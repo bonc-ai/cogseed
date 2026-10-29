@@ -1,0 +1,23 @@
+{
+  "min_app_version": "1.4.0",
+  "skills": [
+    {
+      "name": "meeting-minutes",
+      "version": "1.0.0",
+      "default_install": true,
+      "source_key": "meeting-minutes"
+    },
+    {
+      "name": "meeting-task-breakdown",
+      "version": "1.0.0",
+      "default_install": true,
+      "source_key": "meeting-task-breakdown"
+    }
+  ],
+  "agent": {
+    "name": "智能会议Agent",
+    "version": "1.0.0",
+    "default_install": true,
+    "source_key": "meeting-assistant"
+  }
+}

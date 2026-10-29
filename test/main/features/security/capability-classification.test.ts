@@ -1,23 +1,24 @@
 /**
  * Capability classification on the guardrail status surface.
  *
- * The bug this file guards against is a wording bug with a real cost: the status
- * page opened on "以下能力处于降级状态：密钥检测、依赖漏洞扫描" on a machine that
- * simply had not installed two *optional* tools. Three capabilities were reported
- * as degraded, and reading that as "my install is broken" was the correct reading
- * of what it said.
+ * The original bug this file guarded against was a wording bug with a real cost:
+ * the page opened on "以下能力处于降级状态：密钥检测、依赖漏洞扫描" on a machine
+ * that simply had not installed two *optional* tools — three capabilities were
+ * reported as degraded, and reading that as "my install is broken" was the
+ * correct reading of what it said.
  *
- * Only one of the three was a genuine gap:
- *   secret_detection            — 70 built-in patterns + entropy detection run on
- *                                 every scan. gitleaks widens coverage; it does not
- *                                 decide whether the capability exists.
- *   dependency_vulnerability_scan — nothing native. Without osv-scanner there is no
- *                                 vulnerability database to query at all.
- *   malware_signature_matching  — a native indicator table, honestly a subset.
+ * The fix at the time split `needs_tool` out of `degraded` and classified:
+ *   secret_detection              — implemented (built-in rules; gitleaks is an
+ *                                   enhancement, not the deliverable).
+ *   dependency_vulnerability_scan — needs_tool (no native delivery at all).
+ *   malware_signature_matching    — partial (hand-maintained indicator table).
  *
- * So `needs_tool` was split out of `degraded`. These assertions are relations, not
- * fixed values, because whether gitleaks/osv-scanner are installed differs per
- * machine and must not change the classification.
+ * 2.3.0 closed the other two gaps natively: the ruleset now ships an OSV
+ * snapshot and a YARA signature pack, so both are `implemented` for the same
+ * reason secret_detection is, and the remaining optional tool (osv-scanner)
+ * widens coverage instead of deciding whether the capability exists. These
+ * assertions are still relations rather than fixed counts, because a packaged
+ * tree may legitimately ship a different snapshot size or rule count.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -46,12 +47,26 @@ describe('guardrail capability classification', () => {
     expect(secret?.reason).toBeUndefined();
   });
 
-  it('reports the CVE lookup as needs_tool, never as degraded', () => {
+  it('reports the CVE lookup as implemented from the shipped snapshot', () => {
     const dep = byId.get('dependency_vulnerability_scan');
-    // Nothing native exists here, so "we run it with less coverage" would be false.
-    expect(dep?.status).toBe(toolAvailable('osv-scanner') ? 'implemented' : 'needs_tool');
-    expect(dep?.status).not.toBe('degraded');
-    if (!toolAvailable('osv-scanner')) expect(dep?.reason).toBe('no_osv_scanner');
+    expect(dep?.status).toBe('implemented');
+    expect(dep?.reason).toBeUndefined();
+    // The snapshot is the deliverable; without it the only honest states are
+    // `needs_tool` (no database, no osv-scanner) — never a silent "implemented".
+    expect(status.signaturePacks.vulnerabilityDb?.entries).toBeGreaterThan(1000);
+    expect(status.signaturePacks.vulnerabilityDb?.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // osv-scanner remains an optional widening; it must stay visible as such.
+    expect(status.externalTools.map((t) => t.id)).toContain('osv-scanner');
+    void toolAvailable;
+  });
+
+  it('reports the malware matcher as implemented from the YARA pack', () => {
+    const malware = byId.get('malware_signature_matching');
+    expect(malware?.status).toBe('implemented');
+    expect(malware?.reason).toBeUndefined();
+    // A pack that fails to load would make `implemented` a lie; the count is the
+    // machine-readable evidence that rules are actually present.
+    expect(status.signaturePacks.yaraRules).toBeGreaterThan(20);
   });
 
   it('does not call anything degraded just because an optional tool is missing', () => {
@@ -60,12 +75,7 @@ describe('guardrail capability classification', () => {
     // capability is in that state today. If one appears, it needs a stated
     // coverage loss that is not merely a missing optional tool.
     expect(degraded.map((c) => c.id)).toEqual([]);
-    expect(status.capabilities.filter((c) => c.status === 'needs_tool').length).toBeLessThanOrEqual(1);
-  });
-
-  it('keeps malware signature matching honest as a subset', () => {
-    // A native indicator table exists, so this is not `absent`; its coverage is a
-    // hand-maintained subset, so it is not `implemented` either.
-    expect(byId.get('malware_signature_matching')?.status).toBe('partial');
+    // Both former gaps are now native, so nothing should be waiting on a tool.
+    expect(status.capabilities.filter((c) => c.status === 'needs_tool')).toEqual([]);
   });
 });

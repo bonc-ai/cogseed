@@ -95,6 +95,54 @@ describe('local_agents/runner', () => {
     expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'local', 'file_cache', 'local-agent-runs'))).toBe(false);
   });
 
+  it('refuses a zero-tool run on a CLI without a zero-tool surface before detection or persistence', async () => {
+    const events: any[] = [];
+    const runner = await loadRunner();
+    const result = await runner.run({
+      uid: TEST_UID,
+      cid: 'c',
+      agentId: 'a',
+      cli: 'codex',
+      prompt: 'source text must not reach a tool-capable CLI',
+      cwd: tmpDir,
+      signal: new AbortController().signal,
+      toolPolicy: 'none',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('E_LOCAL_AGENT_NO_TOOL_UNSUPPORTED'),
+    });
+    expect(mockDetect).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ type: 'done', status: 'failed' });
+    expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'local', 'file_cache', 'local-agent-runs'))).toBe(false);
+  });
+
+  it('treats a missing signal as a live signal instead of crashing', async () => {
+    mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '1.0.0' });
+    let backendSignal: AbortSignal | undefined;
+    mockBackendImpl = async (opts) => {
+      backendSignal = opts.signal;
+      opts.onEvent({ type: 'done', status: 'completed' });
+    };
+    const runner = await loadRunner();
+    const result = await runner.run({
+      uid: TEST_UID,
+      cid: 'c',
+      agentId: 'a',
+      cli: 'claude',
+      prompt: 'x',
+      cwd: tmpDir,
+      signal: undefined as never,
+      skipDispatchCheck: true,
+      onEvent: () => {},
+    });
+
+    expect(result.status).toBe('completed');
+    expect(backendSignal).toBeInstanceOf(AbortSignal);
+  });
+
   it('builds local agent log context without raw prompts, args, resume ids, or paths', async () => {
     const runner = await loadRunner();
     const ctx = runner.localAgentRunContextForLog({
@@ -354,8 +402,16 @@ describe('local_agents/runner', () => {
 
   it('forwards AbortSignal — backend reports cancelled, runner relays', async () => {
     mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
+    // 断言的是「abort 由 backend 观察 → 它报 cancelled → runner 原样转发」，所以
+    // 必须等 run 真的进入 backend 再 abort。run() 在拉起 backend 之前有一段异步
+    // preflight（会话读取 + 本体守卫 + run 目录落盘）；固定 10ms 的 setTimeout 在
+    // win32 CI 满载时会先触发，走到 `if (signal.aborted) throw 'local action cancelled'`
+    // （runner.ts），于是 done 变成 failed，本用例测的那条路径根本没执行。
+    let backendEntered!: () => void;
+    const backendStarted = new Promise<void>(resolve => { backendEntered = resolve; });
     mockBackendImpl = async ({ signal, onEvent }) => {
       onEvent({ type: 'process-info', pid: 1, cwd: '/x', cmd: 'claude', args: [] });
+      backendEntered();
       // Simulate abort midway: when the signal fires, emit done(cancelled).
       await new Promise<void>(resolve => {
         if (signal.aborted) { resolve(); return; }
@@ -371,7 +427,8 @@ describe('local_agents/runner', () => {
       signal: ac.signal,
       onEvent: e => events.push(e),
     });
-    setTimeout(() => ac.abort(), 10);
+    await backendStarted;
+    ac.abort();
     const result = await promise;
     expect(result.status).toBe('cancelled');
     const meta = JSON.parse(fs.readFileSync(path.join(

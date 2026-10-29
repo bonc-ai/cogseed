@@ -97,7 +97,7 @@ describe('source refs never fall back to a raw locator', () => {
 describe('processed history shows semantic candidate records', () => {
   it('shows the processed candidate title without exposing its locator', () => {
     const html = renderCognition(
-      { name: 'review' },
+      { name: 'activity', activityDone: '1', candidateId: 'cand-processed' },
       {
         candidates: [candidate({
           id: 'cand-processed',
@@ -110,17 +110,16 @@ describe('processed history shows semantic candidate records', () => {
       },
     );
 
-    expect(html).toContain('fold-processed');
+    expect(html).toContain('data-act="activity-select"');
     expect(visibleText(html)).toContain('架构决策要留可追溯记录');
     expect(visibleText(html)).not.toContain('cand-processed');
   });
 
   it('does not fabricate a processed record for a candidate absent from the snapshot', () => {
-    const html = renderCognition({ name: 'review' }, { candidates: [] });
+    const html = renderCognition({ name: 'activity' }, { candidates: [] });
 
-    expect(html).not.toContain('fold-processed');
-    // specs/018 v2：全清时给结论式空态（原「当前没有等待确认的候选」空壳退役）。
-    expect(visibleText(html)).toContain('没有需要你确认的事项');
+    expect(html).not.toContain('data-act="activity-select"');
+    expect(visibleText(html)).toContain('当前没有需要关注的建议');
   });
 });
 

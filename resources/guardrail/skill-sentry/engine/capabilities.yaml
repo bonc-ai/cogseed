@@ -10,7 +10,7 @@
 # 等于不存在。
 
 schema_version: "2.0.0"
-engine_version: "2.2.0"
+engine_version: "2.3.0"
 
 capabilities:
   text_static_analysis:
@@ -135,19 +135,24 @@ capabilities:
       - "取名刻意不像凭据的变量（如 `k = \"…\"`）不会被通用检测命中"
 
   dependency_vulnerability_scan:
-    implemented: false
-    requires_tool: ["osv-scanner"]
-    method: "仅由 osv-scanner 提供；本引擎不携带漏洞数据库"
+    implemented: true
+    since: "2.3.0"
+    method: "内置依赖清单解析（npm / PyPI）+ 随规则包发布的 OSV 漏洞快照；可选 osv-scanner 扩展到完整 CVE 镜像"
+    enhanced_by: ["osv-scanner"]
     status_note: |
-      原声明写作 `implemented: true / method: 可选 osv-scanner 增强`，但本能力没有
-      任何原生交付：未安装时 vulnerability_findings 恒为空。声明为 implemented 会
-      让上层把它当成「降级」（我们有，只是弱一点），而真相是「整个能力未启用」。
-      上层状态取值为 `needs_tool`：装工具即可解锁，与「能力降级」分开表述。
-      注意依赖**清单与固定性**问题已由 supply_chain_analysis 原生覆盖，不在这里重复。
-    report_fields: ["vulnerability_findings", "coverage.external_tools.osv_scanner"]
+      2.2.0 时本能力没有任何原生交付，上层把未安装 osv-scanner 的状态报成
+      `needs_tool`。2.3.0 起规则包自带漏洞快照（`vulnerabilities.jsonl`），
+      它和内置密钥规则一样是**能力的交付物**：未安装 osv-scanner 不再让能力消失，
+      只是覆盖面止于快照包含的包与公告。osv-scanner 的可用性仍单独出现在
+      `coverage.external_tools.osv_scanner`，信息没有被隐藏。
+      依赖**清单与固定性**问题仍由 supply_chain_analysis 原生覆盖，不在这里重复。
+    report_fields: ["vulnerability_findings", "coverage.vulnerability_db", "coverage.dependency_inventory"]
     known_limitations:
-      - "未安装 osv-scanner 时完全跳过 CVE 扫描，报告中 vulnerability_findings 恒为空"
-      - "离线环境即便装了 osv-scanner，CVE 数据的新鲜度也取决于其本地库的更新"
+      - "快照是 OSV 的**常见包子集**，不是完整 CVE 镜像；截止日期见 coverage.vulnerability_db.as_of。装了 osv-scanner 时才查询完整数据库"
+      - "只有锁文件 / 精确固定的版本参与区间判定；清单里的 ^1.2.3、~1.2、1.x 代表一次未来的求解，不做猜测"
+      - "已知恶意包是唯一例外：包名本身就是结论，即使清单只写了范围也命中"
+      - "支持 npm 与 PyPI；Go / Maven / Cargo 等生态的清单当前不解析"
+      - "同一公告的 GHSA/PYSEC/CVE 重复条目在生成快照时合并；不同包共享同一 CVE 时仍会各报一条"
 
   binary_static_analysis:
     implemented: true
@@ -169,13 +174,17 @@ capabilities:
     tracked_as: "架构决策：扫描过程本身不执行代码以规避风险，但因此无法观察真实运行时行为"
 
   malware_signature_matching:
-    implemented: partial
+    implemented: true
     since: "2.2.0"
-    method: "内置指标表（挖矿池/矿工程序名、反向 shell 形态、键盘记录 API、内存注入 API）"
-    report_fields: ["findings[].category in (crypto_miner, reverse_shell, surveillance)"]
+    native_since: "2.3.0"
+    method: "内置 YARA 子集引擎 + 随规则包发布的签名包（WebShell / 反向 shell / 挖矿 / 窃密 / 持久化 / 勒索 / 混淆执行 / 监控），共 49 条规则"
+    coverage: "字节级匹配，支持文本/十六进制/正则字符串与组合条件；命中同样经过上下文降权（文档中的示例不会直接变成拦截）"
+    report_fields: ["findings[].source == 'yara'", "coverage.signature_pack"]
     known_limitations:
-      - "未接入 YARA 规则引擎与第三方恶意代码特征库；指标表是人工维护的小集合"
-      - "不做家族归因，不给恶意软件命名"
+      - "条件语法是 YARA 子集：不支持 for 循环、pe/math 模块、xor 修饰符；这类规则会在 coverage.signature_pack.errors 中列出，不会静默跳过"
+      - "签名包由本仓库维护，不是第三方恶意代码特征库；不做家族归因，不给恶意软件命名"
+      - "单文件上限 8MB、单次扫描上限 64MB；超限文件在覆盖项里披露"
+      - "仍不执行被扫描代码，无法观察真实运行时行为（见 binary_dynamic_analysis）"
 
   anti_evasion_rescan:
     implemented: true

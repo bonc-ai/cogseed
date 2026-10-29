@@ -34,7 +34,7 @@ const log = createLogger('p3394-bridge:external-gateways');
 // 主动停止（stopExternalGateway / stopAllExternalGateways / 应用退出）会
 // 解除守护：exit 时若已 detach 则不再自动恢复。
 const watched = new Map<string, ChildProcess>();
-const watchedStartInput = new Map<string, { binPath?: string; alias?: string; bridgeInfo?: { endpoint: string; token: string } | null }>();
+const watchedStartInput = new Map<string, { binPath?: string; alias?: string; bridgeInfo?: { endpoint: string; token: string } | null; workspaceRoot?: string }>();
 const restartCounts = new Map<string, number>();
 const WATCHDOG_RESTART_DELAY_MS = Number(process.env.COGSEED_P3394_WATCHDOG_DELAY_MS || 5_000);
 const WATCHDOG_MAX_CONSECUTIVE_FAILURES = 3;
@@ -60,7 +60,7 @@ export function detachWatch(cli: string): void {
   }
 }
 
-function scheduleRestart(cli: string, input: { binPath?: string; alias?: string; bridgeInfo?: { endpoint: string; token: string } | null }): void {
+function scheduleRestart(cli: string, input: { binPath?: string; alias?: string; bridgeInfo?: { endpoint: string; token: string } | null; workspaceRoot?: string }): void {
   const failures = restartCounts.get(cli) ?? 0;
   if (failures >= WATCHDOG_MAX_CONSECUTIVE_FAILURES) {
     log.warn('P3394 external gateway auto-restart giving up', { cli, attempts: failures });
@@ -82,6 +82,7 @@ function scheduleRestart(cli: string, input: { binPath?: string; alias?: string;
       ...(input.binPath ? { binPath: input.binPath } : {}),
       ...(input.alias ? { alias: input.alias } : {}),
       ...(input.bridgeInfo !== undefined ? { bridgeInfo: input.bridgeInfo } : {}),
+      ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
     }).then((result) => {
       if (result.ok) {
         restartCounts.delete(cli);
@@ -95,9 +96,9 @@ function scheduleRestart(cli: string, input: { binPath?: string; alias?: string;
   if (typeof timer.unref === 'function') timer.unref();
 }
 
-function watchGateway(cli: string, child: ChildProcess, input: { binPath?: string; alias?: string; bridgeInfo?: { endpoint: string; token: string } | null }): void {
+function watchGateway(cli: string, child: ChildProcess, input: { binPath?: string; alias?: string; bridgeInfo?: { endpoint: string; token: string } | null; workspaceRoot?: string }): void {
   watched.set(cli, child);
-  watchedStartInput.set(cli, { binPath: input.binPath, alias: input.alias, bridgeInfo: input.bridgeInfo });
+  watchedStartInput.set(cli, { binPath: input.binPath, alias: input.alias, bridgeInfo: input.bridgeInfo, workspaceRoot: input.workspaceRoot });
   child.once('exit', (code) => {
     // 已被主动停止 / 被新实例替换 → 不自动恢复。
     if (watched.get(cli) !== child) return;
@@ -145,6 +146,8 @@ export interface P3394ExternalGatewayState {
   port: number;
   pid: number;
   started_at: string;
+  /** Workspace root used for this gateway's allowlist (ADR-003). */
+  workspace_root?: string;
   /** Live check: pid exists and answers signals (best effort). */
   running: boolean;
 }
@@ -303,6 +306,8 @@ export function startExternalGateway(input: {
   cli: string;
   binPath?: string;
   alias?: string;
+  /** Conversation workspace to add to the gateway allowlist (ADR-003). */
+  workspaceRoot?: string;
   /** Test seam: bridge endpoint/token override (defaults to the live bridge). */
   bridgeInfo?: { endpoint: string; token: string } | null;
 }): Promise<P3394ExternalGatewayResult<P3394ExternalGatewayState>> {
@@ -318,6 +323,7 @@ async function doStartExternalGateway(input: {
   cli: string;
   binPath?: string;
   alias?: string;
+  workspaceRoot?: string;
   /** Test seam: bridge endpoint/token override (defaults to the live bridge). */
   bridgeInfo?: { endpoint: string; token: string } | null;
 }): Promise<P3394ExternalGatewayResult<P3394ExternalGatewayState>> {
@@ -327,9 +333,49 @@ async function doStartExternalGateway(input: {
   const bridgeInfo = input.bridgeInfo === undefined ? getP3394BridgeInfo() : input.bridgeInfo;
   if (!bridgeInfo) return { ok: false, error: 'p3394_bridge_unavailable' };
 
-  // Reuse a live gateway of the same CLI type.
+  // Reuse a live gateway of the same CLI type only when its workspace root
+  // matches. A long-lived gateway carries its allowlist from spawn time, so a
+  // different workspace must stop and respawn it rather than silently reuse
+  // the old boundary.
+  const desiredWorkspaceRoot = input.workspaceRoot && path.isAbsolute(input.workspaceRoot)
+    ? path.resolve(input.workspaceRoot)
+    : undefined;
   const existing = listExternalGateways().find((g) => g.cli === cli && g.running);
-  if (existing) return { ok: true, value: existing };
+  if (existing) {
+    const existingRoot = existing.workspace_root && path.isAbsolute(existing.workspace_root)
+      ? path.resolve(existing.workspace_root)
+      : undefined;
+    if (!desiredWorkspaceRoot || existingRoot === desiredWorkspaceRoot) {
+      return { ok: true, value: existing };
+    }
+    await stopExternalGateway(cli);
+  }
+
+  // 内置网关脚本缺失是安装缺陷，先于 CLI 探测报出：此时换任何 CLI 都起不来，
+  // 报 `p3394_gateway_script_missing` 比误报 CLI 未安装更准确（既有契约，见
+  // external-gateways.test.ts）。
+  const scriptPath = gatewayScriptPath();
+  if (!fs.existsSync(scriptPath)) return { ok: false, error: 'p3394_gateway_script_missing' };
+
+  // Resolve the CLI to an absolute path **before** spawning. A managed gateway is
+  // long-lived and answers turns over the bridge, so a gateway started with an
+  // unresolvable command still registers successfully and only fails later, per
+  // turn, as an opaque `spawn <cmd> ENOENT` (acceptance report E-02). The preset
+  // id is not the command name in general: `workbuddy` ships its `codebuddy` CLI
+  // inside the desktop app (see local_agents/registry BIN_NAMES), so the previous
+  // `|| mapping.id` fallback could never resolve under a GUI launch — and the
+  // renderer start entry points (onboarding, run-center, agent wizard without a
+  // discovered path) pass no binPath. Discovery also covers PATH, so a
+  // user-installed wrapper keeps resolving. Not found → explicit failure; never
+  // bare-spawn.
+  let cliPath = String(input.binPath || '').trim();
+  if (!cliPath) {
+    try {
+      const detected = await detectOne(cli as never);
+      if (detected && detected.path) cliPath = detected.path;
+    } catch { /* discovery failure → reported as not found below */ }
+  }
+  if (!cliPath) return { ok: false, error: 'p3394_cli_not_found: ' + cli };
 
   // 自定义参数模板声明（agent 记录的 runtime.model_args / effort_args）——
   // 「任意外接智能体接入即可控」的声明通道：spawn 时注入网关 env（覆盖
@@ -352,14 +398,20 @@ async function doStartExternalGateway(input: {
     } catch { return {}; }
   })();
 
-  const scriptPath = gatewayScriptPath();
-  if (!fs.existsSync(scriptPath)) return { ok: false, error: 'p3394_gateway_script_missing' };
   let port: number;
   try { port = await freePort(); } catch (error) {
     return { ok: false, error: 'p3394_port_alloc_failed: ' + (error instanceof Error ? error.message : String(error)) };
   }
   const alias = String(input.alias || '').trim().slice(0, 60) || mapping.id;
   const gatewayHome = path.join(variantRoot(), 'external-gateways', cli);
+  const workbuddyLite = (() => {
+    try {
+      const candidate = path.resolve(path.dirname(cliPath), '..', 'dist', 'codebuddy-lite-wb.mjs');
+      return fs.existsSync(candidate) ? candidate : null;
+    } catch {
+      return null;
+    }
+  })();
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
     ELECTRON_RUN_AS_NODE: '1',
@@ -382,7 +434,12 @@ async function doStartExternalGateway(input: {
     // 校验"主进程下发的 working_dir 在允许根内"，自身不主动越权读——
     // 数据隔离由主进程派发时的 working_dir 选取保证。
     ...(process.env.COGSEED_WORKSPACE_ROOT ? {
-      P3394_GATEWAY_ALLOWED_ROOTS: [process.env.COGSEED_WORKSPACE_ROOT, DEFAULT_USER_WORKSPACE, gatewayHome]
+      P3394_GATEWAY_ALLOWED_ROOTS: [
+        process.env.COGSEED_WORKSPACE_ROOT,
+        DEFAULT_USER_WORKSPACE,
+        gatewayHome,
+        ...(input.workspaceRoot && path.isAbsolute(input.workspaceRoot) ? [input.workspaceRoot] : []),
+      ]
         .filter(Boolean)
         .join(path.delimiter),
     } : {}),
@@ -392,7 +449,14 @@ async function doStartExternalGateway(input: {
     P3394_AGENT_ID: mapping.id,
     P3394_AGENT_ALIAS: alias,
     // 检测到的 CLI 绝对路径优先于 PATH（GUI 启动的 app 看不到 shell PATH）。
-    P3394_AGENT_CLI: String(input.binPath || '').trim() || mapping.id,
+    P3394_AGENT_CLI: cliPath,
+    // WorkBuddy 5.8.x 发布的是"lite"包：`bin/codebuddy` 的完整模式会 require
+    // `../dist/codebuddy`，而 lite 包不含该文件（已对照官方 DMG 核实），于是网关
+    // 回合直接 MODULE_NOT_FOUND。若同目录的 lite 入口存在，就直接用 node 驱动它，
+    // 而不是那个会失败的启动器。
+    ...(mapping.preset === 'workbuddy' && workbuddyLite
+      ? { P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: workbuddyLite + ' -p {message}' }
+      : {}),
     P3394_HEARTBEAT_MS: '30000',
     // sscli 主导：声明过的 CLI 走 sscli 路径（claude → stream-json 包装器）。
     // sscli 主导（G-35）：任意 CLI（含未知名自接）默认经 shim 走 sscli。
@@ -408,7 +472,12 @@ async function doStartExternalGateway(input: {
     // GUI-launched apps see a minimal PATH; add the standard install roots
     // (~/.local/bin, /opt/homebrew/bin, ...) so the gateway's own children
     // (bare preset commands like `codebuddy`) resolve like in a terminal.
-    const childEnv = buildCliSpawnEnv(scriptPath, env);
+    //
+    // binPath 必须传被 spawn 的二进制（process.execPath），不是 gateway 脚本：
+    // buildCliSpawnEnv 只在 binPath === process.execPath 时保留
+    // ELECTRON_RUN_AS_NODE，传 scriptPath 会按「用户 CLI」剥离——子进程以 GUI
+    // 形态启动，每个托管网关在 Dock 多一个默认 Electron 图标。
+    const childEnv = buildCliSpawnEnv(process.execPath, env);
     child = spawn(process.execPath, [scriptPath], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let errLog = '';
     let outLog = '';
@@ -446,16 +515,18 @@ async function doStartExternalGateway(input: {
       cli,
       agent_id: mapping.id,
       alias,
-      bin: String(input.binPath || '').trim() || mapping.id,
+      bin: cliPath,
       port,
       pid: child.pid ?? 0,
       started_at: new Date().toISOString(),
+      ...(desiredWorkspaceRoot ? { workspace_root: desiredWorkspaceRoot } : {}),
     };
     state.gateways = state.gateways.filter((g) => g.cli !== cli);
     state.gateways.push(record);
     writeStateFile(state);
     log.info('P3394 external gateway started', { cli, agent_id: mapping.id, port, pid: child.pid });
-    watchGateway(cli, child, { binPath: input.binPath, alias, bridgeInfo: input.bridgeInfo });
+    // Auto-restart must inherit the resolved absolute path, not re-derive it.
+    watchGateway(cli, child, { binPath: cliPath, alias, bridgeInfo: input.bridgeInfo, ...(desiredWorkspaceRoot ? { workspaceRoot: desiredWorkspaceRoot } : {}) });
     return { ok: true, value: { ...record, running: true } };
   } catch (error) {
     if (child && child.exitCode === null) await killProcessTree(child, 'SIGTERM');
@@ -470,6 +541,7 @@ async function doStartExternalGateway(input: {
 export function prewarmExternalGateway(input: {
   cli: string;
   alias?: string;
+  workspaceRoot?: string;
 }): void {
   const cli = String(input.cli || '').trim();
   if (!cli) return;
@@ -482,6 +554,7 @@ export function prewarmExternalGateway(input: {
         cli,
         ...(detected && detected.path ? { binPath: detected.path } : {}),
         ...(input.alias ? { alias: input.alias } : {}),
+        ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
       });
     } catch { /* 预热失败不阻塞——发送时 recoverGateway 会兜底 */ }
   })();
@@ -693,6 +766,7 @@ export async function respawnManagedGateways(
       cli: record.cli,
       alias: record.alias,
       binPath,
+      ...(record.workspace_root ? { workspaceRoot: record.workspace_root } : {}),
       // Test seam: defaults to the live bridge.
       ...(opts.bridgeInfo !== undefined ? { bridgeInfo: opts.bridgeInfo } : {}),
     });

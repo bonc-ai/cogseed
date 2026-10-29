@@ -1,14 +1,315 @@
-/* Shared window chrome: native traffic lights on the left, shell navigation
- * tools on the right, and one recoverable expand entry after collapse. */
-.app-container {
-  --shell-tools-reserved-width: calc(
-    var(--space-3)
-    + var(--control-height-sm)
-    + var(--control-height-sm)
-    + var(--control-height-sm)
-    + var(--space-1)
-    + var(--space-1)
-  );
+/* Shared window chrome (specs/008-shell-rail-layout):
+ *   rail (icon-only modules, macOS traffic lights in its top band)
+ *   → contextual sidebar (per-module host, may be absent or collapsed)
+ *   → main content, whose pages all start with one 52px uiPageHeader row.
+ * Shell controls (search / collapse / expand) are real children of a header
+ * row — the sidebar title row while expanded, otherwise the page header's
+ * shell slot — so Electron drag regions never swallow them. */
+
+/* ── Rail ─────────────────────────────────────────────────────────────── */
+.app-rail {
+  display: flex;
+  flex: 0 0 var(--layout-rail-width);
+  flex-direction: column;
+  align-items: center;
+  width: var(--layout-rail-width);
+  min-height: 0;
+  box-sizing: border-box;
+  padding-bottom: var(--space-3);
+  background: var(--color-sidebar-bottom);
+  position: relative;
+}
+
+/* The rail's right hairline starts below the title band, so the white band
+ * reads as one strip with the sidebar title row / page header next to it. */
+.app-rail::after {
+  content: "";
+  position: absolute;
+  top: var(--layout-titlebar-height);
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line-hairline);
+  pointer-events: none;
+}
+
+.app-rail-titlebar {
+  flex: 0 0 var(--layout-titlebar-height);
+  align-self: stretch;
+  box-sizing: border-box;
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--line-hairline);
+}
+
+.is-macos .app-rail-titlebar {
+  -webkit-app-region: drag;
+}
+
+.app-rail-items {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  min-height: 0;
+  padding-top: var(--space-3);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.app-rail-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.app-rail-item {
+  position: relative;
+  display: flex;
+}
+
+.app-rail-btn.ui-icon-button {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-control);
+  color: var(--text-2);
+  -webkit-app-region: no-drag;
+}
+
+.app-rail-btn.ui-icon-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.app-rail-btn.ui-icon-button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.app-rail-btn.ui-icon-button.is-active {
+  background: var(--color-accent-wash);
+  color: var(--primary-text);
+}
+
+.app-rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--primary);
+  color: var(--color-white);
+  font-size: var(--font-size-1);
+  font-weight: var(--font-weight-semibold);
+  line-height: 16px;
+  text-align: center;
+  /* 计数徽标是执行入口（COGSEED-496）：点它按运行中的会话数直接进入或弹列表。
+     徽标是按钮的兄弟节点、绝对定位压在按钮角上，必须能接收点击，否则点下去只会
+     命中下面的「任务」按钮。 */
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* 徽标里的执行入口按钮：视觉上它就是徽标本身，按钮的边框/底色/内边距全部压掉，
+   只保留可点与可聚焦。COGSEED-496 的点击行为挂在按钮上（单个直达、多个弹列表）。 */
+.app-rail-badge .sidebar-btn-running-chip.ui-button {
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+.app-rail-badge .sidebar-btn-running-chip.ui-button:hover { background: transparent; }
+.app-rail-badge .sidebar-btn-running-chip .ui-button__icon { display: none; }
+
+.app-rail-badge[data-state="attention"] { background: var(--danger); }
+.app-rail-badge[hidden] { display: none; }
+
+.app-rail-footer {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding-top: var(--space-2);
+}
+
+/* The account entry shrinks to its avatar in the rail; the menu opens to
+ * the right of the rail so it is never clipped by the narrow column. */
+.app-rail-account .hub-chip {
+  justify-content: center;
+  width: 48px;
+  min-height: 48px;
+  padding: var(--space-2) 0;
+}
+
+.app-rail-account .hub-chip-meta,
+.app-rail-account .hub-chip-dot,
+.app-rail-account .hub-chip-chev {
+  display: none;
+}
+
+.app-rail-account .hub-chip-menu {
+  left: 0;
+  right: auto;
+  width: 248px;
+}
+
+/* ── Contextual sidebar ──────────────────────────────────────────────── */
+.sidebar-titlebar {
+  position: relative;
+  flex: 0 0 var(--layout-titlebar-height);
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--line-hairline);
+}
+
+.is-macos .sidebar-titlebar {
+  -webkit-app-region: drag;
+}
+
+.sidebar-module {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  /* Breathing room under the title strip; matches the rail's first icon. */
+  padding-top: var(--space-3);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.sidebar-module[hidden] { display: none; }
+
+/* Module navigation moved out of page headers (KB, cognition assets,
+ * connections, settings) shares one vertical list treatment. */
+.sidebar .sidebar-nav {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0 var(--space-2) var(--space-2);
+  overflow-y: auto;
+  border: 0;
+  background: transparent;
+}
+
+.sidebar .sidebar-nav :is(.connections-tab, .ca-tab, .kb-eco-tab, .settings-tab, .run-center-tab) {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height);
+  margin: 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--font-size-ui);
+  font-weight: var(--font-weight-regular);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.13s, color 0.13s;
+}
+
+.sidebar .sidebar-nav :is(.connections-tab, .ca-tab, .kb-eco-tab, .settings-tab, .run-center-tab):hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.sidebar .sidebar-nav :is(.connections-tab, .ca-tab, .kb-eco-tab, .settings-tab, .run-center-tab):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.sidebar .sidebar-nav :is(.connections-tab.is-active, .ca-tab.is-on, .kb-eco-tab.active, .settings-tab.is-active, .run-center-tab.is-active) {
+  background: var(--color-accent-wash);
+  color: var(--primary-text);
+}
+
+.sidebar .sidebar-nav .ca-tab.is-disabled,
+.sidebar .sidebar-nav .ca-tab.is-disabled:hover {
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.sidebar .sidebar-nav .ca-tab strong {
+  overflow: hidden;
+  font-size: inherit;
+  font-weight: inherit;
+  text-overflow: ellipsis;
+}
+
+.sidebar .sidebar-nav .ca-tab .bdg {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-wash);
+  color: var(--primary-text);
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 18px;
+}
+
+.sidebar .sidebar-nav .kb-eco-tab .kb-eco-icon,
+.sidebar .sidebar-nav .settings-tab .settings-tab-icon {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  flex: 0 0 var(--icon-size);
+}
+
+.sidebar .sidebar-nav .kb-eco-tab .kb-sdot { display: none; }
+.sidebar .sidebar-nav .kb-eco-tab .kb-eco-tab-soon { margin-left: auto; }
+
+.sidebar .sidebar-nav .settings-back-btn {
+  margin: 0 0 var(--space-2);
+}
+
+/* Modules without a sidebar (workspace / auto) give the main
+ * content the full width and have nothing to collapse or expand. */
+body.shell-no-sidebar .sidebar {
+  display: none;
+}
+
+/* ── Shell controls ───────────────────────────────────────────────────── */
+.sidebar-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  /* Same inset as the page header, so [collapse][search] sit exactly where
+   * the header's [expand][search] slot appears once the sidebar is collapsed. */
+  padding-inline: var(--space-5);
+  box-sizing: border-box;
+}
+
+/* Short divider at the title row's right edge; the sidebar's full-height
+ * hairline starts below the row (see .sidebar::after). */
+.sidebar-titlebar::after {
+  content: "";
+  position: absolute;
+  top: var(--space-4);
+  right: 0;
+  width: 1px;
+  height: 20px;
+  background: var(--line-default);
+  pointer-events: none;
 }
 
 .sidebar-tools {
@@ -17,60 +318,33 @@
   gap: var(--space-1);
 }
 
-.app-shell-tools {
-  position: fixed;
-  top: 0;
-  left: calc(clamp(180px, var(--sidebar-width, var(--layout-sidebar-width)), 480px) - var(--shell-tools-reserved-width));
-  width: max-content;
-  height: var(--layout-titlebar-height);
-  justify-content: flex-end;
-  -webkit-app-region: no-drag;
-  z-index: calc(var(--z-sticky) + 1);
+/* Page header shell slot: hidden while the sidebar is expanded (its own
+ * title row carries the controls); shown when collapsed, and without the
+ * expand entry in modules that have no sidebar. */
+.ui-page-header__shell {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-end: var(--space-1);
 }
 
-.app-shell-tools > button,
-.app-shell-tools .run-center-global-btn {
-  pointer-events: auto;
-  -webkit-app-region: no-drag;
+body.shell-sidebar-hidden .ui-page-header__shell,
+body.shell-no-sidebar .ui-page-header__shell {
+  display: flex;
 }
 
-.is-macos .sidebar::before {
-  left: 76px;
-  right: var(--shell-tools-reserved-width);
-  height: var(--layout-titlebar-height);
-}
-
-.is-macos .sidebar-logo {
-  -webkit-app-region: no-drag;
-}
-
-.shell-sidebar-hidden {
-  --shell-header-inset: 56px;
-}
-
-html.is-macos .shell-sidebar-hidden {
-  /* Keep the native controls and their hit region in a separate gutter. */
-  --shell-expand-left: 104px;
-  --shell-header-inset: calc(var(--shell-expand-left) + var(--control-height-sm) + var(--space-4));
-}
-
-.shell-sidebar-hidden .app-shell-tools {
-  left: var(--space-4);
-  width: var(--control-height-sm);
-}
-
-html.is-macos .shell-sidebar-hidden .app-shell-tools {
-  left: var(--shell-expand-left);
-}
-
-.shell-sidebar-hidden #sidebar-search-btn,
-.shell-sidebar-hidden #run-center-global-entry {
+body.shell-no-sidebar .ui-page-header__shell .shell-header-expand {
   display: none;
 }
 
-body.sidebar-collapsed .sidebar {
+.is-macos :is(.sidebar-titlebar, .ui-page-header__shell) button {
+  -webkit-app-region: no-drag;
+}
+
+body.sidebar-collapsed:not(.sidebar-peek) .sidebar {
   position: absolute;
-  inset: 0 auto 0 0;
+  inset: 0 auto 0 var(--layout-rail-width);
   width: 0 !important;
   min-width: 0;
   max-width: 0;
@@ -80,85 +354,52 @@ body.sidebar-collapsed .sidebar {
   box-shadow: none;
 }
 
-body.sidebar-collapsed .sidebar > * {
+body.sidebar-collapsed:not(.sidebar-peek) .sidebar::after,
+body.sidebar-collapsed:not(.sidebar-peek) .sidebar > * {
   display: none;
 }
 
-/* Make room for the recovery entry without pushing normal expanded headers. */
-body.shell-sidebar-hidden .main-content :is(
-  .ui-page-header,
-  .chat-header,
-  .ws-page-top,
-  .ws-space-head-row,
-  .run-center-header,
-  .marketplace-header,
-  .agents-grid-header,
-  .skills-grid-header,
-  .contexts-page-header
-) {
-  box-sizing: border-box;
-  padding-inline-start: var(--shell-header-inset);
+/* Collapsed + hovering the active rail entry: the sidebar floats over the
+ * page as an inset rounded card instead of reflowing it
+ * (sidebar-resize.js toggles .sidebar-peek). */
+body.sidebar-collapsed.sidebar-peek .sidebar {
+  position: absolute;
+  inset: calc(var(--layout-titlebar-height) + var(--space-1)) auto var(--space-3) calc(var(--layout-rail-width) + var(--space-2));
+  z-index: var(--z-sidebar-peek);
+  overflow: hidden;
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-ca-float);
+  animation: sidebar-peek-in 0.16s ease-out;
 }
 
-html.is-macos body.shell-sidebar-hidden .app-top-drag-strip {
-  left: var(--shell-header-inset);
+/* Invisible bridge over the gap to the rail so the pointer can cross it. */
+body.sidebar-collapsed.sidebar-peek .sidebar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--space-3));
+  width: var(--space-3);
 }
 
-/* Settings replaces the application rail with its own category navigation. */
-html.is-macos body:has(#panel-settings.active) #settings-page-header .ui-page-header {
-  padding-inline-start: 84px;
-  -webkit-app-region: drag;
+body.sidebar-collapsed.sidebar-peek .sidebar::after,
+body.sidebar-collapsed.sidebar-peek .sidebar-titlebar::after,
+body.sidebar-collapsed.sidebar-peek .sidebar-resize-handle {
+  display: none;
 }
 
-/* A native Electron drag rectangle can swallow a floating control regardless
- * of z-index. Exclude the recovery gutter, then restore dragging on the inset
- * header content while keeping its controls interactive. */
-html.is-macos body.shell-sidebar-hidden .main-content :is(
-  .ui-page-header,
-  .chat-header,
-  .ws-page-top,
-  .ws-space-head,
-  .run-center-header,
-  .marketplace-header,
-  .agents-grid-header,
-  .skills-grid-header,
-  .contexts-page-header
-) {
-  -webkit-app-region: no-drag;
+/* The collapse/search row stays on the page header while collapsed. */
+body.sidebar-collapsed.sidebar-peek .sidebar-titlebar {
+  display: none;
 }
 
-html.is-macos body.shell-sidebar-hidden .main-content :is(
-  .ui-page-header__body,
-  .chat-header-main,
-  .ws-space-heading
-),
-html.is-macos body.shell-sidebar-hidden .main-content :is(
-  .ws-page-top,
-  .run-center-header
-) > :first-child {
-  -webkit-app-region: drag;
+@keyframes sidebar-peek-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
 }
 
-html.is-macos body.shell-sidebar-hidden .main-content :is(
-  .ui-page-header__body,
-  .chat-header-main,
-  .ws-space-heading
-) :is(button, input, a, [contenteditable], .chat-header-breadcrumb, .chat-header-meta) {
-  -webkit-app-region: no-drag;
-}
-
-@media (max-width: 720px) {
-  body:has(:is(#panel-run-center, #panel-workspace).active) .app-shell-tools {
-    left: var(--space-4);
-    width: var(--control-height-sm);
-    z-index: calc(var(--z-popover) + 1);
-  }
-
-  html.is-macos body:has(:is(#panel-run-center, #panel-workspace).active) .app-shell-tools {
-    left: 104px;
-  }
-
-  body:has(:is(#panel-run-center, #panel-workspace).active) #run-center-global-entry {
-    display: none;
-  }
+@media (prefers-reduced-motion: reduce) {
+  body.sidebar-collapsed.sidebar-peek .sidebar { animation: none; }
 }

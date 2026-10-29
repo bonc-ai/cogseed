@@ -1,0 +1,10 @@
+name: seo-schema
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Validate a page's JSON-LD structured data, recommend types to add by page
+  role, and generate paste-ready JSON-LD templates (Organization/WebSite/SoftwareApplication/FAQPage/BreadcrumbList/Article/Product);
+  lint covers missing @type, missing required fields, deprecated rich-result
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

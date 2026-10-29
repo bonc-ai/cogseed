@@ -34,6 +34,38 @@ afterEach(() => {
 
 const PRESET = { contextWindow: 1000000, maxTokens: 384000 };
 
+describe('known model output ceilings', () => {
+  it.each([['gpt-5.6-sol', 128000], ['deepseek-flash', 384000]] as const)('rejects excessive preset overrides for %s', async (id, limit) => {
+    const overrides = await import('../../../src/main/features/model_overrides');
+    expect(overrides.setModelOverride(UID, 'provider', id, { maxTokens: limit + 1 }, { contextWindow: 1000000, maxTokens: limit }).ok).toBe(false);
+    expect(overrides.setModelOverride(UID, 'provider', id, { maxTokens: 8192 }, { contextWindow: 1000000, maxTokens: limit }).ok).toBe(true);
+  });
+
+  it('limits a legacy runtime resolver without imposing GLM limits on other models', async () => {
+    const runtime = await import('../../../src/main/model/model_ability_overrides');
+    runtime.setModelAbilityOverrideResolver(() => ({ maxTokens: 500000 }));
+    try {
+      expect(runtime.modelAbilityOverrideFor('openai', 'gpt-5.6-sol')?.maxTokens).toBe(128000);
+      expect(runtime.modelAbilityOverrideFor('deepseek', 'deepseek-flash')?.maxTokens).toBe(384000);
+      expect(runtime.modelAbilityOverrideFor('private', 'private-model')?.maxTokens).toBe(500000);
+    } finally { runtime.setModelAbilityOverrideResolver(null); }
+  });
+
+  it('bounds legacy preset overrides on read without rewriting the stored file', async () => {
+    const paths = await import('../../../src/main/paths');
+    const overrides = await import('../../../src/main/features/model_overrides');
+    const file = paths.userModelOverridesFile(UID);
+    const raw = JSON.stringify({ version: 1, providers: { openai: {
+      'gpt-5.6-sol': { maxTokens: 384000 }, 'private-model': { maxTokens: 500000 },
+    } } });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, raw);
+    expect(overrides.resolveModelOverride(UID, 'openai', 'gpt-5.6-sol')?.maxTokens).toBe(128000);
+    expect(overrides.resolveModelOverride(UID, 'openai', 'private-model')?.maxTokens).toBe(500000);
+    expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+  });
+});
+
 describe('内置预设的本地覆盖（窗口 / 最大输出）', () => {
   it('真实磁盘回路：写入 → 冷读 → 列出 → 清除', async () => {
     const overrides = await import('../../../src/main/features/model_overrides');

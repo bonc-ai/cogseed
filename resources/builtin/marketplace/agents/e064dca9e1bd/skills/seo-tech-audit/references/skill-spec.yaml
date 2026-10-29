@@ -1,0 +1,11 @@
+name: seo-tech-audit
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'Diagnose technical SEO from seo-crawl page data, emitting bucketed findings
+  (indexability/canonical/title+description/heading hierarchy/structured data/image
+  alt/mobile/HTTPS/robots) and a health score, each with evidence, a leading indicator
+  and a failure criterion; For: ''audit '
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

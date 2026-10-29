@@ -7,6 +7,7 @@ import {
   normalizeCognitionSourceRefsForWrite,
   redactSourceExcerpt,
 } from '../../../../src/main/features/recall/source-service';
+import { assertNotForbiddenToPersist } from '../../../../src/main/util/cognition-sensitivity';
 
 describe('Recall CognitionSourceRef normalization', () => {
   it('normalizes the five canonical source types into taxonomy v2 refs', () => {
@@ -32,10 +33,30 @@ describe('Recall CognitionSourceRef normalization', () => {
     expect(normalized.excerpt!.length).toBeLessThanOrEqual(240);
     expect(redactSourceExcerpt('authorization: Bearer top-secret')).not.toContain('top-secret');
     const jsonExcerpt = redactSourceExcerpt('{\"access_token\":\"abc123\",\"token\":\"def456\",\"password\":\"pw789\"}');
-    expect(jsonExcerpt).toContain('[REDACTED]');
-    expect(jsonExcerpt).not.toContain('abc123');
-    expect(jsonExcerpt).not.toContain('def456');
-    expect(jsonExcerpt).not.toContain('pw789');
+    expect(jsonExcerpt).toBe('{"access_token":"[REDACTED]","token":"[REDACTED]","password":"[REDACTED]"}');
+  });
+
+  it('replaces the complete quoted JSON value, not only its first character', () => {
+    expect(redactSourceExcerpt('{"password":"abc123"}')).toBe('{"password":"[REDACTED]"}');
+    expect(redactSourceExcerpt('{"password":")x9"}')).toBe('{"password":"[REDACTED]"}');
+    expect(redactSourceExcerpt('{"api_key": "placeholder"}')).toBe('{"api_key": "[REDACTED]"}');
+    expect(redactSourceExcerpt('{"token":"x\\"y"}')).toBe('{"token":"[REDACTED]"}');
+    expect(redactSourceExcerpt('{"outer":{"password":"nested-secret"}}')).toBe('{"outer":{"password":"[REDACTED]"}}');
+    expect(redactSourceExcerpt("{'password':'single-secret'}")).toBe("{'password':'[REDACTED]'}");
+  });
+
+  it('redacts a long or truncated value before compaction', () => {
+    expect(redactSourceExcerpt(`{"password":"${'a'.repeat(5_000)}"}`)).toBe('{"password":"[REDACTED]"}');
+    const truncated = `{"password":"abc${'123'.repeat(50)}`;
+    const out = redactSourceExcerpt(truncated);
+    expect(out).not.toContain('abc');
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('keeps non-secret JSON unchanged and lets the placeholder through the persistence gate', () => {
+    expect(redactSourceExcerpt('{"name":"Alice","count":3}')).toBe('{"name":"Alice","count":3}');
+    expect(() => assertNotForbiddenToPersist([redactSourceExcerpt('{"password":"abc123"}')!])).not.toThrow();
+    expect(() => assertNotForbiddenToPersist(['{"password":"[REDACTED]bc123"}'])).toThrow(/credential_assignment/);
   });
 
   it('removes source body text and absolute path titles from new persisted refs', () => {

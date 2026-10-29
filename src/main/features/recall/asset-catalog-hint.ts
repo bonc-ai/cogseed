@@ -1,5 +1,6 @@
 import { createLogger } from '../../logger';
 import { logErrorRef, maskId } from '../../util/log-redact';
+import { abilityAssetActiveVersion } from './asset-service';
 import { formatCatalogEntry, type AssetUsageStat } from './asset-catalog';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import {
@@ -17,7 +18,33 @@ const log = createLogger('recall.catalog-hint');
 export const INLINE_CATALOG_MAX_ENTRIES = CATALOG_PRESENTATION.maxPromptEntries;
 const PROMPT_TOKEN_BUDGET = CATALOG_PRESENTATION.promptTokenBudget;
 
-export function resetAssetCatalogHintCacheForTest(): void { resetCatalogEngineForTest(); }
+export function resetAssetCatalogHintCacheForTest(): void {
+  resetCatalogEngineForTest();
+  projectionHints.clear();
+}
+
+/** The cross-conversation projection scan is expensive and changes rarely;
+ * cache just its asset ids for a short window, then re-run authorization and
+ * reads on every call so a revoked title is never served from stale text. */
+const PROJECTION_HINT_TTL_MS = 30_000;
+const MAX_PROJECTION_HINTS = 64;
+const projectionHints = new Map<string, { at: number; assetIds: readonly string[] }>();
+
+async function newestOtherConversationAssetIds(userId: string, cid: string): Promise<readonly string[]> {
+  const key = `${userId}\0${cid}`;
+  const hit = projectionHints.get(key);
+  if (hit && Date.now() - hit.at < PROJECTION_HINT_TTL_MS) return hit.assetIds;
+  const { listContextProjections } = await import('./context-projection');
+  const projections = await listContextProjections(userId, { status: 'confirmed', limit: 50 });
+  const newest = projections.filter((item) => item.authorization === 'model_selected'
+    && item.conversationId && item.conversationId !== cid)
+    .sort((left, right) => String(right.decidedAt || right.createdAt || '').localeCompare(String(left.decidedAt || left.createdAt || '')))[0];
+  const assetIds = newest?.assetIds.slice(0, 6) || [];
+  projectionHints.delete(key);
+  projectionHints.set(key, { at: Date.now(), assetIds });
+  if (projectionHints.size > MAX_PROJECTION_HINTS) projectionHints.delete(projectionHints.keys().next().value!);
+  return assetIds;
+}
 
 /** The optional turn ID prevents a concurrent conversation from replacing evidence. */
 export function lastCatalogRankedForTurn(userId: string, cid: string, turnId?: string): ReadonlyMap<string, RankedAsset> {
@@ -29,7 +56,7 @@ function estimatedTokens(value: string): number {
   return Math.ceil(han * 1.6 + (value.length - han) / 3);
 }
 
-function assetVersion(asset: RecallAbilityAssetRecord): string { return String(asset.activeVersion || asset.version || '1'); }
+function assetVersion(asset: RecallAbilityAssetRecord): string { return abilityAssetActiveVersion(asset); }
 
 export interface CatalogPromptResult {
   text: string;
@@ -102,14 +129,10 @@ async function recentAttachmentLine(
 ): Promise<string> {
   if (!cid) return '';
   try {
-    const { listContextProjections } = await import('./context-projection');
     const { readAbilityAsset } = await import('./asset-service');
-    const projections = await listContextProjections(userId, { status: 'confirmed', limit: 50 });
-    const newest = projections.filter((item) => item.authorization === 'model_selected'
-      && item.conversationId && item.conversationId !== cid)
-      .sort((left, right) => String(right.decidedAt || right.createdAt || '').localeCompare(String(left.decidedAt || left.createdAt || '')))[0];
-    if (!newest) return '';
-    const candidates = (await Promise.all(newest.assetIds.slice(0, 6).map((id) => readAbilityAsset(userId, id).catch(() => null))))
+    const assetIds = await newestOtherConversationAssetIds(userId, cid);
+    if (!assetIds.length) return '';
+    const candidates = (await Promise.all(assetIds.map((id) => readAbilityAsset(userId, id).catch(() => null))))
       .filter((asset): asset is RecallAbilityAssetRecord => Boolean(asset));
     const allowed = await filterCatalogAssetsForAgentRead(userId, candidates, { taskText, scene, agentId });
     if (!allowed.length) return '';

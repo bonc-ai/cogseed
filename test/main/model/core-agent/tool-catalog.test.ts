@@ -19,8 +19,10 @@ import { createCrossSessionMemoryTool } from '../../../../src/core-agent/src/too
 import { createMetacognitionTool } from '../../../../src/core-agent/src/tools/metacognition-tool';
 import { createLocalTools, createFileTools } from '../../../../src/main/model/core-agent/local-tools';
 import { createKbTools } from '../../../../src/main/model/core-agent/kb-tools';
-import { createRecallTools } from '../../../../src/main/model/core-agent/recall-tools';
+import { createRecallToolSuite } from '../../../../src/main/model/core-agent/recall-tools';
 import { createAssetStewardTools } from '../../../../src/main/model/core-agent/asset-steward-tools';
+import { createCognitionCreateTools } from '../../../../src/main/model/core-agent/cognition-create-tools';
+import { createCognitionEditTools } from '../../../../src/main/model/core-agent/cognition-edit-tools';
 import { createPersonalOntologyTools } from '../../../../src/main/model/core-agent/personal-ontology-tools';
 import { createExperienceTools } from '../../../../src/main/model/core-agent/experience-tools';
 import { createChatHistoryTools } from '../../../../src/main/model/core-agent/chat-history-tools';
@@ -85,11 +87,8 @@ function enumerateAllInjectedTools(): AgentTool[] {
   // injected (memory + metacognition)
   tools.push(
     createCrossSessionMemoryTool({
-      add: () => ({ ok: true, entries: [], usage: { current: 0, limit: 1 } }),
-      replace: () => ({ ok: true, entries: [], usage: { current: 0, limit: 1 } }),
-      remove: () => ({ ok: true, entries: [], usage: { current: 0, limit: 1 } }),
       list: () => ({ ok: true, entries: [], usage: { current: 0, limit: 1 } }),
-    }),
+    }, { includeProjectTier: true }), // Enumerate the largest real description, including space conversations.
   );
   tools.push(
     createMetacognitionTool({
@@ -109,13 +108,20 @@ function enumerateAllInjectedTools(): AgentTool[] {
   }));
   tools.push(...createFileTools({ userId: 'testuid', cid: 'testcid' }));
   tools.push(...createKbTools({ userId: 'testuid' }));
-  // recall 组的三个工厂都要枚举到，否则这一组工具整体漏在反漂移之外
-  // （2026-09-25 补：此前 createRecallTools / createAssetStewardTools /
-  //  createPersonalOntologyTools 都没被调用，catalog 少一行也不会变红）。
-  tools.push(...createRecallTools({ userId: 'testuid' }));
+  // recall 组的三个工厂都要枚举到，否则目录缺项也无法被反漂移断言发现。
+  const previousSemantica = process.env.COGSEED_SEMANTICA_ENABLED;
+  process.env.COGSEED_SEMANTICA_ENABLED = '1';
+  try {
+    tools.push(...createRecallToolSuite({ userId: 'testuid', turnId: 'catalog-turn', onAssetUsageClaim: () => {} }).tools);
+  } finally {
+    if (previousSemantica === undefined) delete process.env.COGSEED_SEMANTICA_ENABLED;
+    else process.env.COGSEED_SEMANTICA_ENABLED = previousSemantica;
+  }
   tools.push(...createAssetStewardTools({ userId: 'testuid' }));
+  tools.push(...createCognitionCreateTools({ userId: 'testuid' }));
+  tools.push(...createCognitionEditTools({ userId: 'testuid' }));
   tools.push(...createPersonalOntologyTools({ userId: 'testuid' }));
-  // 经验目录工厂（specs/016 T024）：同样必须枚举，漏了它 catalog 少两行也不会红。
+  // 经验目录工厂：同样必须枚举，漏了它 catalog 少两行也不会红。
   tools.push(...createExperienceTools({ userId: 'testuid' }));
   tools.push(...createChatHistoryTools({ userId: 'testuid' }));
   tools.push(...createMessagingTools({ userId: 'testuid', cid: 'testcid' }));
@@ -204,11 +210,11 @@ function toolByName(name: string): AgentTool {
 describe('tool-catalog', () => {
   it('TOOL_CATALOG covers every tool name injected by runner (anti-drift)', () => {
     const injected = enumerateAllInjectedToolNames();
-    // 枚举本身也要覆盖到 recall 组：工厂没被调用时这一组会整体隐身，
-    // 反漂移就成了一句空话（2026-09-25 补的洞）。
+    // 枚举本身也要覆盖到 recall 组，避免遗漏整个工厂后反漂移断言失效。
     for (const name of [
-      'search_ability_assets', 'personal_ontology_fields',
+      'search_ability_assets', 'ontology_query', 'personal_ontology_fields',
       'list_ability_assets', 'read_ability_asset',
+      'create_cognition', 'edit_cognition',
     ]) {
       expect(injected.has(name), `enumerateAllInjectedTools 漏了 ${name}`).toBe(true);
     }
@@ -217,19 +223,28 @@ describe('tool-catalog', () => {
     expect(missing, `Injected tools missing from TOOL_CATALOG: ${missing.join(', ')}`).toEqual([]);
   });
 
+  it('retired conversation formation tools are absent from both catalog and factories', () => {
+    const names = TOOL_CATALOG.map(entry => entry.name);
+    const injected = enumerateAllInjectedToolNames();
+    for (const retired of ['personal_field_remember', 'ontology_slot_remember', 'cognition_ontology_save', 'transcript_remember_correction']) {
+      expect(names).not.toContain(retired);
+      expect(injected.has(retired)).toBe(false);
+    }
+  });
+
   it('TOOL_CATALOG has no duplicate names', () => {
     const names = TOOL_CATALOG.map((e) => e.name);
     expect(names.length).toBe(new Set(names).size);
   });
 
   it('declares the ability-asset steward surface in the recall group with no extra gate', () => {
-    // 资产管家的 6 个写工具 + 3 个读工具（specs/008 US-401/402；第 3 个读工具是
-    // 待审批提议清单，2026-09-25 因"模型拿不到待审批的内容"补的）。这些工具读写的
+    // 资产管家的读写工具（含待审批提议清单）处理的是
     // 是 <uid> 数据域里的资产记录，不碰 shell / 文件系统，所以**不该**挂
     // localExec；也不按 agent 限定——主会话与 group_chat 各 actor 共用同一面。
     // 少了 / 多了一层权限门，会直接改变"模型能不能动手"的产品口径。
     const stewardTools = [
       'list_ability_assets', 'read_ability_asset', 'list_asset_change_proposals',
+      'create_cognition', 'edit_cognition',
       'edit_ability_asset', 'merge_ability_assets', 'archive_ability_asset',
       'delete_ability_asset', 'restore_ability_asset', 'rollback_ability_asset',
     ];
@@ -295,7 +310,7 @@ describe('tool-catalog', () => {
       create_docx: ['paragraphs', 'tables', 'images', 'path'],
       create_xlsx: ['rows', 'sheets', 'formula', 'path'],
       create_pptx: ['slides', 'shapes', 'images', 'path'],
-      cross_session_memory: ['remember', 'agent', 'shared', 'user', 'routing', 'language', 'proper nouns', 'add', 'replace', 'remove', 'list'],
+      cross_session_memory: ['read-only', 'agent', 'shared', 'user', 'language', 'proper nouns', 'list'],
       metacognition: ['competence', 'strategies', 'content limits', 'rejected', 'condense', 'read', 'write'],
       list_ability_assets: ['全量', 'offset', '总数', '已删除'],
       read_ability_asset: ['chunk', '2000', '不可用'],
@@ -410,5 +425,43 @@ describe('isToolVisibleToAgent (ownerAgent gate)', () => {
     expect(isToolVisibleToAgent('research_rerank', '')).toBe(false);
     expect(isToolVisibleToAgent('research_rerank', 'sample-agent')).toBe(false);
     expect(isToolVisibleToAgent('research_rerank', 'some-other-agent')).toBe(false);
+  });
+
+  /** Description-budget ratchet: reject newly over-budget tools, reject
+   * regressions and remove frozen entries once they fit within the budget. */
+  it('keeps the over-budget description set frozen and shrinking', () => {
+    const FROZEN_OVER_BUDGET: Record<string, string> = {
+      metacognition: '同上：vendored core-agent 包内',
+      bash: '保留输出目录约定和 Windows shell 条件',
+      edit_office: 'operations 三态表属于调用契约',
+      office_read: '元素路径语法说明（/body/p[3] 等）',
+      grep_files: 'output_mode 语义需要展开',
+      kb_search: '检索范围与命中口径说明',
+      material_search: '与 kb_search 的范围差异需说明',
+      search_ability_assets: '资产检索的范围与分页说明',
+      messaging_send: '渠道与投递语义说明',
+      edit_ability_asset: '资产编辑的确认语义说明',
+    };
+    // 已收敛到预算内的条目不得重新超出预算。
+    const SHRUNK_TO_BUDGET = ['research_rerank', 'markdown_to_pdf', 'cross_session_memory'];
+
+    const over = new Set<string>();
+    for (const tool of enumerateAllInjectedTools()) {
+      if (normalizedDescription(tool.description).length > TOOL_DESCRIPTION_SOFT_BUDGET_CHARS) {
+        over.add(tool.name);
+      }
+    }
+
+    const added = [...over].filter((name) => !(name in FROZEN_OVER_BUDGET));
+    expect(
+      added,
+      `新增超预算工具（>${TOOL_DESCRIPTION_SOFT_BUDGET_CHARS} 字符）：先精简，或写进冻结清单并说明理由`,
+    ).toEqual([]);
+
+    const stale = Object.keys(FROZEN_OVER_BUDGET).filter((name) => !over.has(name));
+    expect(stale, '这些已回到软预算内 → 从冻结清单移除，别让棘轮空转').toEqual([]);
+
+    const regressed = SHRUNK_TO_BUDGET.filter((name) => over.has(name));
+    expect(regressed, '这些描述本次已收敛到预算内，不得回退').toEqual([]);
   });
 });

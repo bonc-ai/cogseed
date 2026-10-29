@@ -25,6 +25,42 @@ afterEach(() => {
 });
 
 describe('custom providers', () => {
+  it.each([
+    ['tencent-glm-5.3-flash', 131072],
+    ['glm-5.3-flash', 131072],
+    ['gpt-5.6-sol', 128000],
+    ['deepseek-flash', 384000],
+  ])('validates %s against its own output ceiling', async (id, limit) => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Model limits', protocol: 'openai-responses', baseUrl: 'https://relay.example/v1',
+      apiKey: 'test-key', models: [id],
+    });
+    if (!added.ok) throw new Error(added.error);
+    expect(providers.listCustomProviders(UID)[0].models[0].maxTokens).toBe(limit);
+    expect(providers.updateCustomProviderModel(UID, added.id, id, { id, maxTokens: limit + 1 }).ok).toBe(false);
+    expect(providers.listCustomProviders(UID)[0].models[0].maxTokens).toBe(limit);
+    expect(providers.updateCustomProviderModel(UID, added.id, id, { id, maxTokens: 8192 })).toMatchObject({
+      ok: true, model: { maxTokens: 8192 },
+    });
+  });
+
+  it('rejects excessive limits on create and normalizes legacy limits when reading', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const auth = await import('../../../src/main/features/auth');
+    const input = {
+      name: 'GLM relay', protocol: 'openai-responses', baseUrl: 'https://aihubmix.com/v1', apiKey: 'test-key',
+      models: [{ id: 'tencent-glm-5.3-flash', maxTokens: 384000 }],
+    };
+    expect(providers.addCustomProvider(UID, input).ok).toBe(false);
+    const added = providers.addCustomProvider(UID, { ...input, models: ['tencent-glm-5.3-flash'] });
+    if (!added.ok) throw new Error(added.error);
+    auth.mutateCustomProviders(UID, ({ customProviders }) => {
+      customProviders.find((provider) => provider.id === added.id)!.models[0].maxTokens = 384000;
+    });
+    expect(providers.listCustomProviders(UID)[0].models[0].maxTokens).toBe(131072);
+  });
+
   it('adds a validated provider, normalizes model metadata, and atomically binds the first model', async () => {
     const providers = await import('../../../src/main/features/custom_providers');
     const result = providers.addCustomProvider(UID, {

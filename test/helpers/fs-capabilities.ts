@@ -44,5 +44,15 @@ export const FILE_SYMLINKS_SUPPORTED = probeSymlink('file');
 /** Whether this test worker can create the native directory-link fixture. */
 export const DIRECTORY_LINKS_SUPPORTED = probeSymlink(DIRECTORY_LINK_TYPE);
 
+/**
+ * Whether this test worker can create a real `dir` symlink.
+ *
+ * On Windows `DIRECTORY_LINKS_SUPPORTED` probes the `junction` type, which needs
+ * no privilege, so it stays true even when the account cannot create a symlink.
+ * Fixtures that must be a *symlink* (escape/reparse assertions, not a plain
+ * junction) depend on this stricter capability instead.
+ */
+export const DIRECTORY_SYMLINKS_SUPPORTED = probeSymlink('dir');
+
 /** Whether chmod/stat expose enforceable POSIX permission bits on this filesystem. */
 export const FILE_MODE_BITS_SUPPORTED = probeFileModeBits();

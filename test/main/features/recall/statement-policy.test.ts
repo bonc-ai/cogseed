@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 正文一等规范（2026-09-29 子安拍板）：
  *   ① 判定四项（空/超长/会话残留/规则偏好类路径）按类型分级；
@@ -65,7 +66,7 @@ describe('晋升正文＝judgment 单一来源（value 不拼入）', () => {
   it('有 value 的候选晋升后正文不含 value 段，且读回带 statementIssues 派生', async () => {
     const { saveRecallCandidate, promoteRecallCandidate, readRecallCandidate } = await import('../../../../src/main/features/recall/candidate-service');
     const uid = 'user-stmt';
-    const candidate = await saveRecallCandidate(uid, {
+    const candidate = await createNightlyCandidateFixture(uid, {
       judgment: '汇报先给一句话结论，读者要细节再看分层依据。',
       value: '这样能省读者的时间，也避免结论被长文淹没。',
       summary: '周报汇报骨架规则',
@@ -82,7 +83,7 @@ describe('晋升正文＝judgment 单一来源（value 不拼入）', () => {
   it('超长正文候选读回带 too_long 警示（不拦截，保存仍成功）', async () => {
     const { saveRecallCandidate } = await import('../../../../src/main/features/recall/candidate-service');
     const uid = 'user-stmt2';
-    const candidate = await saveRecallCandidate(uid, {
+    const candidate = await createNightlyCandidateFixture(uid, {
       judgment: 'X'.repeat(220) + '。',
       summary: '超长正文样本',
       suggestedType: 'fact', suggestedScope: 'general', suggestedAction: 'create',
@@ -91,4 +92,11 @@ describe('晋升正文＝judgment 单一来源（value 不拼入）', () => {
     expect(candidate.status).toBe('pending_review'); // 警示不拦截
     expect(candidate.statementIssues).toContain('too_long');
   });
+});
+
+
+it('keeps unclassified cognition paragraphs without imposing the historical 200 character shape', () => {
+  const statement = '触发条件：评审需要核对依据。\n\n1. 核对证据。\n2. 记录适用条件。\n\n' + '保留知识及局限。'.repeat(40);
+  expect(recallStatementIssues({ statement, type: 'cognition' })).toEqual([]);
+  expect(recallStatementIssues({ statement, type: 'rule' })).toContain('too_long');
 });

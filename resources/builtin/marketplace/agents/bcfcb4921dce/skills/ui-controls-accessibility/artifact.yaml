@@ -1,0 +1,27 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.controls.accessibility
+  name: ui-controls-accessibility
+  version: 1.0.0
+  description: Handle complex forms, composite widgets, or focused accessibility reviews
+    across control taxonomy, states, responsive behavior, text fit, keyboard use,
+    and A11y; ordinary UI uses the compact executor's baseline rules.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

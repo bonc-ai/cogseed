@@ -80,6 +80,19 @@ export interface GuardrailStatus {
   capabilities: CapabilityStatus[];
   /** Optional external tools the engine can use when installed. */
   externalTools: Array<{ id: string; available: boolean }>;
+  /**
+   * Native detection backends shipped with the active ruleset.
+   *
+   * The capability list says "dependency scan is available"; these counts say
+   * *what* made it available and when the snapshot was taken. A capability the
+   * page cannot put a number on is one the user has to take on faith.
+   */
+  signaturePacks: {
+    /** Built-in advisory snapshot, or null when the ruleset does not ship one. */
+    vulnerabilityDb: { entries: number; asOf: string } | null;
+    /** Number of compiled YARA rules in the active ruleset's pack. */
+    yaraRules: number;
+  };
   /** Python interpreter the scanner would use, or '' when none was found. */
   interpreter: string;
 }
@@ -203,6 +216,72 @@ function _interpreter(): string {
   return '';
 }
 
+function _rulesetDir(version: string): string {
+  return path.join(packagedGuardrailDir(), SCANNER_SKILL_ID, 'engine', 'rulesets', version);
+}
+
+/**
+ * Count the built-in advisory snapshot.
+ *
+ * The snapshot is one JSON object per line (metadata first). Counting lines is
+ * enough: the renderer needs a number, and parsing 1,500 adverts on every
+ * settings-tab activation would put JSON.parse on the critical path for no UI
+ * benefit. `asOf` is read from the metadata line only.
+ */
+function _vulnerabilityDb(version: string): { entries: number; asOf: string } | null {
+  if (!version) return null;
+  let raw = '';
+  try {
+    raw = fs.readFileSync(path.join(_rulesetDir(version), 'vulnerabilities.jsonl'), 'utf8');
+  } catch {
+    return null;
+  }
+  let entries = 0;
+  let asOf = '';
+  let sawFirst = false;
+  for (const line of raw.split('\n')) {
+    const text = line.trim();
+    if (!text.startsWith('{')) continue;
+    if (!sawFirst) {
+      sawFirst = true;
+      try {
+        const meta = JSON.parse(text) as { type?: unknown; generated_at?: unknown };
+        if (meta.type === 'meta') {
+          if (typeof meta.generated_at === 'string') asOf = meta.generated_at.slice(0, 10);
+          continue;
+        }
+      } catch {
+        // A malformed first line is counted as an entry; hiding it would make
+        // the snapshot look smaller than it is.
+      }
+    }
+    entries += 1;
+  }
+  return entries > 0 ? { entries, asOf } : null;
+}
+
+/** Count compiled YARA rules in the ruleset's signature pack. */
+function _yaraRules(version: string): number {
+  if (!version) return 0;
+  const dir = path.join(_rulesetDir(version), 'yara');
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir).filter((name) => name.endsWith('.yar'));
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const name of names) {
+    try {
+      const raw = fs.readFileSync(path.join(dir, name), 'utf8');
+      count += (raw.match(/^\s*(?:private\s+|global\s+)?rule\s+[A-Za-z_]\w*/gm) || []).length;
+    } catch {
+      // An unreadable file contributes nothing rather than failing the page.
+    }
+  }
+  return count;
+}
+
 export function guardrailStatus(): GuardrailStatus {
   const scanner = scannerAvailability();
   const sentryDir = path.join(packagedGuardrailDir(), SCANNER_SKILL_ID);
@@ -220,6 +299,9 @@ export function guardrailStatus(): GuardrailStatus {
   const externalTools = _externalTools();
   const gitleaks = externalTools.find((t) => t.id === 'gitleaks')?.available === true;
   const osv = externalTools.find((t) => t.id === 'osv-scanner')?.available === true;
+  const rulesetVersion = resolveRulesetVersion();
+  const vulnerabilityDb = scanner === 'present' ? _vulnerabilityDb(rulesetVersion) : null;
+  const yaraRules = scanner === 'present' ? _yaraRules(rulesetVersion) : 0;
 
   // Capabilities this build can actually perform. `degraded` is a distinct
   // state from `absent`: the check still runs, just with less coverage, and
@@ -246,20 +328,27 @@ export function guardrailStatus(): GuardrailStatus {
       status: scanner === 'present' ? 'implemented' : 'absent',
     },
     {
-      // Nothing native here: without osv-scanner there is no vulnerability
-      // database to query, so the capability is off rather than degraded.
+      // 2.3.0 made this native: the ruleset ships an OSV snapshot, so the
+      // capability no longer depends on installing osv-scanner. The tool is an
+      // optional widening (full CVE mirror) exactly like gitleaks for secrets,
+      // and its absence must not downgrade the capability.
       id: 'dependency_vulnerability_scan',
-      status: scanner !== 'present' ? 'absent' : osv ? 'implemented' : 'needs_tool',
-      ...(osv ? {} : { reason: 'no_osv_scanner' }),
+      status: scanner !== 'present' ? 'absent' : (vulnerabilityDb || osv ? 'implemented' : 'needs_tool'),
+      ...(scanner === 'present' && !vulnerabilityDb && !osv
+        ? { reason: 'no_vulnerability_db' } : {}),
     },
     {
       id: 'binary_static_analysis',
       status: scanner === 'present' ? 'implemented' : 'absent',
     },
     {
+      // A YARA-subset engine ships in the ruleset rather than behind an
+      // installed binary. `partial` is reserved for a build whose signature
+      // pack is missing, which is a packaging fault the page should say out
+      // loud instead of quietly reporting "implemented" over zero rules.
       id: 'malware_signature_matching',
-      status: scanner !== 'present' ? 'absent' : 'partial',
-      reason: 'no_yara_engine',
+      status: scanner !== 'present' ? 'absent' : yaraRules > 0 ? 'implemented' : 'partial',
+      ...(scanner === 'present' && yaraRules === 0 ? { reason: 'no_yara_pack' } : {}),
     },
   ];
 
@@ -275,6 +364,7 @@ export function guardrailStatus(): GuardrailStatus {
     rules,
     capabilities,
     externalTools,
+    signaturePacks: { vulnerabilityDb, yaraRules },
     interpreter: scanner === 'present' ? _interpreter() : '',
   };
 }

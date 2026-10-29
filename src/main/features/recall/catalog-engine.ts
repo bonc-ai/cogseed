@@ -21,6 +21,9 @@ export interface CatalogContext {
   taskText?: string;
   scene?: RankingSceneContext;
   agentId?: string;
+  roleId?: string;
+  conversationKind?: string;
+  fileKinds?: readonly string[];
 }
 
 export interface CatalogSnapshot {
@@ -76,8 +79,11 @@ export function catalogAgentReadContext(input: CatalogContext): RecallAgentReadC
   const taskText = input.taskText?.trim();
   return {
     ...(input.agentId ? { agentId: input.agentId } : {}),
+    ...(input.roleId ? { roleId: input.roleId } : {}),
     ...(input.scene?.turnProjectId ? { projectId: input.scene.turnProjectId } : {}),
     ...(input.scene?.turnSpaceId ? { workspaceId: input.scene.turnSpaceId } : {}),
+    ...(input.conversationKind ? { conversationKind: input.conversationKind } : {}),
+    ...(input.fileKinds?.length ? { fileKinds: [...input.fileKinds] } : {}),
     ...(taskText ? { taskText } : {}),
   };
 }

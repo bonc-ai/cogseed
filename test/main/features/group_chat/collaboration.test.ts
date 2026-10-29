@@ -2310,14 +2310,14 @@ describe("group_chat collaboration › structured context patch extraction", () 
     );
   });
 
-  it("rejects look-alike and malformed context-patch blocks without stripping them", async () => {
+  it("hides malformed protocol blocks but preserves look-alike prose", async () => {
     const c =
       await import("../../../../src/main/features/group_chat/collaboration");
     const malformed = "Visible\n<context-patch>{bad json}</context-patch>";
     const result = c.extractContextPatchBlocks(malformed, "agent-a");
 
     expect(result.patches).toEqual([]);
-    expect(result.cleanText).toBe(malformed);
+    expect(result.cleanText).toBe("Visible");
     expect(result.errors[0]).toContain("invalid context-patch JSON");
 
     const lookalike = c.extractContextPatchBlocks(

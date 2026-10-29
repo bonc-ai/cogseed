@@ -1,18 +1,8 @@
-/**
- * specs/016 T012：冻结副本读路径加固（prompt-injection.ts，data-model §4）。
- *
- * 现状硬缺陷（research D6 实测）：命中 `projection.assetVersionSnapshots` 的
- * 已确认投影仍无条件读 live 资产（evidenceRefs / 治理门 / 字段兜底全走
- * `readAbilityAsset`），而 live 记录不存在时它**抛错**，异常被装配层 catch
- * 吞成 warn ⇒ 冻结引用**静默缺席**——「记录没了 = 断链」。
- *
- * 本文件钉住迁移后的读行为：
- *  ① live 记录缺失（已迁出资产库）且冻结副本命中 → 注入**仍可读**，内容字段
- *     与证据引用全取副本，并在注入块标注「来源已迁入经验目录」；
- *  ② live 记录存在但已带迁出标记（migratedToExperienceId）→ 同样按副本供给；
- *  ③ 无快照的既有路径行为**完全不变**：live 正常 → 照旧走 live（无标注）；
- *     live 缺失且无副本 → 维持现状的缺席（warn 吞掉，不抛出）。
- */
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
+/** Frozen projections retain the confirmed body and evidence after migration.
+ * Missing or migrated live records use their frozen snapshot only while the
+ * migration destination and current source/access gates remain available.
+ * Without a snapshot, the existing live-read behavior remains unchanged. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -47,10 +37,10 @@ async function modules() {
   return { users, assets, projections, promptInjection, store };
 }
 
-async function seedAsset(spec: { id: string; statement: string }) {
+async function seedAsset(spec: { id: string; statement: string; sourceId?: string }) {
   const { assets } = await modules();
   const now = new Date().toISOString();
-  return assets.createSystemAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 1,
     ownerId: UID,
     id: spec.id,
@@ -59,7 +49,8 @@ async function seedAsset(spec: { id: string; statement: string }) {
     statement: spec.statement,
     type: 'rule',
     scope: 'project',
-    evidenceRefs: [{ kind: 'execution', id: `exec-${spec.id}` }],
+    evidenceRefs: spec.sourceId ? [{ kind: 'conversation', id: spec.sourceId, subtype: 'session', scope: 'personal' }]
+      : [{ kind: 'execution', id: `exec-${spec.id}` }],
     reviewDecisionId: 'legacy-untracked',
     lifecycleStatus: 'system_precipitated_unverified',
     status: 'active',
@@ -114,7 +105,7 @@ async function attachProjectionToConversation(projectionId: string, cid: string)
   });
 }
 
-/** 会话注入（confirmed 投影路径——正是 T016 加固的装配函数）。 */
+/** 会话注入（confirmed 投影路径）。 */
 async function promptFor(cid: string) {
   const { promptInjection } = await modules();
   return promptInjection.buildConfirmedProjectionPromptContext(UID, cid);
@@ -126,7 +117,7 @@ function parseInjectedRecords(block: string): Array<Record<string, unknown>> {
   return JSON.parse(line) as Array<Record<string, unknown>>;
 }
 
-describe('frozen read after migration (T016 / SC-002)', () => {
+describe('frozen read after migration', () => {
   it('live 记录已迁出：命中冻结副本的已确认投影仍可读，内容与证据全取副本，并标注来源已迁入经验目录', async () => {
     await modules();
     const STATEMENT = '迁移后仍按当年确认的版本供给：冻结读专用正文 FROZEN-1a2b。';
@@ -153,20 +144,20 @@ describe('frozen read after migration (T016 / SC-002)', () => {
     expect(afterRecord!.scope).toBe(beforeRecord!.scope);
     // 证据引用全取副本（live 已删，读 live 只会抛错被吞）。
     expect(afterRecord!.source_refs).toEqual(beforeRecord!.source_refs);
-    // 如实标注：来源已迁入经验目录（迁移时点已判过治理，此处不重判）。
+    // 如实标注：来源已迁入经验目录（当前来源和迁移目标仍需通过准入）。
     expect(afterRecord!.source_migrated).toBe('experience_catalog');
     // citations 同样不断链。
     expect(after.citations.some((citation) => citation.assetId === asset.id)).toBe(true);
   });
 
-  it('手工构造（迁移中间态）：冻结副本在投影里、live 记录被物理删除 → 注入仍可读（现状会静默缺席）', async () => {
+  it('a frozen body without either a live asset or its migration destination cannot restore access', async () => {
     const { promptInjection, store, assets } = await modules();
     const asset = await seedAsset({ id: 'aa-frozen-0002', statement: '手工构造的冻结正文 MANUAL-FROZEN-9c8d。' });
     const projection = await confirmProjectionPinnedTo(asset.id, 'cid-frozen-0002', 'run-frozen-0002');
     await attachProjectionToConversation(projection.id, 'cid-frozen-0002');
 
     // 手工把确认版本的内容副本塞进投影（等价于迁移冻结步的产物；含
-    // evidenceRefs——T015 冻结时写入的加法式可选字段）。
+    // evidenceRefs——冻结时写入的加法式可选字段）。
     await store.updateRecallJsonRecord(UID, 'projections', projection.id, (raw) => ({
       ...raw,
       assetVersionSnapshots: {
@@ -191,10 +182,8 @@ describe('frozen read after migration (T016 / SC-002)', () => {
 
     const context = await promptFor('cid-frozen-0002');
     const record = parseInjectedRecords(context.promptBlock).find((row) => row.asset_id === asset.id);
-    expect(record).toBeDefined();
-    expect(record!.statement).toBe('手工构造的冻结正文 MANUAL-FROZEN-9c8d。');
-    expect(record!.source_refs).toEqual([{ kind: 'conversation', id: `conv-${asset.id}` }]);
-    expect(record!.source_migrated).toBe('experience_catalog');
+    expect(record).toBeUndefined();
+    expect(context.citations).toEqual([]);
   });
 
   it('live 记录存在但已带迁出标记（migratedToExperienceId）→ 同样按副本供给并标注', async () => {
@@ -261,5 +250,19 @@ describe('frozen read after migration (T016 / SC-002)', () => {
 
     const doomedContext = await promptFor('cid-frozen-doomed');
     expect(parseInjectedRecords(doomedContext.promptBlock).find((row) => row.asset_id === doomed.id)).toBeUndefined();
+  });
+  it('rechecks migrated experience status and source control instead of treating the frozen body as a permanent grant', async () => {
+    const asset = await seedAsset({ id: 'aa-frozen-current-grant', statement: '当前来源与经验状态仍需允许。', sourceId: 'conversation-current-grant' });
+    const projection = await confirmProjectionPinnedTo(asset.id, 'cid-current-grant', 'run-current-grant');
+    await attachProjectionToConversation(projection.id, 'cid-current-grant');
+    await migrateAway(asset.id);
+    expect((await promptFor('cid-current-grant')).citations).toHaveLength(1);
+    const experiences = await import('../../../../src/main/features/recall/experience-service');
+    await experiences.setExperienceStatus(UID, `exp-mig-${asset.id}`, 'pause');
+    expect((await promptFor('cid-current-grant')).citations).toEqual([]);
+    await experiences.setExperienceStatus(UID, `exp-mig-${asset.id}`, 'resume');
+    const sources = await import('../../../../src/main/features/recall/source-control');
+    await sources.pauseCognitionSource(UID, { kind: 'conversation', id: 'conversation-current-grant', subtype: 'session', scope: 'personal' });
+    expect((await promptFor('cid-current-grant')).citations).toEqual([]);
   });
 });

@@ -15,6 +15,9 @@ const loggerMocks = vi.hoisted(() => ({
   debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
 }));
 const fetchImmutableSourceMock = vi.hoisted(() => vi.fn());
+const installAgentMock = vi.hoisted(() => vi.fn());
+const recordAppIncompatibleSkipMock = vi.hoisted(() => vi.fn());
+const clearAppIncompatibleSkipMock = vi.hoisted(() => vi.fn());
 
 /** 合成一条 A-01 目录行（含 artifact 身份）。 */
 function catalogRow(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -43,7 +46,16 @@ function serveImmutableBytes(bytes: Buffer, before?: () => void): void {
 
 vi.mock('../../../src/main/features/marketplace', () => ({
   postJson: postJsonMock,
+  installMarketplaceAgent: installAgentMock,
   extractBundleSafely: extractBundleSafelyMock,
+  // `metadata-adapter.ts` 的目录索引在请求里要带 `app_version`（4f017c7c8：Hub 的硬要求），
+  // 所以它从本模块取 `currentAppVersion()`。少这个导出会让按 ID 取元信息整条链路抛错，
+  // 拉取在到达断言之前就被打断。生产实现就是 `app.getVersion()`，这里对齐同义。
+  currentAppVersion: () => electronMock.appVersion,
+  // C5/N-06 版本门的两个回调：兼容路径会撤销旧标记，所以两个都要在 mock 里存在，
+  // 否则 reconcile 走兼容分支时调用 undefined。
+  recordAppIncompatibleSkip: recordAppIncompatibleSkipMock,
+  clearAppIncompatibleSkip: clearAppIncompatibleSkipMock,
   // 临时区 / trash 的命名是纯字符串函数，用真实实现——mock 掉会让原子提升与
   // 崩溃恢复的命名契约在本用例里失真。
   quarantineStagingName: (hex: string) => `.staging-${hex}`,
@@ -87,7 +99,10 @@ beforeEach(() => {
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   postJsonMock.mockReset();
+  installAgentMock.mockReset();
   extractBundleSafelyMock.mockReset();
+  recordAppIncompatibleSkipMock.mockReset();
+  clearAppIncompatibleSkipMock.mockReset();
   loggerMocks.debug.mockClear();
   loggerMocks.info.mockClear();
   loggerMocks.warn.mockClear();
@@ -184,6 +199,42 @@ describe('marketplace reconcile', () => {
     }
   });
 
+  it('新格式 Agent 行没有 URL、本机缺内容 → 走完整安装落地；随包种子行仍不动（Hub 待改清单 §5）', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected network request'));
+    writeManifest({
+      version: 1,
+      agents: [
+        // 默认安装 / 别的设备同步来的新格式行：没有 agent_json_url，本机也还没有内容
+        { id: 'pkg-default', version: '1.2.0', published_at: 100, updated_at: 120, agent_json_url: '', installed_at: 100, default_install: true },
+        { id: 'builtin-agent', version: '1.0.0', published_at: 0, agent_json_url: '', installed_at: 100, seed_source: 'builtin' },
+      ],
+      skills: [],
+    });
+    installAgentMock.mockResolvedValue({ ok: true, id: 'pkg-default' });
+
+    try {
+      const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+      await expect(reconcile.reconcileInstalls('u1')).resolves.toMatchObject({ pulled_agents: 1, failed: [] });
+      expect(installAgentMock).toHaveBeenCalledTimes(1);
+      expect(installAgentMock.mock.calls[0][0]).toBe('pkg-default');
+      expect(installAgentMock.mock.calls[0][1]).toMatchObject({ version: '1.2.0', published_at: 100, updated_at: 120 });
+      expect(fetchSpy).not.toHaveBeenCalled(); // 不会拿空串去下载
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('新格式 Agent 补装失败 → 记入 failed，不抛出', async () => {
+    writeManifest({
+      version: 1,
+      agents: [{ id: 'pkg-default', version: '1.2.0', published_at: 100, agent_json_url: '', installed_at: 100 }],
+      skills: [],
+    });
+    installAgentMock.mockRejectedValue(new Error('network down'));
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    await expect(reconcile.reconcileInstalls('u1')).resolves.toMatchObject({ pulled_agents: 0, failed: ['agent:pkg-default'] });
+  });
+
   it('marks an installed item stale when updated_at changes even if version and published_at do not', async () => {
     postJsonMock.mockImplementation(async (p: string) => {
       if (p === '/marketplace/agents/list') {
@@ -216,6 +267,7 @@ describe('marketplace reconcile', () => {
     expect(result).toEqual({ updated_agents: 1, updated_skills: 0 });
     expect(postJsonMock).toHaveBeenCalledTimes(1);
     expect(postJsonMock).toHaveBeenCalledWith('/marketplace/agents/list', {
+      app_version: '1.5.1',
       page: 1,
       size: 100,
       ids: ['agent1'],
@@ -346,11 +398,13 @@ describe('marketplace reconcile', () => {
     expect(result).toEqual({ updated_agents: 0, updated_skills: 0 });
     expect(postJsonMock).toHaveBeenCalledTimes(2);
     expect(postJsonMock).toHaveBeenNthCalledWith(1, '/marketplace/agents/list', {
+      app_version: '1.5.1',
       page: 1,
       size: 100,
       ids: ['agent-a'],
     });
     expect(postJsonMock).toHaveBeenNthCalledWith(2, '/marketplace/skills/list', {
+      app_version: '1.5.1',
       page: 1,
       size: 100,
       ids: ['skill-a'],
@@ -683,7 +737,49 @@ describe('marketplace reconcile', () => {
     expect(fs.existsSync(path.join(tmpDir, 'u1', 'local', 'marketplace', 'skills', 'cancelled-skill'))).toBe(false);
   });
 
-  it('pulls new skill_list dependencies while reconciling an updated agent', async () => {
+  /**
+   * 生产形态的取消：登出/切号发生在字节流传输途中时，`source-fetch.ts` 的失败出口
+   * 会把 `ReconcileCancelled` 包成 `MarketplaceError`（原错误只留在 cause 里）。
+   * 上面那条用例注入的是原始哨兵、且 mock 掉了整个 source-fetch，所以**抓不到**
+   * 被归一化的形态——这里按生产的真实形状注入，锁住「取消不会被记成失败」。
+   */
+  it('does not record a cancellation wrapped by the fetch layer as a failure', async () => {
+    const skillZip = new AdmZip();
+    skillZip.addFile('SKILL.md', Buffer.from('---\nname: wrapped-cancel-skill\n---\n'));
+    const body = skillZip.toBuffer();
+    postJsonMock.mockImplementation(async (p: string) => {
+      if (p === '/marketplace/skills/list') return { list: [catalogRow('wrapped-cancel-skill')], total: 1 };
+      throw new Error(`unexpected path ${p}`);
+    });
+    const { MarketplaceError } = await import('../../../src/main/features/marketplace/errors');
+    const { MarketplaceCancelled } = await import('../../../src/main/features/marketplace/cancellation');
+    fetchImmutableSourceMock.mockImplementation(async (req: any) => {
+      // 与 `normalizeMarketplaceError` 一致的包装：外层是 MarketplaceError，内层是取消哨兵。
+      throw new MarketplaceError('CATALOG_UNAVAILABLE', 'CATALOG_UNAVAILABLE: reconcile cancelled', {
+        cause: new MarketplaceCancelled('reconcile cancelled'),
+      });
+    });
+    writeManifest({
+      version: 1,
+      agents: [],
+      skills: [{
+        id: 'wrapped-cancel-skill',
+        version: '1.0.0',
+        published_at: 100,
+        bundle_url: '',
+        installed_at: 200,
+      }],
+    });
+
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    const result = await reconcile.reconcileInstalls('u1', { shouldContinue: () => true });
+
+    expect(result).toMatchObject({ pulled_skills: 0, failed: [] });
+    expect(extractBundleSafelyMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(tmpDir, 'u1', 'local', 'marketplace', 'skills', 'wrapped-cancel-skill'))).toBe(false);
+  });
+
+  it.each(['approved', 'published'])('pulls new skill_list dependencies while reconciling an updated agent (dependency status %s)', async (depStatus) => {
     const depZip = new AdmZip();
     depZip.addFile('SKILL.md', Buffer.from('---\nname: dep-skill\n---\n'));
     const base = await listen((req, res) => {
@@ -700,7 +796,7 @@ describe('marketplace reconcile', () => {
       res.end('not found');
     });
     postJsonMock.mockImplementation(async (p: string) => {
-      if (p === '/marketplace/skills/list') return { list: [catalogRow('dep-skill')], total: 1 };
+      if (p === '/marketplace/skills/list') return { list: [catalogRow('dep-skill', { status: depStatus })], total: 1 };
       throw new Error(`unexpected path ${p}`);
     });
     serveImmutableBytes(depZip.toBuffer());
@@ -729,7 +825,7 @@ describe('marketplace reconcile', () => {
         id: 'dep-skill',
         bundle_url: '',
         version: '1.0.0',
-        status: 'approved',
+        status: depStatus,
       }),
     ]);
     // 字节确实是按 {content_id, version} 从唯一取字节入口取的。
@@ -739,6 +835,125 @@ describe('marketplace reconcile', () => {
     expect(fs.existsSync(path.join(tmpDir, 'u1', 'local', 'marketplace', 'skills', 'dep-skill', 'SKILL.md'))).toBe(true);
     const agentJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'u1', 'local', 'marketplace', 'agents', 'agent-updated', 'agent.json'), 'utf8'));
     expect(agentJson.skill_list).toEqual(['dep-skill']);
+  });
+
+  /**
+   * 更新已装 Agent 失败必须保留旧版（产品 2026-10-13）。
+   * 以前这里是先 rm 旧目录再写新的，更新途中失败就把用户能用的旧版一起弄丢了。
+   */
+  describe('updating an installed agent', () => {
+    const agentDir = () => path.join(tmpDir, 'u1', 'local', 'marketplace', 'agents', 'agent-updated');
+    const failuresFile = () => path.join(tmpDir, 'u1', 'local', 'marketplace', '_agent_update_failures.json');
+    const manifestRow = (base: string) => ({
+      id: 'agent-updated', version: '2.0.0', published_at: 100, updated_at: 200,
+      agent_json_url: `${base}/agent.json`, installed_at: 300,
+    });
+    const serveAgent = (body: Record<string, unknown>) => listen((req, res) => {
+      if (req.url === '/agent.json') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(body));
+        return;
+      }
+      res.statusCode = 404;
+      res.end('not found');
+    });
+    const installOldVersion = (): void => {
+      const dir = writeLocalAgent('agent-updated', { version: '1.0.0', published_at: 50, updated_at: 60, installed_at: 70 });
+      fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify({ agent_id: 'agent-updated', name: 'Old Agent', skill_list: [] }), 'utf8');
+      fs.mkdirSync(path.join(dir, 'skills', 'old-private'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'skills', 'old-private', 'SKILL.md'), '---\nname: old-private\n---\n', 'utf8');
+    };
+
+    it('keeps the old version, with its private skills, when the update fails halfway', async () => {
+      installOldVersion();
+      const base = await serveAgent({ agent_id: 'agent-updated', name: 'New Agent', skill_list: ['dep-skill'] });
+      postJsonMock.mockImplementation(async (p: string) => {
+        // The dependency cannot be resolved: the update must fail as a whole.
+        if (p === '/marketplace/skills/list') return { list: [], total: 0 };
+        throw new Error(`unexpected path ${p}`);
+      });
+      writeManifest({ version: 1, agents: [manifestRow(base)], skills: [] });
+
+      const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+      const result = await reconcile.reconcileInstalls('u1') as any;
+
+      expect(result.pulled_agents).toBe(0);
+      expect(result.failed).toHaveLength(1);
+      const kept = JSON.parse(fs.readFileSync(path.join(agentDir(), 'agent.json'), 'utf8'));
+      expect(kept.name).toBe('Old Agent');
+      expect(fs.existsSync(path.join(agentDir(), 'skills', 'old-private', 'SKILL.md'))).toBe(true);
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir(), '_install.json'), 'utf8')).version).toBe('1.0.0');
+      // No backup directory is left behind to confuse the agent list.
+      const leftovers = fs.readdirSync(path.dirname(agentDir())).filter((n) => n.startsWith('.prev-'));
+      expect(leftovers).toEqual([]);
+      // The failure is remembered (reason code only) so the card can say a newer version did not make it.
+      const recorded = JSON.parse(fs.readFileSync(failuresFile(), 'utf8'));
+      expect(recorded['agent-updated']).toMatchObject({ target_version: '2.0.0', reason: 'dependency_missing' });
+    });
+
+    it('replaces the old version completely when the update succeeds (nothing of the old tree leaks in)', async () => {
+      installOldVersion();
+      const base = await serveAgent({ agent_id: 'agent-updated', name: 'New Agent', skill_list: [] });
+      writeManifest({ version: 1, agents: [manifestRow(base)], skills: [] });
+
+      const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+      const result = await reconcile.reconcileInstalls('u1') as any;
+
+      expect(result.pulled_agents).toBe(1);
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir(), 'agent.json'), 'utf8')).name).toBe('New Agent');
+      expect(fs.existsSync(path.join(agentDir(), 'skills', 'old-private'))).toBe(false);
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir(), '_install.json'), 'utf8')).version).toBe('2.0.0');
+      expect(fs.readdirSync(path.dirname(agentDir())).filter((n) => n.startsWith('.prev-'))).toEqual([]);
+      // A success clears any earlier failure note.
+      expect(fs.existsSync(failuresFile())).toBe(false);
+    });
+
+    it('a later successful update clears the failure note left by an earlier failed one', async () => {
+      installOldVersion();
+      fs.writeFileSync(failuresFile(), JSON.stringify({ 'agent-updated': { target_version: '2.0.0', at: 1, reason: 'network' } }));
+      const base = await serveAgent({ agent_id: 'agent-updated', name: 'New Agent', skill_list: [] });
+      writeManifest({ version: 1, agents: [manifestRow(base)], skills: [] });
+
+      const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+      const result = await reconcile.reconcileInstalls('u1') as any;
+
+      expect(result.pulled_agents).toBe(1);
+      expect(fs.existsSync(failuresFile())).toBe(false);
+    });
+
+    it('does not try to download a builtin:<name> reference as a Skill, and the update succeeds', async () => {
+      fetchImmutableSourceMock.mockClear(); // calls recorded by earlier tests are not this test's
+      const systemSkill = path.join(tmpDir, 'u1', 'local', 'system', 'skills', 'coding');
+      fs.mkdirSync(systemSkill, { recursive: true });
+      fs.writeFileSync(path.join(systemSkill, 'SKILL.md'), '---\nname: coding\n---\n', 'utf8');
+      installOldVersion();
+      const base = await serveAgent({ agent_id: 'agent-updated', name: 'New Agent', skill_list: ['builtin:coding'] });
+      postJsonMock.mockImplementation(async (p: string) => { throw new Error(`unexpected network call ${p}`); });
+      writeManifest({ version: 1, agents: [manifestRow(base)], skills: [] });
+
+      const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+      const result = await reconcile.reconcileInstalls('u1') as any;
+
+      expect(result.pulled_agents).toBe(1);
+      expect(result.failed).toEqual([]);
+      expect(fetchImmutableSourceMock).not.toHaveBeenCalled();
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir(), 'agent.json'), 'utf8')).skill_list).toEqual(['builtin:coding']);
+    });
+
+    it('fails the update, keeping the old version, when a referenced built-in capability is not available here', async () => {
+      installOldVersion();
+      // `coding` is offered by the client but its system skill is not installed on this machine.
+      const base = await serveAgent({ agent_id: 'agent-updated', name: 'New Agent', skill_list: ['builtin:coding'] });
+      postJsonMock.mockImplementation(async (p: string) => { throw new Error(`unexpected network call ${p}`); });
+      writeManifest({ version: 1, agents: [manifestRow(base)], skills: [] });
+
+      const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+      const result = await reconcile.reconcileInstalls('u1') as any;
+
+      expect(result.pulled_agents).toBe(0);
+      expect(result.failed).toHaveLength(1);
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir(), 'agent.json'), 'utf8')).name).toBe('Old Agent');
+    });
   });
 
   it('emits a visible status while default installs are being seeded', async () => {
@@ -886,6 +1101,118 @@ describe('marketplace content update monotonicity', () => {
     });
   });
 
+  it('客户端版本不够新时 Agent 内容不更新，但 Hub 的停用状态仍同步', async () => {
+    const installs = await import('../../../src/main/features/marketplace_installs');
+    await installs.addAgentInstall('u1', {
+      id: 'old-client-agent', version: '1.0.0', published_at: 100, updated_at: 100,
+      agent_json_url: 'https://example.test/agent.json', create_uid: '0', status: 'approved', default_install: false,
+    });
+    // 本机 1.5.1；Hub 上这个 Agent 已是 2.0.0、要求 9.0.0、并被停用
+    catalog([{
+      id: 'old-client-agent', version: '2.0.0', published_at: 999, updated_at: 999,
+      status: 'disabled', default_install: true, min_app_version: '9.0.0',
+    }], 'agents');
+
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    await reconcile.checkServerUpdatesForInstalls('u1');
+
+    const manifest = await installs.readInstalls('u1');
+    expect(manifest.agents[0]).toMatchObject({
+      version: '1.0.0',          // 内容不升级
+      published_at: 100,
+      default_install: false,    // 其余元数据也不动
+      status: 'disabled',        // 停用状态要同步
+      min_app_version: '9.0.0',
+    });
+  });
+
+  describe('新格式（agent-package-v1）Agent 的更新', () => {
+    const PKG = { sha256: 'a'.repeat(64), size_bytes: 10, format: 'agent-package-v1' };
+    async function seed(over: Record<string, unknown> = {}) {
+      const installs = await import('../../../src/main/features/marketplace_installs');
+      await installs.addAgentInstall('u1', {
+        id: 'pkg-agent', version: '1.0.0', published_at: 100, updated_at: 100,
+        agent_json_url: '', create_uid: 'u', status: 'approved',
+        package_format: 'agent-package-v1', artifact_sha256: PKG.sha256, ...over,
+      });
+      return installs;
+    }
+    async function run() {
+      const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+      return reconcile.checkServerUpdatesForInstalls('u1');
+    }
+
+    it('目录版本更高 → 走完整安装（带目录给的版本），不重写 manifest 行', async () => {
+      const installs = await seed();
+      catalog([catalogRow('pkg-agent', { version: '1.1.0', artifact: PKG })], 'agents');
+      installAgentMock.mockResolvedValue({ ok: true, id: 'pkg-agent' });
+      const result = await run();
+      expect(installAgentMock).toHaveBeenCalledTimes(1);
+      expect(installAgentMock.mock.calls[0][0]).toBe('pkg-agent');
+      expect(installAgentMock.mock.calls[0][1]).toMatchObject({ version: '1.1.0' });
+      expect(result.updated_agents).toBe(1);
+      expect((await installs.readInstalls('u1')).agents[0].version).toBe('1.0.0'); // 行由安装本身写，这里没动
+    });
+
+    it('同版本但发布物摘要不同（重新发布）→ 也更新', async () => {
+      await seed();
+      catalog([catalogRow('pkg-agent', { version: '1.0.0', artifact: { ...PKG, sha256: 'b'.repeat(64) } })], 'agents');
+      installAgentMock.mockResolvedValue({ ok: true, id: 'pkg-agent' });
+      await run();
+      expect(installAgentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('同版本同摘要 → 不动', async () => {
+      await seed();
+      catalog([catalogRow('pkg-agent', { version: '1.0.0', artifact: PKG })], 'agents');
+      await run();
+      expect(installAgentMock).not.toHaveBeenCalled();
+    });
+
+    it('目录版本更低 → 永不降级', async () => {
+      await seed({ version: '2.0.0' });
+      catalog([catalogRow('pkg-agent', { version: '1.9.0', artifact: PKG })], 'agents');
+      await run();
+      expect(installAgentMock).not.toHaveBeenCalled();
+    });
+
+    it('更新失败 → 不抛出，记录失败原因，旧版 manifest 行保持不变', async () => {
+      const installs = await seed();
+      catalog([catalogRow('pkg-agent', { version: '1.1.0', artifact: PKG })], 'agents');
+      installAgentMock.mockRejectedValue(new Error('network down'));
+      const result = await run();
+      expect(result.updated_agents).toBe(0);
+      expect((await installs.readInstalls('u1')).agents[0].version).toBe('1.0.0');
+      const failures = await import('../../../src/main/features/agent_update_failures');
+      expect(failures.readAgentUpdateFailures('u1')['pkg-agent']).toMatchObject({ target_version: '1.1.0' });
+    });
+
+    it('状态同步改写本机 _install.json 时，保留发布物身份（package_format / artifact_sha256）', async () => {
+      await seed();
+      const dir = path.join(tmpDir, 'u1', 'local', 'marketplace', 'agents', 'pkg-agent');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify({ agent_id: 'pkg-agent', name: 'P' }), 'utf8');
+      fs.writeFileSync(path.join(dir, '_install.json'), JSON.stringify({
+        version: '1.0.0', published_at: 100, updated_at: 100, agent_json_url: '', create_uid: 'u', status: 'published',
+        package_format: 'agent-package-v1', artifact_sha256: PKG.sha256, artifact_size_bytes: 10,
+      }), 'utf8');
+      // 触发一次只改元数据的同步：客户端版本不够新 + Hub 已停用
+      catalog([catalogRow('pkg-agent', { version: '2.0.0', artifact: PKG, status: 'disabled', min_app_version: '9.0.0' })], 'agents');
+      await run();
+      const meta = JSON.parse(fs.readFileSync(path.join(dir, '_install.json'), 'utf8'));
+      expect(meta.status).toBe('disabled');
+      expect(meta).toMatchObject({ package_format: 'agent-package-v1', artifact_sha256: PKG.sha256, artifact_size_bytes: 10 });
+    });
+
+    it('要求的客户端版本更高 → 不安装，但停用状态仍同步', async () => {
+      const installs = await seed();
+      catalog([catalogRow('pkg-agent', { version: '2.0.0', artifact: PKG, status: 'disabled', min_app_version: '9.0.0' })], 'agents');
+      await run();
+      expect(installAgentMock).not.toHaveBeenCalled();
+      expect((await installs.readInstalls('u1')).agents[0]).toMatchObject({ version: '1.0.0', status: 'disabled' });
+    });
+  });
+
   it('pulls a same-version newer republish exactly once', async () => {
     const installs = await import('../../../src/main/features/marketplace_installs');
     await installs.addSkillInstall('u1', {
@@ -918,5 +1245,50 @@ describe('marketplace content update monotonicity', () => {
       kind: 'skill', reason: 'unparsable_version',
     }));
     expect(JSON.stringify(loggerMocks.info.mock.calls)).not.toContain(tmpDir);
+  });
+});
+
+describe('marketplace app-compatibility gate (C5/N-06)', () => {
+  function catalog(rows: Array<Record<string, unknown>>, kind: 'agents' | 'skills') {
+    postJsonMock.mockImplementation(async (p: string) => {
+      if (p === `/marketplace/${kind}/list`) return { list: rows, total: rows.length };
+      if (p === `/marketplace/${kind === 'agents' ? 'skills' : 'agents'}/list`) return { list: [], total: 0 };
+      throw new Error(`unexpected path ${p}`);
+    });
+  }
+
+  it('records the content whose min_app_version this client cannot meet', async () => {
+    const installs = await import('../../../src/main/features/marketplace_installs');
+    await installs.addAgentInstall('u1', {
+      id: 'gate-agent', version: '1.0.0', published_at: 100, updated_at: 100,
+      agent_json_url: 'https://example.test/agent.json', create_uid: '0', status: 'approved',
+    });
+    catalog([{ id: 'gate-agent', version: '1.0.0', published_at: 100, updated_at: 100, status: 'approved', min_app_version: '9.0.0' }], 'agents');
+
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    await reconcile.checkServerUpdatesForInstalls('u1');
+
+    expect(recordAppIncompatibleSkipMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'gate-agent' }), 'agent', '9.0.0',
+    );
+    expect(clearAppIncompatibleSkipMock).not.toHaveBeenCalled();
+  });
+
+  it('⚠️ 内容端下调 min_app_version 后旧标记被撤销（不再永远显示「需更新客户端」）', async () => {
+    const installs = await import('../../../src/main/features/marketplace_installs');
+    await installs.addAgentInstall('u1', {
+      id: 'gate-agent', version: '1.0.0', published_at: 100, updated_at: 100,
+      agent_json_url: 'https://example.test/agent.json', create_uid: '0', status: 'approved',
+    });
+    // 客户端 1.5.1（见 beforeEach）满足 1.0.0 → 走兼容分支。
+    catalog([{ id: 'gate-agent', version: '1.0.0', published_at: 100, updated_at: 100, status: 'approved', min_app_version: '1.0.0' }], 'agents');
+
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    await reconcile.checkServerUpdatesForInstalls('u1');
+
+    expect(clearAppIncompatibleSkipMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'gate-agent' }), 'agent',
+    );
+    expect(recordAppIncompatibleSkipMock).not.toHaveBeenCalled();
   });
 });

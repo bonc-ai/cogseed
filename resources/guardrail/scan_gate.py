@@ -336,7 +336,15 @@ def evaluate(engine_dir: str, target: str, detail: bool = False) -> dict[str, An
         if s.get("has_binaries") or raw.get("has_binaries"):
             surface["has_binaries"] = True
         try:
-            vulnerabilities += int(r.get("vulnerability_count") or 0)
+            # 引擎报告的是 `vulnerability_findings` 列表，不是计数；计数是
+            # 本文件对外输出的字段。只读 `vulnerability_count` 会让这个数
+            # 恒为 0——即使依赖漏洞 findings 已经列在报告里（实测：
+            # lodash@4.17.20 有 6 条公告，`vulnerability_count` 仍是 0）。
+            count = r.get("vulnerability_count")
+            if count is None:
+                vuln_list = r.get("vulnerability_findings")
+                count = len(vuln_list) if isinstance(vuln_list, list) else 0
+            vulnerabilities += int(count or 0)
         except (TypeError, ValueError):
             pass
         for m in r.get("required_mitigations") or []:

@@ -1,0 +1,11 @@
+name: ui-design-executor
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: UIDesigner's compact default executor for ordinary single-page, component,
+  screenshot-redesign, and in-repo UI work; complete the design, HTML or explicit-format
+  artifact, relevant states, fast validation, and delivery with minimal skill loading
+  and tool loops.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

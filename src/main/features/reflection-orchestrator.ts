@@ -199,12 +199,27 @@ function _sessionNewerThan(uid: string, sessionId: string, sinceMs: number): boo
 
 // ── Reflection invocation ────────────────────────────────────────────────
 
-export type ReflectFn = (uid: string, agentId: string, sinceMs: number) => Promise<void>;
+export type ReflectFn = (uid: string, agentId: string, sinceMs: number, signal?: AbortSignal) => Promise<void>;
+
+/** P-r1-46: true when a user switch made the global active user disagree
+ *  with the uid this cycle was scheduled for. The metacognition store path
+ *  resolves through the active user, so continuing would pair this uid's
+ *  transcript with another user's self-assessment. */
+export async function activeUserMismatch(uid: string): Promise<boolean> {
+  const { hasActiveUser, getActiveUserId } = await import('./users');
+  return hasActiveUser() && getActiveUserId() !== uid;
+}
 
 /** Build the reflection prompt for one agent and run it. Throws on failure
  *  so the caller can decide whether to stamp `lastReflectedAt` (success)
  *  or leave it (retry next cycle). */
-async function realReflectForAgent(uid: string, agentId: string, sinceMs: number): Promise<void> {
+async function realReflectForAgent(uid: string, agentId: string, sinceMs: number, signal?: AbortSignal): Promise<void> {
+  // Re-check the active user at execution time (P-r1-46): skip (throw, no
+  // stamp); the new owner's own cycle re-picks the work.
+  if (await activeUserMismatch(uid)) {
+    throw new Error(`active user changed since cycle was scheduled (expected ${uid})`);
+  }
+
   const runnerAgentId = agentId === DEFAULT_AGENT_ID ? '' : agentId;
 
   // Ephemeral session — runReflection uses an in-memory session (not the
@@ -212,7 +227,24 @@ async function realReflectForAgent(uid: string, agentId: string, sinceMs: number
   const tail = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const sessionId = `reflect-${tail}`;
 
-  const { runner } = await buildRunner({ sessionId, userId: uid, agentId: runnerAgentId });
+  // Read the self-assessment BEFORE building the runner (P-r2-13): the
+  // captured mtimes become the optimistic-lock baseline for every
+  // metacognition write this reflection makes, so a lesson the user saves
+  // in chat mid-reflection is no longer silently clobbered by the stale
+  // snapshot baked into this prompt. `0` = file absent right now.
+  const ca = await import('#core-agent');
+  const comp = metacognition.readContent(agentId, 'competence');
+  const strat = metacognition.readContent(agentId, 'strategies');
+
+  const { runner } = await buildRunner({
+    sessionId,
+    userId: uid,
+    agentId: runnerAgentId,
+    metacognitionBaselineMtime: {
+      competence: comp.mtimeMs ?? 0,
+      strategies: strat.mtimeMs ?? 0,
+    },
+  });
 
   const transcriptResult = await buildTranscript(uid, agentId, sinceMs);
   if (!transcriptResult.text) {
@@ -222,15 +254,15 @@ async function realReflectForAgent(uid: string, agentId: string, sinceMs: number
     throw new Error('transcript empty after dirty gate');
   }
 
-  const ca = await import('#core-agent');
-  const comp = metacognition.readContent(agentId, 'competence');
-  const strat = metacognition.readContent(agentId, 'strategies');
   const languageName = getLocaleMeta(getLanguage()).llmName;
   const prompt = ca.buildReviewPrompt(comp.content || '', strat.content || '', transcriptResult.text, languageName);
 
   // `runReflection` swallows provider/LLM/loop errors and returns ''; an
   // empty response is treated as a failed reflection (cooldown not stamped).
-  const responseText = await runner.runReflection(prompt);
+  // The cycle's cooperative-cancellation signal is passed through (P-r2-15):
+  // without it the 30s maxSliceMs budget could only abort between agents,
+  // and a single minutes-long reflection ran to completion regardless.
+  const responseText = await runner.runReflection(prompt, signal);
   if (!responseText || !responseText.trim()) {
     throw new Error('reflection returned empty (provider/LLM error or max loops; see core-agent log)');
   }
@@ -247,7 +279,10 @@ export interface RunCycleOpts {
   now?: () => number;
   /** Override dirty check (test seam). */
   isDirty?: (uid: string, agentId: string, sinceMs: number) => Promise<boolean>;
-  /** Cooperative cancellation between catalog checks and agent reflections. */
+  /** Cooperative cancellation between catalog checks and agent reflections.
+   *  Propagated into each agent's reflection LLM call (P-r2-15), so a
+   *  maxSliceMs expiry actually interrupts an in-flight reflection instead
+   *  of only taking effect between agents. */
   signal?: AbortSignal;
   /** Override API-model admission (test seam). A custom `reflect` bypasses the
    * production check unless this hook is supplied explicitly. */
@@ -283,7 +318,8 @@ export async function runOneCycle(uid: string, opts: RunCycleOpts = {}): Promise
   const dirtyFn = opts.isDirty ?? isAgentDirty;
 
   let agents: Awaited<ReturnType<typeof listAgentSummaries>> = [];
-  try { agents = await listAgentSummaries(); }
+  let agentsListed = false;
+  try { agents = await listAgentSummaries(); agentsListed = true; }
   catch (err) { log.warn(`listAgentSummaries failed: ${(err as Error).message}`); }
 
   // `_default` first so the most common bucket gets attention even if a
@@ -293,6 +329,22 @@ export async function runOneCycle(uid: string, opts: RunCycleOpts = {}): Promise
     ...agents.filter((agent) => isAgentChatDispatchable(agent)).map((agent) => agent.agent_id),
   ];
   const state = readReflectionState(uid);
+
+  // P-r1-47 lazy GC: cooldown stamps for deleted agents would otherwise
+  // linger in reflection-state.json forever (~50B each). Prune only when the
+  // agent catalog enumerated successfully, so a transient failure can never
+  // wipe the map. Disabled-but-listed agents keep their stamps (they still
+  // exist); `_default` is always kept.
+  if (agentsListed) {
+    const known = new Set([DEFAULT_AGENT_ID, ...agents.map((agent) => agent.agent_id)]);
+    const staleKeys = Object.keys(state.lastReflectedAt).filter((k) => !known.has(k));
+    if (staleKeys.length > 0) {
+      for (const k of staleKeys) delete state.lastReflectedAt[k];
+      writeReflectionState(uid, state);
+      log.info(`pruned ${staleKeys.length} cooldown stamp(s) for deleted agent(s): ${staleKeys.join(', ')}`);
+    }
+  }
+
   const eligible = await pickAgentsForCycle(uid, agentIds, state, now, dirtyFn, opts.signal);
 
   if (eligible.length === 0) {
@@ -305,7 +357,7 @@ export async function runOneCycle(uid: string, opts: RunCycleOpts = {}): Promise
   for (const { agentId, sinceMs, reason } of eligible) {
     if (opts.signal?.aborted) break;
     try {
-      await reflect(uid, agentId, sinceMs);
+      await reflect(uid, agentId, sinceMs, opts.signal);
       // Stamp success — read fresh state in case another writer touched it.
       const next = readReflectionState(uid);
       next.lastReflectedAt[agentId] = new Date(now).toISOString();

@@ -1,0 +1,132 @@
+/* 所有设置横向占满内容区，按行从上到下排列。 */
+#ca-root .ca-layout-settings { container-type: inline-size; }
+#ca-root .ca-app .ca-settings-shell { width: 100%; min-width: 0; }
+#ca-root .ca-app .ca-settings-heading { margin: 0 0 var(--space-3); font-size: var(--font-size-4); font-weight: 600; color: var(--ca-ink2); }
+#ca-root .ca-app .ca-settings-cards { display: flex; flex-direction: column; gap: var(--space-4); }
+#ca-root .ca-app .ca-setting-card { padding: var(--space-5); max-width: none; }
+#ca-root .ca-app .ca-setting-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+#ca-root .ca-app .ca-setting-head-copy { flex: 1; min-width: 0; }
+#ca-root .ca-app .ca-setting-head-copy .note { margin-top: var(--space-2); }
+#ca-root .ca-app .ca-setting-head-ctl { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+#ca-root .ca-app .ca-setting-head-ctl:empty { display: none; }
+#ca-root #ca-scroll.ca-layout-settings .ca-setting-head-ctl .ui-switch { min-height: 0; flex: 0 0 auto; }
+#ca-root #ca-scroll.ca-layout-settings .ca-setting-head-ctl .ui-switch > .ui-switch__knob { display: none; }
+#ca-root .ca-app .ca-setting-body { margin-top: var(--space-3); }
+#ca-root .ca-app .ca-discovery-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+#ca-root .ca-app .ca-discovery-copy { flex: 1; min-width: 0; }
+#ca-root .ca-app .ca-discovery-copy > * + * { margin-top: var(--space-2); }
+#ca-root .ca-app .ca-discovery-actions { flex-wrap: wrap; justify-content: flex-end; }
+#ca-root .ca-app .ca-setting-body > * + * { margin-top: var(--space-2); }
+#ca-root .ca-app .ca-setting-body > .ca-advanced-card { margin-top: var(--space-4); }
+#ca-root .ca-app .ca-model-fold-meta { font-weight: 400; color: var(--ca-ink2); }
+#ca-root .ca-app .ca-advanced-card > details > summary { display: flex; align-items: center; gap: var(--space-3); cursor: pointer; font-size: var(--font-size-4); font-weight: 600; }
+#ca-root .ca-app .ca-advanced-card > details > summary > .ca-model-fold-meta { margin-inline-start: auto; text-align: end; }
+#ca-root .ca-app .ca-advanced-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); margin-top: var(--space-5); }
+#ca-root .ca-app .ca-advanced-body > * + * { margin-top: 0; }
+#ca-root .ca-app .ca-advanced-body > section { min-width: 0; padding: var(--space-5); border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--surface-subtle); }
+#ca-root .ca-app .ca-advanced-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+#ca-root .ca-app .ca-advanced-heading { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+#ca-root .ca-app .ca-advanced-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: var(--radius-card); background: var(--color-brand-soft); color: var(--color-accent); }
+#ca-root .ca-app .ca-advanced-icon svg { width: 18px; height: 18px; }
+#ca-root .ca-app .ca-advanced-section-head h4 { margin: 0; font-size: var(--font-size-4); font-weight: 600; }
+#ca-root .ca-app .ca-advanced-section-head .note { margin-top: var(--space-1); }
+#ca-root .ca-app .ca-advanced-section-head > .ca-model-order-hint { margin: 0; align-self: center; text-align: end; }
+#ca-root .ca-app .ca-advanced-window { display: flex; flex-direction: column; gap: var(--space-3); }
+#ca-root .ca-app .ca-advanced-window-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+#ca-root .ca-app .ca-advanced-window-head h4 { margin: 0; font-size: var(--font-size-4); font-weight: 600; }
+#ca-root .ca-app .ca-window-head-meta { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
+#ca-root .ca-app .ca-window-head-meta .note { margin: 0; text-align: end; }
+#ca-root .ca-app .ca-advanced-window > .note { margin: 0; }
+#ca-root .ca-app .ca-window-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+#ca-root .ca-app .ca-window-field { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1); min-width: 0; }
+#ca-root .ca-app .ca-window-field > span { color: var(--ca-ink2); font-size: var(--font-size-3); }
+#ca-root .ca-app .ca-window-field .ui-input { width: 100%; }
+#ca-root .ca-app .ca-window-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border-soft); }
+#ca-root .ca-app .ca-window-footer > .note { margin: 0; }
+#ca-root .ca-app .ca-window-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
+#ca-root .ca-app .ca-setting-body .ui-progress { margin-top: var(--space-3); height: 4px; background: var(--ca-line); }
+#ca-root .ca-app .ca-settings-shell .tt { font-size: var(--font-size-4); font-weight: 600; }
+#ca-root .ca-app .ca-settings-shell .sub { margin-top: var(--space-2); line-height: 1.65; font-size: var(--font-size-3); }
+#ca-root .ca-app .ca-settings-records { border: 1px solid var(--ca-line); border-radius: var(--radius-card); background: var(--ca-card); overflow: hidden; }
+#ca-root .ca-app .ca-settings-model,
+#ca-root .ca-app .ca-settings-link { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); width: 100%; padding: var(--space-4) var(--space-5); }
+#ca-root .ca-app .ca-settings-records > * + * { border-top: 1px solid var(--ca-line); }
+#ca-root .ca-app .ca-settings-row-copy { flex: 1; min-width: 0; }
+#ca-root .ca-app .ca-settings-model.is-warning { background: var(--ca-amber-bg); }
+#ca-root .ca-app .ca-settings-records p.note { margin: var(--space-2) 0 0; }
+#ca-root .ca-app .ca-settings-records .actions { flex: 0 0 auto; justify-content: flex-end; gap: var(--space-4); }
+#ca-root .ca-app .ca-settings-records .rnm { padding-inline: 0; }
+#ca-root .ca-app .ca-settings-link .sub { color: var(--ca-ink2); font-size: var(--font-size-2); }
+#ca-root .ca-app .ca-settings-link .note { margin-top: var(--space-2); }
+#ca-root .ca-app .ca-settings-tools { margin-top: var(--space-5); }
+#ca-root .ca-app .ca-settings-tools-heading { display: flex; align-items: center; gap: var(--space-3); }
+#ca-root .ca-app .ca-settings-tools-heading .ca-settings-heading { margin: 0; }
+#ca-root .ca-app .ca-settings-tools-hint { margin: var(--space-2) 0 var(--space-3); }
+#ca-root .ca-app .ca-settings-maintenance-item { border: 1px solid var(--ca-line); border-radius: var(--radius-card); background: var(--ca-card); margin-top: var(--space-2); padding-inline: var(--space-4); }
+#ca-root .ca-app .ca-settings-maintenance-item summary { gap: var(--space-3); }
+#ca-root .ca-app .ca-settings-maintenance-item .ui-accordion__title { font-weight: 500; }
+#ca-root .ca-app .ca-settings-maintenance-item .ui-accordion__meta { font-family: inherit; font-size: var(--font-size-2); white-space: normal; text-align: right; max-width: 50%; }
+#ca-root .ca-app .ca-settings-maintenance-item .ui-accordion__body { padding-bottom: var(--space-4); line-height: 1.65; }
+#ca-root .ca-app .ca-settings-maintenance-item p { margin: 0 0 var(--space-2); }
+#ca-root .ca-app .ca-settings-maintenance-item .actions { margin-top: var(--space-3); }
+@container (max-width: 720px) {
+  #ca-root .ca-app .ca-discovery-row { flex-direction: column; align-items: stretch; }
+  #ca-root .ca-app .ca-settings-records > * { flex-wrap: wrap; gap: var(--space-3); }
+  #ca-root .ca-app .ca-settings-records .ca-settings-row-copy { flex-basis: 100%; }
+  #ca-root .ca-app .ca-settings-records .actions { margin-left: auto; flex-wrap: wrap; max-width: 100%; }
+}
+@container (max-width: 520px) {
+  #ca-root .ca-app .ca-setting-card { padding: var(--space-4); }
+  #ca-root .ca-app .ca-setting-head { flex-direction: column; align-items: stretch; }
+  #ca-root .ca-app .ca-setting-head-ctl { justify-content: flex-end; }
+  #ca-root .ca-app .ca-advanced-body > section { padding: var(--space-4); }
+  #ca-root .ca-app .ca-advanced-section-head { flex-wrap: wrap; }
+  #ca-root .ca-app .ca-advanced-section-head > .ca-model-order-hint { text-align: start; }
+  #ca-root .ca-app .ca-advanced-window-head { flex-wrap: wrap; }
+  #ca-root .ca-app .ca-window-fields { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Correct the existing settings composition without the generic two-column .field layout. */
+#ca-root .ca-app #ca-scroll.ca-layout-settings { display: block; overflow-y: auto; }
+#ca-root .ca-app #ca-scroll.ca-layout-settings .ca-settings-page > .hero { display: block; }
+#ca-root .ca-app #ca-scroll.ca-layout-settings .ca-settings-page > .hero .sub { margin-top: var(--space-2); line-height: 1.65; color: var(--ca-ink2); }
+#ca-root .ca-app .ca-nightly-model-controls { display: grid; width: 100%; min-width: 0; gap: var(--space-3); }
+#ca-root .ca-app .ca-nightly-model-controls > .sub,
+#ca-root .ca-app .ca-nightly-model-controls > .note { margin: 0; }
+#ca-root .ca-app .ca-nightly-model-controls > .actions:empty { display: none; }
+/* COG-PV-020: shared card shells with business-owned model identity and actions. */
+.ca-nightly-model-list { display: grid; gap: var(--space-2); list-style: none; padding: 0; margin: 0; }
+.ca-nightly-model-list > li { min-width: 0; }
+#ca-root .ca-app .ca-nightly-model-list > li[draggable="true"] { cursor: grab; }
+#ca-root .ca-app .ca-nightly-model-list > li.is-dragging { opacity: .55; }
+#ca-root .ca-app .ca-nightly-model-list > li.is-drop-before { box-shadow: 0 -2px var(--color-accent); }
+#ca-root .ca-app .ca-nightly-model-list > li.is-drop-after { box-shadow: 0 2px var(--color-accent); }
+#ca-root .ca-app .ca-model-sort-handle { flex: 0 0 auto; cursor: grab; }
+#ca-root .ca-app .ca-model-sort-handle:active { cursor: grabbing; }
+.ui-resource-card.ca-nightly-model-card { position: relative; display: flex; align-items: center; gap: var(--space-3); max-width: none; min-height: calc(var(--control-height-lg) * 2); padding: var(--space-3) var(--space-4); }
+.ca-nightly-model-card .ui-resource-card__icon { flex-shrink: 0; }
+.ca-nightly-model-copy { display: grid; gap: var(--space-1); flex: 1 1 auto; min-width: 0; }
+/* The expanded settings list fills its parent; picker cards retain their roomier layout. */
+#ca-root .ca-app .ca-nightly-model-controls .ca-nightly-model-card { width: 100%; min-height: calc(var(--control-height-sm) * 2); padding-block: var(--space-2); }
+#ca-root .ca-app .ca-nightly-model-controls .ca-nightly-model-card { background: var(--surface-card); box-shadow: none; }
+#ca-root .ca-app .ca-nightly-model-controls .ca-nightly-model-copy { gap: 0; }
+.ca-nightly-model-name,
+.ca-nightly-model-card .ca-nightly-model-hit { margin: 0; color: var(--text-heading); font-size: var(--font-size-4); font-weight: var(--font-weight-medium); line-height: 1.45; overflow-wrap: anywhere; }
+.ca-nightly-model-card .ca-nightly-model-hit { position: static; justify-content: flex-start; width: fit-content; max-width: 100%; height: auto; padding: 0; border: 0; text-align: start; white-space: normal; }
+.ca-nightly-model-hit::after { content: ''; position: absolute; inset: 0; border-radius: var(--radius-card); }
+.ca-nightly-model-provider { color: var(--text-muted); font-size: var(--font-size-meta); line-height: 1.5; overflow-wrap: anywhere; }
+.ca-nightly-model-note { color: var(--status-warning-text); font-size: var(--font-size-meta); line-height: 1.5; overflow-wrap: anywhere; }
+.ca-nightly-model-trailing { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-3); }
+.ca-nightly-model-chevron { width: var(--space-4); height: var(--space-4); color: var(--text-muted); }
+#ca-root .ca-app .ca-nightly-model-controls .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+#ca-root .ca-app .ca-model-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3); }
+.ca-nightly-model-picker { padding-bottom: var(--space-5); }
+.ca-nightly-model-picker .ca-nightly-model-list { gap: var(--space-3); }
+@container (max-width: 620px) {
+  #ca-root .ca-app .ca-nightly-model-card { flex-wrap: wrap; }
+  #ca-root .ca-app .ca-nightly-model-trailing { margin-inline-start: auto; }
+}
+@media (max-width: 520px) {
+  .ca-nightly-model-picker .ca-nightly-model-card { flex-wrap: wrap; }
+  .ca-nightly-model-picker .ca-nightly-model-trailing { margin-inline-start: auto; }
+}

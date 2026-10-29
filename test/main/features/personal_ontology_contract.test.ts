@@ -164,6 +164,28 @@ describe('PO contract › B Runtime 角色画像', () => {
     }
   });
 
+  it('filters restricted manual and imported values out of the runtime prompt', async () => {
+    const contract = await loadContract();
+    const templates = await loadTemplates();
+    const groups = await import('../../../src/main/features/personal_ontology_groups');
+    const groupId = await installStudentWithValue('受限手填正文');
+    const row = templates.readGroups(UID).find((g) => g.template_id === 'student')!;
+    await templates.appendFieldValueToRef(
+      UID, templates.buildContentRef(row.group_id, '学期与课程'), '课程清单', '公开课程', '导入',
+    );
+    await templates.appendFieldValueToRef(
+      UID, templates.buildContentRef(row.group_id, '学期与课程'), '课程清单', '受限导入正文', '导入',
+    );
+    expect(await groups.setFieldValueSensitivity(UID, groupId, '教育阶段', '受限手填正文', true)).toMatchObject({ ok: true });
+    expect(await groups.setFieldValueSensitivity(UID, groupId, '课程清单', '受限导入正文', true)).toMatchObject({ ok: true });
+
+    const block = await contract.getRoleProfileForRuntime(UID, ['student']);
+    expect(block).toContain('学期与课程 · 课程清单: 公开课程');
+    expect(block).not.toContain('受限手填正文');
+    expect(block).not.toContain('受限导入正文');
+    expect(block).not.toContain('[受限]');
+  });
+
   it('未安装 / 全空坑 / 空入参 / 非法 uid → 空串（静默降级，不注入空画像）', async () => {
     const contract = await loadContract();
     const tmpl = await loadTemplates();

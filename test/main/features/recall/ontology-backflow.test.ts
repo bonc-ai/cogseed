@@ -1,3 +1,5 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -31,131 +33,40 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function loadBackflow() {
-  return import('../../../../src/main/features/recall/ontology-backflow');
-}
-
-async function loadPoc() {
-  return import('../../../../src/main/features/personal_ontology_candidates');
-}
-
-interface FakeAsset {
-  id: string;
-  type: 'personal' | 'rule' | 'template' | 'skill_method';
-  statement: string;
-  title: string;
-}
-
-function fakeAsset(overrides: Partial<FakeAsset> = {}): FakeAsset {
-  return {
-    id: 'aa-backflow-1',
-    type: 'personal',
-    statement: '偏好中文简洁回复。',
-    title: '回复语言偏好',
-    ...overrides,
-  };
-}
-
-async function backflowIds(): Promise<string[]> {
-  const poc = await loadPoc();
-  const pool = await poc.listCandidates(UID);
-  return (pool.candidate_updates || [])
-    .map((c) => c.candidate_id)
-    .filter((id) => id.startsWith('asset-backflow-'));
-}
-
-describe('ontology-backflow › whitelist and pool shape', () => {
-  it('does not duplicate canonical personal assets into a second ontology candidate', async () => {
-    const backflow = await loadBackflow();
-    const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset());
-    expect(outcome).toEqual({ offered: false, reason: 'personal_asset_already_canonical' });
-    expect(await backflowIds()).toEqual([]);
+describe('旧资产候选回流writer已退役', () => {
+  it('模块已删除且运行时无法调用，正式资产创建和更新不新增旧po候选', async () => {
+    const retiredModule = path.resolve(__dirname, '../../../../src/main/features/recall/ontology-backflow.ts');
+    expect(fs.existsSync(retiredModule)).toBe(false);
+    await expect(import(retiredModule)).rejects.toThrow();
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const po = await import('../../../../src/main/features/personal_ontology_candidates');
+    const now = new Date().toISOString();
+    const asset = await seedStoredAbilityAsset(UID, {
+      schemaVersion: 2, ownerId: UID, id: 'aa-retirement-rule', candidateId: 'cand-retirement-rule',
+      sourceCandidateIds: ['cand-retirement-rule'], reviewDecisionId: 'rd_retirement_rule',
+      type: 'rule', title: '验收检查规则', statement: '交付前核对来源与验收条件。',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-retirement-rule' }], scope: 'review', status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1', createdAt: now, updatedAt: now,
+    }, { actor: 'user', reason: '完整形成后的资产夹具' });
+    expect((await po.listCandidates(UID)).candidate_updates).toEqual([]);
+    const updated = await assets.updateAbilityAsset(UID, asset.id, { statement: '交付前核对来源、验收条件及负责人。', actor: 'user', reason: '更新已存资产' });
+    expect(updated.statement).toContain('负责人');
+    expect((await po.listCandidates(UID)).candidate_updates).toEqual([]);
+    expect((await assets.readAbilityAsset(UID, asset.id)).statement).toBe(updated.statement);
   });
 
-  it('maps rule → rule/shared and template → instance/user', async () => {
-    const backflow = await loadBackflow();
-    await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ id: 'aa-rule', type: 'rule', statement: '评审先讲产品模型。' }));
-    await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ id: 'aa-tpl', type: 'template', statement: '学生身份在读。' }));
-
-    const poc = await loadPoc();
-    const pool = await poc.listCandidates(UID);
-    expect(pool.candidate_updates.find((c) => c.candidate_id === 'asset-backflow-aa-rule'))
-      .toMatchObject({ kind: 'rule', memory_scope: 'shared' });
-    expect(pool.candidate_updates.find((c) => c.candidate_id === 'asset-backflow-aa-tpl'))
-      .toMatchObject({ kind: 'instance', memory_scope: 'user' });
-  });
-
-  it('never offers skill_method assets', async () => {
-    const backflow = await loadBackflow();
-    const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ id: 'aa-skill', type: 'skill_method' }));
-    expect(outcome).toEqual({ offered: false, reason: 'type_not_whitelisted' });
-    expect(await backflowIds()).toEqual([]);
-  });
-
-  it('skips empty statements', async () => {
-    const backflow = await loadBackflow();
-    const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ type: 'rule', statement: '   ' }));
-    expect(outcome).toEqual({ offered: false, reason: 'empty_statement' });
-  });
-});
-
-describe('ontology-backflow › idempotency and flood guard', () => {
-  it('re-offering the same asset overwrites instead of piling up', async () => {
-    const backflow = await loadBackflow();
-    await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ type: 'rule', statement: '第一版内容。' }));
-    await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ type: 'rule', statement: '第二版内容，覆盖第一版。' }));
-
-    const ids = await backflowIds();
-    expect(ids).toEqual(['asset-backflow-aa-backflow-1']);
-    const poc = await loadPoc();
-    const pool = await poc.listCandidates(UID);
-    expect(pool.candidate_updates[0].memory_text).toBe('第二版内容，覆盖第一版。');
-  });
-
-  it('stops offering once the pool holds 20 backflow entries', async () => {
-    const poc = await loadPoc();
-    for (let i = 0; i < 20; i += 1) {
-      await poc.addCandidate(UID, {
-        candidate_id: `asset-backflow-aa-old-${i}`,
-        kind: 'preference',
-        memory_scope: 'user',
-        summary: `存量回流 ${i}`,
-        memory_text: `存量回流 ${i}`,
-      });
-    }
-    const backflow = await loadBackflow();
-    const outcome = await backflow.backflowAssetToOntologyPool(UID, fakeAsset({ type: 'rule' }));
-    expect(outcome).toEqual({ offered: false, reason: 'pool_full' });
-    // 原池 20 条原样保留，没有第 21 条
-    expect((await backflowIds()).length).toBe(20);
-  });
-});
-
-describe('ontology-backflow › wired into asset creation', () => {
-  it('promoting a personal asset does not create a second ontology candidate', async () => {
-    const cs = await import('../../../../src/main/features/recall/candidate-service');
-    const saved = await cs.saveRecallCandidate(UID, {
-      judgment: '偏好用中文写周报。', summary: '中文周报偏好',
-      suggestedType: 'personal',
-      suggestedScope: 'general',
-      sourceRefs: [{ kind: 'memory', id: 'backflow-e2e' }],
+  it('用户确认建议的新建落点只保存主资产，不重新派生旧po候选', async () => {
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const po = await import('../../../../src/main/features/personal_ontology_candidates');
+    const candidate = await createNightlyCandidateFixture(UID, {
+      judgment: '发布前核对交付来源与验收条件。', summary: '交付核验规则', value: '减少交付遗漏',
+      suggestedType: 'rule', suggestedScope: 'review', suggestedAction: 'create',
+      applicableWhen: ['发布前'], forbiddenWhen: ['来源未核实时'],
+      sourceRefs: [{ kind: 'conversation', id: 'conv-retirement-promotion' }],
     });
-    const { asset } = await cs.promoteRecallCandidate(UID, saved.id, { actor: 'user' });
-    expect(asset?.type).toBe('personal');
-
-    const ids = await backflowIds();
-    expect(ids).toEqual([]);
-  });
-
-  it('skill_method promotion does not touch the pool', async () => {
-    const cs = await import('../../../../src/main/features/recall/candidate-service');
-    const saved = await cs.saveRecallCandidate(UID, {
-      judgment: '先跑测试再提交的做法。', summary: '测试先行做法',
-      suggestedType: 'skill_method',
-      suggestedScope: 'general',
-      sourceRefs: [{ kind: 'memory', id: 'backflow-skill' }],
-    });
-    await cs.promoteRecallCandidate(UID, saved.id, { actor: 'user' });
-    expect(await backflowIds()).toEqual([]);
+    const promoted = await candidates.promoteRecallCandidate(UID, candidate.id, { actor: 'user' });
+    expect(promoted.asset.type).toBe('rule');
+    expect(promoted.candidate.status).toBe('confirmed');
+    expect((await po.listCandidates(UID)).candidate_updates).toEqual([]);
   });
 });

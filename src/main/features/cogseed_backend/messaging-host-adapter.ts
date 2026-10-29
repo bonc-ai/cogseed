@@ -16,6 +16,7 @@ export interface MessagingHostToolContext {
   /** Stable per-(request, call) key so a replayed host call never sends twice. */
   sourceKey: string;
   signal?: AbortSignal | null;
+  beforeDispatch?: () => Promise<void>;
 }
 
 export async function runMessagingHostTool(
@@ -41,7 +42,7 @@ export async function runMessagingHostTool(
       target: 'self',
       text: raw.text,
     },
-    { cid: context.sourceKey, sourceKey: context.sourceKey, signal: context.signal ?? null },
+    { cid: context.sourceKey, sourceKey: context.sourceKey, signal: context.signal ?? null, beforeDispatch: context.beforeDispatch },
   );
   const content = JSON.stringify(result);
   return result.status === 'error' ? { content, isError: true } : { content };

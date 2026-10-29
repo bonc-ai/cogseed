@@ -45,6 +45,7 @@ const deferred = (coreName: string, reason: string): CoreToCogSeedToolMapping =>
 });
 
 export const CORE_TO_MATE_TOOL_MAPPINGS: readonly CoreToCogSeedToolMapping[] = Object.freeze([
+  ...['transcript_glossary_scan', 'transcript_glossary_apply', 'transcript_glossary_upsert', 'transcript_glossary_list'].map((name) => parity(name, 'Shared glossary tools run in Main; confirmation and user scoping never move into the Worker.')),
   parity('read_file', 'Same explicit-root file read semantics, with transcript exclusion and capped Runtime results.'),
   parity('write_file', 'Same explicit writable-root write semantics, with path sandboxing and capped Runtime results.'),
   parity('edit_file', 'Same explicit writable-root exact replacement semantics, with stale/ambiguous replacement errors.'),
@@ -56,7 +57,7 @@ export const CORE_TO_MATE_TOOL_MAPPINGS: readonly CoreToCogSeedToolMapping[] = O
   parity('grep_files', 'Same explicit-root bounded content search semantics with regex, glob, and output modes.'),
   deferred('tool_result_search', 'Deferred until Runtime exposes a bounded opaque-reference result reader; persisted outputs remain local-only.'),
   deferred('tool_result_read_chunk', 'Deferred until Runtime exposes bounded opaque-reference chunk reads without arbitrary path access.'),
-  deferred('publish_outputs', 'Deferred until CogSeed output registration and renderer-safe publication semantics are available.'),
+  parity('publish_outputs', 'Same declaration semantics; the native host verifies writes against the runtime session and returns per-file precipitation outcomes.'),
   deferred('create_artifact', 'Deferred until the validated chat-artifact resolver and artifact lifecycle are wired to Runtime.'),
   parity('bash', 'Same low-risk shell policy and explicit working-root boundary through Runtime shell-tools.ts.'),
   deferred('interactive_cli_start', 'Deferred because interactive CLI spawning is restricted to the local-agent runner choke point.'),
@@ -73,6 +74,7 @@ export const CORE_TO_MATE_TOOL_MAPPINGS: readonly CoreToCogSeedToolMapping[] = O
   parity('office_render', 'Same Office preview capability through the Main-side adapter and reverse host-tool protocol.'),
   deferred('kb_list', 'Deferred until the CogSeed KB adapter exposes a bounded source/status listing contract.'),
   replacement('kb_search', ['search_mate_kb'], 'CogSeed-owned KB search preserves user scoping and uses the Runtime KB manager boundary.'),
+  replacement('list_ontology_graph', ['ontology_graph_read'], 'Read-only graph access goes through the Main-side host adapter, which calls the ontology_graph feature API; the Worker never reads the graph file.'),
   replacement('kb_read', ['read_mate_kb'], 'CogSeed-owned KB source reads preserve user scoping and use the Runtime KB manager boundary.'),
   deferred('research_rerank', 'Deferred because the owner-scoped research reranker has no approved Runtime adapter yet.'),
   deferred('chat_search', 'Deferred because Runtime requests must not access conversation transcripts or chat history.'),
@@ -98,8 +100,10 @@ export const COGSEED_NATIVE_RUNTIME_TOOL_NAMES = Object.freeze([
   'browser_type',
   'browser_screenshot',
   'cogseed_delegate',
+  'cogseed_join',
   'cogseed_tasks',
   'cogseed_cancel',
+  'ontology_projection_apply',
 ] as const);
 
 export function getExecutableCogSeedToolNames(): readonly string[] {

@@ -124,7 +124,7 @@ export async function importOpencodeMemory(
     return { ok: true, added: 0, skipped: 0, rejected: 0, reason: preview.reason || 'no_content' };
   }
 
-  const { addEntry, listEntries } = await import('../memory');
+  const { addEntryTransactional, listEntries } = await import('../memory');
   const existing = new Set<string>();
   const cur = listEntries(userId, 'memory');
   if (cur.ok && Array.isArray(cur.entries)) {
@@ -135,7 +135,8 @@ export async function importOpencodeMemory(
   for (const text of preview.entries) {
     if (!text.trim()) continue;
     if (existing.has(text.trim())) { skipped += 1; continue; }
-    const res = addEntry(userId, 'memory', text.trim());
+    // P-r2-11：shared MEMORY.md 写入走事务通道（避免被并发事务回滚抹掉）。
+    const res = await addEntryTransactional(userId, 'memory', text.trim());
     if (res && res.ok) { added += 1; existing.add(text.trim()); }
     else { rejected += 1; }
   }

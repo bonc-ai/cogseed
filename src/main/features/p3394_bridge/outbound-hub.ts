@@ -13,7 +13,37 @@ import { P3394A2AChannel } from './a2a-channel';
 import { P3394ModelRuntimeAdapter } from './model-runtime-adapter';
 import type { P3394ChannelAdapter } from './channel-adapter';
 import { P3394OutboundClient } from './outbound';
-import { outboxListForReplay, outboxMarkCompleted, outboxMarkFailed, outboxMarkSent, outboxRecordSubmitted } from './outbound-outbox';
+import {
+  outboxBackgroundResultDelivered,
+  outboxBackgroundResultStatus,
+  outboxListForReplay,
+  outboxMarkBackgroundResultDelivered,
+  outboxMarkBackgroundResultIsolated,
+  outboxMarkCompleted,
+  outboxMarkFailed,
+  outboxMarkIsolated,
+  outboxMarkSent,
+  outboxRecordBackgroundResult,
+  outboxRecordBackgroundResultFailure,
+  outboxRecordReplayFailure,
+  outboxRecordSubmitted,
+  outboxReplayDecision,
+} from './outbound-outbox';
+import {
+  P3394_BACKGROUND_JOB_DEADLINE_MS,
+  parseBackgroundAccepted,
+  parseBackgroundFinished,
+  type P3394BackgroundAccepted,
+  type P3394BackgroundFinished,
+} from './background-jobs';
+import {
+  backgroundTimeoutResult,
+  getBackgroundJob,
+  listUndeliveredBackgroundJobs,
+  patchBackgroundJob,
+  putBackgroundJob,
+  type P3394BackgroundJobRecord,
+} from './background-job-store';
 import type { P3394Envelope } from './envelope';
 import type { P3394PeerRecord } from './registry';
 
@@ -22,6 +52,18 @@ const log = createLogger('p3394-bridge:outbound-hub');
 export interface P3394OutboundReply {
   text: string;
   envelope: P3394Envelope;
+  /** `background` when the peer answered phase 1 (`accepted`) instead of
+   *  holding the request open. No further reply is expected on this waiter;
+   *  the result arrives later as its own `background.finished` message. */
+  kind?: 'reply' | 'background';
+  background?: P3394BackgroundAccepted;
+}
+
+export interface P3394BackgroundResultInput {
+  result: P3394BackgroundFinished;
+  job: P3394BackgroundJobRecord;
+  /** Present for a live phase-2 message, absent on a startup replay. */
+  envelope?: P3394Envelope;
 }
 
 export interface P3394OutboundStreamEvent {
@@ -42,6 +84,10 @@ interface PendingReply {
   timer: NodeJS.Timeout;
   /** 出站信封的 message_id —— 回复到达时据此把 outbox 记录标为 completed。 */
   outboundMessageId: string;
+  /** Peer node id and the exact envelope we sent: phase 1 needs both to build
+   *  the durable background-job record (reply target + session/task ids). */
+  agentId: string;
+  outboundEnvelope: P3394Envelope;
   onStream?: (event: P3394OutboundStreamEvent) => void;
   lastStreamSequence?: number;
 }
@@ -51,17 +97,54 @@ export interface P3394OutboundHubDeps {
   listPeers: () => P3394PeerRecord[];
   /** Maximum idle period while waiting for the peer's reply. */
   replyTimeoutMs?: number;
+  /** Active uid. Background jobs are user-scoped machine-private state; without
+   *  it the hub can still resolve phase 1 but cannot persist/replay the job. */
+  userId?: () => string;
+  /** Independent ceiling for a promoted job (default 60 min). */
+  backgroundJobDeadlineMs?: number;
+  /** Delivery attempts before a phase-2 result is isolated (default 3). */
+  isolateAfterAttempts?: number;
+  /** Sink for a phase-2 result into the originating conversation. Returns
+   *  `discarded` when that conversation no longer exists (drop, no retry). */
+  deliverBackgroundResult?: (input: P3394BackgroundResultInput) => Promise<'delivered' | 'discarded'> | 'delivered' | 'discarded';
+  now?: () => number;
+  /** Retry backoff for a failed conversation delivery (test seam). */
+  backgroundRetryDelayMs?: (attempt: number) => number;
+  /** Maps a P3394 session id to the user-visible conversation it belongs to.
+   *  Recorded with the job so replay after a restart still reaches the right
+   *  conversation even though the in-memory binding is gone. */
+  conversationIdFor?: (sessionId: string) => string | undefined;
 }
 
 export class P3394OutboundHub {
   private readonly listPeers: () => P3394PeerRecord[];
   private readonly replyTimeoutMs: number;
+  private readonly userId?: () => string;
+  private readonly deliverBackgroundResultToConversation?: P3394OutboundHubDeps['deliverBackgroundResult'];
+  private readonly backgroundJobDeadlineMs: number;
+  private readonly isolateAfterAttempts: number;
+  private readonly now: () => number;
+  private readonly backgroundRetryDelayMs: (attempt: number) => number;
+  private readonly conversationIdFor?: (sessionId: string) => string | undefined;
   private readonly channels = new Map<string, { signature: string; channel: P3394ChannelAdapter }>();
   private readonly pending = new Map<string, PendingReply>();
+  private readonly backgroundTimers = new Map<string, NodeJS.Timeout>();
+  private readonly backgroundRetryTimers = new Map<string, NodeJS.Timeout>();
+  private readonly backgroundDeliveries = new Map<string, Promise<void>>();
 
   constructor(deps: P3394OutboundHubDeps) {
     this.listPeers = deps.listPeers;
-    this.replyTimeoutMs = deps.replyTimeoutMs ?? 5 * 60 * 1000;
+    // Must stay comfortably ABOVE the managed gateway's agent timeout
+    // (`P3394_AGENT_TIMEOUT_MS`, 8 min) so a deadline promotion still lands
+    // inside this window instead of racing the hub into a timeout.
+    this.replyTimeoutMs = deps.replyTimeoutMs ?? 12 * 60 * 1000;
+    this.userId = deps.userId;
+    this.deliverBackgroundResultToConversation = deps.deliverBackgroundResult;
+    this.backgroundJobDeadlineMs = deps.backgroundJobDeadlineMs ?? P3394_BACKGROUND_JOB_DEADLINE_MS;
+    this.isolateAfterAttempts = Math.max(1, Math.floor(deps.isolateAfterAttempts ?? 3));
+    this.now = deps.now ?? (() => Date.now());
+    this.backgroundRetryDelayMs = deps.backgroundRetryDelayMs ?? ((attempt) => Math.min(30_000, 1000 * Math.max(1, attempt)));
+    this.conversationIdFor = deps.conversationIdFor;
   }
 
   private refreshReplyTimeout(sessionId: string, waiter: PendingReply): void {
@@ -147,13 +230,19 @@ export class P3394OutboundHub {
         reject,
         timer,
         outboundMessageId: envelope.message_id,
+        agentId,
+        outboundEnvelope: envelope,
         ...(onStream ? { onStream } : {}),
       });
     });
     try {
       await channel.dial(agentId);
       await new P3394OutboundClient(channel).send(envelope);
-      outboxMarkSent(envelope.message_id);
+      // A fast phase-1 ack can settle the waiter before the send receipt is
+      // observed. Do not re-open the outbox record with a later `sent` event:
+      // that would put an already-acknowledged request back in the replay set.
+      if (this.pending.has(envelope.session_id)) outboxMarkSent(envelope.message_id);
+      else outboxMarkCompleted(envelope.message_id);
     } catch (error) {
       // Delivery failed: drop the waiter so it cannot leak past this call.
       const waiter = this.pending.get(envelope.session_id);
@@ -206,12 +295,314 @@ export class P3394OutboundHub {
     log.info('P3394 outbound sendOnce (delivery receipt)', { peer: agentId, session_id: envelope.session_id, message_id: envelope.message_id });
   }
 
+  /**
+   * Phase 1 (`extensions.background.phase === 'accepted'`) resolved inside
+   * `tryResolveReply`. Persist the job *before* the caller can observe the
+   * resolution, so a crash between accepted and finished still leaves a
+   * replayable record.
+   */
+  private acceptBackground(waiter: PendingReply, accepted: P3394BackgroundAccepted): void {
+    const uid = this.backgroundUid();
+    if (!uid) {
+      log.warn('P3394 background accepted without an active user; job not persisted', { job_id: accepted.job_id });
+      return;
+    }
+    try {
+      const existing = getBackgroundJob(uid, accepted.job_id);
+      if (existing) {
+        // Gateway retried phase 1 (at-least-once): keep the original deadline
+        // and watchdog instead of extending it on every duplicate.
+        if (existing.state === 'pending') this.armBackgroundWatchdog(existing);
+        return;
+      }
+      const acceptedAt = new Date(this.now()).toISOString();
+      const ext = waiter.outboundEnvelope.extensions ?? {};
+      let conversationId: string | undefined;
+      try { conversationId = this.conversationIdFor?.(waiter.outboundEnvelope.session_id) || undefined; } catch { /* optional */ }
+      const job: P3394BackgroundJobRecord = {
+        job_id: accepted.job_id,
+        peer: waiter.agentId,
+        reply_endpoint: typeof ext.reply_endpoint === 'string' ? ext.reply_endpoint : '',
+        reply_token: typeof ext.reply_token === 'string' ? ext.reply_token : '',
+        deadline: new Date(this.now() + this.backgroundJobDeadlineMs).toISOString(),
+        state: 'pending',
+        accepted_at: acceptedAt,
+        updated_at: acceptedAt,
+        session_id: waiter.outboundEnvelope.session_id,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+        ...(typeof waiter.outboundEnvelope.task_id === 'string' ? { task_id: waiter.outboundEnvelope.task_id } : {}),
+        ...(accepted.eta_seconds ? { eta_seconds: accepted.eta_seconds } : {}),
+      };
+      const saved = putBackgroundJob(uid, job);
+      this.armBackgroundWatchdog(saved);
+      log.info('P3394 background job accepted', {
+        job_id: saved.job_id,
+        peer: saved.peer,
+        deadline: saved.deadline,
+      });
+    } catch (error) {
+      // Persistence failure must not turn an accepted task into a rejected
+      // turn; it only loses replay (the live phase-2 path can still deliver).
+      log.warn('P3394 background job could not be recorded', {
+        job_id: accepted.job_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private backgroundUid(): string | null {
+    try {
+      const uid = this.userId?.();
+      return uid ? String(uid) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private armBackgroundWatchdog(job: P3394BackgroundJobRecord): void {
+    this.clearBackgroundTimer(job.job_id);
+    const deadline = Date.parse(job.deadline);
+    const delay = Number.isFinite(deadline) ? Math.max(0, deadline - this.now()) : 0;
+    const timer = setTimeout(() => { this.onBackgroundDeadline(job.job_id); }, delay);
+    timer.unref?.();
+    this.backgroundTimers.set(job.job_id, timer);
+  }
+
+  private clearBackgroundTimer(jobId: string): void {
+    const timer = this.backgroundTimers.get(jobId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.backgroundTimers.delete(jobId);
+  }
+
+  private clearBackgroundRetryTimer(jobId: string): void {
+    const timer = this.backgroundRetryTimers.get(jobId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.backgroundRetryTimers.delete(jobId);
+  }
+
+  private onBackgroundDeadline(jobId: string): void {
+    this.backgroundTimers.delete(jobId);
+    const uid = this.backgroundUid();
+    if (!uid) return;
+    const job = getBackgroundJob(uid, jobId);
+    if (!job || job.state !== 'pending') return;
+    const result = backgroundTimeoutResult(jobId);
+    const updated = patchBackgroundJob(uid, jobId, { state: 'timeout', result }) ?? job;
+    log.warn('P3394 background job timed out locally', { job_id: jobId, peer: job.peer });
+    void this.startBackgroundDelivery(updated, result);
+  }
+
+  /** Phase 2 (`background.finished`). Returns true when the envelope was a
+   *  background result and must not continue through the normal inbound task
+   *  path; false when it is an ordinary envelope. Idempotent by job_id.
+   *
+   *  Delivery itself is asynchronous (it can be a conversation write), but the
+   *  inbound pipeline is synchronous: the terminal payload is persisted before
+   *  this returns, and the actual sink write runs through
+   *  `startBackgroundDelivery` so a crash cannot lose the result. */
+  deliverBackgroundResult(envelope: P3394Envelope): boolean {
+    const result = parseBackgroundFinished(envelope.extensions?.background);
+    if (!result) return false;
+    const uid = this.backgroundUid();
+    if (!uid) {
+      log.warn('P3394 background result dropped: no active user', { job_id: result.job_id, peer: envelope.sender.agent_id });
+      return true;
+    }
+    let job = getBackgroundJob(uid, result.job_id);
+    if (!job) {
+      // Ledger missing (fresh install/corrupt file): adopt the result so a
+      // duplicate can still be deduped by the outbox job_id marker.
+      const now = new Date(this.now()).toISOString();
+      job = putBackgroundJob(uid, {
+        job_id: result.job_id,
+        peer: envelope.sender.agent_id,
+        reply_endpoint: '',
+        reply_token: '',
+        deadline: now,
+        state: 'finished',
+        accepted_at: now,
+        updated_at: now,
+        session_id: envelope.session_id,
+        ...(typeof envelope.task_id === 'string' ? { task_id: envelope.task_id } : {}),
+        result,
+      });
+    } else {
+      if (job.state === 'delivered' || job.state === 'discarded' || job.state === 'isolated') {
+        log.info('P3394 background result already settled; duplicate ignored', { job_id: result.job_id, state: job.state });
+        return true;
+      }
+      if (outboxBackgroundResultDelivered(job.job_id)) {
+        this.markBackgroundDelivered(uid, job.job_id);
+        return true;
+      }
+      // A finished frame supersedes a pending watchdog: the gateway reported
+      // the real outcome before our local ceiling.
+      this.clearBackgroundTimer(job.job_id);
+      job = patchBackgroundJob(uid, job.job_id, { state: 'finished', result }) ?? job;
+    }
+    void this.startBackgroundDelivery(job, result);
+    return true;
+  }
+
+  /** Dedupe in-flight conversation writes per job_id (a duplicate phase 2 must
+   *  not race the first delivery). */
+  private startBackgroundDelivery(job: P3394BackgroundJobRecord, result: P3394BackgroundFinished): Promise<void> {
+    const existing = this.backgroundDeliveries.get(job.job_id);
+    if (existing) return existing;
+    const run = this.deliverBackgroundJob(job, result)
+      .catch((error) => {
+        // Never let a disk/sink failure become an unhandled rejection: the job
+        // stays `finished` and the next boot replay retries it.
+        log.warn('P3394 background delivery failed unexpectedly', {
+          job_id: job.job_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.backgroundDeliveries.delete(job.job_id);
+      });
+    this.backgroundDeliveries.set(job.job_id, run);
+    return run;
+  }
+
+  /** Await every in-flight background delivery (tests / graceful shutdown). */
+  async flushBackgroundDeliveries(): Promise<void> {
+    await Promise.all([...this.backgroundDeliveries.values()]);
+  }
+
+  private markBackgroundDelivered(uid: string, jobId: string): void {
+    const job = getBackgroundJob(uid, jobId);
+    if (!job || job.state === 'delivered') return;
+    patchBackgroundJob(uid, jobId, {
+      state: 'delivered',
+      delivered_at: new Date(this.now()).toISOString(),
+      last_error: undefined,
+    });
+    outboxMarkBackgroundResultDelivered(jobId);
+  }
+
+  private async deliverBackgroundJob(job: P3394BackgroundJobRecord, result: P3394BackgroundFinished): Promise<void> {
+    const uid = this.backgroundUid();
+    if (!uid) return;
+    // Terminal dedupe (job_id is the idempotency key): a duplicate phase 2 or
+    // a restart replay after success must never enter the conversation twice.
+    if (outboxBackgroundResultDelivered(job.job_id)) {
+      this.markBackgroundDelivered(uid, job.job_id);
+      return;
+    }
+    if (outboxBackgroundResultStatus(job.job_id) === 'isolated') {
+      patchBackgroundJob(uid, job.job_id, { state: 'isolated' });
+      return;
+    }
+    if (!outboxRecordBackgroundResult(job.job_id, job.peer)) {
+      if (outboxBackgroundResultDelivered(job.job_id)) this.markBackgroundDelivered(uid, job.job_id);
+      return;
+    }
+    const sink = this.deliverBackgroundResultToConversation;
+    try {
+      if (!sink) throw new Error('p3394_background_delivery_sink_missing');
+      const outcome = await sink({ result, job });
+      if (outcome === 'discarded') {
+        // Failure-mode table: the originating conversation was deleted → drop
+        // with a warning and never retry.
+        patchBackgroundJob(uid, job.job_id, {
+          state: 'discarded',
+          delivered_at: new Date(this.now()).toISOString(),
+        });
+        outboxMarkBackgroundResultDelivered(job.job_id);
+        log.warn('P3394 background result discarded (conversation gone)', { job_id: job.job_id, peer: job.peer });
+        return;
+      }
+      this.markBackgroundDelivered(uid, job.job_id);
+      log.info('P3394 background result delivered', { job_id: job.job_id, peer: job.peer, outcome: result.outcome });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const attempts = outboxRecordBackgroundResultFailure(job.job_id, message);
+      const updated = patchBackgroundJob(uid, job.job_id, { attempts, last_error: message }) ?? job;
+      if (attempts >= this.isolateAfterAttempts) {
+        patchBackgroundJob(uid, job.job_id, { state: 'isolated' });
+        outboxMarkBackgroundResultIsolated(job.job_id, message);
+        log.warn('P3394 background result isolated', { job_id: job.job_id, attempts, error: message });
+        return;
+      }
+      log.warn('P3394 background result delivery deferred', { job_id: job.job_id, attempts, error: message });
+      this.scheduleBackgroundRetry(updated, result, attempts);
+    }
+  }
+
+  private scheduleBackgroundRetry(job: P3394BackgroundJobRecord, result: P3394BackgroundFinished, attempts: number): void {
+    this.clearBackgroundRetryTimer(job.job_id);
+    const delay = Math.max(0, this.backgroundRetryDelayMs(attempts));
+    const timer = setTimeout(() => {
+      this.backgroundRetryTimers.delete(job.job_id);
+      const uid = this.backgroundUid();
+      if (!uid) return;
+      const current = getBackgroundJob(uid, job.job_id);
+      if (!current || (current.state !== 'finished' && current.state !== 'timeout')) return;
+      void this.deliverBackgroundJob(current, current.result ?? result);
+    }, delay);
+    timer.unref?.();
+    this.backgroundRetryTimers.set(job.job_id, timer);
+  }
+
+  /** Startup replay (decision 2, step 4): every job that has not entered the
+   *  conversation is revisited exactly once per boot.
+   *
+   *  - finished/timeout with a recorded result → deliver (idempotent);
+   *  - pending past its ceiling → synthesize `timeout` and deliver;
+   *  - pending within its ceiling → re-arm the watchdog.
+   */
+  async replayBackgroundJobs(): Promise<{ replayed: number; timedOut: number; delivered: number; isolated: number; deferred: number }> {
+    const uid = this.backgroundUid();
+    const outcome = { replayed: 0, timedOut: 0, delivered: 0, isolated: 0, deferred: 0 };
+    if (!uid) return outcome;
+    const replayedJobIds = listUndeliveredBackgroundJobs(uid).map((job) => job.job_id);
+    for (const job of listUndeliveredBackgroundJobs(uid)) {
+      try {
+        if (job.state === 'pending') {
+          const deadline = Date.parse(job.deadline);
+          if (!Number.isFinite(deadline) || deadline <= this.now()) {
+            const result = backgroundTimeoutResult(job.job_id);
+            const updated = patchBackgroundJob(uid, job.job_id, { state: 'timeout', result });
+            if (updated) {
+              outcome.timedOut += 1;
+              await this.startBackgroundDelivery(updated, result);
+            }
+          } else {
+            this.armBackgroundWatchdog(job);
+            outcome.deferred += 1;
+          }
+          continue;
+        }
+        if (job.result) {
+          outcome.replayed += 1;
+          await this.startBackgroundDelivery(job, job.result);
+        }
+      } catch (error) {
+        log.warn('P3394 background job replay failed', {
+          job_id: job.job_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    for (const jobId of replayedJobIds) {
+      const current = getBackgroundJob(uid, jobId);
+      if (current?.state === 'delivered') outcome.delivered += 1;
+      else if (current?.state === 'isolated') outcome.isolated += 1;
+    }
+    return outcome;
+  }
+
   /** 桥启动重放：把 outbox 里 submitted/sent 的信封重发给对应 peer
    *  （at-least-once；对端按 idempotency_key 幂等）。不等待回复——
    *  回复到达时若没有 waiter，会照常进入会话流程。 */
-  async replayOutbox(): Promise<{ replayed: number; failed: number }> {
+  async replayOutbox(options: { isolateAfterAttempts?: number } = {}): Promise<{ replayed: number; failed: number; isolated: number }> {
+    const isolateAfterAttempts = options.isolateAfterAttempts ?? 3;
     let replayed = 0;
     let failed = 0;
+    let isolated = 0;
     for (const record of outboxListForReplay()) {
       try {
         const peer = this.listPeers().find((candidate) => candidate.identity.agent_id === record.peer && !candidate.disabled);
@@ -223,14 +614,25 @@ export class P3394OutboundHub {
         replayed += 1;
         log.info('P3394 outbox replayed', { peer: record.peer, message_id: record.message_id });
       } catch (error) {
-        // Replay is a recovery attempt, not a terminal delivery decision. Keep
-        // submitted/sent in the replay set so a temporarily unavailable peer
-        // can be retried on the next bridge recovery cycle.
-        failed += 1;
-        log.warn('P3394 outbox replay deferred', { peer: record.peer, message_id: record.message_id, error: error instanceof Error ? error.message : String(error) });
+        const message = error instanceof Error ? error.message : String(error);
+        // Replay is a recovery attempt, not a terminal delivery decision: a
+        // transiently unavailable peer stays in the replay set and never
+        // consumes the record's budget. Configuration-level unreachability
+        // (peer gone / no endpoint) never succeeds by retrying, so after the
+        // configured attempts it is isolated — kept on disk, out of replay.
+        const configLevel = message === 'p3394_peer_not_registered' || message === 'p3394_peer_has_no_endpoint';
+        const attempts = configLevel ? outboxRecordReplayFailure(record.message_id, message) : 0;
+        if (outboxReplayDecision(message, attempts, isolateAfterAttempts) === 'isolate') {
+          outboxMarkIsolated(record.message_id, message);
+          isolated += 1;
+          log.warn('P3394 outbox record isolated', { peer: record.peer, message_id: record.message_id, attempts, error: message });
+        } else {
+          failed += 1;
+          log.warn('P3394 outbox replay deferred', { peer: record.peer, message_id: record.message_id, attempts, error: message });
+        }
       }
     }
-    return { replayed, failed };
+    return { replayed, failed, isolated };
   }
 
   /** Whether a reply waiter is currently registered for this outbound session.
@@ -262,6 +664,36 @@ export class P3394OutboundHub {
   /** Inbound-pipeline hook: resolves the waiting call when the reply arrives. */
   tryResolveReply(envelope: P3394Envelope): boolean {
     const waiter = this.pending.get(envelope.session_id);
+    // Phase 2 is a terminal notification with no waiter. It is consumed by
+    // `deliverBackgroundResult` in the executor; never let a duplicate fall
+    // through into the task path (an empty/boilerplate message would wake the
+    // Commander for nothing).
+    const accepted = parseBackgroundAccepted(envelope.extensions?.background);
+    const finished = parseBackgroundFinished(envelope.extensions?.background);
+    if (finished) return true;
+    if (accepted) {
+      if (!waiter) {
+        log.info('P3394 duplicate background accepted ignored', { job_id: accepted.job_id, session_id: envelope.session_id });
+        return true;
+      }
+      if (typeof envelope.reply_to === 'string' && envelope.reply_to && waiter.outboundMessageId !== envelope.reply_to) {
+        return false;
+      }
+      clearTimeout(waiter.timer);
+      this.pending.delete(envelope.session_id);
+      this.acceptBackground(waiter, accepted);
+      const text = envelopeText(envelope);
+      log.info('P3394 outbound background accepted', {
+        session_id: envelope.session_id,
+        from: envelope.sender.agent_id,
+        job_id: accepted.job_id,
+      });
+      waiter.resolve({ text, envelope, kind: 'background', background: accepted });
+      // Phase 1 is the terminal acknowledgement for this outbound envelope:
+      // the original request is done. The result is tracked as a separate job.
+      outboxMarkCompleted(waiter.outboundMessageId);
+      return true;
+    }
     if (!waiter) return false;
     // 匹配粒度细化（S-03/S-04）：入站若带 reply_to，必须回指向本 waiter 期待
     // 的出站消息才算"回复"；否则它是同 session 上的新 task/另一条消息，不应
@@ -314,6 +746,12 @@ export class P3394OutboundHub {
       waiter.reject(new Error('p3394_bridge_closing'));
     }
     this.pending.clear();
+    for (const timer of this.backgroundTimers.values()) clearTimeout(timer);
+    this.backgroundTimers.clear();
+    for (const timer of this.backgroundRetryTimers.values()) clearTimeout(timer);
+    this.backgroundRetryTimers.clear();
+    await Promise.allSettled([...this.backgroundDeliveries.values()]);
+    this.backgroundDeliveries.clear();
     await Promise.all([...this.channels.values()].map((entry) => entry.channel.close().catch(() => {})));
     this.channels.clear();
   }

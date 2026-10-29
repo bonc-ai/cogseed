@@ -32,6 +32,7 @@ interface Harness {
   setAgents: (agents: unknown[]) => void;
   setCandidates: (agents: unknown[] | null) => void;
   setOutOfScope: (agents: unknown[]) => void;
+  setContacts: (contacts: unknown[]) => void;
   textarea: { value: string; selectionStart: number; selectionEnd: number; setSelectionRange: (a: number, b: number) => void };
   events: any[];
 }
@@ -43,6 +44,7 @@ function createHarness(existingStore?: Map<string, string>): Harness {
   let agents: unknown[] = AGENTS;
   let candidates: unknown[] | null = null;
   let outOfScope: unknown[] = [];
+  let contacts: unknown[] = [];
   const textarea = {
     value: '',
     selectionStart: 0,
@@ -72,6 +74,7 @@ function createHarness(existingStore?: Map<string, string>): Harness {
     getComposerAgentList: () => agents,
     getComposerAgentCandidates: () => (candidates || agents),
     getComposerOutOfScopeAgents: () => outOfScope,
+    getComposerContactCandidates: () => contacts,
     refreshExecConfigChip: () => {},
     escapeHtml: (value: unknown) => String(value == null ? '' : value),
     t: (key: string, vars?: Record<string, unknown>) => (
@@ -91,6 +94,7 @@ function createHarness(existingStore?: Map<string, string>): Harness {
     setAgents: (next: unknown[]) => { agents = next; },
     setCandidates: (next: unknown[] | null) => { candidates = next; },
     setOutOfScope: (next: unknown[]) => { outOfScope = next; },
+    setContacts: (next: unknown[]) => { contacts = next; },
   };
 }
 
@@ -127,6 +131,34 @@ describe('点名标记解析（FR-004）', () => {
 });
 
 describe('选择器结构化点名身份', () => {
+  it('联系人来源经 DOM 编辑、撤销和草稿重载仍保留，不依赖实时联系人目录', () => {
+    h.textarea.value = '@Bob hello';
+    h.members.setMentionSidecar('conversation', [{
+      id: 'opaque-peer', name: 'Bob', kind: 'contact', start: 0, text: '@Bob ',
+    }]);
+    // DOM attributes carry ranges and ids, not trusted routing kinds.
+    h.members.syncMentionSidecarFromDom('conversation', [{
+      id: 'opaque-peer', name: 'Bob', start: 1, text: '@Bob ',
+    }]);
+    expect(h.members.mentionSidecarSnapshot('conversation')[0]).toMatchObject({ id: 'opaque-peer', kind: 'contact', start: 1 });
+    h.members.syncMentionSidecarFromDom('conversation', []);
+    h.members.syncMentionSidecarFromDom('conversation', [{
+      id: 'opaque-peer', name: 'Bob', start: 1, text: '@Bob ',
+    }], { inputType: 'historyUndo' });
+    const reloaded = createHarness(h.store);
+    expect(reloaded.members.mentionTokensForTarget('conversation', ' @Bob hello')[0])
+      .toMatchObject({ id: 'opaque-peer', kind: 'contact', start: 1 });
+    h.members.setMentionSidecar('conversation', [{ id: 'local-bob', name: 'Bob', kind: 'agent', start: 0, text: '@Bob ' }]);
+    h.members.syncMentionSidecarFromDom('conversation', [{ id: 'local-bob', name: 'Bob', kind: 'contact', start: 0, text: '@Bob ' }]);
+    expect(h.members.mentionSidecarSnapshot('conversation')[0]).toMatchObject({ id: 'local-bob', kind: 'agent' });
+  });
+
+  it('联系人选择器创建的令牌保留外部来源', () => {
+    h.members.insertMention('conversation', { kind: 'contact', id: 'opaque-peer', name: 'Bob' });
+    expect(h.members.mentionTokensForTarget('conversation', h.textarea.value)[0])
+      .toMatchObject({ id: 'opaque-peer', kind: 'contact' });
+  });
+
   it('粘贴或手打的同名纯文本不产生 mention_agent_ids', () => {
     h.textarea.value = '@Codex 看看这个';
     expect(h.members.mentionIdsForTarget('conversation', h.textarea.value)).toEqual([]);
@@ -338,6 +370,36 @@ describe('草稿标记与成员的双向联动（FR-002/005, US1-04）', () => {
   });
 });
 
+describe('草稿身份不隐式增员', () => {
+  it.each(['contact', 'agent'])('仅绑定 %s 令牌后，初始化和连续编辑均不创建会话成员', (kind) => {
+    h.setCid('draft-only');
+    const id = kind === 'contact' ? 'contact-id' : 'cli-codex';
+    h.textarea.value = '@Bob question';
+    h.members.setMentionSidecar('conversation', [{ id, kind, name: 'Bob', start: 0, text: '@Bob ' }]);
+    h.members.seedDraftTracking('conversation', h.textarea.value);
+    h.members.syncFromDraft('conversation', h.textarea.value);
+    h.members.syncFromDraft('conversation', h.textarea.value + ' edited');
+    h.members.resetDraftTracking('conversation');
+    expect(h.members.getMembers('conversation')).toEqual([]);
+    expect(JSON.parse(h.store.get('chat.membersByCid') || '{}')).toEqual({});
+  });
+
+  it('已选本地成员删除令牌后可经真实撤销边界恢复，发送重置仍保留成员', () => {
+    h.members.addMember('conversation', { kind: 'agent', id: 'cli-codex', name: 'Codex' });
+    h.members.insertMention('conversation', { kind: 'agent', id: 'cli-codex', name: 'Codex' });
+    const atoms = h.members.mentionSidecarSnapshot('conversation');
+    h.members.seedDraftTracking('conversation', h.textarea.value);
+    h.textarea.value = '';
+    h.members.syncFromDraft('conversation', h.textarea.value);
+    expect(h.members.getMembers('conversation')).toEqual([]);
+    h.textarea.value = '@Codex ';
+    h.members.syncMentionSidecarFromDom('conversation', atoms, { inputType: 'historyUndo' });
+    h.members.syncFromDraft('conversation', h.textarea.value);
+    h.members.resetDraftTracking('conversation');
+    expect(h.members.getMembers('conversation')).toEqual([{ kind: 'agent', id: 'cli-codex', name: 'Codex' }]);
+  });
+});
+
 describe('会话成员持久化与恢复（FR-016, US3-06/07/08）', () => {
   it('按会话隔离并落盘，切换会话互不覆盖', () => {
     h.setCid('conv-a');
@@ -480,4 +542,58 @@ describe('标记插入与整块删除（FR-002/005）', () => {
     // 标记被整块删除，只留下原先的分隔空白（不误删任务文字）。
     expect(h.textarea.value.trim()).toBe('看这个');
   });
+});
+
+describe('联系人分组（A2A · FR-14/FR-15）', () => {
+  it('联系人排在 Task Agent 之后，且点名行带 contact 分组与助理说明', () => {
+    h.setContacts([
+      { user_id: 'cs_alice', name: 'Alice', online: true },
+      { user_id: 'cs_bob', name: 'Bob', online: false },
+    ]);
+    const rows = h.members.memberRows('conversation', 'mentions');
+    const contacts = rows.filter((row: any) => row.kind === 'contact');
+    expect(contacts.map((row: any) => row.key)).toEqual(['cs_alice', 'cs_bob']);
+    expect(contacts[0]).toMatchObject({ group: 'contact', name: 'Alice' });
+    // 原型口径：在线显示「向 TA 的助理提问」，离线显示「离线」。
+    expect(String(contacts[0].description)).toContain('助理');
+    expect(String(contacts[1].description)).toContain('离线');
+    expect(contacts[1].unavailable).toBe(true);
+    expect(contacts[0].unavailable).toBeFalsy();
+  });
+
+  it('分组顺序：CogSeed → 外接 Agent → Task Agent → 联系人', () => {
+    const ordered = h.members.orderRowsByGroup([
+      { key: 'c', group: 'contact' },
+      { key: 't', group: 'task' },
+      { key: 'e', group: 'external' },
+      { key: '', group: '' },
+    ]);
+    expect(ordered.map((row: any) => row.group)).toEqual(['', 'external', 'task', 'contact']);
+  });
+
+  it('没有联系人时不产生联系人行（行为与改动前一致）', () => {
+    h.setContacts([]);
+    const rows = h.members.memberRows('conversation', 'mentions');
+    expect(rows.filter((row: any) => row.kind === 'contact')).toHaveLength(0);
+  });
+
+describe('联系人点名令牌（A2A · D-01）', () => {
+  it('resolves a contact name to the contact account id', () => {
+    const table = h.members.mentionTableFrom(AGENTS, [{ user_id: 'cs_bob', name: 'Bob' }]);
+    const ids = h.members.mentionTokensIn('@Bob 帮我看下报价', table).map((t: any) => t.id);
+    expect(ids).toEqual(['cs_bob']);
+  });
+
+  it('keeps agent precedence when a contact shares an agent name', () => {
+    const table = h.members.mentionTableFrom(AGENTS, [{ user_id: 'cs_dup', name: 'Codex' }]);
+    const ids = h.members.mentionTokensIn('@Codex 在吗', table).map((t: any) => t.id);
+    expect(ids).toEqual(['cli-codex']);
+  });
+
+  it('does not invent contacts when none are provided', () => {
+    const table = h.members.mentionTableFrom(AGENTS, []);
+    const ids = h.members.mentionTokensIn('@Bob 你好', table).map((t: any) => t.id);
+    expect(ids).toEqual([]);
+  });
+});
 });

@@ -145,18 +145,7 @@ const learningReview = {
 };
 
 describe('KStar task-level precipitation (B5)', () => {
-  it('does not import ownerless P3394 updates from user A into user B while retaining B local precipitation', async () => {
-    const p3394Episodes = await import('../../../../src/main/features/p3394_bridge/kstar-episodes');
-    p3394Episodes.recordP3394Episode({
-      session_id: 'ses-user-a',
-      task_id: 'tsk-user-a',
-      goal: '用户 A 的协作任务',
-      agent_id: 'hermes',
-      status: 'completed',
-      actions: [],
-      proposed_updates: [{ goal: '用户 A 的私有工作流' }],
-    });
-
+  it('builds a B-local proposal without any ownerless external update', async () => {
     const epB = episode('kse-b5-ownerless-p3394', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
     await seedEpisode(epB);
     await seedReview(epB, learningReview);
@@ -166,58 +155,15 @@ describe('KStar task-level precipitation (B5)', () => {
     const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
 
     expect(result.proposals).toHaveLength(1);
+    // 并行 episode store 已删除（它没有 uid 作用域、读侧从未接线）：不再存在"外部无主更新"
+    // 这一输入通道，因此这里断言的是 B 本地沉淀本身不引入任何外部来源。
     expect(result.proposals[0].sourceRefs.some((ref) => ref.kind === 'authorized_external_system')).toBe(false);
-    expect(JSON.stringify(result.proposals)).not.toContain('用户 A 的私有工作流');
-    // specs/016 T014：B 本地沉淀改道写经验条目（原「资产」断言 → 经验断言）。
-    expect(result.experienceIds).toHaveLength(1);
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    expect((await experiences.listExperiences('user-b5')).some((exp) => exp.id === result.experienceIds[0])).toBe(true);
-  });
-
-  it('aggregates two episodes into one skill_method asset carrying both episodes evidence', async () => {
-    const epA = episode('kse-b5-a', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
-    const epB = episode('kse-b5-b', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }, { name: 'grep' }]);
-    await seedEpisode(epA);
-    await seedEpisode(epB);
-    await seedReview(epA, learningReview);
-    await seedReview(epB, { ...learningReview, confidence: 0.6 });
-    const requirement = await seedRequirement(['kse-b5-a', 'kse-b5-b']);
-
-    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
-    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
-
-    expect(result.proposals).toHaveLength(1);
-    expect(result.proposals[0]).toMatchObject({
-      suggestedType: 'skill_method',
-      suggestedScope: 'report',
-    });
-    // Merged tool chain spans BOTH episodes, preserving first-seen order.
-    expect(result.proposals[0].judgment).toContain('read_file → write_file → grep');
-    // Merged evidence includes both executions.
-    const sourceKinds = result.proposals[0].sourceRefs.filter((ref) => ref.kind === 'execution');
-    expect(sourceKinds.map((ref) => ref.id).sort()).toEqual(['kse-b5-a', 'kse-b5-b']);
-    // Strongest review drives the signal (confidence 0.9 > 0.6).
-    expect(result.proposals[0].learningSignal?.confidence).toBe(0.9);
-
-    // specs/016 T013/T014（FR-001）：聚合线 create 提案改道写经验条目
-    // （skill_method 分支 → workflow 类型），不再进候选池/资产库——经验没有
-    // 「候选→晋升」的通道，也没有成熟度/lifecycleStatus 这些资产口径（D12）。
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    const stored = await experiences.listExperiences('user-b5');
-    const created = stored.filter((exp) => exp.id === result.experienceIds[0]);
-    expect(created).toHaveLength(1);
-    expect(created[0]).toMatchObject({
-      experienceType: 'workflow',
-      status: 'active',
-      scope: 'report',
-    });
-    // 隔离双向钉住：候选池与资产库对 create 线零产出。
-    const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    expect(await candidates.listRecallCandidates('user-b5')).toHaveLength(0);
+    expect(result.proposals[0].sourceRefs).toContainEqual(expect.objectContaining({ kind: 'execution', id: epB.id }));
+    expect(result.createdAssetIds).toEqual([]);
     expect(result.candidateIds).toEqual([]);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    expect(await assets.listAbilityAssets('user-b5')).toHaveLength(0);
+    expect(result.experienceIds).toEqual([]);
   });
+
 
   it('carries persisted Projection, Forecast, Episode, Review and delta provenance into candidates', async () => {
     const ep = {
@@ -290,24 +236,6 @@ describe('KStar task-level precipitation (B5)', () => {
       status: 'degraded',
       error: 'Forecast provenance is unavailable; candidate evidence is incomplete.',
     });
-  });
-
-  it('is idempotent: re-running precipitation does not duplicate experiences', async () => {
-    const epA = episode('kse-b5-ida', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
-    await seedEpisode(epA);
-    await seedReview(epA, learningReview);
-    const requirement = await seedRequirement(['kse-b5-ida']);
-
-    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
-    const first = await precipitation.precipitateRequirementLevel('user-b5', requirement);
-    const second = await precipitation.precipitateRequirementLevel('user-b5', requirement);
-
-    // specs/016 T014：create 线的去重语义改为「经验不重复」——经验 id 由
-    // source+原序稳定派生，createExperience 同 id 返回既有记录。
-    expect(second.experienceIds).toEqual(first.experienceIds);
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    const stored = await experiences.listExperiences('user-b5');
-    expect(stored.filter((exp) => exp.id === first.experienceIds[0])).toHaveLength(1);
   });
 
   it('emits nothing when no review clears the evidence gate', async () => {
@@ -387,52 +315,6 @@ describe('KStar task-level precipitation (B5)', () => {
 
     expect(result.proposals).toHaveLength(0);
     expect(result.experienceIds).toHaveLength(0);
-  });
-
-  it('precipitates when the ΔR signal clears the noise gate (|ΔR| >= 0.15)', async () => {
-    const epA = episode('kse-b5-clear', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
-    await seedEpisode(epA);
-    await seedReview(epA, {
-      expectedResult: 'A report is built.',
-      actualResult: 'The report was built much faster.',
-      deltaR: 0.2,
-      deltaA: 0.1,
-      outcome: 'better_than_expected',
-      attribution: 'execution_gap',
-      reason: 'The workflow is worth reusing.',
-      confidence: 0.9,
-    });
-    const requirement = await seedRequirement(['kse-b5-clear']);
-
-    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
-    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
-
-    expect(result.proposals).toHaveLength(1);
-    expect(result.experienceIds).toHaveLength(1);
-  });
-
-  it('precipitates a process-experience lesson even when the task met expectations (met_expected + lesson)', async () => {
-    const epA = episode('kse-b5-proc', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
-    await seedEpisode(epA);
-    await seedReview(epA, {
-      expectedResult: 'A report is built.',
-      actualResult: 'The report was built.',
-      deltaR: 0,
-      deltaA: 0,
-      outcome: 'met_expected',
-      attribution: 'unclear',
-      reason: 'The review found that merge-conflict type assertions (as X) hide runtime errors; prefer explicit checks.',
-      confidence: 0.9,
-      lesson: 'Merge-conflict type assertions (as X) hide runtime errors; use explicit discriminant checks instead.',
-    });
-    const requirement = await seedRequirement(['kse-b5-proc']);
-
-    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
-    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
-
-    expect(result.proposals).toHaveLength(1);
-    expect(result.proposals[0].judgment).toContain('type assertions');
-    expect(result.experienceIds).toHaveLength(1);
   });
 
   it('does not precipitate a routine met_expected without a lesson (process-experience noise gate)', async () => {

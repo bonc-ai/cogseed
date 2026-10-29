@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
@@ -86,7 +87,7 @@ async function modules() {
 
 async function createTransferValidatedAsset(): Promise<Awaited<ReturnType<(typeof import('../../../../src/main/features/recall/asset-service'))['readAbilityAsset']>>> {
   const { candidates, assets, refs } = await modules();
-  const candidate = await candidates.saveRecallCandidate(USER_ID, {
+  const candidate = await createNightlyCandidateFixture(USER_ID, {
     judgment: LOCKED_ASSET_STATEMENT,
     value: LOCKED_ASSET_STATEMENT,
     summary: 'Preserve verified file evidence',
@@ -97,8 +98,8 @@ async function createTransferValidatedAsset(): Promise<Awaited<ReturnType<(typeo
     sourceRefs: [{ kind: 'execution', id: 'exec-kstar-closure-candidate' }],
     evidenceRefs: [{ kind: 'execution', id: 'exec-kstar-closure-candidate' }],
   });
-  const promoted = await candidates.autoApplyRecallCandidate(USER_ID, candidate.id, { provenance: 'kstar' });
-  expect(semanticReviewMock.reviewCandidateSemantically).toHaveBeenCalledTimes(1);
+  const promoted = await candidates.promoteRecallCandidate(USER_ID, candidate.id, { actor: 'user', provenance: 'kstar' });
+  expect(semanticReviewMock.reviewCandidateSemantically).not.toHaveBeenCalled();
   if (!promoted.asset) throw new Error('KSTAR scenario asset was not promoted');
   const asset = await assets.setAbilityAssetMaturity(USER_ID, promoted.asset.id, 'transfer_validated');
   await refs.addWorkspaceAssetReference(USER_ID, {

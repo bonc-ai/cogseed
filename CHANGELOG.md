@@ -7,6 +7,83 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-28
+
+### Added
+
+- **智能会议 Agent 与两个随包 Skill 改由 Hub 分发**：`distribution/meeting/` 成为发布源，收敛
+  「智能会议」Agent 与会议纪要、任务拆分两个 Skill；`release.json` 声明各内容版本、
+  `min_app_version` 与默认安装，正文与评测用例随源码迁移，纠错、确认、知识库归档与本体写入
+  仍由客户端提供。
+- **认知资产版式统一**：我的认知与认知生长详情统一为 list/detail 结构，「系统活动」更名为
+  「认知生长」；发现巡检统一到夜间轮次，复查内容支持原子的合并与拆分。
+- **本体星图**：图谱改为画布优先，全局图谱与库内图谱打通，每个对象双层标签，右侧栏可预览
+  记录，模块检查器停靠在图旁。
+- **知识库问答**：正文引用改为行内可点 chip，增加系统状态行与回答工具条，概览回答可溯源并
+  带库级兜底；新增文件下载与纯文本编辑。
+- **工作区技能选择**：技能支持搜索与分类筛选，分类改用带计数的 chip，控件文案本地化。
+- **联系人与 A2A**：关系流程统一走 Hub，新建或沿用已有会话由用户选择，来件显示对方名称，
+  电话查询在 Hub 未配置时降级、配额不足单独提示。
+- **Windows 静默更新**：新增 detached 安装助手与 `updates.install` IPC，支持重启并安装，
+  升级后启动增加防循环守卫。
+- **后台任务可观测**：模型可以查看并读取后台运行，跨工具抖动与同工具重复都被拦截，检查点
+  压缩策略改为在会话内触发。
+- **本地智能体与 p3394 桥接**：截止时间命中的 CLI 运行可转后台继续，退出时回收句柄，
+  桥接启动重放未投递的后台作业。
+- **S4 智能体 / 技能页改版**：首页按主智能体 / 外接智能体 / 平台分组，统一详情弹窗展示
+  「能做什么 / 示例 / 标签 / 会用到的技能」，新增「已安装」管理页与分类筛选；平台内容统一
+  从 Hub 目录读取，默认安装走 `/marketplace/defaults`。
+- **内容使用上报**：首次安装、停用后重新启用、会话首次纳入 Hub Agent 时上报
+  `activate` / `session_start` 事件；只发按内容隔离的匿名摘要，失败不重试、不影响本机操作。
+- **23 个随包私有技能的安全性声明**：补齐 `references/security-manifest.yaml`、`artifact.yaml`、
+  `evals` 与引用文件，使 UIDesigner / SeoGeoAgent 能通过 Hub 发布闸；`seo-crawl` 按已确认的
+  公开网络例外（B）声明，保留 SSRF 守卫与私网阻断。
+
+### Changed
+
+- 市场目录请求携带客户端版本，目录缓存随版本变化失效；卡片明确标出「需要更新」与当前客户端
+  不可安装的内容。
+- 内置内容清单 `resources/builtin/_manifest.json` 随新增声明文件重算；S4 之后不再把随包内容
+  当成 Hub 目录的替代来源。
+
+### Fixed
+
+- **Windows 解包与产物路径**：安装包改用原生 tar / bzip2 解压；产物路径与 `required_deliverables`
+  两侧统一按 `/` 归一，避免把已有交付物误判为缺失。
+- **认知与本体**：软删除资产豁免入池合并，`statementIssues` 以读侧为准；语言切换时在途快照
+  不再导致本体页崩溃。
+- **迁移**：v1 台账退役改到 JSON 落盘成功之后，持久化失败不再丢迁移数据。
+- **本地智能体**：堵住 Electron 变量泄漏进 CLI 子进程，进程树终止失败会留痕。
+- **Windows 上 EduSeed 课程插件的学习记录不再落到"当前工作目录"** — 插件运行时用
+  `process.env.HOME` 拼 KSTAR 记录目录，而 Windows 只有 `USERPROFILE`，于是目录退化成
+  相对路径 `.eduseed/kstar/<学号>`：记录写进了当时的工作目录（用户项目里、或应用安装目录），
+  一旦工作目录变化就再也读不回来（`list-episodes`/ΔR/尝试链断链）。运行时改为
+  `process.env.HOME || os.homedir()`。内置包版本提升到 0.5.5 以触发存量用户重装。
+
+- **Windows 上交付物校验不再误判"缺交付物"、提交不再被阻断** — 插件用 `path.relative()`
+  得到的反斜杠路径（`src\index.js`）去匹配按 `/` 书写的 `required_deliverables`
+  （如 `src/**`），Windows 上带路径的模式永不匹配：`check-deliverables` /
+  `prepare-submission` / `submit-and-track` 会把学生明明已有的交付物报成缺失，并以
+  `缺少交付物: src/**` 拒绝提交（只有显式 `blockOnMissing:false` 才能绕过）。现在模式与
+  文件路径两侧统一按 `/` 归一后再匹配。
+
+- **EduSeed 插件：文档标注"离线"的命令不再要求平台凭证** — `check-deliverables` /
+  `prepare-submission` 在 SKILL.md 里写明是离线本地检查，但 `loadConfig()` 先于免鉴权判断
+  执行，未配置的新装用户直接拿到 `ConfigError`，离线命令完全不可用。现在这两个命令以
+  离线模式加载配置；需要鉴权的命令行为不变（仍要求 `EDUSEED_SERVER_URL` / `API_KEY` /
+  `STUDENT_ID`）。
+
+- **EduSeed 插件：Windows 下也能定位到打包版的 `cogseed-pkg.cjs`** — 自动更新的可执行文件
+  探测此前只有 macOS 的 `/Applications/...` 兜底，Windows 打包版（NSIS，productName
+  `CogSeed`）在宿主未注入 `COGSEED_PC_DIR` 时找不到 CLI，只能退化到对内置包无效的
+  `git pull`。现在补充 `%LOCALAPPDATA%\Programs\CogSeed` 与 `%ProgramFiles%\CogSeed` 候选。
+
+- **EduSeed 插件：后台挑战缓存刷新不再可能闪出控制台窗口** — detached 子进程补齐
+  `windowsHide`。
+
+- **EduSeed 插件：版本口径与文档指针修正** — 运行时自报版本从 0.5.4 跟随到 0.5.5（否则
+  更新检查会把已装版本当成落后版本），`manifest.json` 的 known_issues 指针由不存在的
+  "README.md 第 8 节"改为实际存在的 `docs/troubleshooting.md`。
 ## [1.3.0] - 2026-10-09
 
 ### Added

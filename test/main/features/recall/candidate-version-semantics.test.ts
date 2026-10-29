@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * v1/v2 语义与历史引用冻结（specs/015 · US-702 · T025）。
  *
@@ -64,7 +65,7 @@ const V1_STATEMENT = '发布前必须核对回滚方案，并把它写在发布�
 /** 任务 A：用户确认一条 create 候选 → v1 资产（这是"任务实际用过的 v1"）。 */
 async function seedVersionOne() {
   const { candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate(UID, {
+  const candidate = await createNightlyCandidateFixture(UID, {
     judgment: V1_STATEMENT,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: '语义基线样本',
@@ -78,7 +79,7 @@ async function seedVersionOne() {
 /** 任务 B：改进候选锚定"任务实际用过的 v1"。 */
 async function proposeUpdate(assetId: string, input: { judgment: string; sourceId: string; targetVersionUsed?: string; action?: 'update' | 'limit_scope' }) {
   const { candidates } = await modules();
-  return candidates.saveRecallCandidate(UID, {
+  return createNightlyCandidateFixture(UID, {
     judgment: input.judgment,
     // 与种子标题同值：确认 update 不改 title，也就不触发「改 title 必刷新
     // 已确认投影」（设计 3.3）——本组用例钉的是「历史引用不被顺手刷新」。

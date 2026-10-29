@@ -1,0 +1,28 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.artifact.workspace
+  name: ui-artifact-workspace
+  version: 1.0.0
+  description: Manage UIDesigner standalone artifacts through stable per-artifact
+    directories, artifact.json, HTML-default or explicit alternate formats, in-place
+    iteration, relative assets, and on-demand ZIP packaging so later turns can quickly
+    resume the same design.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

@@ -1,17 +1,17 @@
-// ─── Chat stream events (conv-core spec) ───────────────────────────────────
+// ─── Chat stream events ───────────────────────────────────────────────────
 //
 // 统一会话事件模型：主进程所有执行路径（hermes 直连 / P3394 网关 / local
 // agent / commander）把执行过程投影为 ChatTurn / ChatItem / ChatInteraction
 // 三层语义，经既有 SSE 通道（agents.chat.sendStream）叠加下发，渲染层
 // chat-stream 组件群只消费这一套事件。老字段（delta/progress 纯文本）在
-// 兼容期保留，见 spec.md「事件契约」。
+// 兼容期保留。
 //
 // 本文件是运行时校验的事实源（zod）；静态类型由 schema 推导，见 types.ts。
 
 import { z } from 'zod';
 
 /** 一轮执行（Turn）的终态。started 由 turnStarted 事件表达。 */
-export const CHAT_TURN_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'] as const;
+export const CHAT_TURN_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'waiting_input'] as const;
 
 /** 单个可视单元（Item）的三态。 */
 export const CHAT_ITEM_STATUSES = ['inProgress', 'completed', 'failed'] as const;
@@ -28,7 +28,7 @@ export const CHAT_ITEM_KINDS = [
 /** 双向交互（Interaction）的两种形态。 */
 export const CHAT_INTERACTION_KINDS = ['approval', 'question'] as const;
 
-/** 审批决策：无响应超时由主进程按拒绝处理（bridge.js 先例）。 */
+/** 审批决策：无响应超时由主进程按拒绝处理。 */
 export const CHAT_APPROVAL_DECISIONS = ['allow', 'allowAlways', 'deny'] as const;
 
 const chatItemIdSchema = z.string().min(1);
@@ -51,10 +51,10 @@ const toolExecutionPayloadSchema = z.object({
   /** 失败时的错误信息（status=failed 时有意义）。 */
   error: z.string().optional(),
   /**
-   * item 级计时（conv-core 收编补差）。语义对齐 assistant-ui ToolCallTiming
+   * item 级计时，语义对齐 assistant-ui ToolCallTiming
    * （packages/assistant-stream/src/core/utils/types.ts）：epoch 毫秒，
    * completedAtMs 缺省 = 进行中。命名加 Ms 后缀以区分本仓 turn 级 startedAt
-   * 的 ISO 字符串口径。主进程下发即权威值——历史回放不重测（上游文档同义）。
+   * 的 ISO 字符串口径。历史回放使用主进程下发的值，不重新计时。
    */
   timing: z.object({
     startedAtMs: z.number().finite(),
@@ -77,17 +77,14 @@ const textPayloadSchema = z.object({
 });
 
 const usagePayloadSchema = z.object({
-  /** 输入/输出 token 数（口径沿用 #84 对话内统计）。
-   *  注意：这是**整轮累加**（每步工具循环的调用求和）——消耗口径。 */
+  /** 输入/输出 token 数：整轮工具循环的调用累加，用于统计消耗。 */
   inputTokens: z.number().nonnegative().optional(),
   outputTokens: z.number().nonnegative().optional(),
-  /** 缓存读/写 token 数（2026-09-08 补：面板用量行与页脚 meta 口径
-   *  一致——投影器 usagePayloadFrom 已带上，schema 此前会静默剥掉）。 */
+  /** 整轮累加的缓存读/写 token 数，与面板用量和页脚 meta 口径一致。 */
   cacheReadTokens: z.number().nonnegative().optional(),
   cacheWriteTokens: z.number().nonnegative().optional(),
-  /** 最后一次调用的 prompt 侧用量（2026-09-11 补）：**当前上下文占用**的
-   *  权威口径——上方累加字段把每步重发的历史求和，绝不能当窗口占用展示。
-   *  schema 必须登记，否则 zod 静默剥离（2026-09-08 cacheRead 同类教训）。 */
+  /** 最后一次调用的 prompt 侧用量，用于展示当前上下文占用。
+   *  上方累加字段包含每步重发的历史，不能作为窗口占用。 */
   lastCallUsage: z.object({
     inputTokens: z.number().nonnegative().optional(),
     outputTokens: z.number().nonnegative().optional(),
@@ -96,7 +93,7 @@ const usagePayloadSchema = z.object({
   }).optional(),
   /** 按用户默认单价估算的费用（非账单金额）。 */
   estimatedCost: z.number().nonnegative().optional(),
-  /** 上下文窗口占用比（0-1），接近 1 触发压缩提示（矩阵 #10）。 */
+  /** 上下文窗口占用比（0-1），接近 1 触发压缩提示。 */
   contextWindowRatio: z.number().min(0).max(1).optional(),
 });
 
@@ -168,6 +165,7 @@ export const chatInteractionRequestedSchema = z.object({
   timeoutMs: z.number().positive(),
   /** approval 专用：动作类别，UI 图标用。 */
   approvalCategory: z.enum(['bash', 'fileWrite', 'externalService']).optional(),
+  allowAlways: z.boolean().optional(),
   /** 路由用：ipc 层把事件送进对应会话的活跃流。 */
   cid: z.string().min(1).optional(),
 });

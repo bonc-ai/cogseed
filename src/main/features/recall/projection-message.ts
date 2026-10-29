@@ -50,8 +50,7 @@ export interface PostProjectionCardMessageResult {
 }
 
 function cardMessageText(card: RecallProjectionCard): string {
-  const included = Number(card.summary?.includedCount || card.includedAssetIds?.length || 0);
-  return `Preload candidates: ${included}; add or remove as needed.`;
+  return `Preload candidates: ${card.includedAssetIds.length}; add or remove as needed.`;
 }
 
 export async function postProjectionCardMessage(

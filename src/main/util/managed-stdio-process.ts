@@ -3,7 +3,7 @@ import {
   type ChildProcessWithoutNullStreams,
 } from 'node:child_process';
 import * as path from 'node:path';
-import { killProcessTree } from './process-tree.js';
+import { killProcessTree, type TreeKillFailureReason } from './process-tree.js';
 
 const DEFAULT_LINE_BYTES = 1024 * 1024;
 const MAX_CONFIGURABLE_LINE_BYTES = 64 * 1024 * 1024;
@@ -11,6 +11,8 @@ const TERMINATION_GRACE_MS = 5000;
 const FORCE_KILL_WAIT_MS = 5000;
 
 export interface ManagedStdioProcessOptions {
+  /** 进程树终止失败时的回调（本文件与 process-tree 同属"依赖极轻"边界，不自己记日志）。 */
+  onTreeKillFailure?: (reason: TreeKillFailureReason) => void;
   command: string;
   args: string[];
   cwd: string;
@@ -143,7 +145,9 @@ export function startManagedStdioProcess(opts: ManagedStdioProcessOptions): Mana
     rejectPendingWrites(new Error('managed process is closing'));
     terminationTimer = setTimeout(() => {
       if (processClosed) return;
-      killProcessTree(child, 'SIGKILL');
+      // 没给回调时保持既有的两参调用形态（既有测试与调用方按两参建立契约）
+      if (opts.onTreeKillFailure) killProcessTree(child, 'SIGKILL', { onFailure: opts.onTreeKillFailure });
+      else killProcessTree(child, 'SIGKILL');
       forceKillTimer = setTimeout(() => {
         if (processClosed) return;
         const error = new Error('managed process did not exit after SIGKILL');
@@ -154,7 +158,8 @@ export function startManagedStdioProcess(opts: ManagedStdioProcessOptions): Mana
     }, TERMINATION_GRACE_MS);
     terminationTimer.unref?.();
     try { child.stdin.end(); } catch { /* process may already be gone */ }
-    killProcessTree(child, 'SIGTERM');
+    if (opts.onTreeKillFailure) killProcessTree(child, 'SIGTERM', { onFailure: opts.onTreeKillFailure });
+    else killProcessTree(child, 'SIGTERM');
     return completion;
   };
 

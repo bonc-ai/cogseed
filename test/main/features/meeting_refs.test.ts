@@ -122,11 +122,20 @@ describe('T011 ②：准入拒绝且码化（既有判据，不新写）', () =>
     expect((rejection as MeetingRefError).blockRule).toBe('archived');
   });
 
-  it('既有准入闸拦下的（如 seed 成熟度 never）→ asset_ineligible', async () => {
+  it('明确引用未验证内容不升级成熟度，也不取得默认使用资格', async () => {
     assets.set('ast_seed', assetRecord({ id: 'ast_seed', maturity: 'seed' }));
-    const rejection = await attachMeetingAsset(uid, 'kb/m.md', 'ast_seed').catch((error: MeetingRefError) => error);
+    await attachMeetingAsset(uid, 'kb/m.md', 'ast_seed');
+    expect(await listMeetingAssetRefs(uid, 'kb/m.md')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: 'ast_seed' }),
+    ]));
+    expect(assets.get('ast_seed')?.maturity).toBe('seed');
+  });
+
+  it('有项目限制的资产仍由共同准入拦下并返回稳定规则标识', async () => {
+    assets.set('ast_scoped', assetRecord({ id: 'ast_scoped', scopePolicy: { projectIds: ['project-only'] } }));
+    const rejection = await attachMeetingAsset(uid, 'kb/m.md', 'ast_scoped').catch((error: MeetingRefError) => error);
     expect(rejection.code).toBe('asset_ineligible');
-    expect((rejection as MeetingRefError).blockRule).toBe('maturity');
+    expect((rejection as MeetingRefError).blockRule).toBe('scope');
   });
 
   it('形状不合法 → invalid_asset_id / invalid_via / invalid_doc_id（schema）', async () => {
@@ -375,7 +384,7 @@ describe('T050：relatedMeetingRefs（确定性、零语义、零模型）', () 
       assetIds: ['ast_cogseed'],
       matchedBy: 'asset',
     });
-    // title 是展示名（文档模型缺失时回退文件名段，与 buildConclusionCandidateInput 同一表达式）
+    // title 是展示名（文档模型缺失时回退文件名段）
     expect(related[0].title).toBe('9.01周会.txt');
     // 只读：查询不写任何文件（引用包前后逐字节一致）
     const file = path.join(userMeetingRefsDir(uid), `${docKeyForDocId('meetings/9.01周会.txt')}.json`);

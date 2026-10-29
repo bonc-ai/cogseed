@@ -85,7 +85,8 @@
     const attrs = {
       ...(value.attrs || {}),
       'aria-label': label,
-      title: value.title || label,
+      // `title: false` opts out of the slow native tooltip (see ui-tooltip.js).
+      title: value.title === false ? null : (value.title || label),
     };
 
     return `<button type="button" class="${escapeText(classes)}"${disabled ? ' disabled' : ''}${renderAttrs(attrs)}>${renderIcon(icon, '')}</button>`;

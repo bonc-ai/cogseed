@@ -73,6 +73,13 @@ export interface GroupChatRuntimeStatus {
    *  group-chat bus, so without this the renderer's liveness model would
    *  treat a bus-quiescent conversation as idle and finalize the run early. */
   backend_active?: boolean;
+  /** True when the only thing preventing this conversation from settling is the
+   *  user's wake-approval decision. The run stays `running` and its actor stays
+   *  `pending` until then (the bus never finalizes a run that still has pending
+   *  or approved wakes, and wake expiry in turn requires an already-terminal
+   *  run), so without this flag an awaiting dispatch is indistinguishable from
+   *  an endlessly spinning task. Renderer shows "waiting for your decision". */
+  waiting_approval?: boolean;
   collaboration?: CollaborationSnapshot;
   kstarLifecycle?: KstarTaskLifecycleSnapshot;
 }
@@ -155,7 +162,7 @@ export async function runtimeStatus(
   cid: string,
   projectIdHint?: string | null,
 ): Promise<GroupChatRuntimeStatus> {
-  if (!safeId(cid)) return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false };
+  if (!safeId(cid)) return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false, waiting_approval: false };
   try {
     const state = await readState(userId, cid, projectIdHint);
     // Commander-centric KStar: recover legacy pending projection dispatch
@@ -181,6 +188,29 @@ export async function runtimeStatus(
     let backendActive = false;
     let backendAgents: string[] = [];
     let backendTurns: Array<{ actor: string; turn_id: string; started_at_ms: number }> = [];
+    // 等待唤醒批准 ≠ 执行中（真机症状：用户以为会话已结束，侧栏一直转圈）。
+    // 互相等待的证据链：bus 的收口门槛在本 run 还有 pending/approved 唤醒时
+    // **直接 return**（bus.ts 收口段），wake-service 又只在 run 已终态时才判死
+    // （expireUndispatchableWakeRequests）——run 停在 running、actor 停在 pending。
+    // 此时该 run 的 backend task 仍处 running：backendActive=true 让 processing
+    // 恒真，并且挡住下面的孤儿自愈，于是永远转圈、重启也不消。
+    // 口径与既有的 `waiting_user` 修复一致：等用户决定不是"在跑"。
+    // 「等用户批准」：只读索引（wake-store 里按 TTL 缓存整文件解析，热路径安全），
+    // 刻意不用 wake-service 的 listWakeRequests——它会跑 reconcile（写盘 + 对账），
+    // 读端点不该有副作用。**不要求同时有执行中任务**：run/actor/wake 互等的会话
+    // 可能一个任务都不在执行（本机就有挂了三天、彻底安静的存量），那种情况更要
+    // 如实显示"在等你"，而不是什么都不说。
+    let approvalIndex: { conversations: Set<string>; runs: Set<string> } =
+      { conversations: new Set<string>(), runs: new Set<string>() };
+    try {
+      const { pendingApprovalIndex } = await import('../p3394/wake-store');
+      approvalIndex = await pendingApprovalIndex(userId);
+    } catch { /* 读不到：按原口径（不豁免），宁可显示活跃 */ }
+    const waitingApproval = approvalIndex.conversations.has(cid);
+    const isRunWaitingApproval = (task: unknown): boolean => {
+      const runId = String((task as { groupChatRunId?: string }).groupChatRunId || '');
+      return !!runId && approvalIndex.runs.has(runId);
+    };
     try {
       const { listCogSeedTasks } = await import('../cogseed_backend/task-store');
       const { isCogSeedTaskExecutingStatus } = await import('../cogseed_backend/lifecycle');
@@ -189,19 +219,22 @@ export async function runtimeStatus(
       // 把 `waiting_user`（已停止、等用户回话）也算作活跃，导致会话
       // processing 恒为 true：发送按钮卡在停止态、后续消息被排队
       // （2026-09-11 claude spawn 失败后实机复现）。
-      const active = (Array.isArray(tasks) ? tasks : []).filter((t) => (
+      const executing = (Array.isArray(tasks) ? tasks : []).filter((t) => (
         t && t.conversationId === cid
         && isCogSeedTaskExecutingStatus(t.status)
       ));
+      // 只把"真的在执行"的任务算作活跃：绑定的 run 正等唤醒批准的那些不算
+      // （见上方 waitingApproval 注释），否则 processing 恒真、侧栏一直转圈。
+      const active = executing.filter((t) => !isRunWaitingApproval(t));
       backendActive = active.length > 0;
       backendAgents = Array.from(new Set(
         active.map((t) => t.agentId).filter((a): a is string => !!a),
       ));
       backendTurns = active.map((t) => {
-        const startedMs = Date.parse(String(t.createdAt || ''));
+        const startedMs = Date.parse(String(t.executionStartedAt || (t.lastResumeRequestId ? t.updatedAt : t.createdAt) || ''));
         return {
           actor: String(t.agentId || ''),
-          turn_id: t.taskId,
+          turn_id: (t.executionId || t.taskId) + (t.lastResumeRequestId ? '-' + t.lastResumeRequestId : ''),
           started_at_ms: Number.isFinite(startedMs) ? startedMs : 0,
         };
       }).filter((t) => t.actor && t.turn_id);
@@ -227,7 +260,7 @@ export async function runtimeStatus(
     if ((state.status === 'running' || diskInFlight.length > 0) && !runtime.processing && !backendActive) {
       log.warn(`healing orphan running state user=${userId} cid=${cid} status=${state.status} in_flight=${diskInFlight.join(',')}`);
       await setStatus(userId, cid, 'idle');
-      return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false, ...collaborationPart, ...kstarLifecyclePart, ...floor };
+      return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false, waiting_approval: waitingApproval, ...collaborationPart, ...kstarLifecyclePart, ...floor };
     }
     const inFlight = Array.from(new Set([
       ...diskInFlight,
@@ -241,12 +274,13 @@ export async function runtimeStatus(
       in_flight: inFlight,
       active_turns: [...runtime.activeTurns, ...backendTurns],
       backend_active: backendActive,
+      waiting_approval: waitingApproval,
       ...collaborationPart,
       ...kstarLifecyclePart,
       ...floor,
     };
   } catch {
-    return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false };
+    return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false, waiting_approval: false };
   }
 }
 
@@ -531,8 +565,8 @@ async function _validateUserRoute(
       throw new Error('invalid CLI fallback recipient');
     }
     const cli = runtime.cli;
-    const { hasConfiguredModel } = await import('../auth');
-    if (hasConfiguredModel().configured) throw new Error('CLI fallback is not active');
+    const { hasConfiguredModelForUser } = await import('../auth');
+    if (hasConfiguredModelForUser(userId).configured) throw new Error('CLI fallback is not active');
     const { detectAll } = await import('../local_agents/registry');
     const entries = await detectAll();
     const entry = entries.find((item) => item.type === cli);
@@ -699,7 +733,7 @@ export function _validateExecutionConfigMapForSources(
   return Object.keys(out).length ? out : null;
 }
 
-async function _executionSourceCapabilities(
+export async function _executionSourceCapabilities(
   userId: string,
   selectedAgentIds: string[],
 ): Promise<Record<string, ExecutionSourceCapability>> {
@@ -709,18 +743,38 @@ async function _executionSourceCapabilities(
   const auth = await import('../auth');
   const { entries } = await auth.listEntries();
   const modelLists = new Map<string, Awaited<ReturnType<typeof auth.listModels>>['models']>();
+  const internalCapability = capabilities.internal as Extract<ExecutionSourceCapability, { kind: 'internal' }>;
+  const seenInternal = new Set<string>();
   for (const entry of entries) {
     let models = modelLists.get(entry.provider);
     if (!models) {
       models = (await auth.listModels(entry.provider)).models;
       modelLists.set(entry.provider, models);
     }
-    const meta = models.find((model) => model.id === entry.model);
-    (capabilities.internal as Extract<ExecutionSourceCapability, { kind: 'internal' }>).models.push({
-      provider: entry.provider,
-      model: entry.model,
-      effort: meta?.reasoning === true,
-    });
+    // internal 能力表上报 provider 的完整模型目录，而不只上报条目当前选中的模型：
+    // composer 可切换目录内任一模型（含刚加入 catalog、尚未成为条目选中模型的新模型，
+    // 如 glm-5.3-flash）。只上报选中模型会让切换后的发送在执行配置校验层被
+    // "unsupported provider/model" 拒绝，且错误在渲染层不可见，表现为点击无反应。
+    const selectedMeta = models.find((model) => model.id === entry.model);
+    const selectedKey = `${entry.provider}\0${entry.model}`;
+    if (!seenInternal.has(selectedKey)) {
+      internalCapability.models.push({
+        provider: entry.provider,
+        model: entry.model,
+        effort: selectedMeta?.reasoning === true,
+      });
+      seenInternal.add(selectedKey);
+    }
+    for (const model of models) {
+      const key = `${entry.provider}\0${model.id}`;
+      if (seenInternal.has(key)) continue;
+      seenInternal.add(key);
+      internalCapability.models.push({
+        provider: entry.provider,
+        model: model.id,
+        effort: model.reasoning === true,
+      });
+    }
   }
   const agents = await import('../agents');
   const localModels = await import('../local_agents/models');

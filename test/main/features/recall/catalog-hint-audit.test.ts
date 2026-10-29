@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -31,7 +32,7 @@ describe('catalog_hint receipts and timeline', () => {
     const receipts = await import('../../../../src/main/features/recall/injection-receipt');
 
     const now = new Date().toISOString();
-    const asset = await assets.createAbilityAsset(UID, {
+    const asset = await seedStoredAbilityAsset(UID, {
       schemaVersion: 2, ownerId: UID, id: 'aa-audit-1', candidateId: 'cand-audit-1',
       sourceCandidateIds: ['cand-audit-1'], reviewDecisionId: 'rd_audit0000000001',
       type: 'personal', title: '被提示但没用', statement: '一条被标★却没被取的偏好。',

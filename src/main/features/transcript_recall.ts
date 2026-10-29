@@ -1,61 +1,14 @@
 /**
- * transcript_recall — 转写纠错的**多路召回层**（纯函数，不碰文件系统）
+ * transcript_recall — 转写纠错的多路召回层（纯函数，不碰文件系统）。
  *
- * 为什么需要这一层（现状取证 2026-09-16）：
- *   `transcript_auto_correct.scanText` 的命中路径是 `foldedText.indexOf(entry.wrong)`，
- *   即**字面等价**。词表里没写过的错形，召回率恒等于 0——而 ASR 错形是**开放集**：
- *   同一个概念 `Cogseed` 在真实转写里出现过 11 种写法
- *   （coxy / cox / coc / coco / coke / coxseed / COS / CXXY / cogsed / code seat / Coxy）。
+ * 将未知词形匹配到已确认词条，只提出候选，不自动替换或补写内容。
+ * 归一化通道比较大小写和分隔符；模糊通道使用编辑距离与 ASCII 音形骨架。
+ * confidence 上限为 0.99，只有域内、非陷阱词、低风险且达到强相似阈值的候选
+ * 可以标为 suggest；其他候选只能 review，仍需人工确认。
  *
- * 本层的定位（一句话）：**把"未知形态"路由到"已确认概念"，只出候选，绝不自动替换。**
- *
- * 结构性安全性质（靠设计，不靠自觉）：
- *   - 召回目标**只能是词表里已有的词条** → 本层**不可能发明新概念**、
- *     更不可能补写原文没有的句子（反例：09-14 对照文档发现的"产物里出现原文没有的
- *     11 秒发言"）；
- *   - `confidence` 上限**硬编码为 0.99 < 1** → 上层无法把模糊候选当精确命中用
- *     （`scanText` 的精确命中才是 1），"召回放开、判定收紧"在类型层面成立；
- *   - `disposition: 'suggest'` 需要"不在陷阱词 + 在域内 + riskLevel 低 + 相似度 ≥ 0.9"
- *     四者同时成立，任一不满足即降为 `'review'`（必须人工确认）。
- *
- * 四条护栏（与精确扫描**共用同一实现**，避免两个通道对同一条词条得出相反结论）：
- *   1. 边界：`boundaryOk`（`coxy` 不得命中 `coxyx`；`boundary:'word'` 左右紧贴即拒）；
- *   2. 语境黑白名单：`findDeniedContext`（加白优先且静默）；
- *   3. 保护区域：`computeProtectedRanges`（code / 行内 code / URL 不动）；
- *   4. 作用域：`scopeAllows`（一次会议学到的变体不得升格为全局规则）。
- *
- * ── 阈值分层是**实测定出来的**，不是拍的 ──────────────────────────────
- * 对真实错形逐对测量"归一化串相似度 / 音形骨架相似度"后得到：
- *
- *   | 错形 → 规范形        | keySim | skelSim | 结论                     |
- *   |---|---|---|---|
- *   | cogsed → Cogseed     | 0.857 | 1.000 | ≥0.82 命中（可 suggest）  |
- *   | coxseed → Cogseed    | 0.857 | 0.833 | ≥0.82 命中                |
- *   | coxed → Cogseed      | 0.571 | 0.833 | 靠骨架命中 ≥0.82          |
- *   | personaltology → …   | 0.875 | 0.875 | ≥0.82 命中                |
- *   | k42 → K4(→KSTAR)     | 0.667 | —     | 落在 weak 档（≥0.65）     |
- *   | COS → Cogseed        | 0.429 | 0.500 | **仅 weak 档能兜住**       |
- *   | coco → Cogseed       | 0.286 | 0.500 | **weak 档也兜不住**        |
- *   | coxy → Cogseed       | 0.286 | 0.667 | **weak 档边缘**            |
- *   | roadmap → Raymond    | 0.000 | 0.000 | **任何相似度都兜不住**      |
- *   | 联盟德 → 雷蒙德        | —     | —     | 需拼音（extraPhonetic）    |
- *
- * 由此得出一条必须写下来的结论：**"纠错率低"的主因是词表覆盖面，不是匹配算法。**
- * 像 `k42`／`roadmap`／`联盟德` 这类形态与规范形在字面和音形上都**不接近**，
- * 只可能靠①入册（枚举）或②域先验推断解决；模糊匹配只能兜住中间那一档。
- * 本模块负责①的执行与②的接线，并把兜不住的部分**显式报出来**（`stats.residualHint`），
- * 而不是假装覆盖。
- *
- * 两条已知边界（显式声明，不假装覆盖）：
- *   1. **零新增依赖**（方案红线 + sbom/compliance 门禁）→ 内置骨架只覆盖 ASCII。
- *      中文音近（`王晶`↔`王婧`、`健全`↔`鉴权`、`联盟德`↔`雷蒙德`）需要拼音表，
- *      通过 `extraPhonetic` 注入（`{ 王: 'wang', 晶: 'jing', 婧: 'jing' }`）。
- *      是否内联紧凑拼音表、还是把中文人名降级为"人工确认 + ASR 热词下发"，
- *      属 Owner 决策，本层不裁定。
- *   2. 首字母约束（`initialStrict`，Soundex 式）：实测不影响目标样本
- *     （coxy/k42/roadmap/redmi/model/contact/mesh seed/open cloud/cloud code
- *      首字符均与规范形一致），但能显著压掉误召回，故默认开启。
- *      缩写类映射（`IDC`→`EduSeed`）**不是音形关系**，只能字面入册（种子已录入）。
+ * 边界、语境黑白名单、保护区域与作用域复用精确扫描的实现。
+ * 字面和音形都不接近的错形不能靠降低阈值可靠解决，残余形态须如实报告。
+ * 中文音近可通过 extraPhonetic 注入字符映射；未注入时保留中文字符，不能退化为空串。
  */
 
 import {
@@ -96,10 +49,10 @@ const MAX_KEY_LENGTH_DELTA = 2;
  * 多词形态的**逐词下限**：多词长串做整串相似度会被"共同前缀"抬分
  * （`personal ontology` 与 `personal college` 整串 0.86，但逐词 `ontology`↔`college`
  * 只有 ~0.13）。因此对"词数相同且都 >1"的形态，额外要求**每个词**都够近。
- * 0.6 的依据：`ontology`↔`oncology` = 0.75（真实错形，必须放行）；
+ * 逐词下限示例：`ontology`↔`oncology` = 0.75（近似词形可放行）；
  * `code`↔`car` = 0.50（词数相同但首词差太远，挡掉）。
- * 注：词数**不同**时不适用本规则（`code seat` 与 `coseat`、`car seat` 都属真实变体，
- * 不能因为切词不同就否决——见 metrics 脚本里的逐条上下文核对）。
+ * 注：词数**不同**时不适用本规则（`code seat` 与 `coseat`、`car seat` 可能是同一词条的变体，
+ * 不能因为切词不同就否决）。
  */
 const PER_WORD_FLOOR = 0.6;
 
@@ -133,8 +86,7 @@ export interface RecallOptions extends ScanTarget {
   /**
    * **域内概念**：当前文档/场景已知的概念规范名（来自本体、会议主题、课程标签）。
    * `correct` 命中者才有资格升级为 `suggest`；未命中者一律 `review`。
-   * 这是压住误替换的关键信号：`roadmap→Raymond` 只在"本次确实在讲 Raymond"时才该推荐
-   * （实测语料里 `roadmap` 6 次出现全是正常英文词，脱域推荐即误替换）。
+   * 域外的近似词形不能冒充当前任务的术语，即使相似度较高也须保留人工复核。
    */
   domainTerms?: string[];
   /**
@@ -146,7 +98,7 @@ export interface RecallOptions extends ScanTarget {
   initialStrict?: boolean;
   /**
    * 额外音形映射：字符 → 音形键。**中文音近的唯一接入口**（零依赖下的拼音表挂点）。
-   * 例：`{ 王: 'wang', 晶: 'jing', 婧: 'jing' }`。缺省不启用（CJK 只走归一化/弱通道）。
+   * 合成名称示例：`{ 例: 'li', 加: 'jia', 甲: 'jia' }`。缺省不启用（CJK 只走归一化/弱通道）。
    */
   extraPhonetic?: Record<string, string>;
 }
@@ -302,18 +254,17 @@ interface IndexedEntry {
   contextAllow: string[];
 }
 
-// 拉丁词整段成 token；**CJK 逐字成 token**——否则「王晶说了这句话」会变成一个 token，
-// 词条「王婧」永远无法通过窗口切出来（实测发现：中文召回恒为 0 就是这个原因）。
+// 拉丁词整段成 token，CJK 逐字成 token，才能在连续中文句子中生成名称词条窗口。
 const TOKEN_RE = new RegExp(`[0-9A-Za-z]+(?:[._\\-][0-9A-Za-z]+)*|[${CJK_CLASS}]`, 'g');
 /** 窗口允许的 token 间分隔符（仅空白/点/连字符/间隔号；出现句读即视为跨句，不成窗）。 */
 const GAP_RE = /^[ ._\-·]*$/;
 
 /**
  * 包含关系守卫：候选 token **把错形整个装在里面**时，只有在"多出来的字符全是数字"时
- * 才算同一个词（`K4` ← `k42` 是实测形态），否则视为另一个词而拒绝。
+ * 才算同一个词（例如 `K4` ← `k42`），否则视为另一个词而拒绝。
  * 依据：精确扫描靠 `boundaryOk` 挡住 `coxy` 命中 `coxyx`；模糊通道匹配的是整个 token，
  * 所以必须在这里补上同义守卫——否则 `coxyx`→`coxy`（0.80）、`kstar与`→`kstar`（0.83）
- * 都会被当成候选（实测两条都出现过）。
+ * 都会被当成候选。
  */
 function containsOtherWord(tokenKey: string, entryKey: string): boolean {
   if (tokenKey === entryKey || !entryKey) return false;
@@ -441,7 +392,7 @@ export function recallCandidates(
       //
       // 只对**单一脚本**窗口跑模糊：混合窗口（`personaloncology啊` / `cookie吗` /
       // `moodle了`）是"拉丁词 + 相邻汉字"的拼接产物，音形比较没有意义，
-      // 实测会产生一批垃圾候选。混合形态仍可走归一化通道（`多 vbl`、`K星` 是真实写法）。
+      // 会产生无意义的跨脚本候选。混合形态仍可走归一化通道。
       const scriptMixed = n > 1
         && tokens.slice(i, i + n).some((t) => t.latin)
         && tokens.slice(i, i + n).some((t) => !t.latin);
@@ -482,7 +433,7 @@ export function recallCandidates(
   // 3) 重叠消解：长 span 优先 → 高相似度 → 通道优先级 → entryRef 稳定排序
   const channelRank: Record<RecallChannel, number> = { normalized: 0, phonetic: 1, edit: 2, weak: 3 };
   // 顺序很重要：**通道优先级第一**（精确/归一化命中必须压过长 span 的模糊命中，
-  // 否则 `K-STAR` 会被更长的 `K-STAR 与` 抢走 span——实测发生过），
+  // 否则 `K-STAR` 会被更长的 `K-STAR 与` 抢走 span），
   // 再按 span 长优先（`K star` 压 `star`）、相似度高优先、entryRef 稳定排序。
   raw.sort((a, b) => {
     if (channelRank[a.channel] !== channelRank[b.channel]) return channelRank[a.channel] - channelRank[b.channel];
@@ -513,7 +464,7 @@ export function recallCandidates(
   // 4) 残余清单：只保留 2 字以上、且不是任何 correct 形态的可疑孤立形态。
   //    这是"必须入册 / 靠域先验"的行动清单；本层只报告，不给建议映射。
   //   过滤：① 任何词条的 correct 形态；② 纯数字/日期/时间戳类；③ 过短的拉丁串。
-  //   （不过滤的话，转写里的时间戳与说话人名字会把清单淹掉——实测 `2026-09-05` 出现 478 次。）
+  //   时间戳和说话人不属于需要补充映射的术语。
   const residual = [...orphanCounts.entries()]
     .filter(([surface]) => {
       const key = normalizeKey(surface);
@@ -591,7 +542,8 @@ function build(
   // 注意判据必须是**精确相等（含大小写）**，不能用归一化键：`K-STAR` 与 `KSTAR`
   // 归一化后相等，但前者是需要纠正的写法；`openclaw` 与 `OpenClaw` 差大小写，
   // 那是**有效的写法归一**（人工清理版就做了这一步），不该被挡掉。
-  if (surface === entry.correct) {
+  if (surface === entry.correct
+    || (entry.correct.startsWith(surface) && text.slice(span.start, span.start + entry.correct.length) === entry.correct)) {
     noteDenied('already_correct');
     return null;
   }

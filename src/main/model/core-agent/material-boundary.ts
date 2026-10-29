@@ -95,6 +95,21 @@ export async function resolveMaterialSet(opts: MaterialSetOptions): Promise<Mate
   const artifacts: MaterialArtifact[] = [];
   if (spaceId) {
     const spaceRoot = path.resolve(spaceContentDir(userId, spaceId));
+    // 产物根 = 空间内容目录（附件 / 网页产物 / 导入资料）**加上本会话的工作区**
+    // ——空间绑定本地项目目录（Codex 式原地工作区）后，产物落在用户自己的项目里，
+    // 只按空间根判断会把它们全部判成 out-of-scope，等于把工作区产出踢出材料集。
+    const artifactRoots: string[] = [spaceRoot];
+    if (cid) {
+      try {
+        const { getConversationWorkspacePath } = await import('../../features/group_chat/conv_workspace');
+        const ws = await getConversationWorkspacePath(userId, cid);
+        if (ws) artifactRoots.push(path.resolve(ws));
+      } catch (err) {
+        log.warn('material_boundary: resolve conversation workspace failed', {
+          user_id: maskId(userId), cid: maskId(cid), error: (err as Error).message,
+        });
+      }
+    }
     let entries: spaceArtifacts.SpaceArtifactEntry[] = [];
     try {
       entries = await spaceArtifacts.listSpaceArtifacts(userId, spaceId);
@@ -111,7 +126,7 @@ export async function resolveMaterialSet(opts: MaterialSetOptions): Promise<Mate
         type: e.type,
         ext: e.ext,
         sourceSessionId: e.sourceSessionId,
-        inScope: e.path ? isPathAllowed(path.resolve(e.path), [spaceRoot]) : false,
+        inScope: e.path ? isPathAllowed(path.resolve(e.path), artifactRoots) : false,
       });
     }
   }

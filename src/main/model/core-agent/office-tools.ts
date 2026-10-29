@@ -35,6 +35,7 @@ import { logErrorRef, logPathRef, maskId } from '../../util/log-redact';
 const log = createLogger('office-tools');
 
 export interface OfficeToolsOpts {
+  beforeAction?: (toolName: string, input: Record<string, unknown>) => Promise<ToolResult | undefined>;
   /** Active uid — used to resolve the workspace + attachment sandbox roots. */
   userId?: string;
   /** Current conversation id — adds its attachment dir to the writable scope. */
@@ -154,6 +155,8 @@ async function runCreate(
     cwd = path.dirname(finalPath);
     fs.mkdirSync(cwd, { recursive: true });
 
+    const beforeCreate = await opts.beforeAction?.('write_file', { path: finalPath, operations: args.ops });
+    if (beforeCreate) return beforeCreate;
     const created = await runOfficeCli(['create', finalPath, ...args.createFlags], {
       cwd, ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
@@ -162,6 +165,8 @@ async function runCreate(
     }
 
     if (args.ops.length) {
+      const beforeBatch = await opts.beforeAction?.('edit_file', { path: finalPath, operations: args.ops });
+      if (beforeBatch) return beforeBatch;
       const batched = await runOfficeCli(['batch', finalPath], {
         cwd, stdin: JSON.stringify(args.ops), ...(ctx.signal ? { signal: ctx.signal } : {}),
       });
@@ -660,14 +665,12 @@ function createEditOfficeTool(opts: OfficeToolsOpts): AgentTool {
   return {
     name: 'edit_office',
     description:
-      'Edit an existing Word/Excel/PowerPoint file IN PLACE (preserving its formatting), using the built-in Office ' +
-      'engine. Provide `path` and `operations`, applied in order. Each operation is one of:\n' +
-      '  - {action:"set", path, props} — change an element. props.text for a paragraph/run; props.value or ' +
-      'props.formula (no leading "=") for an xlsx cell; props.style / props.align for a paragraph; etc.\n' +
-      '  - {action:"add", parent, type, props} — insert a new element under `parent` (e.g. parent "/body" type "p").\n' +
-      '  - {action:"remove", path} — delete the element at `path`.\n' +
-      'Discover element paths with office_read first (e.g. /body/p[3], /Sheet1/B2, /slide[2]). Stops at the first ' +
-      'failing operation and reports it. Returns the saved path and a first-page PNG preview.',
+        'Edit a Word/Excel/PowerPoint file IN PLACE, preserving formatting. Pass `path` and `operations` (applied in order):\n' +
+        '  - {action:"set", path, props}: props.text (paragraph/run); props.value or props.formula (xlsx cell, no "="); props.style / props.align\n' +
+        '  - {action:"add", parent, type, props}: insert under `parent` (e.g. "/body" + "p")\n' +
+        '  - {action:"remove", path}: delete that element\n' +
+        'Discover paths with office_read first (/body/p[3], /Sheet1/B2, /slide[2]). Stops at the first failing ' +
+        'operation and reports it; returns the saved path and a first-page PNG preview.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -711,6 +714,8 @@ function createEditOfficeTool(opts: OfficeToolsOpts): AgentTool {
 
       const cwd = path.dirname(abs);
       try {
+        const beforeEdit = await opts.beforeAction?.('edit_file', { path: abs, operations: ops });
+        if (beforeEdit) return beforeEdit;
         const r = await runOfficeCli(['batch', abs, '--stop-on-error'], {
           cwd, stdin: JSON.stringify(ops), ...(ctx.signal ? { signal: ctx.signal } : {}),
         });

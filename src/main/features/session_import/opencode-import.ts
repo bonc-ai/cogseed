@@ -9,6 +9,7 @@
 
 import { createLogger } from '../../logger';
 import { listOpencodeSessions, readOpencodeSessionParts } from '../local_agents/opencode_sessions';
+import { deriveCurrentRequest } from './task-context';
 
 const log = createLogger('session-import:opencode');
 
@@ -26,18 +27,30 @@ function condense(text: string, max: number): string {
   return `${flat.slice(0, max).trimEnd()}…`;
 }
 
+/** Distill the summary (first real user text part) and the continuation
+ *  target (last substantive user text part) in ONE read. Falls back to the
+ *  session title — honest, never fabricated. */
+function opencodeSessionBrief(
+  sessionId: string,
+  title?: string,
+): { summary: string; currentRequest: string } {
+  const fallbackTitle = title || '从 OpenCode 导入的会话';
+  const parts = readOpencodeSessionParts(sessionId);
+  const userTexts = Array.isArray(parts)
+    ? parts
+      .filter((p) => p.role === 'user' && p.text.trim())
+      .map((p) => p.text.trim())
+    : [];
+  return {
+    summary: (userTexts[0] && condense(userTexts[0], 200)) || fallbackTitle,
+    currentRequest: deriveCurrentRequest(userTexts.map((text) => ({ role: 'user', text }))),
+  };
+}
+
 /** Distill a short human summary from an OpenCode session (first real user
  *  text part). Falls back to the session title — honest, never fabricated. */
 export function opencodeSessionSummary(sessionId: string, title?: string): string {
-  const parts = readOpencodeSessionParts(sessionId);
-  if (Array.isArray(parts)) {
-    for (const p of parts) {
-      if (p.role === 'user' && p.text.trim()) {
-        return condense(p.text.trim(), 200) || (title || '从 OpenCode 导入的会话');
-      }
-    }
-  }
-  return title || '从 OpenCode 导入的会话';
+  return opencodeSessionBrief(sessionId, title).summary;
 }
 
 /** Import an OpenCode session into a continuable conversation. */
@@ -63,10 +76,12 @@ export async function importOpencodeSession(
     log.warn('opencode session title lookup failed', { sessionId, error: String(err) });
   }
 
-  const sessionSummary = opencodeSessionSummary(sessionId, title);
+  const brief = opencodeSessionBrief(sessionId, title);
+  const sessionSummary = brief.summary;
   const extraction = {
     ok: true,
     sessionSummary,
+    currentRequest: brief.currentRequest,
     candidates: [],
     degraded: false,
   };

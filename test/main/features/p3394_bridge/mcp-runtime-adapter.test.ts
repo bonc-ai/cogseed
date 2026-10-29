@@ -5,6 +5,16 @@ import * as path from 'node:path';
 import { P3394McpRuntimeAdapter } from '../../../../src/main/features/p3394_bridge/mcp-runtime-adapter';
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 
+// 测试里的 MCP runtime 是一个独立 Node 进程，不能拿宿主进程当 Node 用：
+// `npm run test:js` 让 Vitest 跑在 Electron 的 embedded Node 里，此时
+// process.execPath 是 electron.exe。spawnCli 只对自己（binPath === execPath）
+// 补回 ELECTRON_RUN_AS_NODE；本文件的 .cmd fixture 用 %COGSEED_MCP_TEST_NODE%
+// 启动子进程，binPath 是 .cmd → 标记被剥掉 → electron.exe 以 GUI 形态启动
+// server.js，在 Windows 上以 STATUS_BREAKPOINT(0x80000003) 退出，pending 的
+// initialize 被 close 处理器以 `p3394_mcp_runtime_closed code=2147483651` 拒绝。
+// run-tests.mjs 为这类「启动独立 JS helper」的用例导出了外层 node。
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
+
 // 内联 fake MCP runtime server（stdio JSON-RPC），实现 p3394.runtime.* 工具。
 const FAKE_SERVER = `
 const readline = require('readline');
@@ -51,7 +61,7 @@ function envelope(): P3394Envelope {
 
 describe('P3394 SA-MCP agent runtime adapter (SDK §10.1)', () => {
   it('binds a stdio MCP runtime as a full RuntimeAdapter', async () => {
-    const adapter = new P3394McpRuntimeAdapter({ command: process.execPath, args: ['-e', FAKE_SERVER] });
+    const adapter = new P3394McpRuntimeAdapter({ command: TEST_NODE, args: ['-e', FAKE_SERVER] });
     try {
       const binding = await adapter.openSession({ session_id: 'ses-mcp-1', agent_id: 'mcp-agent' });
       expect(binding.native_session_id).toBe('native-ses-mcp-1');
@@ -112,7 +122,7 @@ setInterval(() => {}, 1000);
     const adapter = new P3394McpRuntimeAdapter({
       command: launcherPath,
       env: {
-        COGSEED_MCP_TEST_NODE: process.execPath,
+        COGSEED_MCP_TEST_NODE: TEST_NODE,
         COGSEED_MCP_TEST_SERVER: serverPath,
         COGSEED_MCP_PID_FILE: pidPath,
         COGSEED_MCP_CMD_MARKER: markerPath,

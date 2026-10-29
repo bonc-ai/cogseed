@@ -21,7 +21,10 @@
   let mdSourceMode = false;
   // 转写纠错面板（宿主 A）：只在"阅读全文"且拿到文本时可用；原文只读。
   let activeCorrection = null;
+  let activeMeetingRefs = null;
   let correctionOpen = false;
+  let correctionPending = false;
+  let correctionSequence = 0;
 
   function formatFallback(text, vars) {
     return String(text || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => String(vars?.[key] ?? ''));
@@ -82,9 +85,10 @@
       modal.close(null, 'close');
     });
     modal.then(() => {
-      // 关闭查看器时销毁纠错面板（其内部状态随 run 走，不跨文档复用）。
+      // A delayed close from an older modal must not dispose the current reader.
+      if (activeModal !== modal) return;
       destroyCorrection();
-      if (activeModal === modal) activeModal = null;
+      activeModal = null;
     });
     activeModal = modal;
     applyReaderScale(readReaderScale());
@@ -145,11 +149,11 @@
     }
     if (canCorrect()) {
       buttons.push(root.uiButton({
-        label: correctionOpen
+        label: correctionOpen || correctionPending
           ? t('kb.transcriptCorrect.close_panel', '收起纠错')
           : t('kb.transcriptCorrect.title', '转写纠错'),
         icon: 'clipboard-list',
-        role: correctionOpen ? 'primary' : 'secondary',
+        role: correctionOpen || correctionPending ? 'primary' : 'secondary',
         size: 'sm',
         attrs: { 'data-anchor-view-correct-toggle': 'true' },
       }));
@@ -682,10 +686,13 @@
   }
 
   function destroyCorrection() {
+    correctionSequence++;
+    correctionPending = false;
     try { activeCorrection?.destroy?.(); } catch (_) { /* 关闭失败不阻塞 */ }
     // 会议引用伴生面板（specs/013）：与纠错面板同生命周期，一并销毁。
-    try { root.KbMeetingRefs?.destroy?.(); } catch (_) { /* 同上 */ }
+    try { activeMeetingRefs?.destroy?.(); } catch (_) { /* 同上 */ }
     activeCorrection = null;
+    activeMeetingRefs = null;
     correctionOpen = false;
     const panel = element('[data-anchor-view-correct]');
     if (panel) {
@@ -727,8 +734,9 @@
   }
 
   async function toggleCorrection() {
-    if (correctionOpen) {
+    if (correctionOpen || correctionPending) {
       destroyCorrection();
+      setStatus('', '');
       renderActions();
       return;
     }
@@ -736,15 +744,21 @@
     if (!panel || !canCorrect()) return;
     panel.hidden = false;
     panel.textContent = '';
+    const sequence = ++correctionSequence;
+    const anchor = activeAnchor;
+    const result = activeResult;
+    correctionPending = true;
+    renderActions();
     setStatus(t('kb.viewer.loading_document', '正在读取原文…'), 'loading');
     let resolved = null;
     try {
       resolved = await resolveCorrectionText();
     } catch (_) {
-      resolved = { text: String(activeResult?.text || ''), degradedReason: '' };
+      resolved = { text: String(result?.text || ''), degradedReason: '' };
     }
     const text = String(resolved?.text || '');
-    if (!modalIsOpen()) return;
+    if (sequence !== correctionSequence || !modalIsOpen()) return;
+    correctionPending = false;
     setStatus('', '');
     // 空间库截断的如实提示（specs/013 T023）：四语文案 + 把降级原因带给面板，
     // 面板顶部会在自己的降级说明区再呈现一次（恰一处，见 kb-transcript-correct）。
@@ -753,21 +767,28 @@
       setStatus(t('kb.meetingRef.space_doc_notice', '暂不支持空间库文档纠错，已按可读片段扫描'), 'warning');
     }
     try {
-      activeCorrection = root.KbTranscriptCorrect.mount(panel, {
+      // Each module owns its complete root, including destructive rendering.
+      // Recreate both roots on every opening; neither may use the shared aside.
+      const correctionHost = document.createElement('div');
+      const refsHost = document.createElement('div');
+      panel.appendChild(correctionHost);
+      panel.appendChild(refsHost);
+      const context = {
+        docId: String(anchor?.path || result?.displayPath || 'transcript'),
+        displayPath: String(result?.displayPath || anchor?.path || ''),
+      };
+      activeCorrection = root.KbTranscriptCorrect.mount(correctionHost, {
+        ...context,
         text,
-        docId: String(activeAnchor?.path || activeResult?.displayPath || 'transcript'),
-        displayPath: String(activeResult?.displayPath || activeAnchor?.path || ''),
         ...(degradedNotes.length ? { degradedNotes } : {}),
       });
       correctionOpen = true;
-      // 会议引用伴生面板（specs/013）：同一文档上下文，挂在纠错面板同容器内；
-      // 模块缺失（旧构建）时静默跳过，不阻塞纠错主功能。
       try {
-        root.KbMeetingRefs?.mount?.(panel, {
-          docId: String(activeAnchor?.path || activeResult?.displayPath || 'transcript'),
-          displayPath: String(activeResult?.displayPath || activeAnchor?.path || ''),
-        });
-      } catch (_) { /* 伴生面板失败不影响纠错 */ }
+        activeMeetingRefs = root.KbMeetingRefs?.mount?.(refsHost, context) || null;
+      } catch (error) {
+        refsHost.textContent = '';
+        log?.warn('meeting refs panel mount failed', { error: error?.message || String(error) });
+      }
       element('.anchored-source-viewer')?.classList.add('is-correct-open');
     const splitter = element('[data-anchor-view-split]');
     if (splitter) splitter.hidden = false;

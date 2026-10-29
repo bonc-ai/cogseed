@@ -33,6 +33,24 @@ afterEach(async () => {
 });
 
 describe('deterministic RecallTaskContract', () => {
+  it('keeps the complete current request and final constraints while bounding retrieval hints', async () => {
+    const { buildRecallTaskContract } = await import('../../../../src/main/features/recall/task-contract');
+    const taskText = `请分析项目报告。${'以下是待核对的背景材料。'.repeat(400)}最后要求：不要写入任何文件；只能说明已经核实的证据。`;
+    const contract = await buildRecallTaskContract('user-a', { taskText });
+    expect(contract.currentRequest?.taskText).toBe(taskText);
+    expect(contract.goal.length).toBeLessThanOrEqual(2000);
+    expect(contract.goal).toContain('不要写入任何文件');
+    expect(contract.constraints).toEqual(expect.arrayContaining([expect.stringContaining('不要写入任何文件'), expect.stringContaining('只能说明已经核实的证据')]));
+  });
+  it('declares omitted constraint hints without omitting them from the authoritative request', async () => {
+    const { buildRecallTaskContract } = await import('../../../../src/main/features/recall/task-contract');
+    const taskText = Array.from({ length: 20 }, (_, index) => `必须核对字段${index}。`).join('');
+    const contract = await buildRecallTaskContract('user-a', { taskText });
+    expect(contract.constraints.length).toBe(12);
+    expect(contract.constraintHintCoverage).toEqual({ total: 20, selected: 12, truncated: true });
+    expect(contract.constraints.at(-1)).toContain('字段19');
+    expect(contract.currentRequest?.taskText).toBe(taskText);
+  });
   it('extracts multilingual action, bounded query fields, and T-Box anchors without model calls', async () => {
     const groups = await import('../../../../src/main/features/personal_ontology_groups');
     const contractModule = await import('../../../../src/main/features/recall/task-contract');

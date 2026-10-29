@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import * as paths from '../../../../src/main/paths';
 import { COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
@@ -169,4 +171,35 @@ describe('CogSeed Runtime KSTAR terminal behavior', () => {
     expect(events.at(-1)).toMatchObject({ type: 'result', status: 'completed' });
     expect(projected).toBe(true);
   });
+
+  it('accepts a user-selected workspace only when the caller passes it as a root', async () => {
+    const seen: RuntimeRunRequest[] = [];
+    const runtime = createCogSeedAgentRuntime({
+      allowedRootsForUser: () => [],
+      worker: {
+        async *run(req: RuntimeRunRequest) {
+          seen.push(req);
+          yield { type: 'result' as const, request_id: req.request_id, runtime_session_id: req.runtime_session_id, status: 'completed' as const, text: 'done' };
+        },
+        async shutdown() {},
+      },
+    });
+    // 用户选定的目录必须是**本机绝对路径**。硬编码 '/tmp/...' 在 win32 上会被
+    // path.resolve 解析到当前盘符的根（`D:\tmp\...`），既不是真实目录，也让
+    // working_dir / writable_roots 的同一性断言对不上同一个字符串。
+    const external = path.join(os.tmpdir(), 'cogseed-runtime-selected-workspace');
+    const input = { task: 'Work in the selected folder.', working_dir: external } as any;
+
+    await expect(collect(runtime.run('runtime-facade-user', input))).rejects.toThrow(/outside the explicit sandbox/);
+    expect(seen).toHaveLength(0);
+
+    const events = await collect(runtime.run('runtime-facade-user', input, { allowedRoots: [external] }));
+    expect(events.map((event) => event.type)).toEqual(['result']);
+    expect(seen[0]).toMatchObject({
+      working_dir: external,
+      writable_roots: expect.arrayContaining([external]),
+    });
+    expect(seen[0].writable_roots?.length).toBeGreaterThan(1);
+  });
+
 });

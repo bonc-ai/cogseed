@@ -12,7 +12,7 @@
  *   meeting.assets.detach      —— 摘除引用（只摘引用，不动资产）
  *   meeting.assets.list        —— 引用清单（现状对比/stale 是读时派生，T037）
  *   meeting.conclusions.list / save / confirm —— 纪要条目（T034）
- *   meeting.conclusions.precipitate —— 已退役（2026-09-29 第 5 批：渲染层零调用，
+ *   meeting.minutes.get / save —— 纪要正文（docId 级 markdown；save ≤20000 字符原子写） *   meeting.conclusions.precipitate —— 已退役（2026-09-29 第 5 批：渲染层零调用，
  *                                      且与「会议内容不进认知主线」红线冲突）
  *   meeting.actions.list / confirm / discard —— 待办草稿（T040~T042；confirm 是
  *   唯一落点入口，内部过外发闸 assertActionDraftSendable；save 属后续任务）
@@ -206,6 +206,23 @@ export const invokeHandlers = {
     return { conclusion };
   },
 
+  /** `meeting.minutes.get`：纪要正文（只读探测；缺失 → 空串，不惰性建档）。 */
+  'meeting.minutes.get': async (payload: Payload, ctx: IpcContext) => {
+    const docId = requireDocId(payload?.docId);
+    return { minutes: meetingDoc.readMeetingMinutes(ctx.userId, docId) };
+  },
+
+  /** `meeting.minutes.save`：保存纪要正文（类型/长度校验；空串 = 清除字段）。 */
+  'meeting.minutes.save': async (payload: Payload, ctx: IpcContext) => {
+    const docId = requireDocId(payload?.docId);
+    const minutes = payload?.minutes;
+    if (typeof minutes !== 'string' || minutes.length > meetingDoc.MAX_MINUTES_CHARS) {
+      throw new meetingDoc.MeetingDocError('invalid meeting minutes', 'invalid_minutes');
+    }
+    const doc = meetingDoc.saveMeetingMinutes(ctx.userId, docId, minutes);
+    return { doc };
+  },
+
   /** `meeting.conclusions.confirm`：确认一条结论（draft → confirmed；零候选/资产副作用）。 */
   'meeting.conclusions.confirm': async (payload: Payload, ctx: IpcContext) => {
     const docId = requireDocId(payload?.docId);
@@ -217,11 +234,8 @@ export const invokeHandlers = {
     return { conclusion };
   },
 
-  // 2026-09-29 第 5 批·退役：`meeting.conclusions.precipitate` 通道移除——渲染层
-  // 零调用（注册后从未接线），且与既有红线冲突：会议纪要不进认知主线（capture
-  // 侧 personal 明确排除会议内容；kb-meeting-refs 引用链只依赖资产 id/版本/标题
-  // /摘要）。服务函数 precipitateMeetingConclusion 保留在 features 层，随
-  // 「通道退役大批」统一处置；contracts/ipc.md §1.3 的对应条目同步作废。
+  // Meeting conclusions remain document content. The former candidate-production
+  // channel and its feature writer have both been removed; historical refs remain readable.
 
   // ── 待办草稿（T040~T042：默认 draft、状态机封闭、外发闸唯一处）──────────
   /** `meeting.actions.list`：本会议的待办草稿清单（只读；draft 态照常返回，可续办）。 */

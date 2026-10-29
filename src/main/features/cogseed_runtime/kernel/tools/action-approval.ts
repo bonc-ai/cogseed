@@ -9,6 +9,7 @@ export type RuntimeActionRisk = 'high' | 'critical';
 export interface RuntimeActionApprovalIntent {
   action: RuntimeSensitiveAction;
   target: string;
+  verbatimTarget?: boolean;
   scope: string;
   auditTarget: string;
   auditScope: string;
@@ -70,6 +71,7 @@ export function createRuntimeActionApprovalClient(options: {
             actor: options.actor,
             action: intent.action,
             target: intent.target,
+            ...(intent.verbatimTarget ? { verbatim_target: true } : {}),
             scope: intent.scope,
             audit_target: intent.auditTarget,
             audit_scope: intent.auditScope,
@@ -93,9 +95,12 @@ export function createRuntimeActionApprovalClient(options: {
     },
 
     async record(requestId, phase, resultCode, signal) {
-      if (!options.hostToolClient) return;
+      if (!options.hostToolClient) {
+        if (phase === 'started') throw new Error('E_ACTION_APPROVAL_NOT_ACTIVE');
+        return;
+      }
       try {
-        await options.hostToolClient.call({
+        const response = await options.hostToolClient.call({
           requestId: options.requestId,
           runtimeSessionId: options.runtimeSessionId,
           name: 'action_approval_execution',
@@ -106,10 +111,12 @@ export function createRuntimeActionApprovalClient(options: {
           },
           signal,
         });
+        if (phase === 'started' && (response.isError || parseObject(response.content)?.ok !== true)) {
+          throw new Error('E_ACTION_APPROVAL_NOT_ACTIVE');
+        }
       } catch {
-        // The action has already been approved or executed. Do not turn a
-        // successful tool result into a retry loop solely because audit append
-        // reporting became unavailable.
+        if (phase === 'started') throw new Error('E_ACTION_APPROVAL_NOT_ACTIVE');
+        // Terminal reporting is best-effort; never retry a completed action.
       }
     },
   };
@@ -126,14 +133,32 @@ export async function runWithRuntimeActionApproval(
   if (decision.approved === false) {
     return { content: `[${decision.code}] sensitive action was not approved`, isError: true };
   }
-  await client.record(decision.requestId, 'started', undefined, signal);
+  return runWithRuntimeActionApprovalGrant(client, decision.requestId, execute, signal);
+}
+
+/** Consume a grant obtained either by the worker client or host preflight. */
+export async function runWithRuntimeActionApprovalGrant(
+  client: Pick<RuntimeActionApprovalClient, 'record'> | undefined,
+  requestId: string,
+  execute: () => Promise<RuntimeToolResult>,
+  signal?: AbortSignal | null,
+): Promise<RuntimeToolResult> {
+  if (!client) return { content: '[E_ACTION_APPROVAL_UNAVAILABLE] execution reporting is unavailable', isError: true };
+  // Audit must still reach the host when the execution signal is cancelled.
   try {
-    const result = await execute();
-    await client.record(decision.requestId, result.isError ? 'failed' : 'succeeded', result.isError ? errorCode(result.content) : undefined, signal);
+    await client.record(requestId, 'started');
+  } catch {
+    return { content: '[E_ACTION_APPROVAL_NOT_ACTIVE] host did not acknowledge approval consumption; action was not executed', isError: true };
+  }
+  try {
+    const cancelled = () => ({ content: '[E_ACTION_APPROVAL_CANCELLED] action cancelled', isError: true });
+    let result = signal?.aborted ? cancelled() : await execute();
+    if (signal?.aborted) result = cancelled();
+    await client.record(requestId, result.isError ? 'failed' : 'succeeded', result.isError ? errorCode(result.content) : undefined);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await client.record(decision.requestId, 'failed', 'E_RUNTIME_ACTION_THROW', signal);
+    await client.record(requestId, 'failed', 'E_RUNTIME_ACTION_THROW');
     return { content: `[E_RUNTIME_ACTION_THROW] ${message}`, isError: true };
   }
 }

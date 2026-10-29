@@ -129,14 +129,16 @@ function loadConnectionsModule() {
 
 describe('connections navigation', () => {
   it('matches the five capability entries from the open-source design system', () => {
-    const tablistStart = indexHtml.indexOf('class="connections-tabs ui-tabs"');
+    // The category tablist lives in the shell sidebar (specs/008-shell-rail-layout).
+    const tablistStart = indexHtml.indexOf('class="connections-tabs sidebar-nav" role="tablist" aria-orientation="vertical"');
+    expect(tablistStart).toBeGreaterThan(indexHtml.indexOf('data-sidebar-for="connections"'));
     const tablistEnd = indexHtml.indexOf('</div>', tablistStart);
     const tablist = indexHtml.slice(tablistStart, tablistEnd);
     expect([...tablist.matchAll(/data-connections-tab="([^"]+)"/g)].map((match) => match[1])).toEqual([
       'agents', 'mcp', 'skills', 'sources', 'touchpoints',
     ]);
-    expect(tablist).toMatch(/connections-tab ui-tab is-active"[^>]*data-connections-tab="agents"/);
-    expect(tablist).toMatch(/connections-tab ui-tab is-active" role="tab" aria-selected="true"/);
+    expect(tablist).toMatch(/connections-tab sidebar-nav-item is-active"[^>]*data-connections-tab="agents"/);
+    expect(tablist).toMatch(/connections-tab sidebar-nav-item is-active" role="tab" aria-selected="true"/);
     expect(tablist.match(/role="tab"/g)).toHaveLength(5);
     expect(tablist.match(/tabindex="-1"/g)).toHaveLength(4);
     expect(tablist).not.toContain('data-connections-tab="plugins"');

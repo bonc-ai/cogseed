@@ -1,21 +1,7 @@
 /**
- * 红队探针 r2：review 决定账本文件名折叠串档——不同候选共用同一 jsonl，
- * 决定互相污染抑制判定（FR-EXT-07 拒绝/暂缓抑制失真）。
- *
- * 推演链：reviewDecisionLogPath（cognition/review-decision.ts:87-89）把
- * targetRef 的非 [A-Za-z0-9._-] 字符全部折叠成 `_`——`recall_candidate:abc`
- * 与 `recall_candidate/abc`（或 `x:y` 与 `x_y`）折叠后同名，共用一个
- * `<tail>.jsonl`。而 listReviewDecisions（:173-183）读文件**全量行**、只按
- * decision_id 去重，**不按 target_ref 过滤**；isCandidateSuppressed
- * （:249-257）取最后一条 decision_type 定抑制——B 候选的 accept 会解除
- * A 候选刚写入的 reject 抑制（或反向：B 的 reject 把 A 无辜压制）。
- * FR-EXT-07「同候选被 defer/reject 后无新 Evidence 不得重复提示」的判定
- * 基础被串档击穿。
- *
- * 2026-09-30 r2 收尾（记账员）：对应待议 P-r2-5（读回按 target_ref 过滤
- * 止血 / 文件名加短哈希去折叠根治 + 存量迁移 / 入口白名单叠加，组合策略
- * 待拍板）→ it.skip。断言锁定的是「现状串档」，拍板修复后反转。
- * 见 round-2-甄别.md toPending。
+ * 不同 targetRef 的决定账本文件身份隔离与抑制状态独立性：
+ * 文件名折叠同名（`:` 与 `/` 都净化成 `_`）时，账本行按真实 target_ref
+ * 精确过滤——B 的决定不改写 A 的抑制状态，历史清单不串档。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -42,13 +28,13 @@ async function loadRd() {
   return import('../../src/main/features/cognition/review-decision');
 }
 
-describe('probe r2 › 决定账本折叠串档（待议 P-r2-5，拍板前 skip）', () => {
-  it.skip('targetRef 折叠同名 → B 的决定改写 A 的抑制状态', async () => {
+describe('决定账本折叠隔离', () => {
+  it('targetRef 折叠同名 → 行级隔离：B 的决定不改写 A 的抑制状态，清单不串档', async () => {
     const rd = await loadRd();
     const targetA = 'recall_candidate:abc';
     const targetB = 'recall_candidate/abc'; // 折叠后与 A 同名（: 与 / 都 → _）
 
-    // A 拒绝（应被抑制，不再提示）
+    // A 拒绝（应被抑制，不再提示）。
     await rd.writeReviewDecision(UID, {
       targetRef: targetA,
       decisionType: 'reject',
@@ -57,7 +43,7 @@ describe('probe r2 › 决定账本折叠串档（待议 P-r2-5，拍板前 skip
     });
     expect(await rd.isCandidateSuppressed(UID, targetA)).toBe(true);
 
-    // B 接受（B 是另一个候选，与 A 无关）
+    // B 接受（B 是另一个候选，与 A 无关）。
     await rd.writeReviewDecision(UID, {
       targetRef: targetB,
       decisionType: 'accept',
@@ -65,15 +51,27 @@ describe('probe r2 › 决定账本折叠串档（待议 P-r2-5，拍板前 skip
       antecedentRef: 'cand-abc2',
     });
 
-    // 串档实锤：A 的抑制被 B 的 accept 解除
-    expect(await rd.isCandidateSuppressed(UID, targetA)).toBe(false);
-    // 反向同样成立：A 的历史决定混进 B 的清单
-    const listOfB = await rd.listReviewDecisions(UID, targetB);
-    expect(listOfB.some((d) => d.target_ref === targetA)).toBe(true);
+    // A 的抑制不被 B 的 accept 解除（行级 target_ref 过滤）。
+    expect(await rd.isCandidateSuppressed(UID, targetA)).toBe(true);
+    // B 按其最近决定（accept）不被抑制。
+    expect(await rd.isCandidateSuppressed(UID, targetB)).toBe(false);
 
-    // 磁盘上两个 target 共用一个账本文件（折叠同名的直接证据）
+    // 清单互不串档：A 的历史不混进 B 的清单，反之亦然。
+    const listOfB = await rd.listReviewDecisions(UID, targetB);
+    expect(listOfB.every((d) => d.target_ref === targetB)).toBe(true);
+    const listOfA = await rd.listReviewDecisions(UID, targetA);
+    expect(listOfA.every((d) => d.target_ref === targetA)).toBe(true);
+    expect(listOfA.length).toBe(1);
+    expect(listOfB.length).toBe(1);
+
+    // 磁盘上两个 target 共用一个折叠账本文件（存储布局不变；隔离靠行级
+    // 自描述 target_ref，而不是拆文件）。
     const { cogseedAgentReviewDecisionsDir } = await import('../../src/main/paths');
     const files = fs.readdirSync(cogseedAgentReviewDecisionsDir(UID));
     expect(files.filter((n) => n.endsWith('.jsonl')).length).toBe(1);
+
+    // 跨候选「已处理历史」视图仍能看到两者各自的决定（独立条目）。
+    const recent = await rd.listRecentReviewDecisions(UID, { limit: 50 });
+    expect(recent.total).toBe(2);
   });
 });

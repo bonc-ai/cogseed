@@ -179,6 +179,35 @@ describe('CogSeed Runtime worker process service', () => {
     await service.shutdown();
   });
 
+  it('fails pending work and restarts after repeated malformed JSONL protocol output', async () => {
+    let spawnCount = 0;
+    const service = createRuntimeWorkerService({
+      handshakeTimeoutMs: 500,
+      spawnWorker: () => {
+        spawnCount += 1;
+        return makeChild((msg, child) => {
+          if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run'] });
+          if (msg.type === 'run' && spawnCount === 1) {
+            child.stdout.write('{not-json\n');
+            child.stdout.write('also-not-json\n');
+            child.stdout.write('still-not-json\n');
+          }
+          if (msg.type === 'run' && spawnCount === 2) {
+            write(child, { type: 'result', request_id: msg.request_id, runtime_session_id: msg.runtime_session_id, status: 'completed', text: 'after protocol restart' });
+          }
+        });
+      },
+    });
+
+    await expect(collect(service.run(request('req-bad-json')))).rejects.toThrow(/invalid JSON protocol output/i);
+    expect(children[0].killed).toBe(true);
+
+    const events = await collect(service.run(request('req-after-bad-json')));
+    expect(spawnCount).toBe(2);
+    expect(events.at(-1)?.text).toBe('after protocol restart');
+    await service.shutdown();
+  });
+
   it('does not dispatch a run request when the signal is already aborted', async () => {
     const service = createRuntimeWorkerService({
       handshakeTimeoutMs: 500,

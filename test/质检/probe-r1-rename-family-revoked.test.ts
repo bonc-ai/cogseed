@@ -1,20 +1,7 @@
 /**
- * 探针 r1（红队-越权与状态，新一轮 r1）：renameAssetFamily 对 revoked 终态资产改写。
- *
- * 发现（读码）：
- *  - family.ts:242 的成员过滤只挡 `purged`/`deleted`，漏了同为终态的 `revoked`；
- *  - family.ts:265-269 的逐成员直写 updater 里没有任何终态守卫
- *    （对照 asset-service.ts:1005 assertMutableAbilityAsset：revoked/deleted/purged
- *    一律「cannot be changed」，版本组写路径 2026-09-16 起统一收口）；
- *  - 后果：revoked（撤回=终态）资产被连带改写 familyName 并刷新 updatedAt——
- *    对照 purgeAbilityAsset 特意清除 familyName 的口径（asset-service.ts:1371-1373
- *    「族名是用户手写的分类名（元数据），与正文同属可识别内容」）。
- *  - 附带面：写入用 `...(current || {})` 兜底（family.ts:266），不做 asAsset
- *    复核——current 为空时会落一条非资产形状的裸记录。
- * 风格对齐 probe-r1-purge-tombstone-residue.test.ts（同域探针）。
- * 2026-09-30 r1 收尾（记账员）：对应待议 P-r1-7（最小补第三终态 vs 锁内
- * 终态复核，两案都合理待拍板）→ it.skip。断言锁定的「revoked 被连带改写」
- * 是现状，拍板修复后反转。
+ * 族重命名对终态成员（revoked/deleted）的保护（回归态）：revoked
+ * 与 deleted 同口径排除——不被连带改 familyName/刷新 updatedAt；经终态成员
+ * 连接的族连通性随之断开，单活成员不再构成可改名族。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -23,7 +10,7 @@ import * as path from 'node:path';
 
 vi.mock('../../src/main/features/kb_indexer', () => ({
   enqueue: () => {},
-  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+  kbEvents: { on: () => {}, emit: () => {}, off: () => {} },
 }));
 vi.mock('../../src/main/features/search', () => ({
   upsertContext: () => {},
@@ -53,20 +40,21 @@ function assetFile(id: string): string {
 }
 
 async function mkAsset(id: string) {
-  const { createAbilityAsset } = await import('../../src/main/features/recall/asset-service');
+  // 直写既有记录（test-only 种子通道）：createAbilityAsset 首建要求候选池里
+  // 存在对应 nightly 候选（formation-creation-gate），探针合成资产不走候选链。
+  const { seedStoredAbilityAsset } = await import('../helpers/stored-ability-asset');
   const now = new Date().toISOString();
-  return createAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'personal', title: '演示资产', statement: `陈述 ${id}。`,
     evidenceRefs: [{ kind: 'conversation', id: `conv-${id}` }], scope: 'general', status: 'active',
     lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
     createdAt: now, updatedAt: now,
-  }, ACT);
+  } as never, ACT);
 }
 
-/** 手工写 same_family 关系（模拟挂族写入的真实产物形态
- *  asset.relations = [{ kind: 'same_family', assetId }]，family.ts:251 的读法）。 */
+/** 手工写 same_family 关系（模拟挂族写入的真实产物形态）。 */
 function writeRelations(id: string, peerIds: string[], extra: Record<string, unknown> = {}) {
   const file = assetFile(id);
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -75,42 +63,57 @@ function writeRelations(id: string, peerIds: string[], extra: Record<string, unk
   fs.writeFileSync(file, JSON.stringify(raw));
 }
 
-describe('probe r1 › renameAssetFamily 改写 revoked 终态资产（待议 P-r1-7，拍板前 skip）', () => {
-  it.skip('revoked 成员被连带改 familyName + 刷新 updatedAt（对照组：deleted 成员被跳过）', async () => {
+describe('renameAssetFamily 终态成员保护', () => {
+  it('revoked 成员被排除：不被改名不刷 updatedAt；残余单活成员不构成族；纯活族正常改名', async () => {
     const assets = await import('../../src/main/features/recall/asset-service');
     const { renameAssetFamily } = await import('../../src/main/features/recall/family');
 
-    // 族一：revoked + active 互指；族二：deleted + active 互指
+    // 族一：revoked + active 互指；族二：deleted + active 互指；族三：两个 active 互指
     await mkAsset('aa-fam-revoked');
     await mkAsset('aa-fam-live');
     await mkAsset('aa-fam-del');
     await mkAsset('aa-fam-del-live');
+    await mkAsset('aa-fam-live2');
     const revokedAt = new Date('2026-01-01T00:00:00.000Z').toISOString();
     writeRelations('aa-fam-revoked', ['aa-fam-live'], { updatedAt: revokedAt });
-    writeRelations('aa-fam-live', ['aa-fam-revoked']);
+    writeRelations('aa-fam-live', ['aa-fam-revoked', 'aa-fam-live2']);
     writeRelations('aa-fam-del', ['aa-fam-del-live']);
     writeRelations('aa-fam-del-live', ['aa-fam-del']);
+    writeRelations('aa-fam-live2', ['aa-fam-live']);
 
     await assets.revokeAbilityAsset(UID, 'aa-fam-revoked', ACT);
     await assets.deleteAbilityAsset(UID, 'aa-fam-del', ACT);
+    const tombBefore = JSON.parse(fs.readFileSync(assetFile('aa-fam-revoked'), 'utf8'));
 
-    // 以 active 资产为锚改族名（正常用户操作：给活资产族改名）
+    // 以活资产为锚改族名：有效族 = {live, live2}（revoked 断开 live—revoked 边）。
     const renamed = await renameAssetFamily(UID, 'aa-fam-live', '新族名');
+    expect(renamed).toContain('aa-fam-live');
+    expect(renamed).toContain('aa-fam-live2');
+    expect(renamed).not.toContain('aa-fam-revoked');
 
-    // 发现主体：revoked 终态资产进了改名清单并被改写
-    expect(renamed).toContain('aa-fam-revoked');
+    // revoked 墓碑不被连带改写：familyName 未被设置、updatedAt 原样。
     const tomb = await assets.readAbilityAsset(UID, 'aa-fam-revoked');
-    expect((tomb as unknown as Record<string, unknown>).familyName).toBe('新族名');
-    // updatedAt 从固 定旧值被刷新（影响 listAbilityAssets 的 updatedAt 降序排序）
-    expect(tomb.updatedAt).not.toBe(revokedAt);
+    expect((tomb as unknown as Record<string, unknown>).familyName).toBeUndefined();
+    expect(tomb.updatedAt).toBe(tombBefore.updatedAt);
 
-    // 对照组：deleted 成员被 :242 的过滤挡住，未被改写
+    // 对照组：deleted 成员同样不被改写。
     const deleted = await assets.readAbilityAsset(UID, 'aa-fam-del');
     expect((deleted as unknown as Record<string, unknown>).familyName).toBeUndefined();
 
-    // 对照组：统一终态守卫在本域的既有口径——单笔通道对 revoked 一律拒绝
+    // 对照组：统一终态守卫——单笔通道对 revoked 一律拒绝。
     await expect(assets.updateAbilityAsset(UID, 'aa-fam-revoked', {
       statement: '绕过尝试', actor: 'user', reason: 'probe',
     })).rejects.toThrow(/revoked ability asset cannot be changed/);
+  });
+
+  it('族里只剩 revoked + 单活成员：改名按无族拒绝（不再连带墓碑）', async () => {
+    const { renameAssetFamily } = await import('../../src/main/features/recall/family');
+    await mkAsset('aa-solo-revoked');
+    await mkAsset('aa-solo-live');
+    writeRelations('aa-solo-revoked', ['aa-solo-live']);
+    writeRelations('aa-solo-live', ['aa-solo-revoked']);
+    const { revokeAbilityAsset } = await import('../../src/main/features/recall/asset-service');
+    await revokeAbilityAsset(UID, 'aa-solo-revoked', ACT);
+    await expect(renameAssetFamily(UID, 'aa-solo-live', '孤族')).rejects.toThrow(/does not belong to a family/);
   });
 });

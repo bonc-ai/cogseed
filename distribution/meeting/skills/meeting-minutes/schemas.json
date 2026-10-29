@@ -1,0 +1,20 @@
+{
+  "artifact_kind": "declarative_runtime_contract_draft",
+  "implemented": false,
+  "runtime_contracts": {
+    "resource": {
+      "direct_resource_access": false,
+      "access_via_gateway_only": true
+    },
+    "permission": {
+      "scope": "provided_materials_only",
+      "external_writes": false
+    },
+    "owner_binding": {
+      "binding_resolved_by": "agent_layer"
+    },
+    "audit": {
+      "emitted_by": "runtime"
+    }
+  }
+}

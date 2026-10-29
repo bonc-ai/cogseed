@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 入池正文闸门（2026-09-29 根治冗长正文）真函数级测试。
  *
@@ -56,6 +57,12 @@ const baseInput = (judgment: string) => ({
 });
 
 describe('入池正文闸门（gateCandidateStatement）', () => {
+  it('不分类认识保留长篇方法的段落和步骤，不触发历史短句改写', async () => {
+    const { gateCandidateStatement } = await loadGate();
+    const statement = '适用条件：评审需要核对依据。\n\n1. 核对证据。\n2. 记录边界。\n\n' + '保留知识及局限。'.repeat(40);
+    expect(await gateCandidateStatement('u-gate', { judgment: statement, suggestedType: 'cognition' })).toBe(statement);
+    expect(rewriteMock).not.toHaveBeenCalled();
+  });
   it('合规正文直通：改写器不被调', async () => {
     const { gateCandidateStatement } = await loadGate();
     const clean = '部署前先跑一遍冒烟清单，任何一步失败都停下来排查。';
@@ -91,21 +98,21 @@ describe('入池正文闸门（gateCandidateStatement）', () => {
 describe('saveRecallCandidate 收口集成', () => {
   it('机器线超长 judgment：落盘的是改写结果', async () => {
     const svc = await loadCandidateService();
-    const saved = await svc.saveRecallCandidate('u-gate', baseInput(LONG_DIRTY));
+    const saved = await createNightlyCandidateFixture('u-gate', baseInput(LONG_DIRTY));
     expect(saved.judgment).toBe('改写后的合规短正文。');
     expect(rewriteMock).toHaveBeenCalledTimes(1);
   });
 
-  it('manual（记一条）豁免：用户亲写原文落盘', async () => {
+  it('manual旧入口在正文改写之前拒绝无形成凭据的写入', async () => {
     const svc = await loadCandidateService();
-    const saved = await svc.saveRecallCandidate('u-gate', { ...baseInput(LONG_DIRTY), manual: true });
-    expect(saved.judgment).toBe(LONG_DIRTY);
+    await expect(svc.saveRecallCandidate('u-gate', { ...baseInput(LONG_DIRTY), manual: true }))
+      .rejects.toThrow('retired candidate producer cannot create a nightly suggestion');
     expect(rewriteMock).not.toHaveBeenCalled();
   });
 
   it('rawStatement 豁免：旧记忆迁移原文落盘', async () => {
     const svc = await loadCandidateService();
-    const saved = await svc.saveRecallCandidate('u-gate', { ...baseInput(LONG_DIRTY), rawStatement: true });
+    const saved = await createNightlyCandidateFixture('u-gate', { ...baseInput(LONG_DIRTY), rawStatement: true });
     expect(saved.judgment).toBe(LONG_DIRTY);
     expect(rewriteMock).not.toHaveBeenCalled();
   });
@@ -113,13 +120,13 @@ describe('saveRecallCandidate 收口集成', () => {
   it('改写失败降级：原文入池不阻断', async () => {
     const svc = await loadCandidateService();
     rewriteMock.mockRejectedValueOnce(new Error('model_timeout'));
-    const saved = await svc.saveRecallCandidate('u-gate', baseInput(LONG_DIRTY));
+    const saved = await createNightlyCandidateFixture('u-gate', baseInput(LONG_DIRTY));
     expect(saved.judgment).toBe(LONG_DIRTY);
   });
 
   it('幂等：已合规正文再入池不触发改写', async () => {
     const svc = await loadCandidateService();
-    await svc.saveRecallCandidate('u-gate', baseInput('部署前先跑一遍冒烟清单，任何一步失败都停下来排查。'));
+    await createNightlyCandidateFixture('u-gate', baseInput('部署前先跑一遍冒烟清单，任何一步失败都停下来排查。'));
     expect(rewriteMock).not.toHaveBeenCalled();
   });
 });

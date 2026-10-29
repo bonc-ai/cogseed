@@ -104,6 +104,10 @@ module.exports = async function ensureRuntimeBeforePack(context) {
     throw new Error(`fetch-embedding-model failed with status ${embedding.status}`);
   }
 
+  await require('./fetch-tmeet.cjs').provision({
+    keys: arches.map(targetArch => `${platform}-${targetArch}`), prune: true,
+  });
+
   // OfficeCLI is an external native engine shipped via extraResources. It is
   // gitignored, so every real package must provision the target asset here;
   // relying on a developer's prior `npm start` leaves CI and release packages

@@ -49,6 +49,27 @@ async function loadModule() {
   return import('../../../src/main/features/personal_ontology_groups');
 }
 
+/**
+ * 直接写一份 v2 整组状态快照（P-r1-30 改写：原 v1 兼容导出
+ * snapshotGroupHistory(uid, gid, text) 已删；快照基础设施的滚动上限 /
+ * 同毫秒互不覆盖 / 命名兼容由 writePoGroupSnapshot 本身锁定）。
+ * 构造一个只有一条流水 entry 的最小组——preview 渲染为 entry 文本。
+ */
+async function writeSnap(uid: string, gid: string, entryText: string): Promise<void> {
+  const store = await import('../../../src/main/features/po/store');
+  const now = new Date().toISOString();
+  store.writePoGroupSnapshot(uid, gid, {
+    id: gid,
+    title: '',
+    kind: 'user',
+    fields: [],
+    values: [],
+    entries: [{ id: `e-${now}-${Math.random().toString(16).slice(2, 8)}`, text: entryText, createdAt: now }],
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 function groupsDir(): string {
   return path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups');
 }
@@ -459,6 +480,38 @@ describe('personal_ontology_groups › @verified field value marker', () => {
     expect(fields2.fields?.[0].values[0].sensitivity).toBeUndefined();
   });
 
+  // P-r1-28 回归：三条旧 marker 通道（verified / ruleKind / sensitivity）对
+  // 资产投影值（assetId 值）返回 asset_projection_read_only——投影的标记归
+  // 来源资产维护，与 setFieldValue / removeFieldValue 同款守卫。
+  it('marker toggles refuse asset-projected values (asset_projection_read_only)', async () => {
+    const groups = await loadModule();
+    const created = await groups.createGroup('test-user-groups', '投影标记守卫组');
+    const gid = created.group!.group_id;
+    await groups.appendFieldValue('test-user-groups', gid, '居住地', '常住北京', '手动');
+
+    // 用底层 editPoDoc 把这条值标记为资产投影（生产里由 personal-profile-sync 写入）
+    const store = await import('../../../src/main/features/po/store');
+    await store.editPoDoc('test-user-groups', (ctx) => {
+      const group = ctx.touch(gid);
+      const value = group?.values.find((v) => v.text === '常住北京');
+      if (value) value.assetId = 'asset-proj-marker-guard';
+    });
+
+    expect(await groups.setFieldValueVerified('test-user-groups', gid, '居住地', '常住北京', true))
+      .toEqual({ ok: false, error: 'asset_projection_read_only' });
+    expect(await groups.cycleFieldValueRuleKind('test-user-groups', gid, '居住地', '常住北京'))
+      .toEqual({ ok: false, error: 'asset_projection_read_only' });
+    expect(await groups.setFieldValueSensitivity('test-user-groups', gid, '居住地', '常住北京', true))
+      .toEqual({ ok: false, error: 'asset_projection_read_only' });
+
+    // 三个标记都没被改动
+    const fields = await groups.listGroupFields('test-user-groups', gid);
+    const row = fields.fields?.[0].values[0];
+    expect(row?.verified).toBeUndefined();
+    expect(row?.ruleKind).toBeUndefined();
+    expect(row?.sensitivity).toBeUndefined();
+  });
+
   it('setFieldValue edits only the value — all six provenance markers stay byte-identical (spec 009 T016 / I-8 / I-9)', async () => {
     const groups = await loadModule();
     const created = await groups.createGroup('test-user-groups', '编辑保标记组');
@@ -585,7 +638,7 @@ describe('personal_ontology_groups › snapshot rolling cap (字典序 = 时间�
     const created = await groups.createGroup(UID, '滚动上限组');
     const gid = created.group!.group_id;
     for (let i = 1; i <= 55; i++) {
-      groups.snapshotGroupHistory(UID, gid, `第${String(i).padStart(2, '0')}版正文`);
+      await writeSnap(UID, gid, `第${String(i).padStart(2, '0')}版正文`);
     }
     const history = groups.listGroupHistory(UID, gid);
     expect(history.length).toBe(50);
@@ -604,7 +657,7 @@ describe('personal_ontology_groups › snapshot rolling cap (字典序 = 时间�
     vi.setSystemTime(new Date('2026-09-25T07:12:33.412Z'));
     try {
       for (let i = 1; i <= 5; i++) {
-        groups.snapshotGroupHistory(UID, gid, `同毫秒第${i}版`);
+        await writeSnap(UID, gid, `同毫秒第${i}版`);
       }
       const history = groups.listGroupHistory(UID, gid);
       expect(history.length).toBe(5); // 远低于上限，谁也不淘汰谁
@@ -650,8 +703,8 @@ describe('personal_ontology_groups › snapshot id & savedAt compatibility (T007
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-25T07:12:33.412Z'));
     try {
-      groups.snapshotGroupHistory(UID, gid, '新格式甲');
-      groups.snapshotGroupHistory(UID, gid, '新格式乙');
+      await writeSnap(UID, gid, '新格式甲');
+      await writeSnap(UID, gid, '新格式乙');
       const history = groups.listGroupHistory(UID, gid);
       expect(history.length).toBe(3);
       for (const entry of history) {

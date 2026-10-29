@@ -1,0 +1,28 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.design.contract
+  name: ui-design-contract
+  version: 1.0.0
+  description: Create durable UIDesigner design contracts for multi-screen, brand,
+    long-lived, or conflicting-reference work across DESIGN.md, source-screen rules,
+    tokens, keep/change/do-not-copy boundaries, and implementation handoff; ordinary
+    single-screen screenshot work stays on the compact
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

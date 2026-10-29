@@ -14,41 +14,42 @@ const shellNavigation = fs.readFileSync(path.join(root, 'src/renderer/shell-navi
 const mainIndex = fs.readFileSync(path.join(root, 'src/main/index.ts'), 'utf8');
 
 describe('macOS top drag regions', () => {
-  it('bounds panel drag strips to main content so shell tools keep mouse hit targets', () => {
+  it('lets page headers own the main-content drag band instead of overlay strips', () => {
     const mainContentRule = css.match(/\.main-content\s*\{([^}]*)}/)?.[1] || '';
-    const dragStripRule = css.match(/\.is-macos \.app-top-drag-strip\s*\{([^}]*)}/)?.[1] || '';
-
     expect(mainContentRule).toContain('position: relative;');
-    expect(dragStripRule).toContain('position: absolute;');
-    expect(dragStripRule).not.toContain('position: fixed;');
+    // specs/008 D12: every panel starts with a uiPageHeader row; overlay drag
+    // strips would sit on top of header controls.
+    expect(html).not.toContain('app-top-drag-strip');
+    expect(css).not.toContain('.app-top-drag-strip');
+    expect(css).toMatch(/\.is-macos \.ui-page-header,[\s\S]*?-webkit-app-region:\s*drag;/);
   });
 
-  it('keeps sidebar drag geometry outside native controls and shell tools', () => {
-    const sidebarDragRule = shellNavigation.match(/\.is-macos \.sidebar::before\s*\{([^}]*)}/)?.[1] || '';
-    const sidebarLogoRule = shellNavigation.match(/\.is-macos \.sidebar-logo\s*\{([^}]*)}/)?.[1] || '';
-
-    expect(sidebarDragRule).toContain('left: 76px;');
-    expect(sidebarDragRule).toContain('right: var(--shell-tools-reserved-width);');
-    expect(sidebarLogoRule).toContain('-webkit-app-region: no-drag;');
+  it('drags the window from the rail and sidebar title bands while rail entries stay clickable', () => {
+    // specs/008-shell-rail-layout: native traffic lights sit in the rail's top band.
+    expect(shellNavigation).toMatch(/\.is-macos \.app-rail-titlebar\s*\{[^}]*-webkit-app-region:\s*drag;/);
+    expect(shellNavigation).toMatch(/\.is-macos \.sidebar-titlebar\s*\{[^}]*-webkit-app-region:\s*drag;/);
+    expect(shellNavigation).toMatch(/\.app-rail-btn\.ui-icon-button\s*\{[^}]*-webkit-app-region:\s*no-drag;/);
+    expect(html.indexOf('class="app-rail-titlebar"')).toBeLessThan(html.indexOf('id="app-rail-items"'));
   });
 
-  it('aligns native traffic lights and keeps the collapsed recovery gutter clickable', () => {
+  it('keeps shell controls as real children of header rows, never floating overlays', () => {
     expect(mainIndex).toContain('trafficLightPosition: { x: 12, y: 19 }');
-    expect(html.indexOf('id="app-shell-tools"')).toBeLessThan(html.indexOf('<aside class="sidebar">'));
-    expect(shellNavigation).toContain('html.is-macos .shell-sidebar-hidden .app-shell-tools');
-    expect(shellNavigation).toContain('--shell-expand-left: 104px;');
-    expect(shellNavigation).toMatch(/html\.is-macos body\.shell-sidebar-hidden \.main-content :is\([\s\S]*?-webkit-app-region:\s*no-drag;/);
-    expect(shellNavigation).toMatch(/html\.is-macos body\.shell-sidebar-hidden \.main-content :is\([\s\S]*?\.ui-page-header__body[\s\S]*?-webkit-app-region:\s*drag;/);
+    // Electron applies app-region rectangles in DOM order; a control nested in
+    // its drag band always comes after it.
+    expect(html).toMatch(/<div class="sidebar-titlebar">\s*<div class="app-shell-tools sidebar-tools" id="app-shell-tools"><\/div>/);
+    expect(shellNavigation).not.toMatch(/\.app-shell-tools\s*\{[^}]*position:\s*fixed/);
+    expect(shellNavigation).not.toContain('--shell-header-inset');
+    expect(shellNavigation).toMatch(/\.is-macos :is\(\.sidebar-titlebar, \.ui-page-header__shell\) button\s*\{[^}]*-webkit-app-region:\s*no-drag;/);
+    for (const panel of ['panel-new-chat', 'panel-conversation', 'panel-marketplace']) {
+      const start = html.indexOf(`id="${panel}"`);
+      expect(html.indexOf('data-shell-header-slot', start)).toBeGreaterThan(start);
+    }
   });
 
-  it.each(['connections', 'workspace'])('covers the %s panel top edge', (panel) => {
-    expect(html).toMatch(new RegExp(`id="panel-${panel}"[\\s\\S]*?class="app-top-drag-strip"`));
-  });
-
-  it('keeps Connections tabs and unified page headers above the drag strip', () => {
-    const raisedHeaderRule = css.match(/\.is-macos \.connections-tabs,\s*\.is-macos \.ws-page-top,\s*\.is-macos \.ui-page-header\s*{([^}]*)}/)?.[1] || '';
+  it('keeps unified page headers above the drag strip', () => {
+    const raisedHeaderRule = css.match(/\.is-macos \.ws-page-top,\s*\.is-macos \.ui-page-header\s*{([^}]*)}/)?.[1] || '';
     expect(raisedHeaderRule).toContain('z-index: calc(var(--z-raised) + 1);');
-    expect(css).toMatch(/\.is-macos \.ws-page-top button,[\s\S]*?\.is-macos \.connections-tabs button,[\s\S]*?-webkit-app-region:\s*no-drag;/);
+    expect(css).not.toContain('.is-macos .connections-tabs');
     expect(css).toMatch(/\.is-macos \.ws-page-top button,[\s\S]*?\.is-macos \.ws-page-top input,[\s\S]*?-webkit-app-region:\s*no-drag;/);
     expect(css).toMatch(/\.is-macos \.ui-page-header button,[\s\S]*?-webkit-app-region:\s*no-drag;/);
   });
@@ -59,9 +60,9 @@ describe('macOS top drag regions', () => {
     expect(css).toMatch(/\.is-macos \.ws-space-head button,[\s\S]*?-webkit-app-region:\s*no-drag;/);
   });
 
-  it('makes the Knowledge Base top navigation draggable without swallowing its tabs', () => {
-    expect(css).toMatch(/\.is-macos \.kb-eco-topnav,[\s\S]*?-webkit-app-region:\s*drag;/);
-    expect(css).toMatch(/\.is-macos \.kb-eco-topnav button,[\s\S]*?-webkit-app-region:\s*no-drag;/);
+  it('moves the Knowledge Base navigation out of the page top band into the sidebar', () => {
+    expect(css).not.toContain('.kb-eco-topnav');
+    expect(html).toContain('id="sidebar-kb-nav"');
   });
 
   it('does not turn the full-width home action container into a no-drag strip', () => {

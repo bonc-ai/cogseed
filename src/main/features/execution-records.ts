@@ -55,6 +55,13 @@ const UNC_ABS_PATH_RE = /(^|[\s'",(=])(\\\\[^\s'",)]+)/g;
 export type ExecutionStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
 export type ExecutionKind = 'core-agent' | 'codex' | 'local-agent' | 'openclaw';
 export type ExecutionBoundary = 'real' | 'degraded' | 'test-double';
+type ResultRefs = import('./recall/persisted-result-content').PersistedResultContent['refs'];
+/** Host-finalized anonymous result, kept locally even after its session is
+ * removed. Paths belong in this private manifest, never record/event DTOs. */
+export interface ExecutionOutputManifest {
+  schemaVersion: 1; executionId: string; conversationId: string; agentId: string;
+  resultRef: string; text: string; produced: string[]; refs: ResultRefs;
+}
 
 export interface ExecutionRecord {
   executionId: string;
@@ -67,6 +74,10 @@ export interface ExecutionRecord {
   contextId?: string;
   receiptId?: string;
   resultRef?: string;
+  /** New host completions bind the exact persisted reply and produced contents.
+   * Legacy records omit this field and retain their text-only contract. */
+  resultMessage?: { id: string; refs: import('./recall/persisted-result-content').PersistedResultContent['refs'] } | 'pending';
+  resultOutput?: 'pending' | { refs: ResultRefs };
   status: ExecutionStatus;
   boundary: ExecutionBoundary;
   permissionMode: string;
@@ -94,6 +105,8 @@ export interface CreateExecutionInput {
   receiptId?: string;
   resultRef?: string;
   status?: 'queued' | 'running';
+  bindResultMessage?: boolean;
+  bindResultOutput?: boolean;
   boundary: ExecutionBoundary;
   permissionMode: string;
 }
@@ -201,6 +214,33 @@ function optionalResultRef(value: unknown): string | undefined {
   return value === undefined ? undefined : requireResultRef(value);
 }
 
+function normalizeResultMessage(value: unknown): NonNullable<ExecutionRecord['resultMessage']> {
+  if (value === 'pending') return value;
+  const row = value as Exclude<ExecutionRecord['resultMessage'], string | undefined>;
+  if (!row || typeof row !== 'object' || !safeId(row.id) || !Array.isArray(row.refs) || row.refs.length < 1 || row.refs.length > 257
+    || row.refs[0].kind !== 'message' || row.refs[0].id !== row.id || !validResultRefs(row.refs)) throw new Error('invalid execution result binding');
+  return row;
+}
+
+function validResultRefs(refs: ResultRefs): boolean {
+  return refs.length > 0 && refs.length <= 257 && !refs.some(ref => !ref || !['message', 'execution_output', 'file'].includes(ref.kind)
+      || !safeId(ref.id) || !['readable', 'unverified'].includes(ref.status)
+      || ref.contentHash !== undefined && !/^[a-f0-9]{64}$/.test(ref.contentHash)
+      || ref.sourceHash !== undefined && !/^[a-f0-9]{64}$/.test(ref.sourceHash)
+      || ref.extraction !== undefined && (!['pdf', 'docx', 'pptx', 'xlsx'].includes(ref.extraction.format)
+        || !Number.isSafeInteger(ref.extraction.version) || ref.extraction.version < 1 || ref.extraction.coverage !== 'text_only')
+      || ref.contentRange !== undefined && (!Number.isSafeInteger(ref.contentRange.start) || !Number.isSafeInteger(ref.contentRange.end)
+        || ref.contentRange.start < 0 || ref.contentRange.end < ref.contentRange.start));
+}
+
+function normalizeResultOutput(value: unknown): NonNullable<ExecutionRecord['resultOutput']> {
+  if (value === 'pending') return value;
+  const row = value as { refs?: ResultRefs } | undefined;
+  if (!row || !Array.isArray(row.refs) || !validResultRefs(row.refs) || row.refs[0].kind !== 'execution_output')
+    throw new Error('invalid execution output binding');
+  return { refs: row.refs };
+}
+
 function terminal(status: ExecutionStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'timed_out';
 }
@@ -250,6 +290,8 @@ function parseRecord(raw: string): ExecutionRecord {
     ...(optionalId(row.contextId, 'context id') ? { contextId: optionalId(row.contextId, 'context id') } : {}),
     ...(optionalId(row.receiptId, 'receipt id') ? { receiptId: optionalId(row.receiptId, 'receipt id') } : {}),
     ...(optionalResultRef(row.resultRef) ? { resultRef: optionalResultRef(row.resultRef) } : {}),
+    ...(row.resultMessage !== undefined ? { resultMessage: normalizeResultMessage(row.resultMessage) } : {}),
+    ...(row.resultOutput !== undefined ? { resultOutput: normalizeResultOutput(row.resultOutput) } : {}),
     status: requireStatus(row.status),
     boundary: requireBoundary(row.boundary),
     permissionMode: requirePermissionMode(row.permissionMode),
@@ -298,6 +340,8 @@ export async function create(userId: string, input: CreateExecutionInput): Promi
       ...(optionalId(input.contextId, 'context id') ? { contextId: input.contextId } : {}),
       ...(optionalId(input.receiptId, 'receipt id') ? { receiptId: input.receiptId } : {}),
       ...(optionalResultRef(input.resultRef) ? { resultRef: input.resultRef } : {}),
+      ...(input.bindResultMessage ? { resultMessage: 'pending' as const } : {}),
+      ...(input.bindResultOutput ? { resultOutput: 'pending' as const } : {}),
       status: input.status ? requireStatus(input.status) : 'queued',
       boundary: requireBoundary(input.boundary),
       permissionMode: requirePermissionMode(input.permissionMode),
@@ -578,6 +622,66 @@ export async function complete(
   });
 }
 
+/** Internal host completion seam; never exposed to model tools or IPC. A reply
+ * can be bound once, after the transcript and produced list have been saved. */
+export async function bindCompletedResultMessage(userId: string, executionId: string,
+  conversationId: string, message: Exclude<ExecutionRecord['resultMessage'], string | undefined>): Promise<void> {
+  requireId(message.id, 'result message id');
+  await executionLock(userId, executionId).runExclusive(async () => {
+    const current = await readUnlocked(userId, executionId);
+    if (current.status !== 'completed' || current.conversationId !== conversationId
+      || current.resultMessage !== 'pending') throw new Error('execution result message cannot be rebound');
+    await writeJson(executionRecordPath(userId, executionId), { ...current, resultMessage: normalizeResultMessage(message), updatedAt: new Date().toISOString() });
+  });
+}
+
+function outputManifestPath(userId: string, executionId: string): string {
+  return path.join(executionDir(userId, executionId), 'host-result.json');
+}
+
+function validateOutputManifest(current: ExecutionRecord, manifest: ExecutionOutputManifest): void {
+  if (current.status !== 'completed' || manifest?.schemaVersion !== 1 || current.executionId !== manifest.executionId
+    || current.conversationId !== manifest.conversationId || current.agentId !== manifest.agentId
+    || current.resultRef !== manifest.resultRef || typeof manifest.text !== 'string' || !manifest.text.trim()
+    || !Array.isArray(manifest.produced) || manifest.produced.length > 256
+    || manifest.produced.some(file => typeof file !== 'string' || !path.isAbsolute(file))
+    || !Array.isArray(manifest.refs) || !validResultRefs(manifest.refs)
+    || manifest.refs[0].kind !== 'execution_output' || manifest.refs[0].id !== current.executionId)
+    throw new Error('invalid completed execution output manifest');
+}
+
+/** Manifest first, binding second. If interrupted between them, read recovery
+ * can finish the existing binding without rerunning the worker or its tools. */
+export async function bindCompletedResultOutput(userId: string, executionId: string, manifest: ExecutionOutputManifest): Promise<void> {
+  await executionLock(userId, executionId).runExclusive(async () => {
+    const current = await readUnlocked(userId, executionId);
+    if (current.resultOutput !== 'pending') throw new Error('execution result output cannot be rebound');
+    validateOutputManifest(current, manifest);
+    try {
+      const existing = JSON.parse(await fs.readFile(outputManifestPath(userId, executionId), 'utf8'));
+      if (JSON.stringify(existing) !== JSON.stringify(manifest)) throw new Error('execution output manifest already exists');
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    await writeJson(outputManifestPath(userId, executionId), manifest);
+    await writeJson(executionRecordPath(userId, executionId), { ...current, resultOutput: { refs: manifest.refs }, updatedAt: new Date().toISOString() });
+  });
+}
+
+export async function readCompletedResultOutput(userId: string, executionId: string): Promise<{ record: ExecutionRecord; manifest: ExecutionOutputManifest }> {
+  return executionLock(userId, executionId).runExclusive(async () => {
+    let record = await readUnlocked(userId, executionId);
+    if (!record.resultOutput) throw new Error('execution output is not bound');
+    const manifest = JSON.parse(await fs.readFile(outputManifestPath(userId, executionId), 'utf8')) as ExecutionOutputManifest;
+    validateOutputManifest(record, manifest);
+    if (record.resultOutput !== 'pending' && JSON.stringify(record.resultOutput.refs) !== JSON.stringify(manifest.refs))
+      throw new Error('execution output manifest binding changed');
+    if (record.resultOutput === 'pending') {
+      record = { ...record, resultOutput: { refs: manifest.refs }, updatedAt: new Date().toISOString() };
+      await writeJson(executionRecordPath(userId, executionId), record);
+    }
+    return { record, manifest };
+  });
+}
+
 function normalizeLifecycleMeta(meta?: Record<string, unknown>): Record<string, unknown> | undefined {
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return undefined;
   return meta;
@@ -595,6 +699,8 @@ export function createLifecycleSink(
     receiptId?: string;
     boundary: ExecutionBoundary;
     permissionMode: string;
+    bindResultMessage?: boolean;
+    bindResultOutput?: boolean;
     sessionId?: string;
   },
 ): ExecutionLifecycleSink {
@@ -617,6 +723,8 @@ export function createLifecycleSink(
         boundary: input.boundary,
         permissionMode: input.permissionMode,
         status: 'queued',
+        ...(input.bindResultMessage ? { bindResultMessage: true } : {}),
+        ...(input.bindResultOutput ? { bindResultOutput: true } : {}),
       });
       created = true;
       return record;

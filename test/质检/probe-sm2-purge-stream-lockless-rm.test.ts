@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
 /**
  * 探针（状态机审计员 · 新循环第 2 轮）：purge 删整流与并发 append 无互斥 +
  * 行数缓存不失效。
@@ -17,6 +18,13 @@
  *
  * 等价构造：purge 正常完成（流已 rm）后模拟在途 append 落盘，断言它不经
  * 任何防护写成功、流可读回、msgIndex 用了 stale 计数。
+ *
+ * 收尾状态（2026-10-01，P-r2-3 根治落地后反转）：removeRecallJsonlStream 已
+ * 改走 storage.removeJsonlStream——与 appendJsonlAtomic 同一把行锁内 rm 并
+ * 失效行数缓存（下文「此处回 0」的既定条件已满足），msgIndex 断言随修复
+ * 反转为 0。本探针直调裸 storage 层 append，故「裸写仍能重建文件」这一层
+ * 现象保留（记录层的防线在 asset-service 的锁内终态复核，由
+ * probe-r7-purge-append-interleave 的产品链路用例覆盖）。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -55,7 +63,7 @@ async function loadAssets() {
 async function mkAsset(id: string) {
   const assets = await loadAssets();
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'personal', title: `资产 ${id}`, statement: `陈述 ${id}。`,
@@ -98,17 +106,17 @@ describe('probe-sm2 › purge 删整流无锁 rm 与在途 append 交错', () =>
     const first = await appendJsonlAtomic(streamPath, versionRecord('aa-sm2', '1', '陈述 v1。'));
     expect(first.msgIndex).toBe(1);
 
-    // 正常软删 + 彻底清除：removeRecallJsonlStream 直接 fs.rm（无行锁、无 invalidate）。
+    // 正常软删 + 彻底清除：removeRecallJsonlStream 走行锁内 rm + 缓存失效（P-r2-3）。
     await assets.deleteAbilityAsset(UID, 'aa-sm2', ACT);
     await assets.purgeAbilityAsset(UID, 'aa-sm2', ACT);
 
     // 模拟「rm 前已通过锁外预检、appendVersion 在路上」的在途写：重建流文件。
     const second = await appendJsonlAtomic(streamPath, versionRecord('aa-sm2', '2', 'purge 后复活的正文 v2。'));
 
-    // stale 计数：rm 不清缓存（计数仍=2），重建后的流只有本条 1 行，正确行号
-    // 应为 0，实际拿到旧缓存值 2——「purge 后第一条 append 用 stale msgIndex」
-    // 的实证（若 removeRecallJsonlStream 补调 invalidateLineCount，此处回 0）。
-    expect(second.msgIndex).toBe(2);
+    // 缓存已失效（P-r2-3 根治）：rm 在行锁内清掉计数缓存，重建后的流只有本条
+    // 1 行，append 重读文件从 0 计数——「purge 后第一条 append 用 stale msgIndex」
+    // 的漏洞已闭合（修复前此处拿到旧缓存值 2）。
+    expect(second.msgIndex).toBe(0);
 
     // purged 资产的版本流可读回复活快照（含正文）。
     const versions = await assets.listAbilityAssetVersions(UID, 'aa-sm2');

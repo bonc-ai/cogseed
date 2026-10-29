@@ -34,10 +34,16 @@ describe('recallTitleIssue（标题规范 3.1 机器可判四项，全模块唯�
     expect(recallTitleIssue('结论先行 Conclusion', STATEMENT)).toBeUndefined();
   });
 
-  it('第 3 项：与正文公共前缀 ≥1 字即不合规（正文首句标题正是老病形态）', () => {
-    expect(recallTitleIssue('遇到同类任务时先列清单', STATEMENT)).toBe('prefix_overlap');
-    // 只有第一个字相同也算（判定口径是 ≥1 字，不是「大段重复」）。
-    expect(recallTitleIssue('遇事不慌', STATEMENT)).toBe('prefix_overlap');
+  it('第 3 项只拒完整首句复制，相同首字和有意义的共同名词不证明截断', () => {
+    expect(recallTitleIssue('回答统一使用中文', '回答统一使用中文')).toBe('prefix_overlap');
+    expect(recallTitleIssue('Use Chinese in replies', 'Use Chinese in replies')).toBe('prefix_overlap');
+    expect(recallTitleIssue('先列已知与未知', '先列已知与未知。再补齐缺口。')).toBe('prefix_overlap');
+    expect(recallTitleIssue('Prepare a checklist', 'Prepare a checklist. Then validate it.')).toBe('prefix_overlap');
+    expect(recallTitleIssue('遇到同类任务时先列清单', STATEMENT)).toBeUndefined();
+    expect(recallTitleIssue('遇事不慌', STATEMENT)).toBeUndefined();
+    expect(recallTitleIssue('星泽项目验收', '星泽项目验收需要负责人最终签字。')).toBeUndefined();
+    expect(recallTitleIssue('Ada的审查责任', 'Ada负责审查需要提交的材料。')).toBeUndefined();
+    expect(recallTitleIssue('Shared evidence', 'Short written summaries explain the evidence.')).toBeUndefined();
     // 正文为空/缺失时无从重复，不触发本项。
     expect(recallTitleIssue('遇事不慌', '')).toBeUndefined();
     expect(recallTitleIssue('遇事不慌', undefined)).toBeUndefined();
@@ -57,8 +63,8 @@ describe('recallTitleIssue（标题规范 3.1 机器可判四项，全模块唯�
   it('判定顺序：空 → 超长 → 前缀重复 → 标点结尾（返回首个命中）', () => {
     // 同时超长且以标点结尾：先报超长。
     expect(recallTitleIssue(`${'标'.repeat(20)}。`, STATEMENT)).toBe('too_long');
-    // 同时前缀重复且标点结尾：先报前缀重复。
-    expect(recallTitleIssue('遇到同类任务时的处理，', STATEMENT)).toBe('prefix_overlap');
+    // 相同首字不再覆盖真实标点问题。
+    expect(recallTitleIssue('遇到同类任务时的处理，', STATEMENT)).toBe('punctuation_suffix');
   });
 
   it('空白按落盘形态归一后判定（与写入口 bounded 同款折叠）', () => {
@@ -77,7 +83,30 @@ describe('assertCompliantAbilityAssetTitle（收口闸门用的可读错误）',
   it('不合规时抛 invalid ability asset title 前缀错误（classifyAbilityAssetWriteFailure 归 schema）', () => {
     expect(() => assertCompliantAbilityAssetTitle('', STATEMENT)).toThrow(/invalid ability asset title/);
     expect(() => assertCompliantAbilityAssetTitle('标'.repeat(17), STATEMENT)).toThrow(/invalid ability asset title/);
-    expect(() => assertCompliantAbilityAssetTitle('遇到同类', STATEMENT)).toThrow(/invalid ability asset title/);
+    expect(() => assertCompliantAbilityAssetTitle('先列已知与未知', '先列已知与未知。再补齐缺口。')).toThrow(/invalid ability asset title/);
     expect(() => assertCompliantAbilityAssetTitle('清单先行。', STATEMENT)).toThrow(/invalid ability asset title/);
+  });
+});
+
+describe('HTML 人工确认标题契约', () => {
+  it('保留用户确认的标题，允许与正文首字相同及 80 字名称；模型生成仍走严格规则', async () => {
+    const { assertReviewedAbilityAssetTitle } = await import('../../../../src/main/features/recall/title-policy');
+    expect(() => assertReviewedAbilityAssetTitle('项目周报交付模板')).not.toThrow();
+    expect(() => assertReviewedAbilityAssetTitle('标'.repeat(80))).not.toThrow();
+    expect(() => assertReviewedAbilityAssetTitle('标'.repeat(81))).toThrow('1 to 80');
+    expect(() => assertReviewedAbilityAssetTitle('')).toThrow();
+    expect(recallTitleIssue('先列已知与未知', '先列已知与未知。再补齐缺口。')).toBe('prefix_overlap');
+  });
+});
+
+describe('真实模型项目事实标题回归', () => {
+  it('保留真实提取的项目名标题，正文及生效范围无需为起名改写', () => {
+    const title = '星泽验收需宋遥签字';
+    const statement = '星泽项目每次验收需要宋遥最终签字。自2026年9月22日起，宋遥是星泽项目的验收负责人；后续准备星泽项目验收材料时应按此找宋遥签字。此规则仅适用于星泽项目，不能套用到其他项目。';
+    expect(recallTitleIssue(title, statement)).toBeUndefined();
+    expect(() => assertCompliantAbilityAssetTitle(title, statement)).not.toThrow();
+    // Proper nouns do not exempt genuine length or punctuation defects.
+    expect(recallTitleIssue('星泽验收负责人签字以及材料准备完整流程', statement)).toBe('too_long');
+    expect(recallTitleIssue(`${title}…`, statement)).toBe('punctuation_suffix');
   });
 });

@@ -63,10 +63,11 @@ describe('open-source shared foundation polish', () => {
   });
 
   it('marks real page tabs and settings groups without changing their routing hooks', () => {
-    expect(index).toContain('class="connections-tabs ui-tabs"');
-    expect(index).toContain('class="connections-tab ui-tab is-active"');
+    expect(index).toContain('class="connections-tabs sidebar-nav"');
+    expect(index).toContain('class="connections-tab sidebar-nav-item is-active"');
     expect(index).toContain('id="ca-root"');
-    expect(cognitionAssetsView).toContain('class="ca-tab${active ? \' is-on\' : \'\'}"');
+    // 折叠/禁用态共用同一属性：is-on 之后可以再拼 is-disabled，故只锚定前缀。
+    expect(cognitionAssetsView).toContain('class="ca-tab${active ? \' is-on\' : \'\'}');
     expect(cognitionAssetsView).toContain('data-act="tab" data-id="${tab.id}"');
     expect(index).toContain('class="settings-group ui-settings-section"');
     for (const hook of [
@@ -90,7 +91,8 @@ describe('open-source shared foundation polish', () => {
     };
 
     expect(sources.workspace).toContain('ws-space-card ui-resource-card');
-    expect(sources.automation).toContain('auto-row ui-resource-card ui-resource-card--row');
+    expect(sources.automation).toContain('uiResourceCard({');
+    expect(sources.automation).toContain("layout: 'compact-row'");
     expect(sources.automation).toContain('auto-tpl-card ui-resource-card');
     expect(sources.agents).toContain('agent-card ui-resource-card');
     expect(sources.skills).toContain('skill-card ui-resource-card');

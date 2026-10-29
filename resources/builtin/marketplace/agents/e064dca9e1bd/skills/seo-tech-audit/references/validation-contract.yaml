@@ -1,0 +1,3 @@
+cases:
+- id: smoke-seo-tech-audit
+  kind: manual-smoke

@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -91,100 +92,11 @@ async function seedRequirement(episodeIds: string[], goal: string): Promise<impo
 }
 
 describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言硬闸）', () => {
-  it('A. KStar rule 候选带单边界即可沉淀为资产（B1: && → ||）', async () => {
-    // 中文任务 + 中文 lesson + 无缺口归因 → rule 候选，只有 applicableWhen
-    // （KStar 聚合刻意不编造 forbiddenWhen）。
-    const ep = episode('kse-scenario-a', '帮我写一份城市资料，500 字', [
-      { name: 'read_file', status: 'ok' },
-      { name: 'write_file', status: 'ok' },
-    ]);
-    await seedEpisode(ep);
-    await seedReview(ep, {
-      deltaR: 'unknown',
-      deltaA: 'unknown',
-      outcome: 'met_expected',
-      attribution: 'unclear',
-      reason: '任务按预期完成，lesson 可复用。',
-      confidence: 0.9,
-      lesson: '写城市资料时应先收集数据再成文，避免编造。',
-    });
-    const requirement = await seedRequirement([ep.id], '帮我写一份城市资料，500 字');
-
-    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
-    const result = await precipitation.precipitateRequirementLevel(UID, requirement);
-
-    expect(result.proposals).toHaveLength(1);
-    expect(result.proposals[0].suggestedType).toBe('rule');
-    // 单边界：只带 applicableWhen，不带 forbiddenWhen
-    expect(result.proposals[0].applicableWhen).toBeTruthy();
-    expect((result.proposals[0] as { forbiddenWhen?: string[] }).forbiddenWhen).toBeUndefined();
-    // 系统线沉淀不被 rule_boundary_required 阻断（specs/016 分流后落经验条目）
-    expect(result.createdAssetIds).toEqual([]);
-    expect(result.experienceIds).toHaveLength(1);
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    const exp = await experiences.readExperience(UID, result.experienceIds![0]);
-    expect(exp.experienceType).toBe('lesson');
-    expect(exp.status).toBe('active');
-    expect(exp.body).toContain('写城市资料时应先收集数据再成文');
-  });
-
-  it('B. drain 收口：drainKstarTaskState 不产候选，requirement 级为唯一沉淀路径（A1）', async () => {
-    const ep = episode('kse-scenario-b', '帮我写一份城市资料，500 字', [
-      { name: 'read_file', status: 'ok' },
-      { name: 'write_file', status: 'ok' },
-    ]);
-    await seedEpisode(ep);
-    await seedReview(ep, {
-      deltaR: 'unknown',
-      deltaA: 'unknown',
-      outcome: 'met_expected',
-      attribution: 'unclear',
-      reason: '任务完成，lesson 可复用。',
-      confidence: 0.9,
-      lesson: '城市资料交付应注明实际字数并按板块组织。',
-    });
-    const requirement = await seedRequirement([ep.id], '帮我写一份城市资料，500 字');
-    // drain 的前置状态：会话任务状态必须 taskComplete 才会走到收口逻辑
-    const store = await import('../../../../src/main/features/kstar/requirement-store');
-    const state = store.createInitialConversationTaskState(UID, 'cid-scenario');
-    await store.writeConversationTaskState(UID, {
-      ...state,
-      currentTaskId: requirement.taskId,
-      currentRequirementId: requirement.id,
-      taskComplete: true,
-    });
-
-    // 1. drain 不再调用 bridge、不产候选（任务/会话关闭职责保留）
-    const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
-    let bridgeCalls = 0;
-    const drainResult = await aggregate.drainKstarTaskState(UID, 'cid-scenario', {
-      candidateBridge: async () => { bridgeCalls += 1; return []; },
-    });
-    expect(bridgeCalls).toBe(0);
-    expect(drainResult?.proposals).toEqual([]);
-    expect(drainResult?.candidates).toEqual([]);
-    expect(drainResult?.task.status).toBe('closed');
-
-    // 2. requirement 级路径正常产出（唯一沉淀路径）
-    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
-    const result = await precipitation.precipitateRequirementLevel(UID, requirement);
-    expect(result.experienceIds).toHaveLength(1);
-
-    // 3. 无双写：requirement 级恰好产一条经验（drain 线不带来重复沉淀），
-    //    且分流后候选池零记录（specs/016：create 线与候选池完全隔离）。
-    const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const pool = await candidates.listRecallCandidates(UID);
-    expect(pool.filter((c) => String(c.judgment).includes('城市资料交付应注明实际字数'))).toHaveLength(0);
-    const experiencesB = await import('../../../../src/main/features/recall/experience-service');
-    const relatedExp = (await experiencesB.listExperiences(UID))
-      .filter((exp) => exp.body.includes('城市资料交付应注明实际字数'));
-    expect(relatedExp).toHaveLength(1);
-  });
 
   it('C. 迁移证明回执并集覆盖：多回合分散注入仍升档（B4）', async () => {
     // 两条真实资产（带规则边界，与 KStar 聚合产出的候选一致），经统一晋升出口
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const c1 = await candidates.saveRecallCandidate(UID, {
+    const c1 = await createNightlyCandidateFixture(UID, {
       judgment: '资产一：跨回合注入的第一条经验。',
       value: '资产一：跨回合注入的第一条经验。',
       summary: '跨回合经验一',
@@ -195,8 +107,8 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
       sourceRefs: [{ kind: 'execution', id: 'exec-c1' }],
       evidenceRefs: [{ kind: 'execution', id: 'exec-c1' }],
     });
-    const p1 = await candidates.autoApplyRecallCandidate(UID, c1.id, { provenance: 'kstar' });
-    const c2 = await candidates.saveRecallCandidate(UID, {
+    const p1 = await candidates.promoteRecallCandidate(UID, c1.id, { actor: 'user', provenance: 'kstar' });
+    const c2 = await createNightlyCandidateFixture(UID, {
       judgment: '资产二：另一个回合注入的第二条经验。',
       value: '资产二：另一个回合注入的第二条经验。',
       summary: '跨回合经验二',
@@ -207,7 +119,7 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
       sourceRefs: [{ kind: 'execution', id: 'exec-c2' }],
       evidenceRefs: [{ kind: 'execution', id: 'exec-c2' }],
     });
-    const p2 = await candidates.autoApplyRecallCandidate(UID, c2.id, { provenance: 'kstar' });
+    const p2 = await candidates.promoteRecallCandidate(UID, c2.id, { actor: 'user', provenance: 'kstar' });
     expect(p1.asset).toBeTruthy();
     expect(p2.asset).toBeTruthy();
 
@@ -311,7 +223,7 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
     // 一条 general 资产 + 一条 review 资产，走 KSTAR 的投影创建路径
     // （purpose='review'，与 control-service/bus 宿主自动路径一致）。
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const c1 = await candidates.saveRecallCandidate(UID, {
+    const c1 = await createNightlyCandidateFixture(UID, {
       judgment: '通用经验：写资料类任务应先收集数据再成文。',
       value: '通用经验：写资料类任务应先收集数据再成文。',
       summary: '资料先行经验',
@@ -322,7 +234,7 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
       sourceRefs: [{ kind: 'execution', id: 'exec-e1' }],
       evidenceRefs: [{ kind: 'execution', id: 'exec-e1' }],
     });
-    const p1 = await candidates.autoApplyRecallCandidate(UID, c1.id, { provenance: 'kstar' });
+    const p1 = await candidates.promoteRecallCandidate(UID, c1.id, { actor: 'user', provenance: 'kstar' });
     expect(p1.asset).toBeTruthy();
 
     const projection = await import('../../../../src/main/features/recall/context-projection');

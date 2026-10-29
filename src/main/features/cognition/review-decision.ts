@@ -1,15 +1,18 @@
 /**
- * Review Decision Ledger — 候选审查决定的审计记录（PRD §9.1 ReviewDecision）。
+ * Review Decision Ledger — 候选审查决定的审计记录。
  *
  * 解决两个产品契约问题：
- * 1. 短确认语前指绑定（FR-REV-03）："采用/确认/是"必须绑定原建议
+ * 1. 短确认语前指绑定："采用/确认/是"必须绑定原建议
  *    （antecedent_ref）、决定类型、作用域和替代关系；无法唯一解析时
  *    不得写入（调用方必须显式传 antecedent_ref，缺省拒绝）。
- * 2. 拒绝/暂缓抑制（FR-EXT-07）：同候选被 defer/reject 后，无新 Evidence
+ * 2. 拒绝/暂缓抑制：同候选被 defer/reject 后，无新 Evidence
  *    不得重复提示——列表层通过本账本过滤（不侵入三个底层候选存储）。
  *
  * 存储：`<uid>/cloud/cogseed/review-decisions/<candidate_id>.jsonl`
- * （append-only；每候选一文件；与资产事件账本同模式）。
+ * （append-only；每候选一文件；与资产事件账本同模式）。文件名按 targetRef
+ * 折叠净化——`recall_candidate:abc` 与 `recall_candidate/abc` 会落到同一个
+ * jsonl——因此**账本行必须自描述**：每行带真实 target_ref，读取
+ * 按精确匹配过滤，折叠同名不再串档（B 的决定改不动 A 的抑制状态）。
  */
 
 import * as fs from 'node:fs/promises';
@@ -17,7 +20,7 @@ import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
-import { appendJsonlAtomic, readJsonl, nowIso } from '../../storage';
+import { appendJsonlAtomic, readJsonl, nowIso, safeId, withJsonlLineLock } from '../../storage';
 import { cogseedAgentReviewDecisionsDir } from '../../paths';
 import { maskId } from '../../util/log-redact';
 import { notifyCognitionWrite } from '../recall/store-events';
@@ -77,7 +80,7 @@ function assertDecisionType(v: unknown): asserts v is ReviewDecisionType {
 }
 
 /** 短确认语义：decision 属于 "采用/确认/是" 类短确认时必须带 antecedent_ref。 */
-const SHORT_CONFIRMATIONS = new Set(['accept', 'yes', 'confirm', '采用', '确认', '是', 'ok', 'yes']);
+const SHORT_CONFIRMATIONS = new Set(['accept', 'yes', 'confirm', '采用', '确认', '是', 'ok']);
 
 export function isShortConfirmation(decision: string): boolean {
   return SHORT_CONFIRMATIONS.has(decision.trim().toLowerCase());
@@ -136,6 +139,15 @@ export async function writeReviewDecision(
   await appendJsonlAtomic<ReviewDecision>(reviewDecisionLogPath(uid, input.targetRef), record);
   notifyCognitionWrite(uid, 'candidates', 'append', decisionId);
   log.info(`review decision actor=${input.actor || 'user'} user=${maskId(uid)} target=${maskId(input.targetRef)} type=${input.decisionType}`);
+  // 夜间筛选统计：只记决策类型计数，不落任何原文——reason 是
+  // 用户自由文本，不能作为聚合键（统计不泄露原文）。
+  void import('../recall/capture-stats').then(({ bumpRecallCaptureStats }) => (
+    bumpRecallCaptureStats(uid, {
+      decisions: { [input.decisionType]: 1 },
+    })
+  )).catch(() => {
+    // 统计失败不影响决定账本主流程。
+  });
   return record;
 }
 
@@ -169,11 +181,90 @@ export async function recordReviewDecisionOutcome(
   return updated;
 }
 
+/** 清除资产正文时同步抹掉审查账本里的用户文本。
+ *
+ * 账本本身按决定保留（id、类型、时间、结果、目标），只移除可识别的
+ * `modified_content` 与自由文本 `reason`。匹配既支持决定 id（资产记录了
+ * reviewDecisionId/appliedReviewDecisionIds），也支持候选 targetRef（同一候选
+ * 的编辑历史可能有多条决定）。匹配行按原顺序重写；坏行属于不可读残留，
+ * 直接丢弃，避免清除后仍能从撕裂字节里还原正文。 */
+export async function redactReviewDecisionContent(
+  uid: string,
+  scope: { decisionIds?: readonly string[]; targetRefs?: readonly string[] },
+): Promise<number> {
+  if (!safeId(uid)) throw new Error('invalid uid');
+  const decisionIds = new Set((scope.decisionIds || []).filter((id): id is string => typeof id === 'string' && id.trim() !== ''));
+  const targetRefs = new Set((scope.targetRefs || []).filter((ref): ref is string => typeof ref === 'string' && ref.trim() !== ''));
+  if (!decisionIds.size && !targetRefs.size) return 0;
+  const dir = cogseedAgentReviewDecisionsDir(uid);
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+  let redacted = 0;
+  for (const name of names) {
+    if (!name.endsWith('.jsonl')) continue;
+    const file = path.join(dir, name);
+    redacted += await withJsonlLineLock(file, async () => {
+      const text = await fs.readFile(file, 'utf8');
+      const rewritten: string[] = [];
+      let changed = false;
+      let fileRedacted = 0;
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        let record: ReviewDecision;
+        try {
+          record = JSON.parse(line) as ReviewDecision;
+        } catch {
+          changed = true;
+          continue;
+        }
+        const matches = decisionIds.has(record.decision_id) || targetRefs.has(record.target_ref);
+        if (!matches) {
+          rewritten.push(line);
+          continue;
+        }
+        const next: ReviewDecision = { ...record };
+        let local = false;
+        if (next.modified_content !== undefined) {
+          delete next.modified_content;
+          local = true;
+        }
+        if (next.reason !== undefined) {
+          delete next.reason;
+          local = true;
+        }
+        if (local) {
+          changed = true;
+          fileRedacted += 1;
+          rewritten.push(JSON.stringify(next));
+        } else {
+          rewritten.push(line);
+        }
+      }
+      if (!changed) return 0;
+      const tmp = `${file}.purge-${process.pid}.tmp`;
+      await fs.writeFile(tmp, rewritten.length ? `${rewritten.join('\n')}\n` : '', 'utf8');
+      await fs.rename(tmp, file);
+      return fileRedacted;
+    });
+  }
+  return redacted;
+}
+
 /** 某候选的全部审查决定（按追加顺序）。 */
 export async function listReviewDecisions(uid: string, targetRef: string): Promise<ReviewDecision[]> {
   const records = await readJsonl<ReviewDecision>(reviewDecisionLogPath(uid, targetRef), 10000);
   const latest = new Map<string, ReviewDecision>();
   for (const record of records) {
+    if (!record || typeof record.decision_id !== 'string') continue;
+    // 行级 target_ref 过滤：文件名折叠净化会让不同 targetRef 共用
+    // 一个 jsonl；账本行自带真实 target_ref，按精确匹配过滤后折叠不再串档。
+    // 存量行的 target_ref 一直是真实值，过滤对旧档同样成立。
+    if (record.target_ref !== targetRef) continue;
     // Reinsert outcome records so decision order follows the append-only ledger,
     // rather than the first occurrence of a decision id.
     latest.delete(record.decision_id);
@@ -244,7 +335,7 @@ export async function listRecentReviewDecisions(
 
 /**
  * 该候选是否被"抑制"（最近决定为 defer 或 reject，且之后没有 accept 覆盖）。
- * 列表层据此过滤，避免同一 Evidence 重复提示（FR-EXT-07）。
+ * 列表层据此过滤，避免同一 Evidence 重复提示。
  */
 export async function isCandidateSuppressed(uid: string, targetRef: string): Promise<boolean> {
   const decisions = await listReviewDecisions(uid, targetRef);

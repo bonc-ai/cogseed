@@ -1,10 +1,8 @@
 /**
- * specs/015 T046：反漂移断言——把四个「唯一处」钉在**源码事实**上，防长出第二套。
+ * 单一实现边界：依据源码检查写入、采用判定、版本比对和工具目录。
  *
- * 守四条（与 tasks.md T046 ①②③④ 一一对应，一个 `it` 一条）：
- *   ① 两条沉淀线都经**同一个准入门**（`improvement-admission.ts::admitKstarProposals`）：
- *      门的实现只有一处、调用点只有一处；需求级线与直通线都路由到那个出口；
- *      历史 drain 桥（`recall-bridge.ts::saveKstarCandidateProposals`）保持零调用点。
+ * 检查四条约束：
+ *   ① KSTAR历史适配器保留结果兼容，域内没有认知候选/资产/经验写入调用。
  *   ② 不存在第二处「采用判定」：`'applied'` 字面量只允许出现在显式清单里的文件
  *      （写入侧 / 展示侧 / 另一个域的枚举），且**两条件并判**（`applied` + `real`）
  *      只允许在权威口径 `asset-usage-receipt.ts` 里；准入门自己不得重判状态。
@@ -12,12 +10,10 @@
  *      只允许在 `asset-service.ts`；且那处判定必须在 `updateAbilityAsset` 的
  *      **锁内**（`updateRecallJsonRecord` 回调里）。
  *   ④ `tool-catalog.ts` 未新增 recall 组工具：catalog 的 recall 组与三个工厂
- *      （`createRecallTools` / `createAssetStewardTools` / `createPersonalOntologyTools`）
+ *      （`createRecallToolSuite` / `createAssetStewardTools` / `createPersonalOntologyTools`）
  *      的工具面一致，且等于下面的冻结基线。
  *
  * 派生而非抄名单：
- *   · 门的「放行列表」字段名不是手写的——从 `KstarAdmissionResult` 接口里按
- *     类型（`KstarCandidateProposal[]`）派生，字段改名它跟着改，删掉它则报错。
  *   · 版本比对的模式是本文件里逐条**先核实存在**再写的（`current.version` 比较、
  *     「期望版本标识符参与比较」），不是想象的形状；后者按片段级判定（切 `&&`/括号后
  *     逐片段看），所以 `liveVersion !== targetVersionUsed` 这类裸标识符形状也覆盖得到，
@@ -34,11 +30,15 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createAssetStewardTools } from '../../../../src/main/model/core-agent/asset-steward-tools';
 import { createPersonalOntologyTools } from '../../../../src/main/model/core-agent/personal-ontology-tools';
-import { createRecallTools } from '../../../../src/main/model/core-agent/recall-tools';
+import { createCognitionKernelTools } from '../../../../src/main/model/core-agent/cognition-kernel-tools';
+import { createCognitionCreateTools } from '../../../../src/main/model/core-agent/cognition-create-tools';
+import { createCognitionEditTools } from '../../../../src/main/model/core-agent/cognition-edit-tools';
+import { createMeetingOntologyTools } from '../../../../src/main/model/core-agent/meeting-ontology-tools';
+import { createRecallToolSuite } from '../../../../src/main/model/core-agent/recall-tools';
 import { createExperienceTools } from '../../../../src/main/model/core-agent/experience-tools';
 import { TOOL_CATALOG } from '../../../../src/main/model/core-agent/tool-catalog';
 
@@ -55,11 +55,22 @@ const F = {
   taskClosure: 'src/main/features/kstar/task-closure.ts',
   trace: 'src/main/features/kstar/trace.ts',
   usageReceipt: 'src/main/features/recall/asset-usage-receipt.ts',
+  usageClaim: 'src/main/features/recall/asset-usage-claim.ts',
   assetService: 'src/main/features/recall/asset-service.ts',
   candidateService: 'src/main/features/recall/candidate-service.ts',
+  automaticPolicy: 'src/main/features/recall/nightly-automatic-approval.ts',
+  automaticSupport: 'src/main/features/recall/nightly-automatic-support.ts',
+  standingAuthority: 'src/main/features/recall/standing-preference-authority.ts',
+  automaticFormationUndo: 'src/main/features/recall/automatic-formation-undo.ts',
+  outputCheck: 'src/main/features/recall/cognition-output-check.ts',
   approvalService: 'src/main/features/recall/asset-approval-service.ts',
   profileSync: 'src/main/features/recall/personal-profile-sync.ts',
   cleanupReport: 'src/main/features/recall/cleanup-report-service.ts',
+  contentOrganization: 'src/main/features/recall/content-organization.ts',
+  feedbackVersionContext: 'src/main/features/recall/feedback-version-context.ts',
+  captureService: 'src/main/features/recall/capture-service.ts',
+  stockProvenance: 'src/main/features/recall/stock-organization-provenance.ts',
+  stockOrganization: 'src/main/features/recall/stock-organization.ts',
 } as const;
 
 function rel(abs: string): string {
@@ -125,9 +136,39 @@ function stripComments(source: string): string {
       i += 2;
       continue;
     }
+    // Regex literals can contain quotes (`/["\\u0000-\\u001f]/`); treating the
+    // quote as a string start swallows a following block comment. A slash after
+    // an operator/opening token starts a regex; a slash after a value is division.
+    if (ch === '/' && /[=(:,[!&|?{};>]/.test(previousSignificant(source, i))) {
+      i = skipRegex(source, i) + 1;
+      continue;
+    }
     i += 1;
   }
   return out.join('');
+}
+
+function previousSignificant(source: string, index: number): string {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (!/\s/.test(source[i])) return source[i];
+  }
+  return '';
+}
+
+function skipRegex(source: string, slashIndex: number): number {
+  let inClass = false;
+  for (let i = slashIndex + 1; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === '\\') { i += 1; continue; }
+    if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    else if (ch === '/' && !inClass) {
+      let end = i + 1;
+      while (/[a-z]/i.test(source[end] || '')) end += 1;
+      return end - 1;
+    } else if (ch === '\n') return i;
+  }
+  return source.length - 1;
 }
 
 function skipString(source: string, quoteIndex: number): number {
@@ -162,20 +203,6 @@ function sliceFunctionBody(code: string, name: string): string {
   const bodyOpen = code.indexOf('{', paramsClose);
   const bodyClose = matchDelimiter(code, bodyOpen, '{', '}');
   return code.slice(bodyOpen, bodyClose + 1);
-}
-
-/** 接口字段 → 声明类型（用于**派生**契约字段名，而不是手抄一个名字）。 */
-function interfaceFieldTypes(code: string, name: string): Map<string, string> {
-  const head = new RegExp(`interface[ \\t]+${name}[ \\t]*\\{`).exec(code);
-  if (!head) throw new Error(`契约漂移：找不到接口 ${name}`);
-  const open = code.indexOf('{', head.index);
-  const close = matchDelimiter(code, open, '{', '}');
-  const fields = new Map<string, string>();
-  for (const line of code.slice(open + 1, close).split('\n')) {
-    const match = /^[ \t]*(?:readonly[ \t]+)?([A-Za-z_$][\w$]*)\??[ \t]*:[ \t]*(.+?);?[ \t]*$/.exec(line);
-    if (match) fields.set(match[1], match[2].trim());
-  }
-  return fields;
 }
 
 interface SourceMatch { file: string; line: number; text: string }
@@ -229,63 +256,27 @@ function stringLiteralUnionOfField(code: string, field: string): string[] {
   return [...declaration[0].matchAll(/'([^']*)'/g)].map((match) => match[1]);
 }
 
-describe('T046 ① 两条沉淀线都经同一个准入门', () => {
+describe('① 两条沉淀线都经同一个准入门', () => {
   /** 允许写候选的 kstar 文件（唯一出口 + 零调用点的历史桥）：每项都必须给理由。 */
-  const candidateWriteAllowlist: Array<{ file: string; why: string }> = [
-    {
-      file: F.direct,
-      why: '两条沉淀线共用的**唯一候选出口**：`admitKstarProposals` 在此调用，`saveRecallCandidate` 排在它之后（放行的才落候选）。',
-    },
-    {
-      file: F.bridge,
-      why: '历史 drain 桥（`saveKstarCandidateProposals`）：`src/main` 内**零调用点**（下一条断言钉住），生产不可达；一旦被接线必须先接准入门。',
-    },
-  ];
+  // 2026-10-07 收敛（SPEC §3 提取管线唯一）：kstar 域不再直调
+  // `saveRecallCandidate`——KSTAR 的候选提交是统一提取管线（cognition/
+  // candidate-submission → routeAndSubmit）的子线程/适配器。白名单随之
+  // 清空：直调本身就是漂移，不再需要"允许的直调者"。
+  const candidateWriteAllowlist: Array<{ file: string; why: string }> = [];
 
-  it('门的实现与调用点各只有一处，且两条线都路由到它', () => {
-    const mainFiles = mainTsFiles();
-
-    // 实现唯一：`function admitKstarProposals(` 只允许出现在 improvement-admission.ts。
-    const implementations = mainFiles
-      .filter((file) => /(?:async[ \t]+)?function[ \t]+admitKstarProposals[ \t]*\(/.test(stripComments(readSource(rel(file)))))
-      .map(rel);
-    expect(implementations, '准入门必须只有一处实现（第二套准入实现 = 漂移）')
-      .toEqual([F.admission]);
-
-    // 调用点唯一：`await admitKstarProposals(` 只允许出现在两条线共用的出口里。
-    expect(filesWithCallSites(mainFiles, 'admitKstarProposals'), '准入门必须只有一处调用（第二处调用 = 长出第二个准入点）')
-      .toEqual([F.direct]);
-
-    // 需求级线：先建准入上下文，再走共用出口；自己不得写候选。
-    const requirementLine = stripComments(readSource(F.requirementLine));
-    expect(requirementLine, '需求级线必须建准入上下文（哪条线 + 采用证据范围）')
-      .toContain('kstarPrecipitationAdmission(');
-    expect(requirementLine, '需求级线必须走两条线共用的提交出口')
-      .toContain('precipitateDirectExperienceFromSource(');
-    expect(callSites(requirementLine, 'saveRecallCandidate'), '需求级线不得自己写候选（绕过出口 = 绕过准入）').toBe(0);
-    expect(callSites(requirementLine, 'saveKstarCandidateProposals'), '需求级线不得改走历史桥').toBe(0);
-
-    // 直通线（episode 级）：入口必须调共用出口。
-    const direct = stripComments(readSource(F.direct));
-    expect(direct, '直通线入口不得消失（两条线只剩一条 = 契约漂移）')
-      .toContain('precipitateDirectExperienceAssets(');
-    expect(sliceFunctionBody(direct, 'precipitateDirectExperienceAssets'), '直通线入口必须调两条线共用的提交出口')
-      .toContain('precipitateDirectExperienceFromSource(');
-
-    // kstar 域内允许写候选的文件 = 显式清单（新增第三个写入者 → 红）。
-    const writers = kstarCandidateWriters();
-    expect(writers, 'kstar 域内的候选写入者只有显式清单里的两个（新增写入者必须显式登记并说明它怎么过准入门）')
-      .toEqual(candidateWriteAllowlist.map((entry) => entry.file).sort());
-    for (const entry of candidateWriteAllowlist) {
-      expect(entry.why.length, `${entry.file} 必须在允许清单里写清为什么允许`)
-        .toBeGreaterThan(20);
+  it('KSTAR兼容适配器没有认知写调用，隔离开关不能恢复旧写线', async () => {
+    const kstarFiles = mainTsFiles().filter(file => rel(file).startsWith('src/main/features/kstar/'));
+    for (const name of ['saveRecallCandidate', 'submitCognitionCandidate', 'autoApplyRecallCandidate', 'createAbilityAsset', 'createExperience']) {
+      expect(filesWithCallSites(kstarFiles, name), `KSTAR不得调用认知写口 ${name}`).toEqual([]);
     }
-
-    // 历史桥必须保持不可达：否则它就是绕过准入门、不经 #1 出口的第二条候选写入路径。
-    expect(callSites(stripComments(readSource(F.bridge)), 'saveKstarCandidateProposals'), '历史桥自身只有定义，没有自调用')
-      .toBe(0);
-    const bridgeCallers = filesWithCallSites(mainFiles, 'saveKstarCandidateProposals');
-    expect(bridgeCallers, '历史桥一旦被生产调用 = 绕过准入门写候选（必须先接准入门再接线）').toEqual([]);
+    expect(kstarCandidateWriters()).toEqual(candidateWriteAllowlist.map(entry => entry.file).sort());
+    for (const file of [F.direct, F.bridge]) expect(stripComments(readSource(file))).not.toContain('cognitionIntegrationIsolated');
+    const bridge = await import('../../../../src/main/features/kstar/recall-bridge');
+    expect(await bridge.saveKstarCandidateProposals('adapter-user', [{ judgment: 'Do not write this task lesson.' } as never])).toEqual([]);
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
+    const empty = { createdAssetIds: [], candidateIds: [], experienceIds: [], mergedIntoIds: [], updateCandidateIds: [], failureIds: [] };
+    expect(await direct.precipitateDirectExperienceAssets('adapter-user', { id: 'adapter-episode' } as never, [{} as never])).toEqual(empty);
+    expect(await direct.precipitateDirectExperienceFromSource('adapter-user', { id: 'adapter-source' }, [{} as never], {} as never, {} as never)).toEqual(empty);
   });
 
   it('受控动作与两条线的来源都从导出常量派生（不另立一套名单）', () => {
@@ -317,41 +308,26 @@ describe('T046 ① 两条沉淀线都经同一个准入门', () => {
         declaredSources.add(match[1]);
       }
     }
-    expect([...declaredSources].sort(), '两条线声明的来源必须与 KSTAR_ADMISSION_SOURCES 一致（新来源 = 新沉淀线，必须先登记）')
-      .toEqual([...sources].sort());
+    for (const source of declaredSources) expect(sources, '既有任务线来源必须已登记').toContain(source);
   });
 
-  it('门不是死引用：出口真读放行结果，且写候选排在门之后', () => {
-    const admission = stripComments(readSource(F.admission));
-    // 字段名从接口派生：改名跟着改，删掉派生不出 → 报错（不是手抄的名字）。
-    const resultFields = interfaceFieldTypes(admission, 'KstarAdmissionResult');
-    const admittedFields = [...resultFields.entries()]
-      .filter(([, type]) => type.includes('KstarCandidateProposal[]'))
-      .map(([name]) => name);
-    expect(admittedFields, '无法从 KstarAdmissionResult 派生「放行提案列表」字段——契约已变，请先核对准入门返回体')
-      .toHaveLength(1);
-    const admittedField = admittedFields[0];
 
-    const exitBody = sliceFunctionBody(stripComments(readSource(F.direct)), 'precipitateDirectExperienceFromSource');
-    const gateAt = exitBody.indexOf('admitKstarProposals(');
-    const writeAt = exitBody.indexOf('saveRecallCandidate(');
-    expect(gateAt, '唯一出口里必须有准入门调用').toBeGreaterThan(-1);
-    expect(writeAt, '唯一出口里必须有候选写入').toBeGreaterThan(-1);
-    expect(gateAt, '准入必须排在写候选之前（先过门再写）').toBeLessThan(writeAt);
-
-    const between = exitBody.slice(gateAt, writeAt);
-    expect(between, `门的放行结果必须被真读（\`.${admittedField}\`）——否则是死引用，门形同虚设`)
-      .toContain(`.${admittedField}`);
-    expect(between, '被拦的提案必须被跳过（continue），而不是照写不误').toContain('continue');
-  });
 });
 
-describe('T046 ② 不存在第二处「采用判定」', () => {
+describe('② 不存在第二处「采用判定」', () => {
   /** `'applied'` 字面量的显式允许清单：**每项都要说清它为什么不是第二套采用判定**。 */
   const appliedLiteralAllowlist: Array<{ file: string; why: string }> = [
     {
+      file: F.outputCheck,
+      why: '最终结果遵从检查的回执写入侧：根据已保存结果与真实供应版本写observed usage，不读取或解释既有applied回执，不产生效果实证。',
+    },
+    {
+      file: F.usageClaim,
+      why: '显式采用报告的写入侧：绑定当轮真实供应版本和最终消息后，调用权威回执服务写入；不解释已有回执，不参与候选准入或效果验证。',
+    },
+    {
       file: F.usageReceipt,
-      why: '权威口径本身（specs/011 定稿）：`status === \'applied\' && boundary === \'real\'` 的唯一判定在这里，读取一律走 `listAppliedUsageReceipts`。',
+      why: '`status === \'applied\' && boundary === \'real\'` 的判定在这里，读取走 `listAppliedUsageReceipts`。',
     },
     {
       file: F.taskClosure,
@@ -373,9 +349,19 @@ describe('T046 ② 不存在第二处「采用判定」', () => {
       file: F.cleanupReport,
       why: '**另一个域**的状态枚举：大扫除条目的处置结果 `CleanupItemStatus`，与「资产被任务采用」无关。',
     },
+    {
+      file: F.candidateService,
+      why: '**另一个域**的状态枚举：候选记录启动迁移的逐条日志状态（applied/current/failed/blocked/missing），与资产采用判定和准入无关。',
+    },
+    {
+      file: F.contentOrganization,
+      why: '**另一个域**的执行结果：候选内容组织/整理的回执状态，表示组织动作是否已提交，不读取采用回执也不决定资产准入。',
+    },
   ];
 
   const APPLIED_LITERAL = /['"]applied['"]/g;
+  const isUsageDecision = (line: string) => /boundary/.test(line)
+    && /(?:={2,3}|!={1,2})\s*['"]applied['"]|['"]applied['"]\s*(?:={2,3}|!={1,2})/.test(line);
   /** 两条件并判（同行的 `applied` + `real`）：采用口径的形状本身，只允许权威处。 */
   const TWO_CONDITION = /=== 'applied'[^\n]*=== 'real'|=== 'real'[^\n]*=== 'applied'/g;
 
@@ -411,21 +397,40 @@ describe('T046 ② 不存在第二处「采用判定」', () => {
 
     // 同一行同时出现 `applied` 与 `boundary` = 自己重写采用判定的形状 → 只允许权威处。
     const sameLine = scan(assetDomainTsFiles(), APPLIED_LITERAL)
-      .filter((hit) => hit.file !== F.usageReceipt && /boundary/.test(hit.text));
+      .filter((hit) => hit.file !== F.usageReceipt && isUsageDecision(hit.text));
     expect(sameLine, `出现清单外文件里的「applied + boundary」同判形状（等于第二套采用判定）：\n${hitSummary(sameLine)}`)
       .toEqual([]);
   });
+
+  it('赋值写入不算采用判定，状态比较和边界同判仍受守卫约束', () => {
+    expect(isUsageDecision("status: 'applied', boundary: 'real'")).toBe(false);
+    expect(isUsageDecision("receipt.status === 'applied' && receipt.boundary === 'real'")).toBe(true);
+    expect(isUsageDecision("receipt.status == 'applied' && receipt.boundary != 'test-double'")).toBe(true);
+  });
 });
 
-describe('T046 ③ 不存在第二处版本比对', () => {
+describe('③ 不存在第二处版本比对', () => {
   /** 版本比对允许处：每项都写清为什么它不是「第二套重检」。 */
   const versionCompareAllowlist: Array<{ file: string; currentVersionHits: number; why: string }> = [
     {
+      file: F.feedbackVersionContext,
+      currentVersionHits: 1,
+      why: '夜间反馈的只读上下文标注：把反馈版本与当前在用版比较后标成 current/historical，仅用于展示与后续复盘，不校验调用方基线、不做准入重检、不写资产。',
+    },
+    {
+      file: F.captureService,
+      currentVersionHits: 1,
+      why: '夜间形成反馈的只读版本标注：把已评估的历史版本与快照中的当前版比较后标成 current/historical，仅用于提示与复盘，不校验提交基线、不做准入重检、不写资产。',
+    },
+    {
       file: F.assetService,
-      currentVersionHits: 3,
-      why: '资产版本链唯一 owner：① `updateAbilityAsset` 锁内 `expectedVersion` 重检（**唯一处**，specs/015 D9）；'
+      currentVersionHits: 7,
+      why: '资产版本链入口：① `updateAbilityAsset` 锁内 `expectedVersion` 重检；'
         + '② `rollbackAbilityAsset` 的「已经在目标版」no-op 判定 `current.version === toVersion`（版本链内部操作，不对外做重检）；'
-        + '③ `setStatus` 锁内 `expectedVersion` 并发保护只约束暂停/恢复等状态操作，不重复准入重检。',
+        + '③ `setStatus` 锁内 `expectedVersion` 并发保护只约束暂停/恢复等状态操作，不重复准入重检；'
+        + '④ 同一更新写锁内核对宿主私有长期偏好审阅凭证的版本基线，只绑定原子凭证，不增加保存入口或另一处用户CAS；'
+        + '⑤⑥ 成熟度推进与验证计数在此唯一 owner 写锁内核对实际成果版本，防止旧证明归到新版；'
+        + '⑦ 暂停/重做推荐在同一 owner 写锁内绑定实际反馈版本，不另建保存或准入重检入口。',
     },
   ];
 
@@ -460,7 +465,7 @@ describe('T046 ③ 不存在第二处版本比对', () => {
     return hits;
   }
 
-  it('拿期望版本与当前在用版比大小的表达式只在 asset-service.ts', () => {
+  it('提交版本判断只在资产服务；自动确认可读基线预检，仍交由同一写锁复核', () => {
     const files = assetDomainTsFiles();
     const hits = scan(files, CURRENT_VERSION_COMPARE);
     const byFile = [...new Set(hits.map((hit) => hit.file))].sort();
@@ -472,12 +477,61 @@ describe('T046 ③ 不存在第二处版本比对', () => {
         .toBe(entry.currentVersionHits);
     }
 
-    // 内容更新准入与状态变更并发保护各有一处，二者都在 asset-service 的写锁内。
+    // 两处用户内容/状态CAS及三处成果版本绑定都在资产唯一 owner 写锁内。
     const expectationHits = expectationCompareHits();
-    expect(expectationHits, `期望版本比较只允许在资产服务内的内容更新和状态变更：\n${hitSummary(expectationHits)}`)
-      .toHaveLength(2);
-    expect(expectationHits.every((hit) => hit.file === F.assetService)).toBe(true);
-    expect(expectationHits.every((hit) => hit.text.includes('current.version !== input.expectedVersion'))).toBe(true);
+    const commitHits = expectationHits.filter(hit => hit.file === F.assetService);
+    expect(commitHits).toHaveLength(5);
+    const userCasHits = commitHits.filter(hit => hit.text.includes('throw') === false
+      && hit.text.includes('current.version !== input.expectedVersion') && !hit.text.includes('return current'));
+    expect(userCasHits).toHaveLength(2);
+    const outcomeCasHits = commitHits.filter(hit => hit.text.includes('return current'));
+    expect(outcomeCasHits).toHaveLength(3);
+    // 当前在用版由 activeVersionOf() 统一收口（activeVersion || version），
+    // 不能因为辅助函数抽取而把三处成果绑定当成缺失。
+    expect(outcomeCasHits.every(hit => hit.text.includes('activeVersionOf(current) !== expectedVersion')
+      || hit.text.includes('activeVersionOf(current) !== input.expectedVersion')),
+      `成果版本绑定必须以当前在用版为基线：\n${outcomeCasHits.map(hit => `${hit.line} ${hit.text}`).join('\n')}`).toBe(true);
+    const policyHits = expectationHits.filter(hit => hit.file === F.automaticPolicy);
+    expect(policyHits).toHaveLength(1);
+    const supportHits = expectationHits.filter(hit => hit.file === F.automaticSupport);
+    expect(supportHits).toHaveLength(1);
+    expect(supportHits.every(hit => hit.text.includes('targetVersionUsed'))).toBe(true);
+    const historicalProofHits = expectationHits.filter(hit => hit.file === F.standingAuthority);
+    expect(historicalProofHits).toHaveLength(1);
+    expect(historicalProofHits[0].text).toContain('candidate.targetVersionUsed !== proof.previousVersion');
+    // This compares the two immutable historical anchors of a committed proof.
+    // It does not compare a supplied baseline with the currently active asset.
+    // Live version comparisons remain confined to the asset owner above.
+    // Independent model observations bind their proof to the exact read target.
+    // They cannot mutate assets or promote candidates; authoritative version
+    // validation still runs once inside the asset service's write lock.
+    // Undo 的版本比较只把候选记录的**历史锚点**与当前版比「是否同一版」：
+    // 回退目标必须严格早于当前版（回退到当前版不是撤销），它不校验任何
+    // 调用方提供的基线、不做准入重检，实际回退仍走资产 owner 的回退写锁。
+    const undoHits = expectationHits.filter(hit => hit.file === F.automaticFormationUndo);
+    expect(undoHits).toHaveLength(1);
+    // 其余三处只比对已冻结的历史锚点/准备快照：形成复检把候选记录的
+    // targetVersionUsed 与准备时的版本对齐（capture-service），stock 组织
+    // 重放要求提交的 targetVersionUsed 与 job.prepared 完全一致（provenance），
+    // 本体命令则绑定 job 内记录的 expectedVersion（stock-organization）。
+    // 它们都不读取资产当前在用版，也不承担准入重检。
+    expect(expectationHits.every(hit => [F.assetService, F.automaticPolicy, F.automaticSupport, F.standingAuthority,
+      F.automaticFormationUndo, F.captureService, F.stockProvenance, F.stockOrganization].includes(hit.file as typeof F.assetService)), hitSummary(expectationHits)).toBe(true);
+    const standingCode = stripComments(readSource(F.standingAuthority));
+    expect(standingCode).not.toMatch(/\b(?:createAbilityAsset|updateAbilityAsset|promoteRecallCandidate|persistCognitionSource|writeRecallJsonRecord|updateRecallJsonRecord)\s*\(/);
+    const supportCode = stripComments(readSource(F.automaticSupport));
+    expect(supportCode).not.toMatch(/\b(?:createAbilityAsset|updateAbilityAsset|promoteRecallCandidate|revokeAbilityAsset|deleteAbilityAsset|rollbackAbilityAsset|withOntologyFormationPromotion|persistCognitionSource)\s*\(/);
+    expect(supportCode).not.toMatch(/\bupdateRecallJsonRecord\s*\(/);
+    // Both persistence calls are audit/observation stores: the compact support
+    // receipt and the reusable source observation. Neither writes an asset or
+    // opens a second publication gateway.
+    expect(supportCode).toContain("const COLLECTION = 'automatic-source-support'");
+    expect([...supportCode.matchAll(/\bwriteRecallJsonRecord\s*\(/g)]).toHaveLength(2);
+    expect(supportCode).toMatch(/\bwriteRecallJsonRecord\s*\(\s*userId,\s*COLLECTION,\s*id,\s*receipt\s*\)/);
+    expect(supportCode).toMatch(/\bwriteRecallJsonRecord\s*\(\s*userId,\s*OBSERVATIONS,\s*observation\.id,\s*observation\s*\)/);
+    const policyBody = sliceFunctionBody(stripComments(readSource(F.automaticPolicy)), 'evaluateNightlyAutomaticApproval');
+    expect(policyBody).not.toMatch(/(?:updateAbilityAsset|promoteRecallCandidate|writeRecallJsonRecord|updateRecallJsonRecord)\s*\(/);
+    expect(policyHits.every(hit => hit.text.includes('targetVersionUsed'))).toBe(true);
   });
 
   it('唯一那处判定在 updateAbilityAsset 的锁内（检查与写入同一把锁）', () => {
@@ -489,6 +543,9 @@ describe('T046 ③ 不存在第二处版本比对', () => {
     expect(lockAt, 'updateAbilityAsset 必须走资产写锁').toBeGreaterThan(-1);
     expect(checkAt, '版本判定必须落在写锁回调**内部**（先锁后比，不存在比对与写入之间的窗口）')
       .toBeGreaterThan(lockAt);
+    const standingAt = body.indexOf('current.version !== standingBaseline.version');
+    expect(standingAt, '宿主授权版本同样只由资产服务在同一写锁内核对').toBeGreaterThan(lockAt);
+    expect(body.indexOf('attachStandingPreferenceAuthority(', standingAt)).toBeGreaterThan(standingAt);
 
     const statusBody = sliceFunctionBody(code, 'setStatus');
     expect(statusBody, '状态变更的乐观并发保护必须留在 setStatus 内').toContain('current.version !== input.expectedVersion');
@@ -510,27 +567,31 @@ describe('T046 ③ 不存在第二处版本比对', () => {
   });
 });
 
-describe('T046 ④ tool-catalog 未新增 recall 组工具', () => {
+describe('④ tool-catalog recall 组工具面受控扩展', () => {
   /**
-   * 冻结基线（= 2 个既有 + 资产管家 9 个 + 经验目录 2 个只读）。口径与
-   * `asset-steward-tools.test.ts` 的「3 读 + 6 写」一致（那一份按工厂名清单钉死，
-   * 这里钉 catalog 的 recall 组面）。新增/删除任何一项都必须先与 owner 确认，再改这里。
-   * 2026-09-25 +2：specs/016 T024 的 list_task_experiences / read_task_experience
-   * （2 读 0 写、⊄只读白名单，另有 experience-tools.test.ts 钉行为）——Backlog
-   * Epic 8 规格内的合法扩张，非口径漂移。
-   * 2026-09-28 +1：list_ontology_graph（本体图谱只读工具）——09-27 本体切片
-   * 已在工厂（personal-ontology-tools）与 catalog 双侧注册、行为测试在
-   * personal-ontology-tools.test.ts，本基线随树重算补登记。
+   * 工具名基线与工厂输出保持一致。工具增删须更新工厂、catalog 和行为测试。
+   * 关系查询返回关系证据与元数据，不读取资产正文。
    */
   const RECALL_GROUP_BASELINE = [
+    // 冻结工具名称与工厂保持对应，覆盖保存和采用入口，排除已退役的形成入口。
+    'report_ability_asset_usage',
     'personal_ontology_fields',
+    // develop 会议本体线：两个 in-process 工厂工具 + 一个 Runtime 主机别名。
+    'ontology_graph_read',
+    'ontology_projection_apply',
+    'list_ontology_graph',
+    'personal_fields_check',
+    'cognition_ontology_query',
+    'transcript_corrections_query',
     'search_ability_assets',
+    'ontology_query',
     'list_task_experiences',
     'read_task_experience',
-    'list_ontology_graph',
     'list_ability_assets',
     'read_ability_asset',
     'list_asset_change_proposals',
+    'create_cognition',
+    'edit_cognition',
     'edit_ability_asset',
     'merge_ability_assets',
     'archive_ability_asset',
@@ -539,20 +600,38 @@ describe('T046 ④ tool-catalog 未新增 recall 组工具', () => {
     'rollback_ability_asset',
   ];
 
-  it('catalog 的 recall 组 = 三个工厂的实际工具面 = 冻结基线', () => {
-    const catalogRecall = TOOL_CATALOG.filter((entry) => entry.group === 'recall').map((entry) => entry.name);
-    const factoryNames = [
-      ...createRecallTools({ userId: 'admission-guard' }),
-      ...createAssetStewardTools({ userId: 'admission-guard' }),
-      ...createPersonalOntologyTools({ userId: 'admission-guard' }),
-      ...createExperienceTools({ userId: 'admission-guard' }),
-    ].map((tool) => tool.name);
+  // `list_ontology_graph` is a host-facing legacy name (the Runtime mapping
+  // replaces it with ontology_graph_read); it has no in-process factory, so it
+  // is frozen in the catalog baseline but is not part of the factory surface.
+  const CATALOG_ONLY_RECALL_TOOLS = ['list_ontology_graph'];
 
-    expect([...catalogRecall].sort(), 'recall 组新增/删除了工具——「不新增模型工具」是 specs/015 D15 的硬约束，确要变更先找 owner')
+  it('catalog 的 recall 组 = 工厂的实际工具面 + 已登记主机别名 = 冻结基线', () => {
+    const catalogRecall = TOOL_CATALOG.filter((entry) => entry.group === 'recall').map((entry) => entry.name);
+    // ontology_query is opt-in at runtime. This contract checks the complete
+    // catalog surface, so only its factory enumeration enables Semantica.
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    let factoryNames: string[];
+    try {
+      factoryNames = [
+        ...createRecallToolSuite({ userId: 'admission-guard', turnId: 'guard-turn', onAssetUsageClaim: () => {} }).tools,
+        ...createAssetStewardTools({ userId: 'admission-guard' }),
+        ...createPersonalOntologyTools({ userId: 'admission-guard' }),
+        ...createExperienceTools({ userId: 'admission-guard' }),
+        ...createCognitionKernelTools({ userId: 'admission-guard', cid: 'authorized-conversation' }),
+        ...createCognitionCreateTools({ userId: 'admission-guard', cid: 'authorized-conversation' }),
+        ...createCognitionEditTools({ userId: 'admission-guard', cid: 'authorized-conversation' }),
+        ...createMeetingOntologyTools({ userId: 'admission-guard', cid: 'authorized-conversation' }),
+      ].map((tool) => tool.name);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect([...catalogRecall].sort(), 'recall 组工具集合必须等于已登记能力')
       .toEqual([...RECALL_GROUP_BASELINE].sort());
     expect(factoryNames.length, '工厂产出的工具名不得重复').toBe(new Set(factoryNames).size);
-    expect([...factoryNames].sort(), 'catalog 的 recall 组必须与三个工厂的实际工具面逐一对上（缺一行/多一行都要红）')
-      .toEqual([...RECALL_GROUP_BASELINE].sort());
+    const factoryBaseline = RECALL_GROUP_BASELINE.filter((name) => !CATALOG_ONLY_RECALL_TOOLS.includes(name));
+    expect([...factoryNames].sort(), 'catalog 的 recall 组必须与各工厂的实际工具面逐一对上（缺一行/多一行都要红）')
+      .toEqual([...factoryBaseline].sort());
   });
 });
 

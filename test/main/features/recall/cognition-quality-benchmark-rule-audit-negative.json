@@ -1,0 +1,1664 @@
+{
+  "fixtureOrigin": "Recorded configured-model response for the fixed synthetic cognition-quality-v1-20261015 corpus (2026-10-15). Kept as an invalid-response regression fixture.",
+  "input": {
+    "ruleSemanticsPolicyVersion": 1,
+    "candidates": [
+      {
+        "index": 0,
+        "sources": [
+          {
+            "label": "m11",
+            "text": "今后做版本回退，先核旧版本和数据格式兼容，再停止新写入，切回已知健康版本，最后查健康与关键数据。不能只换二进制就宣布成功。",
+            "approvedQuotes": [
+              "先核旧版本和数据格式兼容，再停止新写入，切回已知健康版本，最后查健康与关键数据。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "今后做版本回退的顺序：1) 先核旧版本与数据格式兼容；2) 停止新写入；3) 切回已知健康版本；4) 最后查服务健康与关键数据。不能只替换二进制就宣布回退成功。适用条件：版本回退操作。",
+          "value": "今后执行或评审版本回退时按此步骤和验收标准执行，避免假性成功。",
+          "suggestedScope": "code",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "执行或评审版本回退"
+          ],
+          "forbiddenWhen": [
+            "仅替换二进制即宣布成功"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-version-rollback",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "先核旧版本和数据格式兼容，再停止新写入，切回已知健康版本，最后查健康与关键数据。不能只换二进制就宣布成功。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户给出今后版本回退的标准顺序"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-version-rollback",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "版本回退先核兼容再切换并验证",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "",
+                  "requirement": "今后做版本回退的顺序：1) 先核旧版本与数据格式兼容；2) 停止新写入；3) 切回已知健康版本；4) 最后查服务健康与关键数据。不能只替换二进制就宣布回退成功。适用条件：版本回退操作。"
+                },
+                "sourceLabel": "用户长期要求：版本回退步骤"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-version-rollback",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-version-rollback",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录版本回退的标准步骤作为长期要求",
+            "evidence": [
+              "m11"
+            ]
+          }
+        }
+      },
+      {
+        "index": 1,
+        "sources": [
+          {
+            "label": "m23",
+            "text": "纠正刚才的话：QA-Nova 的测试联系人其实是陈工，林工不是。后续测试安排请联系陈工。",
+            "approvedQuotes": [
+              "纠正刚才的话：QA-Nova 的测试联系人其实是陈工，林工不是。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "项目 QA-Nova 的测试联系人是陈工（2026-10-14 用户纠正：此前所说林工是错误的，林工不是联系人）。后续测试安排应联系陈工。",
+          "value": "今后为 QA-Nova 安排测试时直接联系陈工，不再找林工。",
+          "suggestedScope": "product",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "安排 QA-Nova 的测试工作"
+          ],
+          "forbiddenWhen": [
+            "不要联系林工（用户已纠正其不是联系人）"
+          ]
+        }
+      },
+      {
+        "index": 2,
+        "sources": [
+          {
+            "label": "m8",
+            "text": "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。这样才知道整改有没有真正完成。",
+            "approvedQuotes": [
+              "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "今后事故复盘要记录：影响、关键时间线、直接原因、根因和改进项；每项改进须有负责人和期限；不能只责怪个人。目的：以此判断整改是否真正完成。适用条件：事故复盘。",
+          "value": "今后撰写或评审事故复盘时按此结构检查，确保改进可跟踪。",
+          "suggestedScope": "report",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "撰写或评审事故复盘"
+          ],
+          "forbiddenWhen": [
+            "不能只责怪个人"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-incident-review",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户要求今后事故复盘按固定要素记录"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-incident-review",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "事故复盘五类记录及改进责任",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "",
+                  "requirement": "今后事故复盘要记录：影响、关键时间线、直接原因、根因和改进项；每项改进须有负责人和期限；不能只责怪个人。目的：以此判断整改是否真正完成。适用条件：事故复盘。"
+                },
+                "sourceLabel": "用户长期要求：事故复盘记录结构"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-incident-review",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-incident-review",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录事故复盘的长期记录要求并建立规则",
+            "evidence": [
+              "m8"
+            ]
+          }
+        }
+      },
+      {
+        "index": 3,
+        "sources": [
+          {
+            "label": "m13",
+            "text": "以后容量估算从峰值请求量、每请求资源消耗、目标利用率推机器需求，保留单位、计算假设和突发余量。否则数字无法复核。",
+            "approvedQuotes": [
+              "从峰值请求量、每请求资源消耗、目标利用率推机器需求，保留单位、计算假设和突发余量。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "今后容量估算方法：从峰值请求量、每请求资源消耗、目标利用率推导机器需求；必须保留单位、计算假设和突发余量，否则数字无法复核。适用条件：容量估算。",
+          "value": "今后做容量估算时按此输入和留痕要求执行，保证结果可复核。",
+          "suggestedScope": "product",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "进行容量估算"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-capacity-estimation",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "从峰值请求量、每请求资源消耗、目标利用率推机器需求，保留单位、计算假设和突发余量。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户给出今后容量估算的方法要求"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-capacity-estimation",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "容量估算须留单位和假设",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "",
+                  "requirement": "今后容量估算方法：从峰值请求量、每请求资源消耗、目标利用率推导机器需求；必须保留单位、计算假设和突发余量，否则数字无法复核。适用条件：容量估算。"
+                },
+                "sourceLabel": "用户长期要求：容量估算方法"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-capacity-estimation",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-capacity-estimation",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录容量估算方法作为长期要求",
+            "evidence": [
+              "m13"
+            ]
+          }
+        }
+      },
+      {
+        "index": 4,
+        "sources": [
+          {
+            "label": "m18",
+            "text": "上次全量发布把故障放大了。以后先小流量，观察错误率和延迟，达到停止条件就回退，稳定才扩大。这个教训对我们后续发布都适用。",
+            "approvedQuotes": [
+              "以后先小流量，观察错误率和延迟，达到停止条件就回退，稳定才扩大。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "经验教训：上次全量发布放大了故障。今后发布流程：先小流量发布，观察错误率和延迟，达到停止条件就回退，稳定后才扩大流量。该教训对后续所有发布都适用。适用条件：后续发布操作。",
+          "value": "今后安排发布时采用小流量验证流程，降低故障放大风险。",
+          "suggestedScope": "product",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "计划或执行服务发布"
+          ],
+          "forbiddenWhen": [
+            "未观察指标即直接全量发布"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-small-flow-release",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "以后先小流量，观察错误率和延迟，达到停止条件就回退，稳定才扩大。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户基于全量发布放大故障的教训提出要求"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-small-flow-release",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "发布先小流量验证再扩大",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "",
+                  "requirement": "经验教训：上次全量发布放大了故障。今后发布流程：先小流量发布，观察错误率和延迟，达到停止条件就回退，稳定后才扩大流量。该教训对后续所有发布都适用。适用条件：后续发布操作。"
+                },
+                "sourceLabel": "用户长期要求：先小流量发布"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-small-flow-release",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-small-flow-release",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录发布流程的长期要求",
+            "evidence": [
+              "m18"
+            ]
+          }
+        }
+      },
+      {
+        "index": 5,
+        "sources": [
+          {
+            "label": "m3",
+            "text": "给管理者的项目汇报只把待拍板事项、主要风险和下一步责任人放在正文，技术细节放附录。今后按这个分层，避免负责人找不到行动。",
+            "approvedQuotes": [
+              "给管理者的项目汇报只把待拍板事项、主要风险和下一步责任人放在正文，技术细节放附录。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "给管理者的项目汇报采用分层：正文只放待拍板事项、主要风险和下一步责任人；技术细节放附录。目的是避免负责人找不到要采取的行动。适用条件：给管理者的项目汇报。",
+          "value": "今后撰写面向管理者的项目汇报时按此分层，提高可执行性。",
+          "suggestedScope": "report",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "撰写给管理者的项目汇报"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-manager-report",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "给管理者的项目汇报只把待拍板事项、主要风险和下一步责任人放在正文，技术细节放附录。今后按这个分层。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户要求今后管理者汇报按分层结构"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-manager-report",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "管理者汇报正文只放决策要素",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "临时闲聊等非汇报场景不适用",
+                  "requirement": "给管理者的项目汇报采用分层：正文只放待拍板事项、主要风险和下一步责任人；技术细节放附录。目的是避免负责人找不到要采取的行动。适用条件：给管理者的项目汇报。"
+                },
+                "sourceLabel": "用户长期要求：管理者汇报分层"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-manager-report",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-manager-report",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录用户对管理者汇报分层的长期要求并建立规则",
+            "evidence": [
+              "m3"
+            ]
+          }
+        }
+      },
+      {
+        "index": 6,
+        "sources": [
+          {
+            "label": "m5",
+            "text": "项目会议材料只有议题会让大家到场才找证据。今后会前材料保留五项：会议目标、背景事实、待决策问题、负责人、下一步行动；临时闲聊不套。",
+            "approvedQuotes": [
+              "今后会前材料保留五项：会议目标、背景事实、待决策问题、负责人、下一步行动；临时闲聊不套。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "今后项目会前材料保留五项要素：会议目标、背景事实、待决策问题、负责人、下一步行动。临时闲聊不套用此结构。适用条件：项目会议的会前材料；不适用于临时闲聊。",
+          "value": "今后准备项目会前材料时按五项要素组织，避免只有议题导致到场后才发现缺少证据。",
+          "suggestedScope": "report",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "准备项目会议的会前材料"
+          ],
+          "forbiddenWhen": [
+            "临时闲聊"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-premeeting-five",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "今后会前材料保留五项：会议目标、背景事实、待决策问题、负责人、下一步行动；临时闲聊不套。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户要求今后会前材料保留五项"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-premeeting-five",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "会前材料保留五项要素",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "临时闲聊不套用此结构",
+                  "requirement": "今后项目会前材料保留五项要素：会议目标、背景事实、待决策问题、负责人、下一步行动。临时闲聊不套用此结构。适用条件：项目会议的会前材料；不适用于临时闲聊。"
+                },
+                "sourceLabel": "用户长期要求：会前材料五要素"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-premeeting-five",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-premeeting-five",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录会前材料五要素模板作为长期要求",
+            "evidence": [
+              "m5"
+            ]
+          }
+        }
+      },
+      {
+        "index": 7,
+        "sources": [
+          {
+            "label": "m1",
+            "text": "以后解释复杂技术问题，别先铺很长背景。先告诉我结论，再列证据和推理，我才容易判断。",
+            "approvedQuotes": [
+              "先告诉我结论，再列证据和推理，我才容易判断。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "今后解释复杂技术问题时，不先铺很长的背景，先给出结论，再列证据和推理，便于用户判断。适用条件：复杂技术问题的解释。",
+          "value": "今后为该用户解释复杂技术问题时按结论先行结构组织，减少前置背景，便于其快速判断。",
+          "suggestedScope": "general",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "向该用户解释复杂技术问题"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-conclusion-first",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "以后解释复杂技术问题，别先铺很长背景。先告诉我结论，再列证据和推理，我才容易判断。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户明确要求今后解释复杂技术问题先给结论"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-conclusion-first",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "复杂技术问题先结论后证据",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "",
+                  "requirement": "今后解释复杂技术问题时，不先铺很长的背景，先给出结论，再列证据和推理，便于用户判断。适用条件：复杂技术问题的解释。"
+                },
+                "sourceLabel": "用户长期偏好：复杂技术问题解释先给结论"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-conclusion-first",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-conclusion-first",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录用户对复杂技术问题解释顺序的长期偏好，并建立指导后续回答的规则",
+            "evidence": [
+              "m1"
+            ]
+          }
+        }
+      },
+      {
+        "index": 8,
+        "sources": [
+          {
+            "label": "m20",
+            "text": "在合成项目 QA-Delta，发布负责人是赵工，部署窗口由赵工确认。QA-Echo 是另一个独立项目，不能把两者的职责混用。以后安排上线找对负责人。",
+            "approvedQuotes": [
+              "QA-Echo 是另一个独立项目，不能把两者的职责混用。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "项目 QA-Delta：发布负责人是赵工，部署窗口由赵工确认。QA-Echo 是另一个独立项目，两者职责不能混用；以后安排上线时找对负责人。",
+          "value": "今后安排 QA-Delta 上线时联系赵工确认部署窗口，不与 QA-Echo 的职责混淆。",
+          "suggestedScope": "product",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "安排 QA-Delta 项目的上线部署"
+          ],
+          "forbiddenWhen": [
+            "不得把 QA-Echo 的职责与 QA-Delta 混用"
+          ]
+        }
+      },
+      {
+        "index": 9,
+        "sources": [
+          {
+            "label": "m16",
+            "text": "上次配置落盘成功但缓存没失效，界面仍读旧值。以后改权威配置也要更新缓存版本或使缓存失效，验收不能只看写文件成功。",
+            "approvedQuotes": [
+              "以后改权威配置也要更新缓存版本或使缓存失效，验收不能只看写文件成功。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "经验教训：上次权威配置落盘成功但缓存未失效，界面仍读旧值。今后修改权威配置时必须同步更新缓存版本或使缓存失效；验收不能只看写文件成功，需确认新值生效。适用条件：修改权威配置的场合。",
+          "value": "今后修改配置或验收配置变更时检查缓存同步，避免界面继续读旧值。",
+          "suggestedScope": "code",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "修改权威配置并验收"
+          ],
+          "forbiddenWhen": [
+            "仅以写文件成功作为验收通过标准"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-config-cache-sync",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "以后改权威配置也要更新缓存版本或使缓存失效，验收不能只看写文件成功。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户基于缓存未失效的教训提出今后要求"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-config-cache-sync",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "改权威配置须同步缓存并验证生效",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "",
+                  "requirement": "经验教训：上次权威配置落盘成功但缓存未失效，界面仍读旧值。今后修改权威配置时必须同步更新缓存版本或使缓存失效；验收不能只看写文件成功，需确认新值生效。适用条件：修改权威配置的场合。"
+                },
+                "sourceLabel": "用户长期要求：配置修改同步缓存"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-config-cache-sync",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-config-cache-sync",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录配置修改与缓存同步的经验教训及长期要求",
+            "evidence": [
+              "m16"
+            ]
+          }
+        }
+      },
+      {
+        "index": 10,
+        "sources": [
+          {
+            "label": "m24",
+            "text": "部署评审必须在材料里额外写风险和回退条件，否则无法安全决定是否上线。普通例会不加这两栏，不能推广成所有会议都加长。这条区别以后一直保留。",
+            "approvedQuotes": [
+              "普通例会不加这两栏，不能推广成所有会议都加长。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "部署评审必须在材料里额外写风险和回退条件，否则无法安全决定是否上线；普通例会不加这两栏，不能把该要求推广成所有会议都加长。用户表示这条区别一直保留。适用条件：仅适用于部署评审；普通例会不适用。",
+          "value": "今后准备部署评审材料时确保包含风险与回退条件两栏，同时不把要求扩大到例会材料。",
+          "suggestedScope": "review",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "准备或评审部署评审材料"
+          ],
+          "forbiddenWhen": [
+            "普通例会不适用，不得推广到所有会议"
+          ],
+          "ontologyChanges": {
+            "actions": [
+              {
+                "intent": "create",
+                "recordId": "pref-deploy-review",
+                "record": {
+                  "kind": "assertion",
+                  "moduleId": "benchmark-module",
+                  "subjectId": "benchmark-self",
+                  "definitionId": "benchmark-preference",
+                  "object": {
+                    "kind": "literal",
+                    "valueType": "text",
+                    "value": "部署评审必须在材料里额外写风险和回退条件；普通例会不加这两栏，不能推广成所有会议都加长。这条区别一直保留。"
+                  },
+                  "validity": {
+                    "from": null,
+                    "until": null,
+                    "precision": "day",
+                    "timezone": "Asia/Shanghai"
+                  },
+                  "certainty": "confirmed",
+                  "access": "task"
+                },
+                "sourceLabel": "用户要求部署评审材料含风险和回退条件且区别长期保留"
+              },
+              {
+                "intent": "create",
+                "recordId": "rule-deploy-review",
+                "record": {
+                  "kind": "rule",
+                  "moduleId": "benchmark-module",
+                  "name": "部署评审材料须含风险与回退条件",
+                  "strength": "default",
+                  "condition": null,
+                  "effect": {
+                    "kind": "note"
+                  },
+                  "exception": "普通例会不加这两栏，不推广到所有会议",
+                  "requirement": "部署评审必须在材料里额外写风险和回退条件，否则无法安全决定是否上线；普通例会不加这两栏，不能把该要求推广成所有会议都加长。用户表示这条区别一直保留。适用条件：仅适用于部署评审；普通例会不适用。"
+                },
+                "sourceLabel": "用户长期要求：部署评审含风险与回退条件"
+              }
+            ],
+            "refs": [
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "pref-deploy-review",
+                "versionPolicy": "current"
+              },
+              {
+                "groupId": "benchmark-module",
+                "moduleId": "benchmark-module",
+                "recordId": "rule-deploy-review",
+                "versionPolicy": "current",
+                "sharedBody": true
+              }
+            ],
+            "reason": "记录部署评审材料的长期要求及明确边界",
+            "evidence": [
+              "m24"
+            ]
+          }
+        }
+      },
+      {
+        "index": 11,
+        "sources": [
+          {
+            "label": "m21",
+            "text": "合成项目 QA-Orbit 的服务日志统一记录 UTC。给上海团队展示时换算 UTC+8，同时保留原始 UTC 时间。以后排查事件先按这个对齐。",
+            "approvedQuotes": [
+              "给上海团队展示时换算 UTC+8，同时保留原始 UTC 时间。"
+            ]
+          }
+        ],
+        "candidate": {
+          "judgment": "项目 QA-Orbit：服务日志统一记录为 UTC；给上海团队展示时换算为 UTC+8，同时保留原始 UTC 时间。以后排查事件时先按此时区规则对齐。适用条件：QA-Orbit 的日志展示与事件排查，展示对象为上海团队。",
+          "value": "今后处理 QA-Orbit 日志或向上海团队展示时按 UTC 记录、UTC+8 展示并保留原始 UTC，避免时间线错位。",
+          "suggestedScope": "code",
+          "suggestedAction": "create",
+          "scopePolicy": {
+            "projectIds": [
+              "benchmark-project"
+            ]
+          },
+          "applicableWhen": [
+            "查看或展示 QA-Orbit 服务日志，尤其面向上海团队"
+          ]
+        }
+      }
+    ],
+    "completeConversationContext": [
+      {
+        "label": "m1",
+        "id": "f01-m1",
+        "ts": "2026-10-14T04:00:00.000Z",
+        "role": "user",
+        "text": "以后解释复杂技术问题，别先铺很长背景。先告诉我结论，再列证据和推理，我才容易判断。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m2",
+        "id": "f13-m1",
+        "ts": "2026-10-14T04:01:00.000Z",
+        "role": "user",
+        "text": "今天这一份摘要标题用蓝色，仅限这次，不是长期偏好。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m3",
+        "id": "f02-m1",
+        "ts": "2026-10-14T04:02:00.000Z",
+        "role": "user",
+        "text": "给管理者的项目汇报只把待拍板事项、主要风险和下一步责任人放在正文，技术细节放附录。今后按这个分层，避免负责人找不到行动。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m4",
+        "id": "f14-m1",
+        "ts": "2026-10-14T04:03:00.000Z",
+        "role": "user",
+        "text": "文件下载好了，谢谢，结束本次操作。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m5",
+        "id": "f03-m1",
+        "ts": "2026-10-14T04:04:00.000Z",
+        "role": "user",
+        "text": "项目会议材料只有议题会让大家到场才找证据。今后会前材料保留五项：会议目标、背景事实、待决策问题、负责人、下一步行动；临时闲聊不套。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m6",
+        "id": "f15-m1",
+        "ts": "2026-10-14T04:05:00.000Z",
+        "role": "assistant",
+        "text": "我建议今后每份材料都超过十页。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m7",
+        "id": "f15-m2",
+        "ts": "2026-10-14T04:06:00.000Z",
+        "role": "user",
+        "text": "这个建议先不采用，不要记成要求。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m8",
+        "id": "f04-m1",
+        "ts": "2026-10-14T04:07:00.000Z",
+        "role": "user",
+        "text": "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。这样才知道整改有没有真正完成。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m9",
+        "id": "f16-m1",
+        "ts": "2026-10-14T04:08:00.000Z",
+        "role": "assistant",
+        "text": "我建议给所有报告强制配橙色封面。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m10",
+        "id": "f16-m2",
+        "ts": "2026-10-14T04:09:00.000Z",
+        "role": "user",
+        "text": "收到，我知道你提了这个建议。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m11",
+        "id": "f05-m1",
+        "ts": "2026-10-14T04:10:00.000Z",
+        "role": "user",
+        "text": "今后做版本回退，先核旧版本和数据格式兼容，再停止新写入，切回已知健康版本，最后查健康与关键数据。不能只换二进制就宣布成功。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m12",
+        "id": "f17-m1",
+        "ts": "2026-10-14T04:11:00.000Z",
+        "role": "user",
+        "text": "QA-Luna 下月是否要迁机房？请比较方案。我没有提供迁移决定，地点和时间也都没定。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m13",
+        "id": "f06-m1",
+        "ts": "2026-10-14T04:12:00.000Z",
+        "role": "user",
+        "text": "以后容量估算从峰值请求量、每请求资源消耗、目标利用率推机器需求，保留单位、计算假设和突发余量。否则数字无法复核。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m14",
+        "id": "f18-m1",
+        "ts": "2026-10-14T04:13:00.000Z",
+        "role": "assistant",
+        "text": "可以把每周日报改成只剩总分。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m15",
+        "id": "f18-m2",
+        "ts": "2026-10-14T04:14:00.000Z",
+        "role": "user",
+        "text": "不采用这个提案，本轮没有形成新的日报要求。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m16",
+        "id": "f07-m1",
+        "ts": "2026-10-14T04:15:00.000Z",
+        "role": "user",
+        "text": "上次配置落盘成功但缓存没失效，界面仍读旧值。以后改权威配置也要更新缓存版本或使缓存失效，验收不能只看写文件成功。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m17",
+        "id": "f19-m1",
+        "ts": "2026-10-14T04:16:00.000Z",
+        "role": "user",
+        "text": "我是在问：QA-River 和 QA-Hill 资料里同名的两位王工是同一个人吗？本轮我没有提供任何身份核实依据。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m18",
+        "id": "f08-m1",
+        "ts": "2026-10-14T04:17:00.000Z",
+        "role": "user",
+        "text": "上次全量发布把故障放大了。以后先小流量，观察错误率和延迟，达到停止条件就回退，稳定才扩大。这个教训对我们后续发布都适用。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m19",
+        "id": "f20-m1",
+        "ts": "2026-10-14T04:18:00.000Z",
+        "role": "user",
+        "text": "请查一下 QA-Past 现在用什么数据库，旧记录说的去年配置是否仍有效？我没有提供当前配置结论。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m20",
+        "id": "f09-m1",
+        "ts": "2026-10-14T04:19:00.000Z",
+        "role": "user",
+        "text": "在合成项目 QA-Delta，发布负责人是赵工，部署窗口由赵工确认。QA-Echo 是另一个独立项目，不能把两者的职责混用。以后安排上线找对负责人。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m21",
+        "id": "f10-m1",
+        "ts": "2026-10-14T04:20:00.000Z",
+        "role": "user",
+        "text": "合成项目 QA-Orbit 的服务日志统一记录 UTC。给上海团队展示时换算 UTC+8，同时保留原始 UTC 时间。以后排查事件先按这个对齐。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m22",
+        "id": "f11-m1",
+        "ts": "2026-10-14T04:21:00.000Z",
+        "role": "user",
+        "text": "合成项目 QA-Nova 的测试联系人是林工。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m23",
+        "id": "f11-m2",
+        "ts": "2026-10-14T04:22:00.000Z",
+        "role": "user",
+        "text": "纠正刚才的话：QA-Nova 的测试联系人其实是陈工，林工不是。后续测试安排请联系陈工。",
+        "artifacts": [],
+        "discovery": true
+      },
+      {
+        "label": "m24",
+        "id": "f12-m1",
+        "ts": "2026-10-14T04:23:00.000Z",
+        "role": "user",
+        "text": "部署评审必须在材料里额外写风险和回退条件，否则无法安全决定是否上线。普通例会不加这两栏，不能推广成所有会议都加长。这条区别以后一直保留。",
+        "artifacts": [],
+        "discovery": true
+      }
+    ],
+    "summary": [
+      {
+        "title": "复杂技术问题的解释顺序",
+        "content": "用户要求今后解释复杂技术问题时不先铺长背景，先给结论，再列证据和推理，便于判断。",
+        "conditions": [
+          "适用于复杂技术问题的解释"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f01-m1",
+            "quote": "先告诉我结论，再列证据和推理，我才容易判断。",
+            "role": "user",
+            "start": 19,
+            "end": 41
+          }
+        ]
+      },
+      {
+        "title": "摘要标题蓝色仅限一次",
+        "content": "用户要求今天这份摘要标题用蓝色，明确仅限这次，不是长期偏好。",
+        "conditions": [
+          "仅限本次摘要，非长期偏好"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f13-m1",
+            "quote": "今天这一份摘要标题用蓝色，仅限这次，不是长期偏好。",
+            "role": "user",
+            "start": 0,
+            "end": 25
+          }
+        ]
+      },
+      {
+        "title": "管理者项目汇报分层",
+        "content": "给管理者的项目汇报正文只放待拍板事项、主要风险和下一步责任人，技术细节放附录，今后按此分层，避免负责人找不到行动。",
+        "conditions": [
+          "适用于给管理者的项目汇报"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f02-m1",
+            "quote": "给管理者的项目汇报只把待拍板事项、主要风险和下一步责任人放在正文，技术细节放附录。",
+            "role": "user",
+            "start": 0,
+            "end": 41
+          }
+        ]
+      },
+      {
+        "title": "文件下载完成，结束操作",
+        "content": "用户确认文件下载完成并致谢，结束本次操作。",
+        "conditions": [],
+        "unresolved": [],
+        "attribution": "source_observation",
+        "evidence": [
+          {
+            "messageId": "f14-m1",
+            "quote": "文件下载好了，谢谢，结束本次操作。",
+            "role": "user",
+            "start": 0,
+            "end": 17
+          }
+        ]
+      },
+      {
+        "title": "会前材料五项要素",
+        "content": "项目会议材料今后保留五项：会议目标、背景事实、待决策问题、负责人、下一步行动；临时闲聊不套用此结构。",
+        "conditions": [
+          "适用于项目会议材料",
+          "临时闲聊不适用"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f03-m1",
+            "quote": "今后会前材料保留五项：会议目标、背景事实、待决策问题、负责人、下一步行动；临时闲聊不套。",
+            "role": "user",
+            "start": 21,
+            "end": 65
+          }
+        ]
+      },
+      {
+        "title": "助手建议材料超十页（被拒绝）",
+        "content": "助手建议今后每份材料都超过十页，用户明确不采用，不要记成要求。",
+        "conditions": [
+          "助手提议，用户拒绝"
+        ],
+        "unresolved": [],
+        "attribution": "assistant_proposal",
+        "evidence": [
+          {
+            "messageId": "f15-m1",
+            "quote": "我建议今后每份材料都超过十页。",
+            "role": "assistant",
+            "start": 0,
+            "end": 15
+          },
+          {
+            "messageId": "f15-m2",
+            "quote": "这个建议先不采用，不要记成要求。",
+            "role": "user",
+            "start": 0,
+            "end": 16
+          }
+        ]
+      },
+      {
+        "title": "事故复盘记录要求",
+        "content": "事故复盘今后记影响、关键时间线、直接原因、根因和改进项，每项改进有负责人和期限，不能只责怪个人，以此判断整改是否真正完成。",
+        "conditions": [
+          "适用于事故复盘"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f04-m1",
+            "quote": "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。",
+            "role": "user",
+            "start": 0,
+            "end": 49
+          }
+        ]
+      },
+      {
+        "title": "助手建议橙色封面（仅收到，未采用）",
+        "content": "助手建议给所有报告强制配橙色封面，用户只表示收到该建议，未形成采用。",
+        "conditions": [
+          "助手提议，未被采用，仅知悉"
+        ],
+        "unresolved": [],
+        "attribution": "assistant_proposal",
+        "evidence": [
+          {
+            "messageId": "f16-m1",
+            "quote": "我建议给所有报告强制配橙色封面。",
+            "role": "assistant",
+            "start": 0,
+            "end": 16
+          },
+          {
+            "messageId": "f16-m2",
+            "quote": "收到，我知道你提了这个建议。",
+            "role": "user",
+            "start": 0,
+            "end": 14
+          }
+        ]
+      },
+      {
+        "title": "版本回退步骤",
+        "content": "今后版本回退顺序：先核旧版本与数据格式兼容，再停止新写入，切回已知健康版本，最后查健康与关键数据；不能只换二进制就宣布成功。",
+        "conditions": [
+          "适用于版本回退操作"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f05-m1",
+            "quote": "先核旧版本和数据格式兼容，再停止新写入，切回已知健康版本，最后查健康与关键数据。",
+            "role": "user",
+            "start": 8,
+            "end": 48
+          }
+        ]
+      },
+      {
+        "title": "QA-Luna 机房迁移方案待比较",
+        "content": "用户询问 QA-Luna 下月是否要迁机房，请比较方案；用户未提供迁移决定，地点和时间均未定。",
+        "conditions": [],
+        "unresolved": [
+          "是否迁移、地点和时间均未定",
+          "方案比较未给出"
+        ],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f17-m1",
+            "quote": "我没有提供迁移决定，地点和时间也都没定。",
+            "role": "user",
+            "start": 23,
+            "end": 43
+          }
+        ]
+      },
+      {
+        "title": "容量估算方法",
+        "content": "今后容量估算从峰值请求量、每请求资源消耗、目标利用率推机器需求，保留单位、计算假设和突发余量，否则数字无法复核。",
+        "conditions": [
+          "适用于容量估算"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f06-m1",
+            "quote": "从峰值请求量、每请求资源消耗、目标利用率推机器需求，保留单位、计算假设和突发余量。",
+            "role": "user",
+            "start": 6,
+            "end": 47
+          }
+        ]
+      },
+      {
+        "title": "日报改总分提案（被拒绝）",
+        "content": "助手提议把每周日报改成只剩总分，用户明确不采用，本轮没有形成新的日报要求。",
+        "conditions": [
+          "助手提议，用户拒绝"
+        ],
+        "unresolved": [],
+        "attribution": "assistant_proposal",
+        "evidence": [
+          {
+            "messageId": "f18-m1",
+            "quote": "可以把每周日报改成只剩总分。",
+            "role": "assistant",
+            "start": 0,
+            "end": 14
+          },
+          {
+            "messageId": "f18-m2",
+            "quote": "不采用这个提案，本轮没有形成新的日报要求。",
+            "role": "user",
+            "start": 0,
+            "end": 21
+          }
+        ]
+      },
+      {
+        "title": "配置修改需同步缓存",
+        "content": "上次配置落盘成功但缓存未失效，界面仍读旧值。今后改权威配置也要更新缓存版本或使缓存失效，验收不能只看写文件成功。",
+        "conditions": [
+          "适用于修改权威配置"
+        ],
+        "unresolved": [],
+        "attribution": "source_observation",
+        "evidence": [
+          {
+            "messageId": "f07-m1",
+            "quote": "以后改权威配置也要更新缓存版本或使缓存失效，验收不能只看写文件成功。",
+            "role": "user",
+            "start": 22,
+            "end": 56
+          }
+        ]
+      },
+      {
+        "title": "同名王工是否同一人未决",
+        "content": "用户询问 QA-River 和 QA-Hill 资料里同名的两位王工是否同一人，本轮未提供任何身份核实依据。",
+        "conditions": [],
+        "unresolved": [
+          "两位王工是否同一人未定，无身份核实依据"
+        ],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f19-m1",
+            "quote": "本轮我没有提供任何身份核实依据。",
+            "role": "user",
+            "start": 41,
+            "end": 57
+          }
+        ]
+      },
+      {
+        "title": "小流量发布流程",
+        "content": "上次全量发布放大了故障。今后先小流量，观察错误率和延迟，达到停止条件就回退，稳定后扩大；教训对后续发布都适用。",
+        "conditions": [
+          "适用于后续发布"
+        ],
+        "unresolved": [],
+        "attribution": "source_observation",
+        "evidence": [
+          {
+            "messageId": "f08-m1",
+            "quote": "以后先小流量，观察错误率和延迟，达到停止条件就回退，稳定才扩大。",
+            "role": "user",
+            "start": 13,
+            "end": 45
+          }
+        ]
+      },
+      {
+        "title": "QA-Past 当前数据库与配置待查",
+        "content": "用户请查 QA-Past 现在用什么数据库，以及旧记录说的去年配置是否仍有效；未提供当前配置结论。",
+        "conditions": [],
+        "unresolved": [
+          "QA-Past 当前数据库及去年配置是否有效未确认"
+        ],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f20-m1",
+            "quote": "我没有提供当前配置结论。",
+            "role": "user",
+            "start": 37,
+            "end": 49
+          }
+        ]
+      },
+      {
+        "title": "QA-Delta 与 QA-Echo 职责区分",
+        "content": "合成项目 QA-Delta 的发布负责人是赵工，部署窗口由赵工确认；QA-Echo 是独立项目，职责不能混用，以后安排上线找对负责人。",
+        "conditions": [
+          "QA-Delta 与 QA-Echo 为独立项目"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f09-m1",
+            "quote": "QA-Echo 是另一个独立项目，不能把两者的职责混用。",
+            "role": "user",
+            "start": 34,
+            "end": 62
+          }
+        ]
+      },
+      {
+        "title": "QA-Orbit 日志时区处理",
+        "content": "合成项目 QA-Orbit 服务日志统一记录 UTC，给上海团队展示时换算 UTC+8 并保留原始 UTC 时间，排查事件先按此对齐。",
+        "conditions": [
+          "适用于 QA-Orbit",
+          "展示对象为上海团队"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f10-m1",
+            "quote": "给上海团队展示时换算 UTC+8，同时保留原始 UTC 时间。",
+            "role": "user",
+            "start": 28,
+            "end": 59
+          }
+        ]
+      },
+      {
+        "title": "QA-Nova 测试联系人纠正为陈工",
+        "content": "用户先称 QA-Nova 测试联系人是林工，随后纠正为陈工，林工不是；后续测试安排联系陈工。",
+        "conditions": [
+          "以后测试安排联系陈工"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f11-m2",
+            "quote": "纠正刚才的话：QA-Nova 的测试联系人其实是陈工，林工不是。",
+            "role": "user",
+            "start": 0,
+            "end": 32
+          }
+        ]
+      },
+      {
+        "title": "部署评审材料须含风险与回退条件",
+        "content": "部署评审必须在材料里额外写风险和回退条件，否则无法安全决定是否上线；普通例会不加这两栏，不能推广成所有会议都加长，该区别一直保留。",
+        "conditions": [
+          "仅适用于部署评审",
+          "普通例会不适用"
+        ],
+        "unresolved": [],
+        "attribution": "user_requirement",
+        "evidence": [
+          {
+            "messageId": "f12-m1",
+            "quote": "普通例会不加这两栏，不能推广成所有会议都加长。",
+            "role": "user",
+            "start": 34,
+            "end": 57
+          }
+        ]
+      }
+    ],
+    "existingAssets": [],
+    "comparisonCoverage": {
+      "total": 0,
+      "selected": 0,
+      "truncated": false,
+      "unavailable": 0,
+      "semantic": "not_needed"
+    },
+    "ontology": {
+      "revision": 1,
+      "records": [
+        {
+          "id": "benchmark-self",
+          "version": 1,
+          "status": "active",
+          "access": "task",
+          "createdAt": "2026-10-14T19:00:00.000Z",
+          "updatedAt": "2026-10-14T19:00:00.000Z",
+          "source": {
+            "kind": "user",
+            "label": "Synthetic pre-existing test ontology"
+          },
+          "kind": "entity",
+          "moduleId": "benchmark-module",
+          "typeId": "benchmark-person-type",
+          "name": "本合成测试账号",
+          "description": "本次对话的已知用户；仅为隔离测试账号",
+          "aliases": [
+            "用户",
+            "自己"
+          ],
+          "identityStatus": "confirmed"
+        },
+        {
+          "id": "benchmark-module",
+          "version": 1,
+          "status": "active",
+          "access": "task",
+          "createdAt": "2026-10-14T19:00:00.000Z",
+          "updatedAt": "2026-10-14T19:00:00.000Z",
+          "source": {
+            "kind": "user",
+            "label": "Synthetic pre-existing test ontology"
+          },
+          "kind": "module",
+          "name": "合成项目工作知识",
+          "description": "隔离评估既有结构",
+          "scope": {
+            "kind": "project",
+            "id": "benchmark-project"
+          }
+        },
+        {
+          "id": "benchmark-person-type",
+          "version": 1,
+          "status": "active",
+          "access": "task",
+          "createdAt": "2026-10-14T19:00:00.000Z",
+          "updatedAt": "2026-10-14T19:00:00.000Z",
+          "source": {
+            "kind": "user",
+            "label": "Synthetic pre-existing test ontology"
+          },
+          "kind": "definition",
+          "moduleId": "benchmark-module",
+          "name": "人物",
+          "description": "",
+          "definitionKind": "type",
+          "subjectTypes": [],
+          "objectTypes": [],
+          "valueType": "entity",
+          "cardinality": "many",
+          "cardinalityAnchor": "subject"
+        },
+        {
+          "id": "benchmark-preference",
+          "version": 1,
+          "status": "active",
+          "access": "task",
+          "createdAt": "2026-10-14T19:00:00.000Z",
+          "updatedAt": "2026-10-14T19:00:00.000Z",
+          "source": {
+            "kind": "user",
+            "label": "Synthetic pre-existing test ontology"
+          },
+          "kind": "definition",
+          "moduleId": "benchmark-module",
+          "name": "已表达偏好与要求",
+          "description": "保留每条完整适用条件，允许多条独立表达",
+          "definitionKind": "attribute",
+          "subjectTypes": [
+            "benchmark-person-type"
+          ],
+          "objectTypes": [],
+          "valueType": "text",
+          "cardinality": "many",
+          "cardinalityAnchor": "subject"
+        },
+        {
+          "id": "benchmark-project-type",
+          "version": 1,
+          "status": "active",
+          "access": "task",
+          "createdAt": "2026-10-14T19:00:00.000Z",
+          "updatedAt": "2026-10-14T19:00:00.000Z",
+          "source": {
+            "kind": "user",
+            "label": "Synthetic pre-existing test ontology"
+          },
+          "kind": "definition",
+          "moduleId": "benchmark-module",
+          "name": "项目",
+          "description": "",
+          "definitionKind": "type",
+          "subjectTypes": [],
+          "objectTypes": [],
+          "valueType": "entity",
+          "cardinality": "many",
+          "cardinalityAnchor": "subject"
+        }
+      ],
+      "truncated": false
+    },
+    "feedback": []
+  },
+  "response": {
+    "text": "{\"assessments\":[{\"index\":0,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m11\",\"quote\":\"先核旧版本和数据格式兼容，再停止新写入，切回已知健康版本，最后查健康与关键数据。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"用户在 m11 提出今后版本回退的固定顺序和禁止事项（不能只换二进制就宣布成功），属于条件成立时必须履行的操作义务，且包含明确禁止。structured strength 为 default 弱化了义务性质，已通过 ruleRevisions 修正为 required，其余判断、范围与本体内容均有原文支持。\"}},{\"index\":1,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m23\",\"quote\":\"纠正刚才的话：QA-Nova 的测试联系人其实是陈工，林工不是。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"用户在 m23 对先前的林工说法作出明确纠正并给出后续行动指向（联系陈工），候选完整保留了纠正语义、被否定对象和新结论，日期 2026-10-14 与会话时间一致，无既有资产可比。\"}},{\"index\":2,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m8\",\"quote\":\"事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"用户提出事故复盘的固定记录要求和“每项改进有负责人和期限”的义务性规定并含禁止（不能只责怪个人），属于义务性规则；structured strength default 与义务性不符，已通过 ruleRevisions 修正为 required，内容其余部分均由原文支持。\"}},{\"index\":3,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m13\",\"quote\":\"从峰值请求量、每请求资源消耗、目标利用率推机器需求，保留单位、计算假设和突发余量。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"用户提出今后容量估算的固定方法和留痕要求（否则数字无法复核），是条件成立的执行义务；structured strength default 弱化了该义务，已通过 ruleRevisions 修正为 required，其余内容有原文支持。\"}},{\"index\":4,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m18\",\"quote\":\"以后先小流量，观察错误率和延迟，达到停止条件就回退，稳定才扩大。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"用户基于上次全量发布放大故障的教训提出对所有后续发布均适用的小流量流程，属于义务性发布要求；structured strength default 弱化了义务，已通过 ruleRevisions 修正为 required，其余内容有原文支持。\"}},{\"index\":5,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m3\",\"quote\":\"给管理者的项目汇报只把待拍板事项、主要风险和下一步责任人放在正文，技术细节放附录。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"m3 提出今后管理者汇报的分层要求，属于义务；但规则 exception 写入的“临时闲聊等非汇报场景不适用”来自 m5 的会前材料语境，m3 原文并未给出该例外，属于引入未经支持的内容，且 default 强度弱化义务，均已在 ruleRevisions 中修正（exception 置空、strength 改 required），修正后全部内容由 m3 支持。\"}},{\"index\":6,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m5\",\"quote\":\"今后会前材料保留五项：会议目标、背景事实、待决策问题、负责人、下一步行动；临时闲聊不套。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"m5 提出会前材料五要素要求并明确“临时闲聊不套”的例外，候选完整保留了要素、条件和例外；该要求为义务性指令，structured strength default 弱化义务，已通过 ruleRevisions 修正为 required。\"}},{\"index\":7,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m1\",\"quote\":\"先告诉我结论，再列证据和推理，我才容易判断。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"m1 包含禁止（别先铺很长背景）和顺序指令（先结论、再证据和推理），是对复杂技术问题解释的义务性要求；structured strength default 弱化义务，已通过 ruleRevisions 修正为 required，其余内容有原文支持。\"}},{\"index\":8,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m20\",\"quote\":\"QA-Echo 是另一个独立项目，不能把两者的职责混用。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"m20 明确 QA-Delta 负责人为赵工、部署窗口由其确认，并明确 QA-Echo 为独立项目且职责不能混用；候选完整保留该边界与后续安排要求，无既有资产可比。\"}},{\"index\":9,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m16\",\"quote\":\"以后改权威配置也要更新缓存版本或使缓存失效，验收不能只看写文件成功。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"m16 基于缓存未失效的教训提出修改权威配置时必须同步缓存并给出验收禁止（不能只看写文件成功），属于义务加禁止；structured strength default 弱化义务，已通过 ruleRevisions 修正为 required，其余内容有原文支持。\"}},{\"index\":10,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m24\",\"quote\":\"普通例会不加这两栏，不能推广成所有会议都加长。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"m24 使用明确义务词“必须”并规定普通例会例外且该区别一直保留，候选完整保留了义务、例外和长期有效性；structured strength default 与必须性义务不符，已通过 ruleRevisions 修正为 required，其余内容有原文支持。\"}},{\"index\":11,\"checks\":{\"supported\":true,\"noUnsupportedClaims\":true,\"scopePreserved\":true,\"finalDecisionPreserved\":true,\"priorContentPreserved\":true,\"evidence\":[{\"label\":\"m21\",\"quote\":\"给上海团队展示时换算 UTC+8，同时保留原始 UTC 时间。\"}]},\"uncertaintyDisposition\":\"none\",\"comparison\":{\"relation\":\"new\",\"reason\":\"m21 规定 QA-Orbit 日志统一记录 UTC、面向上海团队展示时换算 UTC+8 并保留原始 UTC，候选完整保留记录、换算、留痕三层要求及排查对齐指向，无本体变更，无既有资产可比。\"}}]}",
+    "meta": {
+      "usage": {
+        "inputTokens": 11113,
+        "outputTokens": 3214,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "totalTokens": 14327
+      }
+    },
+    "chosen": {
+      "provider": "zai",
+      "model": "glm-5.2"
+    },
+    "toolCalls": []
+  }
+}

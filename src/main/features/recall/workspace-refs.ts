@@ -1,11 +1,14 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
+import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { recallJsonRecordPath } from './paths';
 import { appendRecallJsonlRecord, listRecallJsonlRecords, readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import { readAbilityAsset } from './asset-service';
 import type { RecallJsonRecord } from './types';
+
+const log = createLogger('workspace-refs');
 
 export interface WorkspaceAssetReference extends RecallJsonRecord {
   assetId: string;
@@ -64,8 +67,37 @@ export async function addWorkspaceAssetReference(userId: string, input: { assetI
 export async function listWorkspaceAssetReferences(userId: string, assetId?: string): Promise<WorkspaceAssetReference[]> {
   let names: string[];
   try { names = await fs.readdir(referencesDirectory(userId)); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
-  const refs = await Promise.all(names.filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5))).map((name) => readRecallJsonRecord(userId, 'workspace-refs', name.slice(0, -5))));
-  return refs.filter((ref): ref is RecallJsonRecord => Boolean(ref)).map(asReference).filter((ref) => !assetId || ref.assetId === assetId).sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
+  const ids = names.filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5))).map((name) => name.slice(0, -5));
+  // 逐条降级，而不是让一条坏引用把整份引用列表读失败（照抄同目录
+  // listExperiences / listAbilityAssets / listRecallCandidates 的既有口径）：
+  // 记录形状的不变量分布在两层——store 的 validateRecallRecord 和这里的
+  // asReference——任一层一抛，`workspaceRefs.list` IPC 与 context-projection
+  // 的投影/注入装配就整体失败，好引用也列不出、一并不可见。
+  //
+  // 只降级**记录形状**的错。真正的 IO 故障（EACCES / EISDIR……）带 errno code，
+  // 照旧上抛：那种情况下静默少几条，等于把磁盘问题伪装成「引用变少了」。
+  const reads = await Promise.all(ids.map(async (id) => {
+    try {
+      return { id, record: await readRecallJsonRecord(userId, 'workspace-refs', id) };
+    } catch (error) {
+      if (typeof (error as NodeJS.ErrnoException).code === 'string') throw error;
+      return { id, error: error as Error };
+    }
+  }));
+  const references: WorkspaceAssetReference[] = [];
+  for (const read of reads) {
+    if (read.error) {
+      log.warn('skipped an unreadable workspace asset reference', { referenceId: read.id, error: read.error.message });
+      continue;
+    }
+    if (!read.record) continue;
+    try {
+      references.push(asReference(read.record));
+    } catch (error) {
+      log.warn('skipped a malformed workspace asset reference', { referenceId: read.id, error: (error as Error).message });
+    }
+  }
+  return references.filter((ref) => !assetId || ref.assetId === assetId).sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
 }
 
 export async function updateWorkspaceAssetReference(userId: string, id: string, input: { scope?: string; enabled?: boolean }): Promise<WorkspaceAssetReference> {

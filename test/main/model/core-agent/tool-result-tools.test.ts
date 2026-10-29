@@ -65,6 +65,21 @@ describe('persisted tool-result retrieval', () => {
     expect(TOOL_RESULT_SEARCH_MAX_TOKENS).toBe(2_000);
   });
 
+  it('requires fresh domain reads for historical governed results and their explicit chunk/search descendants without blocking ordinary results', async () => {
+    const original = toolResultRefForPath(persistToolResult(dir, 'cognition_ontology_query', 'WITHDRAWN_PRIVATE_BODY'));
+    const descendant = toolResultRefForPath(persistToolResult(dir, 'tool_result_read_chunk', `<tool-result-chunk ref="${original}" total_chars="22" covered="0-22" next_cursor="done">\nWITHDRAWN_PRIVATE_BODY\n</tool-result-chunk>`));
+    const nested = toolResultRefForPath(persistToolResult(dir, 'tool_result_search', `<tool-result-search ref="${descendant}" query="body">\nWITHDRAWN_PRIVATE_BODY\n</tool-result-search>`));
+    for (const blocked of [original, descendant, nested, 'read_ability_asset.1111111111111111']) {
+      for (const name of ['tool_result_search', 'tool_result_read_chunk']) {
+        const result = await getTool(tools, name).execute({ ref: blocked, query: 'PRIVATE', cursor: 0 }, ctx);
+        expect(result.isError).toBe(true); expect(result.content).toContain('E_RESULT_SOURCE_RECHECK_REQUIRED');
+        expect(result.content).not.toContain('WITHDRAWN_PRIVATE_BODY');
+      }
+    }
+    expect((await getTool(tools, 'tool_result_read_chunk').execute({ ref, cursor: 0 }, ctx)).isError).toBeFalsy();
+    expect(fs.existsSync(path.join(dir, original + '.txt'))).toBe(true);
+  });
+
   it('searches for narrow excerpts without returning the whole result', async () => {
     const result = await getTool(tools, 'tool_result_search').execute({ ref, query: 'needle important' }, ctx);
     expect(result.isError).toBeFalsy();

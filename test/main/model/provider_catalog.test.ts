@@ -107,6 +107,32 @@ describe('provider_catalog › CURATED_MODELS', () => {
     expect(CURATED_MODELS['moonshot']?.length).toBeGreaterThan(0);
   });
 
+  it('routes the saved Zhipu preset to the domestic Coding Plan for runtime and connection probes', () => {
+    const catalog = { getPiModel: (provider: string, model: string) => getModel(provider as any, model as any) };
+    for (const { id } of CURATED_MODELS.zai) {
+      const resolved = resolveConfiguredPiModel(catalog, 'zai', id);
+      expect(resolved).toMatchObject({
+        requestedProviderId: 'zai', requestedModelId: id, catalogProviderId: 'zai-coding-cn',
+        needsCustomModel: true, isConfiguredFallback: false,
+        model: { id, provider: 'zai-coding-cn', api: 'openai-completions',
+          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' },
+      });
+    }
+    // Resolving the app preset must not mutate the upstream international catalog.
+    expect(getModel('zai', 'glm-5.2').baseUrl).toBe('https://api.z.ai/api/coding/paas/v4');
+  });
+
+  it('keeps a configured Zhipu model upgrade on the domestic endpoint when SDK metadata lags', () => {
+    const catalog = { getPiModel: (provider: string, model: string) =>
+      model === 'glm-5.1' ? getModel(provider as any, model as any) : undefined };
+    expect(resolveConfiguredPiModel(catalog, 'zai', 'glm-5.2')).toMatchObject({
+      requestedProviderId: 'zai', requestedModelId: 'glm-5.2', templateModelId: 'glm-5.1',
+      needsCustomModel: true, isConfiguredFallback: true,
+      model: { id: 'glm-5.2', provider: 'zai-coding-cn', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' },
+    });
+    expect(resolveConfiguredPiModel(catalog, 'zai', 'unconfigured-model')).toBeNull();
+  });
+
   it('moonshot catalog exposes only K3 and K2.7', () => {
     const ids = (CURATED_MODELS['moonshot'] || []).map((m) => m.id);
     expect(ids).toEqual(['kimi-k3', 'kimi-k2.7-code']);

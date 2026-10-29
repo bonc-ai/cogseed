@@ -8,8 +8,8 @@
  *
  * 约定：
  *   - envelope 只放四类共用的字段，直接对应 PRD 3.5「共通元数据」；
- *   - 类型差异放进 `payload`，按 `assetType` 判别（当前是最小占位，
- *     Rule 的条件三元组 / Template 的结构 / Skill 的 Manifest 引用后续填）；
+ *   - 类型差异放进 `payload`，按 `assetType` 判别，保留规则边界、
+ *     模板槽位与方法的执行步骤及已安装 Skill 引用；
  *   - `statement` 保留为所有类型的人类可读摘要，不再承担结构表达职责。
  *
  * 三条状态轴必须保持正交（PRD 3.6）：
@@ -64,13 +64,13 @@ export interface FormalAssetEnvelope {
   updatedAt: string;
 }
 
-/** 分类型 payload。当前是最小占位：四类先共用 statement，
- *  各自的结构化字段按 PR-C/后续阶段逐类填充，形状先钉在这里。 */
+/** 分类型 payload。规则边界、模板槽位及方法步骤均从已持久化内容生成；没有写过的结构不猜测。 */
 export type FormalAssetPayload =
+  | { kind: 'cognition' }
   | { kind: 'personal' }
-  | { kind: 'rule' }
-  | { kind: 'template' }
-  | { kind: 'skill_method'; generatedSkillId?: string }
+  | { kind: 'rule'; action: string; applicableWhen: string[]; forbiddenWhen: string[]; boundaryRecorded: boolean; causalRule?: RecallAbilityAssetRecord['causalRule'] }
+  | { kind: 'template'; body: string; slots: Array<{ name: string; required: true }>; structureError?: string }
+  | { kind: 'skill_method'; generatedSkillId?: string; steps: string[]; skillReference?: { skillId: string; assetVersion: string; manifestHash?: string; stale: boolean } }
   | { kind: 'fact' };
 
 export interface FormalAbilityAsset extends FormalAssetEnvelope {
@@ -91,7 +91,7 @@ export interface ListFormalAssetsFilter {
  *  唯一判据——Personal Ontology 分组、Memory、Evidence、Receipt、
  *  RelationshipAssertion、Workspace state、原始文件都进不来。 */
 export const FORMAL_ASSET_TYPES: ReadonlySet<FormalAssetType> = new Set<FormalAssetType>([
-  'personal', 'rule', 'template', 'skill_method', 'fact',
+  'cognition', 'personal', 'rule', 'template', 'skill_method', 'fact',
 ]);
 
 export function isFormalAssetType(value: unknown): value is FormalAssetType {

@@ -4,6 +4,7 @@
 /resources/embedding-model
 /resources/officecli
 /resources/sherpa-onnx
+/resources/tencent-meeting
 /.npm-cache
 /resources/runtime/.python-*
 /resources/runtime/.uv-*
@@ -12,6 +13,9 @@
 /resources/runtime/python
 /resources/runtime/uv
 /resources/runtime/vc
+/resources/runtime/ffmpeg
+/resources/runtime/whisper
+/resources/runtime/tencent-meeting
 /src/main/native/build/
 /userWorkSpace
 /venv
@@ -20,6 +24,7 @@
 task.md
 plan.md
 !specs/001-hub-skill-contribution/plan.md
+!specs/009-agent-skill-pages/plan.md
 .collab-poc/
 
 # Local document/render outputs and workflow state
@@ -35,6 +40,9 @@ __pycache__/
 # Unrelated project snapshots and inspection material (never commit)
 /.inspect-jiaoyu/
 /builds/
+
+# Local scratch space for one-off audits and scan artifacts (never commit)
+/tmp/
 
 # engine build artifacts
 packages/*/node_modules

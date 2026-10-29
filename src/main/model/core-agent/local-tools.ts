@@ -44,18 +44,20 @@
  */
 
 import * as crypto from 'node:crypto';
+import { createBackgroundRunTools } from './background-run-tools.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 
 import type { AgentTool, ToolContext, ToolResult } from '#core-agent';
+import type { OntologyMarkdownWriteInput, OntologyOperationDecision } from '../../features/cognition/ontology/operation-guard';
 import {
   BASH_PROGRESS_INTERVAL_MS,
   bashTool as coreBashTool,
   normalizeBashTimeoutMs,
   writeFileTool as coreWriteFileTool,
 } from '../../../core-agent/src/tools/builtin';
-import { buildSandboxEnv, decodeProcessOutput, killProcessTree } from '../../../core-agent/src/sandbox/executor';
+import { buildSandboxEnv, decodeProcessOutput, DEFAULT_SANDBOX_EXEC, killProcessTree, STRICT_SANDBOX_ENV, STRICT_SANDBOX_SCRATCH_DIRNAME } from '../../../core-agent/src/sandbox/executor';
 import { windowsStrongSandboxAvailable } from '../../../core-agent/src/sandbox/windows-sandbox';
 import {
   ProcessOutputCapture,
@@ -73,7 +75,7 @@ import { classifyBashCommand } from './bash-risk';
 import { requestBashDecision } from './bash-permissions';
 import { markdownToPdf, htmlToPdf } from '../../util/md-to-pdf';
 import { uniquifyPath, renderRenameSignal } from '../../util/uniquify-path';
-import { isPathAllowed } from '../../util/path-sandbox';
+import { canonicalizePath, isPathAllowed } from '../../util/path-sandbox';
 import { kindOf } from '../../features/file_indexer';
 import { getWorkspacePath } from '../../features/user_workspace';
 import {
@@ -113,9 +115,25 @@ import {
   browserRuntimeInstallRequiresExplicitRequest,
 } from './browser-automation-guard';
 
+import type { ShellApprovalInput, ShellApprovalDecision, ShellApprovalGrant } from '../client';
+import { runWithRuntimeActionApprovalGrant } from '../../features/cogseed_runtime/kernel/tools/action-approval';
+
 const log = createLogger('local-tools');
 
 export interface LocalToolsOpts {
+  /** Single authorized root for a trusted inbound A2A reception turn. When set,
+   *  it replaces the union of workspace/attachment/extra roots and ignores the
+   *  global local-access mode; writes still need the receiver's per-action
+   *  approval. Ordinary local turns never set it. */
+  receptionRoot?: string;
+  /** Host-owned deny-only check after sandbox admission and before final bytes
+   * are written. It neither changes the bytes nor grants filesystem access. */
+  beforeUnverifiedAction?: (toolName: string, input: Record<string, unknown>) => Promise<ToolResult | undefined>;
+  /** 宿主注入的逐次审批（A2A 接待用）：返回拒绝码表示本人没有批准这次写入。
+   *  由 group_chat 在接访会话里注入，普通会话不传——写路径行为保持不变。 */
+  beforeWriteApproval?: (input: { toolName: 'write_file' | 'edit_file'; path: string; content: string }) => Promise<string | null>;
+  beforeShellApproval?: (input: ShellApprovalInput) => Promise<ShellApprovalDecision>;
+  beforeMarkdownWrite?: (input: Pick<OntologyMarkdownWriteInput, 'operation' | 'path' | 'content'>) => Promise<OntologyOperationDecision>;
   /** Host shell platform override for deterministic wrapper integration tests.
    *  Production callers omit this and use `process.platform`. */
   hostPlatform?: NodeJS.Platform;
@@ -193,6 +211,62 @@ function resolveAbs(ctx: ToolContext, p: string): string {
   return path.resolve(ctx.workingDir ?? '.', p);
 }
 
+/**
+ * Fail-closed resolution of the trusted-reception ceiling.
+ *
+ * `absent` = ordinary local turn (existing behaviour unchanged). `unavailable`
+ * = a scope was requested but cannot be proven (missing/non-directory/relative
+ * root): every caller must refuse instead of falling back to the default
+ * workspace or an allow-all access mode.
+ */
+type ReceptionRootResolution =
+  | { kind: 'absent' }
+  | { kind: 'root'; root: string }
+  | { kind: 'unavailable'; error: string };
+
+function resolveReceptionRoot(raw: string | undefined): ReceptionRootResolution {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (!trimmed) return { kind: 'absent' };
+  if (!path.isAbsolute(trimmed)) {
+    return {
+      kind: 'unavailable',
+      error: errText(
+        'E_RECEPTION_ROOT_UNAVAILABLE',
+        `the trusted reception root is not an absolute path (${trimmed}); refusing instead of falling back to another scope.`,
+      ),
+    };
+  }
+  let st: fs.Stats;
+  try { st = fs.statSync(trimmed); }
+  catch (err) {
+    return {
+      kind: 'unavailable',
+      error: errText(
+        'E_RECEPTION_ROOT_UNAVAILABLE',
+        `the confirmed reception root does not exist or is not stat-able (${trimmed}): ${(err as Error).message}. Refusing; do not retry with another root.`,
+      ),
+    };
+  }
+  if (!st.isDirectory()) {
+    return {
+      kind: 'unavailable',
+      error: errText(
+        'E_RECEPTION_ROOT_UNAVAILABLE',
+        `the confirmed reception root is not a directory (${trimmed}). Refusing; do not retry with another root.`,
+      ),
+    };
+  }
+  return { kind: 'root', root: canonicalizePath(trimmed) };
+}
+
+/** Path out of the reception ceiling, independent of the global access mode. */
+function receptionScopeError(root: string, abs: string): string {
+  return errText(
+    'E_PATH_OUT_OF_SCOPE',
+    `path is outside the confirmed reception root ${root}: ${abs}. A trusted reception turn may only touch that single root, even when the current access mode allows other paths.`,
+  );
+}
+
 function isMineFor(opts: LocalToolsOpts): (p: string) => boolean {
   const fn = opts.hasProducedPath;
   return (p) => {
@@ -203,6 +277,50 @@ function isMineFor(opts: LocalToolsOpts): (p: string) => boolean {
 
 function errText(code: string, msg: string): string {
   return `${code}: ${msg}`;
+}
+
+async function markdownWritePreflight(opts: LocalToolsOpts, operation: 'write_file' | 'edit_file', absPath: string, content: string): Promise<ToolResult | undefined> {
+  if (!opts.beforeMarkdownWrite || !['.md', '.markdown'].includes(path.extname(absPath).toLowerCase())) return undefined;
+  try {
+    const decision = await opts.beforeMarkdownWrite({ operation, path: absPath, content });
+    if (decision.allowed) return undefined;
+    const missing = decision.checks.filter(check => check.status === 'blocked' && check.reasonCode === 'required_section_missing')
+      .flatMap(check => check.sectionName ? [check.sectionName] : []);
+    const message = missing.length ? t('ontology.operation.required_sections_missing', { sections: [...new Set(missing)].join('、') })
+      : decision.checks.some(check => check.status === 'blocked' && check.reasonCode === 'operation_adapter_missing')
+        ? t('ontology.operation.adapter_missing')
+      : t('ontology.operation.conditions_unresolved');
+    return { content: errText('E_ONTOLOGY_OPERATION_PRECONDITION', message), isError: true };
+  } catch {
+    log.warn('markdown operation preflight unavailable', { operation, user_id: maskId(opts.userId) });
+    return { content: errText('E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE', t('ontology.operation.preflight_unavailable')), isError: true };
+  }
+}
+
+function markdownWriteSnapshot(absPath: string): string {
+  try {
+    const entry = fs.lstatSync(absPath, { bigint: true });
+    const target = entry.isSymbolicLink() ? fs.statSync(absPath, { bigint: true }) : entry;
+    return [entry.dev, entry.ino, entry.size, entry.mtimeNs, entry.ctimeNs,
+      target.dev, target.ino, target.size, target.mtimeNs, target.ctimeNs].join(':');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
+    throw error;
+  }
+}
+
+function markdownAccessSnapshot(opts: LocalToolsOpts, absPath: string): string {
+  return JSON.stringify({ mode: getLocalExecMode(), path: canonicalizePath(absPath),
+    roots: allowedRootsFor(opts).map(root => canonicalizePath(root)) });
+}
+
+function markdownAccessChanged(opts: LocalToolsOpts, absPath: string, expected: string): ToolResult | undefined {
+  const scopeError = guardEditPath(opts, absPath);
+  if (scopeError) return { content: scopeError, isError: true };
+  if (markdownAccessSnapshot(opts, absPath) !== expected) {
+    return { content: errText('E_STALE', 'The path or local access settings changed during the rule check; retry using the current scope.'), isError: true };
+  }
+  return undefined;
 }
 
 function permissionWaitProgress(ctx: ToolContext | undefined, operation: string): (elapsedMs: number) => void {
@@ -244,13 +362,22 @@ function translateFixedBashError(result: ToolResult): ToolResult {
 }
 
 const BASH_PRODUCED_SCAN_LIMIT = 5000;
+// 产出检测（bash 前后快照 diff）跳过的目录。工作区可能是用户自己的代码仓库
+// （空间绑定本地项目目录 / 会话绑定 coding_project_dir），所以名单按"仓库垃圾
+// 目录 + 构建产物目录"两类收集：前者是依赖/缓存，后者是编译输出——跑一次
+// `npm run build` / `cargo build` 会把成千上万个生成文件算成"AI 产出"，
+// 把产物列表冲垮。源码目录（src/lib/app/bin…）一律不跳。
 const BASH_PRODUCED_SKIP_DIRS = new Set([
   '.cache',
+  '.cogseed-scratch',
   '.git',
+  '.gradle',
   '.hg',
   '.idea',
   '.mypy_cache',
   '.next',
+  '.nuxt',
+  '.output',
   '.parcel-cache',
   '.pytest_cache',
   '.ruff_cache',
@@ -260,7 +387,14 @@ const BASH_PRODUCED_SKIP_DIRS = new Set([
   '.vs',
   '.vscode',
   '__pycache__',
+  'build',
+  'coverage',
+  'dist',
   'node_modules',
+  'out',
+  'Pods',
+  'target',
+  'vendor',
   'venv',
 ]);
 const BASH_PRODUCED_SKIP_FILES = new Set([
@@ -611,6 +745,29 @@ function withBashWritableRoots(ctx: ToolContext, roots: string[]): () => void {
   };
 }
 
+/**
+ * Opt exactly one bash call of a confirmed trusted reception turn into the
+ * deny-default macOS reception profile. The marker is derived here from
+ * `receptionRoot` (never from ambient env), so ordinary local turns keep the
+ * existing allow-default + deny-write behavior byte for byte. The executor
+ * still re-proves the root and fails closed on its own; this only opts in.
+ */
+function withBashReceptionSandboxEnv(ctx: ToolContext, opts: LocalToolsOpts): () => void {
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind !== 'root') return () => {};
+  const original = ctx.state.sandboxEnv as Record<string, string> | undefined;
+  ctx.state.sandboxEnv = {
+    ...(original ?? {}),
+    [STRICT_SANDBOX_ENV.mode]: '1',
+    [STRICT_SANDBOX_ENV.root]: reception.root,
+    [STRICT_SANDBOX_ENV.scratch]: path.join(reception.root, STRICT_SANDBOX_SCRATCH_DIRNAME),
+  };
+  return () => {
+    if (original) ctx.state.sandboxEnv = original;
+    else delete ctx.state.sandboxEnv;
+  };
+}
+
 type CogSeedCliInvocation = {
   script: 'run-skill.cjs' | 'cogseed-pkg.cjs';
   nodePath: string;
@@ -948,7 +1105,9 @@ async function executeDirectCogSeedCli(
         finish({
           content: useStderr ? stderr : stdout,
           ...(selected?.streamedOutput ? { streamedOutput: selected.streamedOutput } : {}),
-          isError: true,
+          // Truncation alone is not a failure: the command ran to completion and
+          // its exit code is the verdict. Only a real non-zero exit stays an error.
+          isError: (code ?? 1) !== 0,
         });
         return;
       }
@@ -997,13 +1156,18 @@ async function executeDirectCogSeedCli(
       }
       totalBytes += data.length;
       if (totalBytes > COGSEED_DIRECT_OUTPUT_LIMIT) {
+        // No spool directory, so this 1 MiB buffer is all we can keep. Stop
+        // buffering but do NOT kill: a legitimately verbose command (a build
+        // log, a big diff) used to be aborted mid-flight and reported as an
+        // error even though it was working. Draining the pipe keeps the writer
+        // unblocked and the command finishes with its real exit code; the
+        // result carries the truncation marker instead.
         outputLimitExceeded = true;
         truncatedKind = kind;
         const allowed = Math.max(0, data.length - (totalBytes - COGSEED_DIRECT_OUTPUT_LIMIT));
         if (allowed > 0) {
           (kind === 'stdout' ? stdoutChunks : stderrChunks).push(data.subarray(0, allowed));
         }
-        killChild();
         return;
       }
       (kind === 'stdout' ? stdoutChunks : stderrChunks).push(data);
@@ -1097,6 +1261,7 @@ async function executeCoreBashWithOutputTracking(
   const before = opts.onFileWritten ? collectBashFileSnapshot(outputDir) : new Map<string, BashFileSnapshotEntry>();
   const restoreEnv = withBashOutputEnv(ctx, outputDir, manifestPath);
   const restoreWritableRoots = withBashWritableRoots(ctx, bashWritableRootsFor(opts, workingDir));
+  const restoreStrictSandbox = withBashReceptionSandboxEnv(ctx, opts);
 
   // Create execution record
   const intent = commandIntent.extractIntent(command);
@@ -1122,14 +1287,22 @@ async function executeCoreBashWithOutputTracking(
   } catch { /* IPC not available */ }
 
   try {
-    const direct = parseCogSeedCliInvocation(input, ctx);
+    // A trusted reception turn must go through the scoped SandboxExecutor:
+    // the direct run-skill.cjs / cogseed-pkg.cjs fast path would execute a
+    // skill script outside the per-command shell approval and path ceiling.
+    const receptionActive = resolveReceptionRoot(opts.receptionRoot).kind !== 'absent';
+    const direct = receptionActive ? null : parseCogSeedCliInvocation(input, ctx);
     const writeSandboxActive = ((process.platform === 'darwin' && fs.existsSync('/usr/bin/sandbox-exec'))
       || (process.platform === 'win32' && windowsStrongSandboxAvailable()))
       && Array.isArray(ctx.state.sandboxAllowedDirs)
       && ctx.state.sandboxAllowedDirs.length > 0;
-    const result = direct && !writeSandboxActive
+    const denied = await opts.beforeUnverifiedAction?.('bash', input);
+    const cancelled = ctx.signal?.aborted
+      ? { content: errText('E_ACTION_APPROVAL_CANCELLED', 'The shell action was cancelled before execution.'), isError: true }
+      : undefined;
+    const result = denied || cancelled || (direct && !writeSandboxActive
       ? await executeDirectCogSeedCli(direct, input, ctx, workingDir)
-      : await coreBashTool.execute(input, ctx);
+      : await coreBashTool.execute(input, ctx));
 
     // Update execution record with result
     const updates: Partial<executionLog.ExecutionRecord> = {
@@ -1179,6 +1352,7 @@ async function executeCoreBashWithOutputTracking(
     throw err;
   } finally {
     try { fs.rmSync(manifestPath, { force: true }); } catch { /* best-effort */ }
+    restoreStrictSandbox();
     restoreWritableRoots();
     restoreEnv();
   }
@@ -1187,8 +1361,13 @@ async function executeCoreBashWithOutputTracking(
 /** Assemble the workspace-scoped writable roots for the current (uid, cid).
  *  The global access mode may allow paths outside these roots, but these
  *  roots remain the default safe scope and the macOS write sandbox scope for
- *  `workspace_approval`. */
+ *  `workspace_approval`.
+ *  A trusted reception turn replaces this union with the single confirmed
+ *  `receptionRoot`; workspace / attachment / extra roots are not added. */
 function allowedRootsFor(opts: LocalToolsOpts): string[] {
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'root') return [reception.root];
+  if (reception.kind === 'unavailable') return [];
   const roots: string[] = [];
   if (opts.userId) {
     try {
@@ -1209,6 +1388,12 @@ function allowedRootsFor(opts: LocalToolsOpts): string[] {
 function guardEditPath(opts: LocalToolsOpts, abs: string): string | null {
   const protectedRoot = protectedRootForPath(opts, abs);
   if (protectedRoot) return protectedWriteError(abs, protectedRoot);
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'unavailable') return reception.error;
+  if (reception.kind === 'root') {
+    // The receiver's approval answers "who agreed"; it never widens the root.
+    return isPathAllowed(abs, [reception.root]) ? null : receptionScopeError(reception.root, abs);
+  }
   const roots = allowedRootsFor(opts);
   if (!roots.length && !localAccessAllowsOutsideWorkspace()) {
     return errText('E_NO_SCOPE', 'no visible roots for this conversation');
@@ -1277,6 +1462,11 @@ async function gateEditPath(opts: LocalToolsOpts, abs: string, ctx?: ToolContext
 function guardDeletePath(opts: LocalToolsOpts, abs: string): string | null {
   const protectedRoot = protectedRootForPath(opts, abs);
   if (protectedRoot) return protectedWriteError(abs, protectedRoot);
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'unavailable') return reception.error;
+  if (reception.kind === 'root') {
+    return isPathAllowed(abs, [reception.root]) ? null : receptionScopeError(reception.root, abs);
+  }
   const roots = allowedRootsFor(opts);
   if (!roots.length && !localAccessAllowsOutsideWorkspace()) {
     return errText('E_NO_SCOPE', 'no visible roots for this conversation');
@@ -1297,6 +1487,9 @@ function isInWritableWorkspaceScope(opts: LocalToolsOpts, abs: string): boolean 
 }
 
 function deleteRequiresUserConfirmation(opts: LocalToolsOpts, abs: string): boolean {
+  // A trusted reception has no per-action delete approval hook, so even an
+  // in-root unlink must go through the local user's confirmation card.
+  if (resolveReceptionRoot(opts.receptionRoot).kind !== 'absent') return true;
   return !isInWritableWorkspaceScope(opts, abs) && localAccessRequiresSensitiveApproval();
 }
 
@@ -1332,6 +1525,31 @@ const BASH_PROTECTED_READ_ONLY_CMDS = new Set([
 const BASH_FIND_MUTATING_ACTIONS = new Set([
   '-delete', '-exec', '-execdir', '-ok', '-okdir', '-fls', '-fprint', '-fprint0', '-fprintf',
 ]);
+// Reception fail-closed gates (see guardBashReceptionUnprovableForm /
+// guardBashReceptionBackground). Kept next to the other static bash tables.
+const BASH_RECEPTION_CWD_CHANGE_CMDS = new Set(['cd', 'pushd', 'popd']);
+const BASH_RECEPTION_SCRIPT_INJECTION_CMDS = new Set(['source', '.', 'eval']);
+const BASH_RECEPTION_SHELL_CMDS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
+const BASH_RECEPTION_BACKGROUND_LAUNCHERS = new Set(['nohup', 'setsid', 'disown', 'coproc']);
+const BASH_RECEPTION_RESERVED_WORDS = new Set([
+  '(', ')', '{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done',
+  'while', 'until', 'for', 'in', 'case', 'esac', 'function', 'select',
+]);
+/** A reception command word that carries any of these characters is not a
+ *  literal program name: it is escaped (`\cd`), expanded (`$C`, `${C}`,
+ *  `$(…)`, backticks) or function syntax (`f()`). The static layer cannot
+ *  prove which program actually runs, so it refuses instead of guessing. */
+const BASH_RECEPTION_UNPROVABLE_COMMAND_WORD_RE = /[\\$`(){}]/;
+/** A function definition can start a statement as `f()`, `f ()`,
+ *  `function f()` or `function f { … }`. The regexes are anchored to a
+ *  statement boundary so `grep function file` and a quoted `'f()'` argument are
+ *  not mistaken for a definition. */
+const BASH_RECEPTION_FUNCTION_DEF_RE = /(^|[;&|({\n])\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)/;
+const BASH_RECEPTION_FUNCTION_KEYWORD_RE = /(^|[;&|({\n])\s*function\s+[A-Za-z_]/;
+/** Command substitution anywhere in the line (`$(…)`, backticks, or process
+ *  substitution `<(...)`/`>(...)`) evaluates text the static scanner never
+ *  sees, so it is refused on a trusted reception turn. */
+const BASH_RECEPTION_COMMAND_SUBSTITUTION_RE = /\$\(|`|[<>]\(/;
 const BASH_ENV_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const BASH_GENERIC_FLAGS_WITH_VALUE = new Set([
   '-C', '-D', '-F', '-G', '-I', '-J', '-M', '-O', '-S', '-T', '-b', '-c', '-d', '-e', '-f', '-g', '-m', '-o', '-p', '-r', '-s', '-t', '-u',
@@ -1532,6 +1750,34 @@ function bashEnvForPathResolution(ctx: ToolContext, workingDir: string): Record<
     PWD: workingDir,
     HOME: process.env.HOME || process.env.USERPROFILE || '',
   };
+}
+
+/**
+ * 收集命令里**自己赋值**的字面变量（`DIR=/x/y; cat "$DIR/f"`）。
+ *
+ * 这类变量静态可验证：值就在同一条命令里，且不含 `$` / 反引号 / `%VAR%`。
+ * 此前它们被当作"未解析变量"一律拒绝，于是模型写
+ * `V=<workspace>/out; cat "$V/$f"` 这种自给自足的读命令也会被挡
+ * （2026-10-12 日志里的 `E_BASH_DYNAMIC_PATH_UNSUPPORTED ... "$V/$f"`）。
+ *
+ * 只收字面 RHS：`DIR=$OTHER` / `DIR=$(cmd)` / 反引号取值都不进，
+ * 避免把不可验证的值洗成可验证的。
+ */
+export function collectLiteralShellAssignments(command: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const pattern = /(?:^|[;&|(\s])(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|()]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(command)) !== null) {
+    const name = match[1];
+    let value = match[2];
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (!value) continue;
+    if (value.includes('$') || value.includes('`') || /%[A-Za-z_][A-Za-z0-9_]*%/.test(value)) continue;
+    out[name] = value;
+  }
+  return out;
 }
 
 export function expandKnownShellPathVars(raw: string, env: Record<string, string>): { value: string; dynamic: boolean } {
@@ -1777,6 +2023,13 @@ function collectBashReadCandidates(command: string, workingDir: string, env: Rec
 }
 
 function bashScopedRootsFor(opts: LocalToolsOpts, workingDir: string): string[] {
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'root') {
+    // The single root is both the read and the write ceiling; it is also the
+    // macOS write-sandbox scope passed to SandboxExecutor.
+    return [reception.root];
+  }
+  if (reception.kind === 'unavailable') return [];
   if (localAccessAllowsOutsideWorkspace()) return [];
   const roots = allowedRootsFor(opts);
   if (!opts.userId && workingDir) roots.push(workingDir);
@@ -1791,6 +2044,17 @@ function guardBashScopedPath(opts: LocalToolsOpts, abs: string, workingDir: stri
   if (access === 'write') {
     const protectedRoot = protectedRootForPath(opts, abs);
     if (protectedRoot) return protectedWriteError(abs, protectedRoot);
+  }
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'unavailable') return reception.error;
+  if (reception.kind === 'root') {
+    // Never fall through to the global allow-all lane in a reception turn.
+    if (isPathAllowed(abs, [reception.root])) return null;
+    const code = access === 'read' ? 'E_BASH_READ_PATH_OUT_OF_SCOPE' : 'E_BASH_PATH_OUT_OF_SCOPE';
+    return errText(
+      code,
+      `bash ${access} target is outside the confirmed reception root ${reception.root}: ${abs}. A trusted reception turn may only touch that single root.`,
+    );
   }
   const roots = bashScopedRootsFor(opts, workingDir);
   if (!roots.length) {
@@ -1812,6 +2076,273 @@ function guardBashWritablePath(opts: LocalToolsOpts, abs: string, workingDir: st
   return guardBashScopedPath(opts, abs, workingDir, 'write');
 }
 
+/** The shell process cwd is part of the reception ceiling: a command whose cwd
+ *  is outside the confirmed root could reach the rest of the disk regardless of
+ *  the per-target path checks. Refuse instead of retargeting to a default root. */
+function guardBashWorkingDir(opts: LocalToolsOpts, workingDir: string): string | null {
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'unavailable') return reception.error;
+  if (reception.kind !== 'root') return null;
+  if (!workingDir || !path.isAbsolute(workingDir) || !isPathAllowed(workingDir, [reception.root])) {
+    return errText(
+      'E_BASH_CWD_OUT_OF_SCOPE',
+      `bash working directory is outside the confirmed reception root ${reception.root}: ${workingDir || '<missing>'}. A trusted reception turn cannot execute from another directory.`,
+    );
+  }
+  return null;
+}
+
+/** Command-position scanner used only by the reception fail-closed gate. It
+ *  tolerates the shell punctuation that can be glued to a command word
+ *  (`(cd`, `{cd`, `!cd`), env assignments and the wrapper commands the normal
+ *  path resolver already unwraps. A command word that is escaped, expanded or
+ *  written in function syntax is reported as unprovable instead of being
+ *  mistaken for a literal program name.
+ *
+ *  Privilege escalation is returned as the command position (not unwrapped):
+ *  its own option/value parsing is ambiguous, so the reception gate refuses it
+ *  instead of pretending the wrapped command was inspected. */
+type BashReceptionCommandPosition =
+  | { kind: 'command'; cmd: string; args: string[] }
+  | { kind: 'unprovable'; word: string };
+
+function bashReceptionCommandPosition(words: string[]): BashReceptionCommandPosition | null {
+  let i = 0;
+  while (i < words.length) {
+    const raw = words[i];
+    const w = raw.replace(/^[({!]+/, '');
+    if (!w) { i += 1; continue; }
+    if (BASH_ENV_ASSIGN_RE.test(w)) { i += 1; continue; }
+    const base = path.basename(w).toLowerCase();
+    if (base === 'function') return { kind: 'unprovable', word: raw };
+    if (BASH_RECEPTION_RESERVED_WORDS.has(base)) { i += 1; continue; }
+    if (BASH_GUARD_WRAPPERS.has(base)) {
+      i += 1;
+      while (i < words.length && (words[i].startsWith('-') || BASH_ENV_ASSIGN_RE.test(words[i]))) i += 1;
+      continue;
+    }
+    // `\cd` (the shell drops the backslash), `$C`/`${C}` (variable indirection),
+    // `$(echo cd)`/backticks and `f()` can all expand to a different program —
+    // including a cwd change or an uninspected shell. Refuse instead of
+    // assuming the literal word is what runs.
+    if (BASH_RECEPTION_UNPROVABLE_COMMAND_WORD_RE.test(w)) {
+      return { kind: 'unprovable', word: raw };
+    }
+    return { kind: 'command', cmd: base, args: words.slice(i + 1) };
+  }
+  return null;
+}
+
+/** A shell whose script body arrives on stdin (`printf '…' | sh`,
+ *  `sh < file`, `sh <<EOF`) executes text the command line never shows, so the
+ *  static scanner cannot see its paths. Only an explicit script operand inside
+ *  the confirmed root keeps the body bounded by the path/OS checks. */
+function bashReceptionShellFedByStdin(command: string): string | null {
+  let fedByPipe = false;
+  let redirectsStdin = false;
+  let expectInputTarget = false;
+  let skipNextWord = false;
+  let atCommandPosition = true;
+  let shellAtCommandPosition: string | null = null;
+  let denied: string | null = null;
+
+  const finishSegment = () => {
+    if (!denied && shellAtCommandPosition && (fedByPipe || redirectsStdin)) {
+      denied = shellAtCommandPosition;
+    }
+    fedByPipe = false;
+    redirectsStdin = false;
+    expectInputTarget = false;
+    skipNextWord = false;
+    atCommandPosition = true;
+    shellAtCommandPosition = null;
+  };
+
+  for (const tok of tokenizeBashPathGuard(command)) {
+    if (tok.type === 'op') {
+      if (tok.value === '|' || tok.value === '|&') {
+        finishSegment();
+        fedByPipe = true;
+      } else if (tok.value === '<' || tok.value === '<<' || tok.value === '<<<') {
+        expectInputTarget = true;
+      } else if (BASH_OUTPUT_REDIR_OPS.has(tok.value)) {
+        skipNextWord = true;
+      } else if (BASH_PATH_SEGMENT_OPS.has(tok.value)) {
+        finishSegment();
+      } else {
+        expectInputTarget = false;
+        skipNextWord = false;
+      }
+      continue;
+    }
+    if (expectInputTarget) { redirectsStdin = true; expectInputTarget = false; continue; }
+    if (skipNextWord) { skipNextWord = false; continue; }
+    if (!atCommandPosition) continue;
+    const word = tok.value.replace(/^[({!]+/, '');
+    if (!word || word.startsWith('-')) continue;
+    if (BASH_ENV_ASSIGN_RE.test(word)) continue;
+    const base = path.basename(word).toLowerCase();
+    if (BASH_RECEPTION_RESERVED_WORDS.has(base)) continue;
+    if (BASH_GUARD_WRAPPERS.has(base) || BASH_GUARD_PRIV_ESC.has(base)) continue;
+    atCommandPosition = false;
+    if (BASH_RECEPTION_SHELL_CMDS.has(base)) shellAtCommandPosition = base;
+  }
+  finishSegment();
+  return denied;
+}
+
+/** Remove quoted/escaped text so operator detection cannot be fooled by an `&`
+ *  inside a string (and cannot fire on one). */
+function stripBashQuotedText(command: string): string {
+  let out = '';
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === '\\') { i += 1; continue; }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Reception fail-closed gate: forms that change the path-resolution base or
+ * inject a script body cannot be proven to stay inside the single confirmed
+ * root by static inspection, so a trusted reception shell refuses them.
+ *
+ * Covered (rejected): `cd` / `pushd` / `popd` (any operand, including no
+ * operand — `cd` would jump to $HOME while the static resolver still resolves
+ * later relative paths against R), `source` / `.` / `eval`, escaped or
+ * variable/command-substituted command words (`\cd`, `$C`, `${C}`, `$(…)`,
+ * backticks), function definitions (`f() { cd …; }`), a shell fed by a pipe or
+ * stdin redirection (`printf '…' | sh`, `sh < file`), shell `-c` inline scripts
+ * (`sh -c '…'`, `bash -lc '…'`) and `git -C` / `--git-dir` / `--work-tree`
+ * path overrides. This is "unprovable ⇒ refuse" for the forms this heuristic
+ * can recognise, not a complete shell proof: interpreter inline code
+ * (`python -c`), dynamically assembled script text, arbitrary child processes
+ * and network remain OS-sandbox territory (see s2-round2.md §13).
+ */
+function guardBashReceptionUnprovableForm(command: string): string | null {
+  // The shell removes a backslash-newline continuation before word splitting
+  // (`c\` newline `d` runs `cd`), so analyse the continuation-free form.
+  const normalized = command.replace(/\\\r?\n/g, '');
+  if (BASH_RECEPTION_COMMAND_SUBSTITUTION_RE.test(normalized)) {
+    return errText(
+      'E_BASH_UNPROVABLE_IN_RECEPTION',
+      'command substitution (`$(…)`, backticks, `<(...)`/`>(...)`) evaluates text the static path guard cannot inspect. Refusing (fail closed); run the literal command instead.',
+    );
+  }
+  if (BASH_RECEPTION_FUNCTION_KEYWORD_RE.test(normalized) || BASH_RECEPTION_FUNCTION_DEF_RE.test(normalized)) {
+    return errText(
+      'E_BASH_UNPROVABLE_IN_RECEPTION',
+      'this command defines a shell function; the static path guard does not inspect function bodies, which can change directory or source/evaluate a script. Refusing (fail closed); write the commands literally.',
+    );
+  }
+  for (const segment of bashPathSegments(normalized)) {
+    const position = bashReceptionCommandPosition(segment.words);
+    if (!position) continue;
+    if (position.kind === 'unprovable') {
+      return errText(
+        'E_BASH_UNPROVABLE_IN_RECEPTION',
+        `the command word \`${position.word}\` uses an escape, variable/command substitution or function syntax, so the application cannot prove which program actually runs (it could expand to \`cd\` or a shell). Refusing (fail closed); write the literal command.`,
+      );
+    }
+    const { cmd, args } = position;
+    if (BASH_GUARD_PRIV_ESC.has(cmd)) {
+      return errText(
+        'E_BASH_UNPROVABLE_IN_RECEPTION',
+        `\`${cmd}\` privilege escalation cannot be proven to stay inside the confirmed root. Refusing (fail closed); run the command without elevation.`,
+      );
+    }
+    if (BASH_RECEPTION_CWD_CHANGE_CMDS.has(cmd) || BASH_RECEPTION_SCRIPT_INJECTION_CMDS.has(cmd)) {
+      return errText(
+        'E_BASH_UNPROVABLE_IN_RECEPTION',
+        `\`${cmd}\` changes the path-resolution base or injects a script body, so this trusted reception shell cannot prove it stays inside the confirmed root. Refusing (fail closed); give explicit paths inside the root instead of changing directories or sourcing/evaluating scripts.`,
+      );
+    }
+    if (BASH_RECEPTION_SHELL_CMDS.has(cmd) && args.some((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a))) {
+      return errText(
+        'E_BASH_UNPROVABLE_IN_RECEPTION',
+        `\`${cmd} -c\` runs an inline script body the static path guard cannot inspect. Refusing (fail closed); pass the script as a file inside the confirmed root.`,
+      );
+    }
+    if (cmd === 'git' && args.some((a) => (
+      a === '-C' || /^-C./.test(a) || a === '--git-dir' || a.startsWith('--git-dir=')
+      || a === '--work-tree' || a.startsWith('--work-tree=')
+    ))) {
+      return errText(
+        'E_BASH_UNPROVABLE_IN_RECEPTION',
+        '`git -C` / `--git-dir` / `--work-tree` retargets the repository root outside the checked path set. Refusing (fail closed); run git with the confirmed root as the working directory.',
+      );
+    }
+  }
+  const stdinFedShell = bashReceptionShellFedByStdin(normalized);
+  if (stdinFedShell) {
+    return errText(
+      'E_BASH_UNPROVABLE_IN_RECEPTION',
+      `\`${stdinFedShell}\` would read its script from a pipe or stdin redirection, so the body stays invisible to the static path guard. Refusing (fail closed); pass the script as an explicit file inside the confirmed root.`,
+    );
+  }
+  return null;
+}
+
+/** True where the S2b strict deny-default sandbox can actually be applied
+ *  (mirrors the executor's platform/exec gate; the executor still runs its own
+ *  self-check and fails closed). */
+function strictReceptionSandboxAvailable(): boolean {
+  return process.platform === 'darwin' && fs.existsSync(DEFAULT_SANDBOX_EXEC);
+}
+
+/**
+ * Reception fail-closed gate for background execution.
+ *
+ * The SDK `run_in_background` lane is accepted only where the S2b strict
+ * deny-default sandbox is available: that package proves with real
+ * `sandbox-exec` that the detached child inherits the ROOT/scratch write scope,
+ * the in-ROOT log-path check and the no-network profile. Without that proven OS
+ * constraint a background process would outlive one receiver approval with no
+ * ceiling, so it is refused here (fail closed).
+ *
+ * The shell's own self-backgrounding forms (`&`, `nohup`, `setsid`, …) do not
+ * go through the executor's `executeBackground` log/scratch contract at all, so
+ * their lifecycle is unproven even under the OS sandbox and they are refused on
+ * every reception turn.
+ */
+function guardBashReceptionBackground(input: Record<string, unknown>, command: string): string | null {
+  if (input.run_in_background === true && !strictReceptionSandboxAvailable()) {
+    return errText(
+      'E_RECEPTION_BACKGROUND_SHELL_UNAVAILABLE',
+      'a trusted reception shell cannot run in the background without the proven macOS deny-default sandbox. Run the command in the foreground (add a bounded timeout) instead of run_in_background=true.',
+    );
+  }
+  for (const segment of bashPathSegments(command)) {
+    let i = 0;
+    while (i < segment.words.length && BASH_ENV_ASSIGN_RE.test(segment.words[i])) i += 1;
+    const first = segment.words[i]
+      ? path.basename(segment.words[i].replace(/^[({!]+/, '')).toLowerCase()
+      : '';
+    if (BASH_RECEPTION_BACKGROUND_LAUNCHERS.has(first)) {
+      return errText(
+        'E_RECEPTION_BACKGROUND_SHELL_UNAVAILABLE',
+        `\`${first}\` launches a process outside the executor's approved background lane (in-ROOT log + scratch contract). A trusted reception shell refuses this unproven background form (fail closed).`,
+      );
+    }
+  }
+  // A single `&` background operator (not `&&`, `&>`, `>&`). Quoted text is
+  // removed first so a literal `&` inside a string cannot trigger or hide it.
+  if (/(^|[^&>])&(?!&|>)/.test(stripBashQuotedText(command))) {
+    return errText(
+      'E_RECEPTION_BACKGROUND_SHELL_UNAVAILABLE',
+      'the `&` background operator leaves a process running after the approved command returns. A trusted reception shell accepts only foreground commands (fail closed).',
+    );
+  }
+  return null;
+}
+
 async function gateBashPathAccess(
   opts: LocalToolsOpts,
   abs: string,
@@ -1821,6 +2352,9 @@ async function gateBashPathAccess(
 ): Promise<BashPathGateResult> {
   const denied = guardBashScopedPath(opts, abs, workingDir, access);
   if (denied) return { error: denied, approvedReasons: [] };
+  // The whole command will receive a single receiver decision after all path
+  // checks. This defers only the sensitive-path prompt, never sandbox admission.
+  if (opts.beforeShellApproval) return { error: null, approvedReasons: [] };
   return gateSensitiveLocalPathDetailed(opts, abs, 'bash', access, ctx);
 }
 
@@ -1848,8 +2382,10 @@ async function guardBashPathCandidates(
             'E_BASH_DYNAMIC_PATH_UNSUPPORTED',
             `bash ${c.reason} target "${c.raw}" uses an unresolved variable, command substitution, or glob that the application cannot verify. `
             + (access === 'write'
-              ? 'Use an explicit path inside the workspace, or use write_file/edit_file/delete_file for file changes.'
-              : 'Use an explicit path inside the workspace, or ask the user to switch to an all-files access mode.'),
+              ? 'Use an explicit path inside the workspace, or use write_file/edit_file/delete_file for file changes. '
+              : 'Rewrite it one of these ways: give a literal path; use a glob with a literal base directory (dir/*.md); '
+                + 'pin the variable in the same command (DIR=<literal path>; cat "$DIR/name"); or `cd <literal dir>` first and use '
+                + 'a plain relative name. Otherwise ask the user to switch to an all-files access mode. '),
           ),
           isError: true,
         },
@@ -1886,7 +2422,12 @@ async function guardBashFilesystemTargets(
   workingDir: string,
 ): Promise<BashFilesystemGuardResult> {
   const command = String(input.command ?? '');
-  const env = bashEnvForPathResolution(ctx, workingDir);
+  // 命令内字面赋值参与解析：`DIR=<literal>; cat "$DIR/f"` 可验证，不该按
+  // "未解析变量"拒绝；变量 RHS（`DIR=$OTHER`）不会进这里。
+  const env = {
+    ...bashEnvForPathResolution(ctx, workingDir),
+    ...collectLiteralShellAssignments(command),
+  };
   const approvedReasons: LocalAccessRiskCategory[] = [];
   const mutation = await guardBashPathCandidates(
     opts,
@@ -2042,7 +2583,7 @@ async function guardUntrustedSkillBash(opts: LocalToolsOpts, command: string): P
     // `listSkillSpecsForAgentMetadata` is deliberately not trust-filtered (it
     // backs spec writes), which makes it the right source here: we need the
     // full id/name map to resolve what the command names, then ask about trust.
-    blocked = await registry.blockedSkillIds(specs.map((s) => s.id));
+    blocked = await registry.blockedSkillIdsForUser(uid, specs.map((s) => s.id));
   } catch {
     return null;
   }
@@ -2242,6 +2783,40 @@ export function windowsPowerShellCompatibilityError(
   );
 }
 
+async function gateShellApproval(
+  opts: LocalToolsOpts,
+  toolName: ShellApprovalInput['toolName'],
+  command: string,
+  ctx: ToolContext,
+): Promise<{ refusal?: ToolResult; grant?: ShellApprovalGrant }> {
+  if (!opts.beforeShellApproval) return {};
+  let refusal: ShellApprovalDecision = 'E_ACTION_APPROVAL_UNAVAILABLE';
+  try {
+    if (ctx.signal?.aborted) refusal = 'E_ACTION_APPROVAL_CANCELLED';
+    else {
+      refusal = await opts.beforeShellApproval({
+        toolName, command, workingDir: path.resolve(ctx.workingDir ?? '.'), signal: ctx.signal,
+      });
+      if (refusal && typeof refusal === 'object' && refusal.requestId && typeof refusal.record === 'function') {
+        return { grant: refusal };
+      }
+      if (ctx.signal?.aborted) refusal = 'E_ACTION_APPROVAL_CANCELLED';
+    }
+  } catch {
+    // Approval transport failures must never become shell execution or leak inputs.
+  }
+  if (refusal === null) return {};
+  const code = typeof refusal === 'string' && /^E_ACTION_APPROVAL_[A-Z_]+$/.test(refusal) ? refusal : 'E_ACTION_APPROVAL_UNAVAILABLE';
+  return { refusal: {
+    content: errText(code, 'Receiver approval is required for this shell action. Do not retry or use another tool to work around this decision.'),
+    isError: true,
+  } };
+}
+
+function runWithShellGrant(grant: ShellApprovalGrant | undefined, execute: () => Promise<ToolResult>, ctx: ToolContext): Promise<ToolResult> {
+  return grant ? runWithRuntimeActionApprovalGrant(grant, grant.requestId, execute, ctx.signal) : execute();
+}
+
 /** Wrapped `bash` tool — identical schema, permission-gated, host-shell wording. */
 function createBashTool(opts: LocalToolsOpts): AgentTool {
   const wafBlockedCommands = new Set<string>();
@@ -2261,18 +2836,15 @@ function createBashTool(opts: LocalToolsOpts): AgentTool {
   return {
     name: 'bash',
     description:
-      'Execute a shell command on the user\'s local machine and return its output. ' +
-      'Use for installing CLIs (brew, npm, pip), running builds, converting files, ' +
-      'inspecting the filesystem, and any other host-side work. The shell runs in ' +
-      'the user\'s current workspace directory. Files generated under the conversation ' +
-      'workspace are surfaced as produced-file chips, except for files clearly created ' +
-      'by external download/clone commands such as git clone, gh repo clone, curl, or wget. ' +
-      outputDirDescription +
-      windowsShellDescription +
-      'Scratch/cache files should stay in temporary or cache directories. ' +
-      'For GUI apps, browsers, servers, watchers, or any command you would normally ' +
-      'background with `&`, set run_in_background=true instead of shell-backgrounding it; ' +
-      'inherited stdout/stderr can otherwise keep the tool waiting.',
+        'Execute a shell command on the user\'s local machine. Use for installing CLIs, builds, conversions, ' +
+        'filesystem inspection, and other host-side work. Runs in the current workspace directory. ' +
+        'Files created in the conversation workspace surface as produced-file chips, except those made by ' +
+        'download/clone commands (git clone, gh repo clone, curl, wget). ' +
+        outputDirDescription +
+        windowsShellDescription +
+        'Keep scratch/cache files in temp or cache directories. ' +
+        'For GUI apps, servers, watchers, or anything you would normally background with `&`, set ' +
+        'run_in_background=true: inherited stdout/stderr can otherwise keep the tool waiting.',
     inputSchema: {
       ...(coreBashTool.inputSchema as Record<string, unknown>),
       properties: {
@@ -2371,11 +2943,38 @@ function createBashTool(opts: LocalToolsOpts): AgentTool {
         return { content: unsupportedAuthErr, isError: true };
       }
       const workingDirForGuard = path.resolve(ctx.workingDir ?? '.');
+      const cwdDenied = guardBashWorkingDir(opts, workingDirForGuard);
+      if (cwdDenied) {
+        log.warn('bash reception cwd reject', { user_id: maskId(opts.userId), path: logPathRef(workingDirForGuard) });
+        return { content: cwdDenied, isError: true } as ToolResult;
+      }
+      if (resolveReceptionRoot(opts.receptionRoot).kind !== 'absent') {
+        // Static-inspection holes: shell cwd changes / script injection and
+        // any background lifetime are unprovable on a trusted reception turn.
+        const backgroundDenied = guardBashReceptionBackground(input, command);
+        if (backgroundDenied) {
+          log.warn('bash reception background reject', {
+            user_id: maskId(opts.userId),
+            command_chars: command.length,
+          });
+          return { content: backgroundDenied, isError: true } as ToolResult;
+        }
+        const unprovableDenied = guardBashReceptionUnprovableForm(command);
+        if (unprovableDenied) {
+          log.warn('bash reception unprovable form reject', {
+            user_id: maskId(opts.userId),
+            command_chars: command.length,
+          });
+          return { content: unprovableDenied, isError: true } as ToolResult;
+        }
+      }
       const filesystemGate = await guardBashFilesystemTargets(opts, input, ctx, workingDirForGuard);
       if (filesystemGate.result) return filesystemGate.result;
+      const shellApproval = await gateShellApproval(opts, 'bash', command, ctx);
+      if (shellApproval.refusal) return shellApproval.refusal;
       // Approval modes: classify the command and block on user confirmation
       // when it trips a sensitive category. all_files_auto skips this.
-      if (localAccessRequiresSensitiveApproval(mode) && command.trim()) {
+      if (!opts.beforeShellApproval && localAccessRequiresSensitiveApproval(mode) && command.trim()) {
         const base = classifyBashCommand(command);
         const pathApprovalCoveredSensitive = filesystemGate.approvedReasons.includes('sensitive_path');
         const baseReasons = pathApprovalCoveredSensitive
@@ -2435,16 +3034,36 @@ function createBashTool(opts: LocalToolsOpts): AgentTool {
       //               bash on same cwd, ENOTEMPTY, EACCES) is silently
       //               swallowed.
       if (!ctx.workingDir) {
-        return finalizeBrowserResult(translateFixedBashError(await coreBashTool.execute(input, ctx)));
+        // A trusted reception shell must run from the confirmed root and go
+        // through executeCoreBashWithOutputTracking (strict deny-default
+        // sandbox + in-root scratch env). With no cwd there is nothing to
+        // prove, so refuse instead of executing from the process cwd.
+        if (resolveReceptionRoot(opts.receptionRoot).kind !== 'absent') {
+          return {
+            content: errText(
+              'E_BASH_CWD_OUT_OF_SCOPE',
+              'a trusted reception shell has no working directory; refusing instead of executing from the process cwd.',
+            ),
+            isError: true,
+          } as ToolResult;
+        }
+        return runWithShellGrant(shellApproval.grant, async () => {
+          const denied = await opts.beforeUnverifiedAction?.('bash', input);
+          if (denied) return denied;
+          if (ctx.signal?.aborted) {
+            return { content: errText('E_ACTION_APPROVAL_CANCELLED', 'The shell action was cancelled before execution.'), isError: true };
+          }
+          return finalizeBrowserResult(translateFixedBashError(await coreBashTool.execute(input, ctx)));
+        }, ctx);
       }
       const workingDir = path.resolve(ctx.workingDir);
       if (fs.existsSync(workingDir)) {
-        return finalizeBrowserResult(await executeCoreBashWithOutputTracking(opts, input, ctx, workingDir));
+        return runWithShellGrant(shellApproval.grant, async () => finalizeBrowserResult(await executeCoreBashWithOutputTracking(opts, input, ctx, workingDir)), ctx);
       }
       try { fs.mkdirSync(ctx.workingDir, { recursive: true }); }
       catch { /* let spawn produce the canonical error */ }
       try {
-        return finalizeBrowserResult(await executeCoreBashWithOutputTracking(opts, input, ctx, workingDir));
+        return await runWithShellGrant(shellApproval.grant, async () => finalizeBrowserResult(await executeCoreBashWithOutputTracking(opts, input, ctx, workingDir)), ctx);
       } finally {
         try {
           if (fs.readdirSync(ctx.workingDir).length === 0) {
@@ -2512,7 +3131,7 @@ async function gateInteractiveCliStart(
     });
     return { content: untrustedSkillErr, isError: true };
   }
-  if (localAccessRequiresSensitiveApproval(mode) && command.trim()) {
+  if (!opts.beforeShellApproval && localAccessRequiresSensitiveApproval(mode) && command.trim()) {
     const base = classifyBashCommand(command);
     const reasons = classifyConfiguredBashCommand(command, base.reasons);
     if (reasons.length) {
@@ -2643,35 +3262,61 @@ function createInteractiveCliStartTool(opts: LocalToolsOpts): AgentTool {
     async execute(input, ctx) {
       const command = String(input.command ?? '').trim();
       if (!command) return { content: errText('E_BAD_INPUT', '`command` is required'), isError: true };
+      const reception = resolveReceptionRoot(opts.receptionRoot);
+      if (reception.kind === 'unavailable') return { content: reception.error, isError: true };
+      if (reception.kind === 'root') {
+        // A live session outlives the one-shot receiver approval and has no
+        // proven execution root; a reception turn must use `bash` instead.
+        return {
+          content: errText(
+            'E_RECEPTION_TOOL_UNAVAILABLE',
+            'interactive_cli_start is unavailable during a trusted reception turn. Use bash with the receiver per-action approval, inside the confirmed root.',
+          ),
+          isError: true,
+        };
+      }
       const workingDir = path.resolve(ctx.workingDir ?? '.');
       const gate = await gateInteractiveCliStart(opts, command, {
         allowNoBrowserAuth: input.allow_no_browser_auth === true,
         workingDir,
       }, ctx);
       if (gate) return gate;
-      try { fs.mkdirSync(workingDir, { recursive: true }); }
-      catch { /* spawn will report the canonical error */ }
-      const view = startInteractiveCliSession({
-        uid: opts.userId ?? '',
-        cid: opts.cid,
-        agentId: opts.agentId,
-        agentName: opts.agentName ?? opts.agentId,
-        purpose: typeof input.purpose === 'string' ? input.purpose : undefined,
-        command,
-        cwd: workingDir,
-        sandboxEnv: (ctx.state.sandboxEnv ?? {}) as Record<string, string>,
-        maxLifetimeMs: Number(input.max_lifetime_ms),
-      });
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      const latest = readInteractiveCliSession(opts.userId ?? '', view.session_id);
-      if (latest.status !== 'running') {
-        const result = interactiveCliToolPayload(latest);
-        return {
-          content: JSON.stringify(result, null, 2),
-          isError: latest.status === 'error',
-        };
+      if (opts.beforeShellApproval) {
+        const filesystemGate = await guardBashFilesystemTargets(opts, { ...input, command }, ctx, workingDir);
+        if (filesystemGate.result) return filesystemGate.result;
       }
-      return jsonToolResult(interactiveCliToolPayload(latest));
+      const shellApproval = await gateShellApproval(opts, 'interactive_cli_start', command, ctx);
+      if (shellApproval.refusal) return shellApproval.refusal;
+      return runWithShellGrant(shellApproval.grant, async () => {
+        try { fs.mkdirSync(workingDir, { recursive: true }); }
+        catch { /* spawn will report the canonical error */ }
+        const denied = await opts.beforeUnverifiedAction?.('interactive_cli_start', input);
+        if (denied) return denied;
+        if (ctx.signal?.aborted) {
+          return { content: errText('E_ACTION_APPROVAL_CANCELLED', 'The shell action was cancelled before execution.'), isError: true };
+        }
+        const view = startInteractiveCliSession({
+          uid: opts.userId ?? '',
+          cid: opts.cid,
+          agentId: opts.agentId,
+          agentName: opts.agentName ?? opts.agentId,
+          purpose: typeof input.purpose === 'string' ? input.purpose : undefined,
+          command,
+          cwd: workingDir,
+          sandboxEnv: (ctx.state.sandboxEnv ?? {}) as Record<string, string>,
+          maxLifetimeMs: Number(input.max_lifetime_ms),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const latest = readInteractiveCliSession(opts.userId ?? '', view.session_id);
+        if (latest.status !== 'running') {
+          const result = interactiveCliToolPayload(latest);
+          return {
+            content: JSON.stringify(result, null, 2),
+            isError: latest.status === 'error',
+          };
+        }
+        return jsonToolResult(interactiveCliToolPayload(latest));
+      }, ctx);
     },
   };
 }
@@ -2720,9 +3365,18 @@ function createInteractiveCliSendTool(opts: LocalToolsOpts): AgentTool {
     },
     async execute(input) {
       if (!getLocalExecGranted()) return deniedResult();
+      if (opts.beforeShellApproval) {
+        // Starting a shell does not authorize later commands sent through stdin.
+        return {
+          content: errText('E_ACTION_APPROVAL_REQUIRED', 'Interactive stdin is unavailable during reception. Use a separate shell action with receiver approval; do not work around this restriction.'),
+          isError: true,
+        };
+      }
       const sessionId = String(input.session_id ?? '').trim();
       if (!sessionId) return { content: errText('E_BAD_INPUT', '`session_id` is required'), isError: true };
       try {
+        const denied = await opts.beforeUnverifiedAction?.('interactive_cli_send', input);
+        if (denied) return denied;
         const view = sendInteractiveCliInput(opts.userId ?? '', sessionId, String(input.input ?? ''), {
           addNewline: input.add_newline !== false,
           sensitive: false,
@@ -2812,10 +3466,63 @@ function createWriteFileTool(opts: LocalToolsOpts): AgentTool {
         return { content: scopeErr, isError: true };
       }
       const { finalPath, renamed } = await uniquifyPath(inputAbs, isMineFor(opts));
+      // uniquifyPath can rewrite the target; re-check the canonical target before
+      // it is shown to the receiver in an approval prompt.
+      const rewrittenScopeErr = guardEditPath(opts, finalPath);
+      if (rewrittenScopeErr) {
+        log.warn('write_file rewritten target scope reject', { user_id: maskId(opts.userId), path: logPathRef(finalPath) });
+        return { content: rewrittenScopeErr, isError: true };
+      }
+      if (opts.beforeWriteApproval) {
+        const refusal = await opts.beforeWriteApproval({
+          toolName: 'write_file',
+          path: finalPath,
+          content: String(input.content ?? ''),
+        });
+        if (refusal) {
+          log.info('write_file not approved by the receiver', { user_id: maskId(opts.userId), code: refusal });
+          return { content: errText(refusal, `${finalPath}: 这次写操作没有得到接收方批准，未执行`), isError: true };
+        }
+      }
+      // Approval answers "who agreed", not "where": the path may have been
+      // swapped for a symlink pointing outside the root while the receiver was
+      // deciding. Re-verify the canonical target immediately before writing.
+      const approvedScopeErr = guardEditPath(opts, finalPath);
+      if (approvedScopeErr) {
+        log.warn('write_file scope changed during approval', { user_id: maskId(opts.userId), path: logPathRef(finalPath) });
+        return { content: approvedScopeErr, isError: true };
+      }
       const rewritten = finalPath !== inputAbs
         ? { ...input, path: finalPath }
         : input;
-      const result = await coreWriteFileTool.execute(rewritten, ctx);
+      const checkedMarkdown = !!opts.beforeMarkdownWrite && ['.md', '.markdown'].includes(path.extname(finalPath).toLowerCase());
+      const accessSnapshot = checkedMarkdown ? markdownAccessSnapshot(opts, finalPath) : undefined;
+      let writeSnapshot: string | undefined;
+      if (checkedMarkdown) {
+        try { writeSnapshot = markdownWriteSnapshot(finalPath); }
+        catch { return { content: errText('E_STALE', 'The file could not be checked before writing; read it again before retrying.'), isError: true }; }
+      }
+      const preflight = await markdownWritePreflight(opts, 'write_file', finalPath, String(input.content ?? ''));
+      if (preflight) return preflight;
+      let result: ToolResult;
+      if (checkedMarkdown) {
+        // Avoid an additional async filesystem window after the host rule
+        // check; a new path is also created exclusively to protect late files.
+        try {
+          const accessChanged = markdownAccessChanged(opts, finalPath, accessSnapshot!);
+          if (accessChanged) return accessChanged;
+          if (markdownWriteSnapshot(finalPath) !== writeSnapshot) {
+            return { content: errText('E_STALE', 'The file changed during the rule check; the write was not performed.'), isError: true };
+          }
+          fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+          fs.writeFileSync(finalPath, String(input.content ?? ''), { encoding: 'utf8', flag: writeSnapshot === 'absent' ? 'wx' : 'w' });
+          result = { content: `File written: ${finalPath}` };
+        } catch (error) {
+          result = { content: `Error writing file: ${(error as Error).message}`, isError: true };
+        }
+      } else {
+        result = await coreWriteFileTool.execute(rewritten, ctx);
+      }
       if (!result.isError) {
         // Stamp the just-written bytes so a follow-up edit_file accepts an edit
         // without an intervening read_file (the model already knows the content
@@ -2891,12 +3598,37 @@ function createEditFileTool(opts: LocalToolsOpts): AgentTool {
         log.warn('edit_file scope reject', { user_id: maskId(opts.userId), path: logPathRef(abs) });
         return { content: scopeErr, isError: true };
       }
+      if (opts.beforeWriteApproval) {
+        const refusal = await opts.beforeWriteApproval({
+          toolName: 'edit_file',
+          path: abs,
+          content: String(input.new_string ?? ''),
+        });
+        if (refusal) {
+          log.info('edit_file not approved by the receiver', { user_id: maskId(opts.userId), code: refusal });
+          return { content: errText(refusal, `${abs}: 这次修改没有得到接收方批准，未执行`), isError: true };
+        }
+      }
+      // Re-verify after the approval wait: the file may have been replaced by a
+      // symlink pointing outside the confirmed root while the receiver decided.
+      const afterApprovalScopeErr = guardEditPath(opts, abs);
+      if (afterApprovalScopeErr) {
+        log.warn('edit_file scope changed during approval', { user_id: maskId(opts.userId), path: logPathRef(abs) });
+        return { content: afterApprovalScopeErr, isError: true };
+      }
 
       // Serialize the read-modify-write per file: parallel workers share this
       // process + filesystem, so two concurrent edits of the same file must not
       // interleave stat→read→write (lost update). Distinct files never contend.
       const release = await fileEditLock(abs).acquire();
       try {
+        // The lock wait is a second window; re-check the canonical target after
+        // acquiring it so a swap during the wait cannot follow the link.
+        const afterLockScopeErr = guardEditPath(opts, abs);
+        if (afterLockScopeErr) {
+          log.warn('edit_file scope changed during lock wait', { user_id: maskId(opts.userId), path: logPathRef(abs) });
+          return { content: afterLockScopeErr, isError: true };
+        }
         let st: fs.Stats;
         try { st = fs.statSync(abs); }
         catch (err) {
@@ -2970,6 +3702,26 @@ function createEditFileTool(opts: LocalToolsOpts): AgentTool {
         if (oauthClientMismatchErr) {
           log.warn('edit_file google oauth client/scope mismatch reject', { user_id: maskId(opts.userId), path: logPathRef(abs) });
           return { content: oauthClientMismatchErr, isError: true };
+        }
+
+        const checkedMarkdown = !!opts.beforeMarkdownWrite && ['.md', '.markdown'].includes(path.extname(abs).toLowerCase());
+        const accessSnapshot = checkedMarkdown ? markdownAccessSnapshot(opts, abs) : undefined;
+        const preflight = await markdownWritePreflight(opts, 'edit_file', abs, next);
+        if (preflight) return preflight;
+        // The async rule check can yield to an external editor. Our per-file
+        // mutex serializes app callers only, so verify the exact bytes again
+        // before committing the replacement.
+        if (checkedMarkdown) {
+          const accessChanged = markdownAccessChanged(opts, abs, accessSnapshot!);
+          if (accessChanged) return accessChanged;
+          let freshBody: string;
+          try { freshBody = fs.readFileSync(abs, 'utf8'); }
+          catch { return { content: errText('E_STALE', 'The file changed or disappeared during the rule check; read it again before retrying.'), isError: true }; }
+          const freshHash = editableFileHash(freshBody);
+          if (freshHash !== currentHash) {
+            recordRead(ctx, abs, undefined, freshHash);
+            return { content: `${errText('E_STALE', 'The file changed during the rule check; the edit was not written.')}\n${editRecoveryContext(freshBody, oldStr, freshHash)}`, isError: true };
+          }
         }
 
         try {
@@ -3077,14 +3829,11 @@ function createMarkdownToPdfTool(opts: LocalToolsOpts): AgentTool {
   return {
     name: 'markdown_to_pdf',
     description:
-      'Render Markdown content to a PDF file at the given path. ' +
-      'Supports headings, paragraphs, bold, italic, inline code, fenced code blocks, ' +
-      'ordered and unordered lists, horizontal rules, and links. ' +
-      'For tables or custom styling, generate HTML yourself and call `html_to_pdf` instead. ' +
-      'No external tools required (no pandoc / wkhtmltopdf). ' +
-      'If the target path already exists and was not written by you earlier in this turn, ' +
-      'the basename is automatically suffixed (`-2 / -3 / ...`) to avoid clobbering, and ' +
-      'the rename is surfaced in a `<file-renamed>` block in the tool result.',
+        'Render Markdown to a PDF at `path`. ' +
+        'Supports headings, emphasis, inline/fenced code, ordered and unordered lists, rules, and links. ' +
+        'For tables or custom styling, build HTML and call `html_to_pdf` instead. No external tools needed. ' +
+        'A target you did not write earlier this turn is suffixed (`-2`, `-3`, ...) instead of clobbered; ' +
+        'the rename appears in a `<file-renamed>` block.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3221,6 +3970,16 @@ function createCreateArtifactTool(opts: LocalToolsOpts): AgentTool {
     },
     async execute(input) {
       if (!getLocalExecGranted()) return deniedResult();
+      const reception = resolveReceptionRoot(opts.receptionRoot);
+      if (reception.kind === 'unavailable') return { content: reception.error, isError: true };
+      if (reception.kind === 'root') {
+        // Managed-container writes (chat_artifacts) live outside the single
+        // confirmed root; a reception turn must not create them.
+        return {
+          content: errText('E_RECEPTION_TOOL_UNAVAILABLE', 'create_artifact is unavailable during a trusted reception turn. Write files inside the confirmed root with write_file instead.'),
+          isError: true,
+        };
+      }
       const uid = opts.userId;
       const cid = opts.cid;
       if (!uid || !cid) {
@@ -3484,24 +4243,41 @@ function createDeleteFileTool(opts: LocalToolsOpts): AgentTool {
 
 /** Build the array of local-machine tools for a single runner. */
 export function createLocalTools(opts: LocalToolsOpts = {}): AgentTool[] {
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  const receptionActive = reception.kind !== 'absent';
   const tools: AgentTool[] = [
     createBashTool(opts),
-    createInteractiveCliStartTool(opts),
-    createInteractiveCliReadTool(opts),
-    createInteractiveCliSendTool(opts),
-    createInteractiveCliCloseTool(opts),
+    // Interactive CLI sessions, PDF renderers, promoted background runs and
+    // chat artifacts either outlive the one-shot receiver approval or write to
+    // managed containers outside the single confirmed root. They are not
+    // offered on a trusted reception turn; bash + write_file/edit_file keep
+    // their existing per-action approval semantics for the other rungs.
+    ...(receptionActive ? [] : [
+      createInteractiveCliStartTool(opts),
+      createInteractiveCliReadTool(opts),
+      createInteractiveCliSendTool(opts),
+      createInteractiveCliCloseTool(opts),
+    ]),
     createWriteFileTool(opts),
     createEditFileTool(opts),
-    createDeleteFileTool(opts),
-    createMarkdownToPdfTool(opts),
-    createHtmlToPdfTool(opts),
+    // delete_file has no receiver per-action approval hook (its confirmation
+    // card is a local-user surface), so a trusted reception turn does not even
+    // get the factory — not merely a name filter in the runner.
+    ...(receptionActive ? [] : [createDeleteFileTool(opts)]),
+    ...(receptionActive ? [] : [
+      createMarkdownToPdfTool(opts),
+      createHtmlToPdfTool(opts),
+    ]),
+    // Promoted (background) CLI runs: a run that outlived its turn is only
+    // reachable through these, so they ship from the same factory.
+    ...(receptionActive ? [] : createBackgroundRunTools({ ...(opts.userId ? { userId: opts.userId } : {}) })),
   ];
   if (opts.onOutputsPublished) tools.push(createPublishOutputsTool(opts));
   // `create_artifact` only makes sense on a conversation surface that
   // renders the embedded result and routes interactions back — i.e. a `cid`
   // plus an `onArtifactCreated` sink (group chat). Edit chats / ad-hoc runs
   // don't pass the sink, so the tool isn't offered there.
-  if (opts.cid && opts.onArtifactCreated) tools.push(createCreateArtifactTool(opts));
+  if (!receptionActive && opts.cid && opts.onArtifactCreated) tools.push(createCreateArtifactTool(opts));
   return tools;
 }
 

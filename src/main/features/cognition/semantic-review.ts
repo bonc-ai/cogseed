@@ -66,11 +66,17 @@ function _buildPrompt(content: CandidateContent): string {
   // fenced and explicitly labelled as data, and the task is constrained to
   // emitting labels from a fixed list — so the worst case of a successful
   // injection is a wrong label, not an arbitrary action.
-  const parts = [
+  let parts = [
     content.title ? `title: ${content.title}` : '',
     content.summary ? `summary: ${content.summary}` : '',
     content.body ? `body: ${content.body}` : '',
   ].filter(Boolean).join('\n').slice(0, MAX_INPUT_CHARS);
+  // slice 按 UTF-16 码元截断可能劈开代理对（emoji 等），末尾留下孤立高代理
+  // 直接进 prompt。孤立代理必在末尾，砍 1 码元即愈、不引入 U+FFFD；
+  // MAX_INPUT_CHARS 语义不变（按码元封顶，不按码点翻倍）。同型先例：
+  // sanitizePoText（po/model.ts）。
+  const last = parts.charCodeAt(parts.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) parts = parts.slice(0, -1);
 
   return `You are reviewing a candidate knowledge item before it is stored as a reusable asset.
 

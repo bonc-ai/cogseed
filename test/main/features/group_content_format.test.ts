@@ -172,6 +172,26 @@ describe('group_content_format › serializeGroupContent', () => {
     expect(out).toContain('- 项目「晚风」 \\[已归档] [手动]');
     expect(g.parseGroupContent(out)).toEqual(c);
   });
+
+  it('P-r3-43 空坑字段不渲染（serialize 跳过无值字段，与 parse 不收录空块自洽）', async () => {
+    const g = await loadGroups();
+    // 空坑 + 有值字段并存：空坑不渲染，有值字段照常。
+    const out = g.serializeGroupContent({
+      fields: {
+        空坑: [],
+        偏好: [{ value: '喜欢大白话', source: '候选' }],
+      },
+      entries: ['流水一条'],
+    });
+    expect(out).not.toContain('### 空坑');
+    expect(out).toContain('### 偏好');
+    // 渲染产物再 parse 回来与渲染语义一致（不再出现「视图显示空块、原样保存
+    // 即被删」的所见即所得悖论）。
+    expect(g.parseGroupContent(out).fields['空坑']).toBeUndefined();
+    // 全部字段皆空 → 退化为纯流水文本（与 fields:{} 同形）。
+    const allEmpty = g.serializeGroupContent({ fields: { 空坑: [] }, entries: ['a'] });
+    expect(allEmpty).toBe('a');
+  });
 });
 
 describe('group_content_format › parseFieldValueLine', () => {

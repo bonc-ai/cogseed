@@ -2045,7 +2045,7 @@ describe("AgentRunner", () => {
         if (seenMessages.length === 1) {
           return {
             content: [
-              { type: "tool_use", id: "call_1", name: "wedged_tool", input: {} },
+              { type: "tool_use", id: "call_1", name: "metacognition", input: {} },
             ],
             stopReason: "tool_use",
             usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
@@ -2070,8 +2070,11 @@ describe("AgentRunner", () => {
     const registry = new ProviderRegistry();
     registry.registerFactory("mock", () => mockProvider);
     let capturedSignal: AbortSignal | undefined;
+    // Named `metacognition` so the tool is inside REFLECTION_TOOL_ALLOWLIST
+    // (P-r1-19): reflection executes only allowlisted tools, and this test
+    // locks the idle-watchdog conversion for exactly those.
     const wedgedTool = defineTool({
-      name: "wedged_tool",
+      name: "metacognition",
       description: "Never resolves",
       inputSchema: { type: "object", properties: {} },
       async execute(_input, ctx) {
@@ -2186,6 +2189,133 @@ describe("AgentRunner", () => {
     expect(r2!.text).toBe(r1.text);
     expect(r2!.meta.stopReason).toBe(r1.meta.stopReason);
     expect(r2!.meta.toolLoops).toBe(r1.meta.toolLoops);
+  });
+
+  it("withholds terminal text until the final response gate approves it", async () => {
+    const provider = createMockProvider([{
+      content: [{ type: "text", text: "unverified draft" }],
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+      model: "mock-model",
+    }]);
+    const registry = new ProviderRegistry();
+    registry.registerFactory("mock", () => provider);
+    const config = createConfig({ agent: { defaultProvider: "mock", defaultModel: "mock-model" } });
+    const validate = vi.fn(async () => ({ text: "approved answer" }));
+    const runner = new AgentRunner({ config, providers: registry, tools: [] });
+    const events: AgentRunEvent[] = [];
+
+    for await (const event of runner.runStream({
+      message: "answer from evidence",
+      finalResponseGate: { isRequired: () => true, validate },
+    })) events.push(event);
+
+    expect(validate).toHaveBeenCalledWith(expect.objectContaining({
+      text: "unverified draft",
+      content: [{ type: "text", text: "unverified draft" }],
+    }));
+    expect(events.filter((event) => event.type === "text_delta").map((event) => event.text))
+      .toEqual(["approved answer"]);
+    const done = events.find((event): event is Extract<AgentRunEvent, { type: "done" }> => event.type === "done");
+    expect(done?.result.text).toBe("approved answer");
+    expect(JSON.stringify(runner.getSession().getMessages())).not.toContain("unverified draft");
+  });
+
+  it("keeps the original streaming behavior when the final response gate is inactive", async () => {
+    const provider = createMockProvider([{
+      content: [{ type: "text", text: "ordinary response" }],
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+      model: "mock-model",
+    }]);
+    const registry = new ProviderRegistry();
+    registry.registerFactory("mock", () => provider);
+    const config = createConfig({ agent: { defaultProvider: "mock", defaultModel: "mock-model" } });
+    const validate = vi.fn(async () => ({ text: "should not run" }));
+    const runner = new AgentRunner({ config, providers: registry, tools: [] });
+    const events: AgentRunEvent[] = [];
+
+    for await (const event of runner.runStream({
+      message: "ordinary chat",
+      finalResponseGate: { isRequired: () => false, validate },
+    })) events.push(event);
+
+    expect(validate).not.toHaveBeenCalled();
+    expect(events.filter((event) => event.type === "text_delta").map((event) => event.text))
+      .toEqual(["ordinary response"]);
+  });
+
+  it("fails closed when the final response gate itself throws", async () => {
+    const provider = createMockProvider([{
+      content: [{ type: "text", text: "unsafe draft" }],
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+      model: "mock-model",
+    }]);
+    const registry = new ProviderRegistry();
+    registry.registerFactory("mock", () => provider);
+    const config = createConfig({ agent: { defaultProvider: "mock", defaultModel: "mock-model" } });
+    const runner = new AgentRunner({ config, providers: registry, tools: [] });
+    const events: AgentRunEvent[] = [];
+
+    for await (const event of runner.runStream({
+      message: "answer from evidence",
+      finalResponseGate: {
+        isRequired: () => true,
+        validate: async () => { throw new Error("validator unavailable"); },
+      },
+    })) events.push(event);
+
+    const streamedText = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.text)
+      .join("");
+    expect(streamedText).toContain("unverified answer was not returned");
+    expect(streamedText).not.toContain("unsafe draft");
+    const done = events.find((event): event is Extract<AgentRunEvent, { type: "done" }> => event.type === "done");
+    expect(done?.result.text).toBe(streamedText);
+  });
+
+  it("streams tool-round commentary but gates the terminal answer", async () => {
+    const provider = createMockProvider([
+      {
+        content: [
+          { type: "text", text: "checking evidence" },
+          { type: "tool_use", id: "gate-call", name: "evidence_tool", input: {} },
+        ],
+        stopReason: "tool_use",
+        usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 },
+        model: "mock-model",
+      },
+      {
+        content: [{ type: "text", text: "unverified terminal draft" }],
+        stopReason: "end_turn",
+        usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+        model: "mock-model",
+      },
+    ]);
+    const registry = new ProviderRegistry();
+    registry.registerFactory("mock", () => provider);
+    const evidenceTool = defineTool({
+      name: "evidence_tool",
+      description: "read evidence",
+      inputSchema: { type: "object", properties: {} },
+      async execute() { return { content: "verified evidence" }; },
+    });
+    const config = createConfig({ agent: { defaultProvider: "mock", defaultModel: "mock-model" } });
+    const validate = vi.fn(async () => ({ text: "evidence-backed answer" }));
+    const runner = new AgentRunner({ config, providers: registry, tools: [evidenceTool] });
+    const events: AgentRunEvent[] = [];
+
+    for await (const event of runner.runStream({
+      message: "use the evidence",
+      finalResponseGate: { isRequired: () => true, validate },
+    })) events.push(event);
+
+    expect(events.filter((event) => event.type === "text_delta").map((event) => event.text))
+      .toEqual(["checking evidence", "evidence-backed answer"]);
+    expect(validate).toHaveBeenCalledTimes(1);
+    expect(validate).toHaveBeenCalledWith(expect.objectContaining({ text: "unverified terminal draft" }));
   });
 
   it("forwards AgentRunParams.sandboxEnv into ToolContext.state.sandboxEnv", async () => {

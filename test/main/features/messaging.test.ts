@@ -46,6 +46,32 @@ afterEach(async () => {
   }
 });
 
+describe('agent delivery operation gates', () => {
+  it.each(['missing', 'blocked', 'allowed'])('checks every delivery attempt and holds unsafe recovery without retry (%s)', async mode => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const { RuntimeInstance } = await import('../../../src/main/features/messaging/runtime');
+    const send = vi.fn(async () => ({ deliveryId: 'synthetic-delivery-id' }));
+    const runtime = new RuntimeInstance({ uid: 'user-1', instanceId: 'synthetic-guard', instance: {} as any,
+      adapter: { sendMessage: send } as any, isCurrent: () => true });
+    const key = 'synthetic-current-condition';
+    const begun = await ledger.beginDelivery('user-1', { key, instanceId: 'synthetic-guard', recipientId: 'synthetic-self',
+      recipientIdType: 'open_id', sourceMessageId: 'synthetic-source', text: 'Synthetic delivery; no real account is contacted.',
+      textHash: 'synthetic-text-hash', requiresOperationPreflight: true } as any);
+    const stored = await ledger.getDelivery('user-1', key);
+    expect(stored?.requiresOperationPreflight).toBe(true);
+    const gate = vi.fn(async () => {
+      if (mode === 'blocked') throw Object.assign(new Error('synthetic current condition is unresolved'), { code: 'E_ONTOLOGY_OPERATION_PRECONDITION' });
+    });
+    if (mode !== 'missing') runtime.setDeliveryPreflight(key, gate);
+    await runtime.attemptDelivery(key, begun.entry);
+    expect(send).toHaveBeenCalledTimes(mode === 'allowed' ? 1 : 0);
+    expect(gate).toHaveBeenCalledTimes(mode === 'missing' ? 0 : 1);
+    expect((await ledger.getDelivery('user-1', key))?.status).toBe(mode === 'allowed' ? 'sent' : 'failed');
+    expect(runtime.retryTimer).toBeNull();
+    runtime.controller.abort();
+  });
+});
+
 describe('messaging policy', () => {
   it('enforces user, group, mention and command policy in order', async () => {
     const { evaluateInboundPolicy } = await import('../../../src/main/features/messaging/policy');
@@ -1355,12 +1381,13 @@ describe('messaging manager adapter flow', () => {
         expect(instances[0]?.status.kind).toBe('connected');
       });
 
-      // 批准路径：候选离开池、卡片更新为终态。
-      const { candidate_ids } = await ontology.addCandidates('user-1', [
-        { judgment: '日程：测试课', suggestedType: 'template' },
-      ]);
-      expect(candidate_ids).toHaveLength(1);
-      const candidateId = candidate_ids[0];
+      // 旧批准卡片退役：不消费候选，不伪造成功卡片。
+      // （P-r1-31 改写：批量 addCandidates 已删，改用单条 addCandidate 等价
+      //   入池——原映射 template → instance / user。）
+      const { candidate } = await ontology.addCandidate('user-1', {
+        summary: '日程：测试课', kind: 'instance', memory_scope: 'user',
+      });
+      const candidateId = candidate.candidate_id;
       await manager.ingestCardAction('user-1', {
         platform: 'feishu_lark',
         instanceId: created.id,
@@ -1372,13 +1399,13 @@ describe('messaging manager adapter flow', () => {
         receivedAt: new Date().toISOString(),
       });
       const pool = await ontology.listCandidates('user-1');
-      expect(pool.candidate_updates.find((c) => c.candidate_id === candidateId)).toBeUndefined();
-      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(1));
+      expect(pool.candidate_updates.find((c) => c.candidate_id === candidateId)).toBeDefined();
+      expect(adapter.updateCard).not.toHaveBeenCalled();
 
-      // 拒绝路径：候选直接移除。
-      const { candidate_ids: ids2 } = await ontology.addCandidates('user-1', [
-        { judgment: '日程：另一课', suggestedType: 'template' },
-      ]);
+      // 旧拒绝卡片同样退役，历史候选保持原样。
+      const { candidate: candidate2 } = await ontology.addCandidate('user-1', {
+        summary: '日程：另一课', kind: 'instance', memory_scope: 'user',
+      });
       await manager.ingestCardAction('user-1', {
         platform: 'feishu_lark',
         instanceId: created.id,
@@ -1386,11 +1413,12 @@ describe('messaging manager adapter flow', () => {
         externalChatId: 'oc_candidate',
         externalUserId: 'user-1',
         action: 'candidate_reject',
-        payload: { candidate_id: ids2[0] },
+        payload: { candidate_id: candidate2.candidate_id },
         receivedAt: new Date().toISOString(),
       });
       const pool2 = await ontology.listCandidates('user-1');
-      expect(pool2.candidate_updates.find((c) => c.candidate_id === ids2[0])).toBeUndefined();
+      expect(pool2.candidate_updates.find((c) => c.candidate_id === candidate2.candidate_id)).toBeDefined();
+      expect(adapter.updateCard).not.toHaveBeenCalled();
 
       // 缺 candidate_id 的卡片动作被拒绝。
       const rejected = await manager.ingestCardAction('user-1', {
@@ -1403,7 +1431,7 @@ describe('messaging manager adapter flow', () => {
         payload: {},
         receivedAt: new Date().toISOString(),
       });
-      expect(rejected).toMatchObject({ accepted: false, reason: 'invalid_card_action' });
+      expect(rejected).toMatchObject({ accepted: false, reason: 'unsupported_card_action' });
     } finally {
       vi.doUnmock('../../../src/main/features/messaging/adapters');
       vi.doUnmock('../../../src/main/features/group_chat');

@@ -1,0 +1,16 @@
+{
+  "category": "office",
+  "routing": {
+    "applicable_domain": "会议原始转写整理为可追溯纪要草稿",
+    "negative_examples": [
+      "在线获取会议",
+      "拆分执行任务",
+      "实际知识库归档",
+      "创建外部任务"
+    ],
+    "prerequisites": [
+      "调用方提供完整转写与来源",
+      "Agent 层提供归属上下文"
+    ]
+  }
+}

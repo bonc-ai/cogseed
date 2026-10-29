@@ -17,6 +17,7 @@
  */
 
 import { tryGetRecallCandidateCapabilities } from '../candidate-capabilities';
+import { comparableJudgmentText } from '../candidate-service';
 import { validatePromotionByAssetType } from './promotion';
 import type { FormalAbilityAsset, FormalAssetType } from './types';
 import type { AssetVersionDiff } from './version-diff';
@@ -88,6 +89,7 @@ export type CognitionInboxAction =
   | 'reject'
   | 'defer'
   | 'ignore'
+  | 'resume'
   | 'claim'
   | 'set_boundary'
   | 'keep'
@@ -160,6 +162,10 @@ export interface CognitionInboxInput {
   skillUpgradeCurrentAssetIds?: ReadonlySet<string>;
   /** 用户已明确拒绝当前资产版本的升级，不应重复打扰。 */
   skillUpgradeRejectedAssetIds?: ReadonlySet<string>;
+  /** Skill 升版 binding 读取失败的资产（2026-10-01 质检 P-r1-13）。追平/拒绝
+   *  状态未知——未知不能反推成「待升版」，不产出升级待办，否则已追平/已拒绝
+   *  的升级以假待办复活。 */
+  skillUpgradeUnknownAssetIds?: ReadonlySet<string>;
   /** AI 提议的实质变化里还没拍板的那些（pending / deferred）。 */
   pendingAssetChanges?: ReadonlyArray<{ proposalId: string; assetId: string; title?: string; reason?: string }>;
   /** 大扫除里还没处置的拿不准项。 */
@@ -189,9 +195,9 @@ const INBOX_ACTIONS: Record<CognitionInboxKind, readonly CognitionInboxAction[]>
   rule_scope_changed: [],
   template_updated: [],
   rule_boundary_missing: ['set_boundary'],
-  classification_conflict: ['claim', 'reject', 'defer'],
-  evidence_insufficient: ['reject', 'defer'],
-  candidate_ineligible: ['reject', 'defer'],
+  classification_conflict: ['claim', 'reject'],
+  evidence_insufficient: ['reject'],
+  candidate_ineligible: ['reject'],
   source_unavailable: [],
   asset_change_pending: ['accept', 'defer', 'reject'],
   cleanup_uncertain: ['reject', 'defer'],
@@ -236,9 +242,11 @@ const KIND_ORDER: CognitionInboxKind[] = [
   'inspection_finding',
 ];
 
-/** 与 candidate-service 的同名比较保持一致：只做空白归一，不做语义归一。 */
+/** 同文本判重的唯一口径：直接复用 candidate-service 的 comparableJudgmentText
+ *  （NFKC + 剥标点/符号/空白 + 小写）。冲突表、晋升闸门、待办分组必须逐字
+ *  同源——这里自算一份宽松版，标点变体会出现「清单说有冲突、选边说没有」。 */
 function comparableJudgment(text: string | undefined): string {
-  return String(text || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+  return comparableJudgmentText(text || '');
 }
 
 function item(
@@ -307,6 +315,7 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
       && asset.payload.generatedSkillId && diff
       && !input.skillUpgradeCurrentAssetIds?.has(asset.assetId)
       && !input.skillUpgradeRejectedAssetIds?.has(asset.assetId)
+      && !input.skillUpgradeUnknownAssetIds?.has(asset.assetId)
       && (diff.kinds.includes('statement') || diff.kinds.includes('boundary'))) {
       items.push(item('skill_upgrade_suggested', `skill-upgrade:${asset.assetId}`, asset.title, {
         assetType: asset.assetType,

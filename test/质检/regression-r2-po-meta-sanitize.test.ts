@@ -1,21 +1,4 @@
-/**
- * 探针 r2（边界测试员 · 并发与时序 + 修复复查）：
- *
- * A. 复查 r1 后落盘的两处修复（工作区未提交 diff）：
- *    1) po/model.ts sanitizePoText 代理对截断自愈——验证修复生效 + 边界（空串/存量脏数据）；
- *    2) po/api.ts poAddValueToFieldByName 导入通道 meta 校验——验证非法 asOf/ruleKind/verified
- *       被剥离、合法保留。
- * B. 新发现验证：同一批校验在兄弟通道漏修——
- *    3) poAddValue 的 draft.ruleKind 零枚举校验（poUpdateValue 有）；
- *    4) poUpdateValue 的 patch.verified 零取值校验（导入通道刚修了同类）。
- *    两者都是「写成功落非法值、读侧 normalize 静默剥掉」的写读不对称。
- *    （2026-09-30 r2 修复 F-r2-1/F-r2-2 后已堵，B 组两用例反转为回归。）
- *
- * 2026-09-30 r2 收尾（记账员）：由 probe- 改名 regression-，收编为 r1/r2
- * 已修项的回归测试（A 组复查 F-r1-1/F-r1-2、B 组回归 F-r2-1/F-r2-2）。
- * 唯一例外：A 组第 3 用例（存量脏数据）的后半断言锁定「中间孤立代理
- * 不自愈」现状，对应待议 P-r2-2 → it.skip，拍板后随结论启用或拆分。
- */
+/** 本体读写规范化：孤立代理、时间元数据、规则类型及验证状态的输入与读取一致性。 */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -56,8 +39,8 @@ async function loadApi() {
 
 const LONE_SURROGATE = /(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF]))|((?:[^\uD800-\uDBFF])|^)[\uDC00-\uDFFF]/;
 
-describe('regression r2 › 修复复查：sanitizePoText 代理对', () => {
-  it('截断不再劈开代理对：末尾无孤立高代理（r1 F5 修复生效）', async () => {
+describe('修复复查：sanitizePoText 代理对', () => {
+  it('截断不再劈开代理对：末尾无孤立高代理', async () => {
     const { sanitizePoText } = await import('../../src/main/features/po/model');
     const out = sanitizePoText('x'.repeat(1997) + '😀'.repeat(10));
     expect(out.length).toBeLessThanOrEqual(2000);
@@ -71,11 +54,9 @@ describe('regression r2 › 修复复查：sanitizePoText 代理对', () => {
     expect(sanitizePoText('😀', 1)).toBe(''); // 全是高代理开头 → 空串
   });
 
-  // 待议 P-r2-2：本用例后半断言「中间孤立代理不在自愈范围」锁定的正是待议
-  // 现状（A 只修注释 / B 扩大自愈 toWellFormed / C 对齐副本，拍板前不固化）。
-  // 前半「末尾孤立代理读自愈」断言为 F-r1-2 行为，拍板后随结论一并启用或拆分。
-  it.skip('存量脏数据（末尾孤立代理）load 自愈；中间孤立代理不在自愈范围（修复注释口径）', async () => {
-    // 末尾孤立代理：读路径 normalize → sanitize 砍掉
+  // 存量脏数据的读取收敛：孤立代理无论在末尾（截断场景的存量
+  // 形态）还是中间（撕裂/坏同步），读路径都自愈剥除。
+  it('存量脏数据 load 自愈：末尾与中间的孤立代理都被剥除', async () => {
     const api = await loadApi();
     fs.mkdirSync(path.dirname(poDocFile()), { recursive: true });
     fs.writeFileSync(poDocFile(), JSON.stringify({
@@ -84,9 +65,9 @@ describe('regression r2 › 修复复查：sanitizePoText 代理对', () => {
         id: 'g-dirty', title: '脏档', kind: 'user', createdAt: '2026-09-01', updatedAt: '2026-09-01',
         fields: [{ id: 'f1', name: 'F', origin: 'user', createdAt: '2026-09-01' }],
         values: [
-          // v1：孤立高代理在**末尾**（截断场景的存量形态）——读路径应自愈砍掉
+          // v1：孤立高代理在**末尾**（截断场景的存量形态）——读路径自愈砍掉
           { id: 'v1', fieldId: 'f1', text: 'x'.repeat(1999) + String.fromCharCode(0xd83d), source: '手动', createdAt: '', updatedAt: '' },
-          // v2：孤立代理在**中间**——修复只砍末尾，中间保留（口径如此，记录行为）
+          // v2：孤立代理在**中间**——同样剥除（不再只砍末尾）
           { id: 'v2', fieldId: 'f1', text: 'a' + String.fromCharCode(0xd83d) + 'b', source: '手动', createdAt: '', updatedAt: '' },
         ],
         entries: [],
@@ -96,16 +77,15 @@ describe('regression r2 › 修复复查：sanitizePoText 代理对', () => {
     const { loadPoDocSync } = await import('../../src/main/features/po/store');
     const doc = loadPoDocSync(UID);
     const texts = doc.groups[0].values.map((v) => v.text);
-    // v1：末尾孤立高代理 → normalize 的 sanitize（末尾砍 1 码元逻辑）自愈
     expect(LONE_SURROGATE.test(texts[0])).toBe(false);
-    // v2：孤立代理在中间——修复只砍末尾，中间保留（口径如此，记录行为）
-    expect(LONE_SURROGATE.test(texts[1])).toBe(true);
+    expect(LONE_SURROGATE.test(texts[1])).toBe(false);
+    expect(texts[1]).toBe('ab'); // 中间孤立代理剥除后两侧相连
     void api;
   });
 });
 
-describe('regression r2 › 修复复查：导入通道 meta 校验', () => {
-  it('非法 asOf/ruleKind/verified 剥离，合法三件全保留（r1 修复生效）', async () => {
+describe('修复复查：导入通道 meta 校验', () => {
+  it('非法 asOf/ruleKind/verified 剥离，合法三件全保留', async () => {
     const api = await loadApi();
     const applied = await api.poImportApply(UID, [{
       title: '注入组',
@@ -139,9 +119,8 @@ describe('regression r2 › 修复复查：导入通道 meta 校验', () => {
   });
 });
 
-describe('regression r2 › 兄弟通道漏修（F-r2-1/F-r2-2 已修，转为回归）', () => {
-  // r2 修复（F-r2-1/F-r2-2）：poAddValue 补 ruleKind 枚举门、poUpdateValue 补
-  // verified 三态门——写读不对称幽灵写不再可能。
+describe('本体元数据写入与读取校验一致性', () => {
+  // poAddValue 的 ruleKind 与 poUpdateValue 的 verified 均须使用合法枚举。
   it('poAddValue 的 draft.ruleKind 枚举门：非法值被拒不落盘（与 poUpdateValue 同口径）', async () => {
     const api = await loadApi();
     const g = await api.poCreateGroup(UID, '规则组');

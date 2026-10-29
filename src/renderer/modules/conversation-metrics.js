@@ -282,5 +282,7 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     formatLatency,
     messageMetricsLine,
     foldSessionMetrics,
+    // 命中率公式单独暴露：口径必须可被测试锁住（部分命中不得显示 100%）。
+    cacheHitPercentText,
   };
 }

@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 资产生命周期状态机 · 红队压力测试（2026-09-28 全量 debug 任务）。
  *
@@ -48,7 +49,7 @@ async function modules() {
 /** 走正式链路建一条 active 资产（与产品路径一致：候选→确认→转正）。 */
 async function seedAsset(userId: string, statement = '先给结论再给解释。') {
   const { candidates, assets } = await modules();
-  const candidate = await candidates.saveRecallCandidate(userId, {
+  const candidate = await createNightlyCandidateFixture(userId, {
     judgment: statement,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: '红队基线样本',
@@ -246,17 +247,27 @@ describe('红队：证据撤销级联与融合路径不碰非 active 资产（20
     expect(afterV.validationCount || 0).toBe(before.validationCount || 0);
   });
 
-  it('purge 墓碑不再残留成熟度声明', async () => {
+  it('purge 墓碑不再残留成熟度与验证计数声明', async () => {
     const { assets, asset } = await seedAsset('rt-purge-mat');
     await assets.recordAbilityAssetValidation('rt-purge-mat', asset.id, 'success');
     await assets.recordAbilityAssetValidation('rt-purge-mat', asset.id, 'success');
+    // 补一次失败，让 consecutiveFailures 也带上非零值——三件套全部可见后再清。
+    await assets.recordAbilityAssetValidation('rt-purge-mat', asset.id, 'failure');
     const grown = await assets.readAbilityAsset('rt-purge-mat', asset.id);
     expect(grown.maturity).toBe('bud');
+    expect(grown.validationCount).toBe(2);
+    expect(grown.consecutiveFailures).toBe(1);
+    expect(grown.lastValidatedAt).toBeTruthy();
     await assets.deleteAbilityAsset('rt-purge-mat', asset.id, { actor: 'user', reason: '删除' });
     await assets.purgeAbilityAsset('rt-purge-mat', asset.id, { actor: 'user', reason: '彻底清除' });
     const tomb = await assets.readAbilityAsset('rt-purge-mat', asset.id);
     expect(tomb.status).toBe('purged');
     expect(tomb.maturity).toBeUndefined(); // 墓碑不携带任何效果声明
+    // 验证三件套同性质（2026-10-01 补）：validationCount>0 加 lastValidatedAt
+    // 就是「已验证 N 次、最近验证于 X」——墓碑不该替已清除的内容背书。
+    expect(tomb.validationCount).toBeUndefined();
+    expect(tomb.consecutiveFailures).toBeUndefined();
+    expect(tomb.lastValidatedAt).toBeUndefined();
   });
 });
 

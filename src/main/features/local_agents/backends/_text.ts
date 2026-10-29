@@ -64,6 +64,7 @@ export function makeTextBackend(def: TextBackendDef): LocalBackend {
         timeoutMs: opts.timeoutMs,
         idleKillMs: opts.idleKillMs,
         lastEventAt: opts.lastEventAt,
+        ...(opts.onDeadline ? { onDeadline: opts.onDeadline } : {}),
       });
 
       if (def.promptOnStdin) {

@@ -47,7 +47,7 @@ describe('candidate detail reflects the candidate lifecycle', () => {
     expect(html).toContain('已保存为正式资产');
     expect(html).toContain('data-act="go-inbox-asset"');
     expect(html).toContain('data-id="asset-saved"');
-    expect(html).toContain('建议详情');
+    expect(html).toContain('<h2>Use project evidence</h2>');
     expect(html).not.toContain('确认内容，也确认它该在什么范围生效');
   });
 

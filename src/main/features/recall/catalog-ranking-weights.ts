@@ -133,18 +133,26 @@ export async function getRankingWeights(userId: string): Promise<RankingWeightsS
  */
 export async function setRankingWeights(userId: string, update: RankingWeightsUpdate): Promise<RankingWeights> {
   const partial = validatePartialWeights(update);
-  const current = await getRankingWeights(userId);
-  const merged = validateWeights({ ...current.weights, ...partial });
-  if (merged.ok === false) {
-    throw new Error(`invalid catalog ranking weights: ${merged.reason}`);
-  }
-  await updateRecallJsonRecord(userId, WEIGHTS_COLLECTION, WEIGHTS_ID, (existing) => ({
-    ...(existing || {}),
-    schemaVersion: 1,
-    ownerId: userId,
-    id: WEIGHTS_ID,
-    weights: merged.weights,
-    updatedAt: new Date().toISOString(),
-  } as RecallJsonRecord));
-  return merged.weights;
+  // 读-合-写收进锁内：updateRecallJsonRecord 的 fileEditLock 只保证单次 update
+  // 原子，跨不过锁外的 getRankingWeights——此前两次并发部分更新各自基于同一
+  // 份旧快照合并，后写覆盖先写，先提交的因子被静默丢弃。回调内的 existing 是
+  // 锁内最新值；串行调用下与旧实现完全等价，盘上非法时同样按默认值合并（一次
+  // 合法写入本身就是修复）。
+  const result = await updateRecallJsonRecord(userId, WEIGHTS_COLLECTION, WEIGHTS_ID, (existing) => {
+    const currentWeights = existing ? validateWeights((existing as RankingWeightsRecord).weights) : undefined;
+    const base = currentWeights && currentWeights.ok ? currentWeights.weights : DEFAULT_RANKING_WEIGHTS;
+    const merged = validateWeights({ ...base, ...partial });
+    if (merged.ok === false) {
+      throw new Error(`invalid catalog ranking weights: ${merged.reason}`);
+    }
+    return {
+      ...(existing || {}),
+      schemaVersion: 1,
+      ownerId: userId,
+      id: WEIGHTS_ID,
+      weights: merged.weights,
+      updatedAt: new Date().toISOString(),
+    } as RecallJsonRecord;
+  });
+  return (result as RankingWeightsRecord).weights;
 }

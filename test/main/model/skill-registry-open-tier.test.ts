@@ -342,6 +342,21 @@ describe('skill-registry › searchOpenTierSkills (global tier only)', () => {
 });
 
 describe('skill-registry › listSkillsForBridge (external CLI surface)', () => {
+  it('uses the requested uid for bridge listings even after the active user switches', async () => {
+    const otherUid = 'u2';
+    const otherRoot = path.join(tmpDir, otherUid, 'cloud', 'skills');
+    writeSkill(customDir(), 'requested-skill', 'requested-skill', 'requested user skill');
+    writeSkill(otherRoot, 'active-skill', 'active-skill', 'active user skill');
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(otherUid);
+
+    const { listSkillsForBridge } = await loadRegistry();
+    const ids = (await listSkillsForBridge(TEST_UID)).map((s) => s.id);
+
+    expect(ids).toContain('requested-skill');
+    expect(ids).not.toContain('active-skill');
+  });
+
   it('serves trusted + external packages but NEVER global roots', async () => {
     // Global roots are enabled by default; the CLI reads its own
     // ~/.claude|.codex/skills natively, so the bridge must not re-expose
@@ -367,6 +382,22 @@ describe('skill-registry › listSkillsForBridge (external CLI surface)', () => 
     const { listSkillsForBridge } = await loadRegistry();
     const rows = await listSkillsForBridge(TEST_UID);
     expect(rows.find((s) => s.id === 'pkg-skill')!.source).toBe('external');
+  });
+});
+
+describe('skill-registry › explicit user prompt roots', () => {
+  it('renders trusted and private skills from the requested uid', async () => {
+    const otherUid = 'u2';
+    writeSkill(customDir(), 'requested-skill', 'requested-skill', 'requested user skill');
+    writeSkill(path.join(tmpDir, otherUid, 'cloud', 'skills'), 'active-skill', 'active-skill', 'active user skill');
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(otherUid);
+
+    const { getSystemPromptBlock } = await loadRegistry();
+    const text = await getSystemPromptBlock({ userId: TEST_UID });
+
+    expect(text).toContain('requested-skill');
+    expect(text).not.toContain('active-skill');
   });
 });
 

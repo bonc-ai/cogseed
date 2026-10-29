@@ -3,7 +3,8 @@
 // surface: sign-in state, device list, consent list, sign-out and account
 // deletion. Talks to the Hub account service through the `hub-account.*`
 // IPC handlers; token material never crosses the IPC boundary (status DTOs
-// only).
+// only). T6 nickname composes shared uiFormModal/uiForm/uiField/uiInput
+// under registry CONN-M-001; no page-owned shell or focus behavior.
 
 const _hubLog = createLogger('hub-account:settings');
 
@@ -73,7 +74,53 @@ async function _hubStatus() {
 
 // ── 渲染 ─────────────────────────────────────────────────────────────────
 
+let _hubRenderGeneration = 0;
+// 最近一次成功渲染的数据快照。语言切换只重绘，不重新拉取身份数据
+// （hub-account.me 昵称 / 设备 / 授权），i18n-change 不应产生网络读取。
+let _hubAccountView = null;
+
+/** 用已取到的数据绘制账号卡；文案在绘制时经 t() 解析，因此可安全重绘。 */
+function _renderHubAccountView(view) {
+  const card = document.getElementById('hub-account-card');
+  if (!card || _nicknameCtx || !view) return;
+  _hubAccountView = view;
+  if (view.kind === 'unavailable') {
+    card.innerHTML = `<div class="settings-empty">${_escapeHtml(t('hub.account.unavailable'))}</div>`;
+    return;
+  }
+  if (view.kind === 'gate') {
+    card.innerHTML = `
+      <div class="settings-section-head">${_escapeHtml(t('hub.account.title'))}</div>
+      <div class="settings-empty">${_escapeHtml(t('hub.account.release_gate_closed'))}</div>
+    `;
+    return;
+  }
+  if (view.kind === 'signed-out') {
+    card.innerHTML = _signedOutCard(view.status);
+    _bindSignIn(card);
+    return;
+  }
+  card.innerHTML = _signedInCard(view.status, view.devices, view.consents, view.displayName, view.loginId, view.phoneMasked);
+  _bindSignedIn(card, { phoneMasked: view.phoneMasked, displayName: view.displayName, accountId: view.status.account_id });
+}
+
+// i18n-change 的本地重绘入口：沿用上一次的数据快照，只替换文案；
+// 只有快照缺失（或上次是“服务不可用”）时才回源，避免语言切换重新拉取昵称。
+function _repaintHubAccount() {
+  if (_nicknameCtx) return;
+  const card = document.getElementById('hub-account-card');
+  if (!card) return;
+  if (_deletionCtx) { _renderDeletion(card); return; }
+  if (_hubAccountView && _hubAccountView.kind !== 'unavailable') {
+    _renderHubAccountView(_hubAccountView);
+    return;
+  }
+  void _renderHubAccount();
+}
+
 async function _renderHubAccount() {
+  if (_nicknameCtx) return; // Preserve the shared modal's connected return-focus trigger.
+  const generation = ++_hubRenderGeneration;
   const card = document.getElementById('hub-account-card');
   if (!card) return;
   let status = null;
@@ -83,18 +130,16 @@ async function _renderHubAccount() {
     _hubLog.warn('hub account status refresh failed', { error: (err && err.message) || String(err) });
   }
 
+  if (_nicknameCtx || generation !== _hubRenderGeneration) return;
   if (!status) {
     // 注销流程进行中：状态刷新失败也不打断流程（切窗口后焦点刷新的重渲染）。
     if (_deletionCtx) { _renderDeletion(card); return; }
-    card.innerHTML = `<div class="settings-empty">${_escapeHtml(t('hub.account.unavailable'))}</div>`;
+    _renderHubAccountView({ kind: 'unavailable' });
     return;
   }
 
   if (status.release_enabled === false) {
-    card.innerHTML = `
-      <div class="settings-section-head">${_escapeHtml(t('hub.account.title'))}</div>
-      <div class="settings-empty">${_escapeHtml(t('hub.account.release_gate_closed'))}</div>
-    `;
+    _renderHubAccountView({ kind: 'gate' });
     return;
   }
 
@@ -102,8 +147,7 @@ async function _renderHubAccount() {
     // 真实登出/注销（会话已失效）：丢弃进行中的注销流程，呈现未登录态。
     _stopDeletionCountdown();
     _deletionCtx = null;
-    card.innerHTML = _signedOutCard(status);
-    _bindSignIn(card);
+    _renderHubAccountView({ kind: 'signed-out', status });
     return;
   }
 
@@ -142,8 +186,8 @@ async function _renderHubAccount() {
     }
   }
 
-  card.innerHTML = _signedInCard(status, devices, consents, displayName, loginId, phoneMasked);
-  _bindSignedIn(card, { phoneMasked });
+  if (_nicknameCtx || generation !== _hubRenderGeneration) return; // Keep the return-focus trigger.
+  _renderHubAccountView({ kind: 'signed-in', status, devices, consents, displayName, loginId, phoneMasked });
 }
 
 function _signedOutCard(status) {
@@ -267,6 +311,7 @@ function _signedInCard(status, devices, consents, displayName, loginId, phoneMas
     <div class="hub-card hub-card-list">${consentRows}</div>
 
     <div class="hub-actions">
+      ${uiButton({ label: t('hub.account.nickname_edit'), size: 'sm', attrs: { id: 'hub-account-edit-name' } })}
       ${uiButton({ label: t('hub.account.sign_out'), icon: 'log-out', size: 'sm', attrs: { id: 'hub-account-sign-out' } })}
       ${uiButton({ label: t('hub.account.delete_account'), icon: 'trash-2', role: 'danger', size: 'sm', attrs: { id: 'hub-account-delete' } })}
     </div>
@@ -296,6 +341,8 @@ function _bindSignIn(card) {
 }
 
 function _bindSignedIn(card, opts) {
+  const editName = card.querySelector('#hub-account-edit-name');
+  if (editName) editName.addEventListener('click', () => _openNicknameModal(opts || {}));
   const manage = card.querySelector('#hub-account-manage');
   if (manage) {
     manage.addEventListener('click', () => {
@@ -358,6 +405,78 @@ function _bindSignedIn(card, opts) {
       }
     });
   });
+}
+
+// T6 page-specific business form; structure/lifecycle are CONN-M-001 shared APIs.
+let _nicknameCtx = null;
+function _nicknameModalOptions(draft) {
+  return {
+    title: t('hub.account.nickname_title'), closeLabel: t('hub.account.nickname_cancel'),
+    submitLabel: t('hub.account.nickname_save'), busyLabel: t('hub.account.nickname_saving'),
+    cancelLabel: t('hub.account.nickname_cancel'), initialFocus: '#hub-nickname-input',
+    bodyHtml: uiForm({ fields: [uiField({ id: 'hub-nickname-input',
+      label: t('hub.account.nickname_label'), hint: t('hub.account.nickname_hint'), required: true,
+      control: { kind: 'input', value: draft, attrs: { autocomplete: 'nickname' } },
+    })] }),
+  };
+}
+function _bindNicknameForm(ctx) {
+  const input = ctx.modal.dialog.querySelector('#hub-nickname-input');
+  input.addEventListener('compositionstart', () => { ctx.composing = true; });
+  input.addEventListener('compositionend', () => { ctx.composing = false; });
+  input.addEventListener('keydown', event => {
+    if ((event.key === 'Enter' || event.keyCode === 229) && (event.isComposing || event.keyCode === 229)) event.preventDefault();
+  });
+}
+function _openNicknameModal(opts) {
+  if (_nicknameCtx) return;
+  _hubRenderGeneration += 1; // Revoke refreshes that began before this draft opened.
+  const ctx = { modal: null, errorKey: '', composing: false };
+  ctx.modal = uiFormModal({ ..._nicknameModalOptions(opts.displayName || ''), onSubmit: async () => {
+    if (ctx.composing) return;
+    const raw = ctx.modal.dialog.querySelector('#hub-nickname-input').value;
+    if (/\p{Cc}/u.test(raw) || !raw.trim() || raw.trim().length > 32) {
+      ctx.errorKey = 'hub.account.nickname_invalid';
+      ctx.modal.setFeedback(t(ctx.errorKey));
+      return;
+    }
+    ctx.errorKey = '';
+    ctx.modal.setFeedback('');
+    ctx.modal.setBusy(true);
+    try {
+      await _invoke('hub-account.update_profile', { display_name: raw });
+      if (_nicknameCtx === ctx) { ctx.saved = true; ctx.modal.close(true, 'saved'); }
+    } catch (err) {
+      if (_nicknameCtx !== ctx) return;
+      ctx.errorKey = 'hub.account.nickname_error';
+      ctx.modal.setFeedback(t(ctx.errorKey));
+    } finally {
+      ctx.modal.setBusy(false);
+    }
+  } });
+  _nicknameCtx = ctx;
+  _bindNicknameForm(ctx);
+  ctx.modal.then(() => {
+    if (_nicknameCtx === ctx) {
+      _nicknameCtx = null;
+      // Cancel has no write. Refresh after a successful save; defer until the
+      // shared modal restores focus to the still-connected trigger.
+      requestAnimationFrame(() => {
+        if (ctx.saved || ctx.sessionChanged) void _renderHubAccount();
+      });
+    }
+  });
+}
+function _relocalizeNicknameModal() {
+  const ctx = _nicknameCtx;
+  if (!ctx) return;
+  const input = ctx.modal.dialog.querySelector('#hub-nickname-input');
+  const start = input.selectionStart, end = input.selectionEnd;
+  ctx.modal.update(_nicknameModalOptions(input.value));
+  _bindNicknameForm(ctx);
+  const next = ctx.modal.dialog.querySelector('#hub-nickname-input');
+  next.setSelectionRange(start, end);
+  if (ctx.errorKey) ctx.modal.setFeedback(t(ctx.errorKey));
 }
 
 // ── 注销流程（P3394 DEL-01~04）───────────────────────────────────────────
@@ -661,8 +780,9 @@ window.addEventListener('focus', () => {
   if (pane && !pane.hidden) void _renderHubAccount();
 });
 window.addEventListener('i18n-change', () => {
+  _relocalizeNicknameModal();
   const pane = document.querySelector('.settings-tab-pane[data-settings-pane="account"]');
-  if (pane && !pane.hidden) void _renderHubAccount();
+  if (pane && !pane.hidden) _repaintHubAccount();
 });
 
 // deep link 登录完成的推送事件。`start_login` 在打开浏览器时就已返回，登录真正
@@ -693,6 +813,10 @@ if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
   try {
     window.cogseed.onPushEvent('hub-account:state-changed', (change) => {
       _hubLog.info('hub state change received', { reason: (change && change.reason) || 'unknown' });
+      if (_nicknameCtx && change && (change.reason === 'signed_out' || change.reason === 'account_deleted')) {
+        _nicknameCtx.sessionChanged = true;
+        _nicknameCtx.modal.close(null, 'session-changed');
+      }
       const pane = document.querySelector('.settings-tab-pane[data-settings-pane="account"]');
       if (pane && !pane.hidden) void _renderHubAccount();
     });

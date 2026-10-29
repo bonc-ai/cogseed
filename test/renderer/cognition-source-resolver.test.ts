@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { loadCognitionAssets, renderCognition } from './helpers/cognition-renderer';
+import { loadCognitionAssets, renderCognitionWithDialogs as renderCognition } from './helpers/cognition-renderer';
 
 const RAW_ID_PATTERNS = [/immediate-[0-9a-f]/, /kse-[0-9a-z]/, /turn-\d/, /conv-[0-9a-z]/, /proj-[0-9a-z]/, /aur-[0-9a-z]/, /aa-[0-9a-z]/];
 
@@ -241,10 +241,10 @@ describe('五处来源同名（US-603 AC1）', () => {
     expect(candidate).toContain('data-act="open-kstar-episode" data-id="kse-ep-1"');
   });
 
-  it('可解析的会话来源给回看入口（点回原对话）', () => {
+  it('可解析的会话来源给来源核对入口（核对后回看原对话）', () => {
     const html = assetDetailHtml();
 
-    expect(html).toContain('data-act="open-conversation" data-id="conv-src-1"');
+    expect(html).toContain('data-act="open-review-source" data-id="conv-src-1"');
   });
 
   it('版本证据与使用记录用同一标题（同源同解析）', () => {

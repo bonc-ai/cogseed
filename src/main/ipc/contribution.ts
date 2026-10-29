@@ -31,6 +31,9 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../logger';
+import * as nodePath from 'node:path';
+import { agentDir, marketplaceCacheSkillsDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
+import { readSkillDisplayName } from '../features/contribution/skill-display-name';
 import {
   createStaging, cleanupOrphanedStaging, type ContributionStaging,
 } from '../features/contribution/staging';
@@ -57,6 +60,11 @@ import {
 import { contributionTarget, localSkillUuid, mergeMine, readContributionStore, safeStoreView } from '../features/contribution/store';
 import { buildSubmissionUploadManifest, submissionMetadata } from '../features/contribution/upload-manifest';
 import { isHigherSemVer, parseSemVer } from '../features/contribution/version';
+import {
+  confirmAgentPreview, startAgentContribution, submitAgentContribution, type AgentContributionDeps,
+} from '../features/contribution/agent-contribution';
+import { localAgentUuid } from '../features/contribution/store';
+import type { AgentSubmissionManifest } from '../features/contribution/hub-client';
 
 const log = createLogger('ipc/contribution');
 
@@ -69,6 +77,33 @@ function assertHubId(value: unknown, field: string): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(value)) throw new Error(`invalid ${field}`);
   return value;
 }
+
+/** 本机 Agent id：与 `agents.ts` 的目录名同一字符集；先校验再拼路径，防目录穿越。 */
+function assertAgentId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value)) throw new Error('invalid agent_id');
+  return value;
+}
+
+/** Agent 贡献的外部能力组装点：业务在 `features/contribution/agent-contribution.ts`，这里只接线。 */
+const agentContributionDeps: AgentContributionDeps = {
+  gateIdentity,
+  resolveSources: (uid, agentId) => ({
+    agentDir: agentDir(uid, agentId),
+    userSkillsDir: userSkillsDir(uid),
+    stagingRoot: marketplaceCacheSkillsDir(uid),
+  }),
+  cleanupOrphans: cleanupOrphanedStaging,
+  skillDisplayName: (uid, skillId) => readSkillDisplayName([
+    userMarketplaceSkillDir(uid, skillId),
+    nodePath.join(userSkillsDir(uid), skillId),
+  ]),
+  fetchTerms,
+  createSubmission: (uid, args) => createSubmission(uid, { ...args, manifest: args.manifest as AgentSubmissionManifest }),
+  contributionTarget,
+  localAgentUuid,
+  clientVersion: clientAppVersion,
+  newIdempotencyKey: randomUUID,
+};
 
 function renderableApiError(err: unknown) {
   if (!(err instanceof ContributionApiError)) throw err;
@@ -215,6 +250,33 @@ export const invokeHandlers = {
   },
 
   /** 写入补齐值并**立即重检**。重检不交给渲染层调用——`C-FR-004c` 是机械要求。 */
+  /** 开始一次 Agent 贡献：身份门 → 暂存副本 → 准入（逐个随包 Skill）→ 预览。业务见 agent-contribution.ts。 */
+  'contribution.agent.start': async (payload: { agent_id?: unknown }, ctx: { userId: string }) =>
+    startAgentContribution(ctx.userId, assertAgentId(payload?.agent_id), agentContributionDeps),
+
+  'contribution.agent.confirm': async (
+    payload: { token?: unknown; digest?: unknown; acknowledge_hints?: unknown },
+    ctx: { userId: string },
+  ) =>
+    confirmAgentPreview(
+      ctx.userId, assertToken(payload?.token), typeof payload?.digest === 'string' ? payload.digest : '', agentContributionDeps,
+      { acknowledgeHints: payload?.acknowledge_hints === true },
+    ),
+
+  'contribution.agent.submit': async (
+    payload: { token?: unknown; version?: unknown; target_content_id?: unknown; replace_confirmed?: unknown },
+    ctx: { userId: string },
+  ) => {
+    const target = payload?.target_content_id == null || payload.target_content_id === ''
+      ? null : assertHubId(payload.target_content_id, 'target_content_id');
+    const result = await submitAgentContribution(ctx.userId, assertToken(payload?.token), {
+      version: typeof payload?.version === 'string' ? payload.version.trim() : '',
+      targetContentId: target,
+      replaceConfirmed: payload?.replace_confirmed === true,
+    }, agentContributionDeps);
+    return 'apiError' in result ? renderableApiError(result.apiError) : result;
+  },
+
   'contribution.complete': async (
     payload: {
       token?: unknown; name?: unknown; description?: unknown; version?: unknown;

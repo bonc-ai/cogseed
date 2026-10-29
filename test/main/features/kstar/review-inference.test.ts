@@ -70,7 +70,7 @@ describe('KSTAR review inference', () => {
     expect(result.review.actualResult).toContain('auth.test.ts');
   });
 
-  it('feeds referenced assets (in-use versions) into review input for lesson fusion（2026-09-16 版本组）', async () => {
+  it('does not feed ordinary cognition assets into isolated review input（2026-09-16 版本组）', async () => {
     const inference = await import('../../../../src/main/features/kstar/review-inference');
     let capturedMessage = '';
     const runModel = vi.fn(async ({ message }: { message: string }) => {
@@ -81,9 +81,9 @@ describe('KSTAR review inference', () => {
       k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: ['asset-fuse-1'] },
     }), { runModel });
 
-    expect(capturedMessage).toContain('referencedAssets');
-    expect(capturedMessage).toContain('asset-fuse-1');
-    expect(capturedMessage).toContain('decision log');
+    expect(capturedMessage).not.toContain('referencedAssets');
+    expect(capturedMessage).not.toContain('asset-fuse-1');
+    expect(capturedMessage).not.toContain('decision log');
   });
 
   it('uses strict model analysis for a completed task without objective verification', async () => {
@@ -273,7 +273,7 @@ describe('KSTAR review inference', () => {
     });
   });
 
-  it('accepts model secondary attribution only when it cites an Episode evidence id', async () => {
+  it('accepts model secondary attribution only when it cites an Episode evidence id（坏引用只丢条目不废评审）', async () => {
     const inference = await import('../../../../src/main/features/kstar/review-inference');
     const result = await inference.inferKstarReview('user-a', episode(), {
       runModel: async () => JSON.stringify({
@@ -314,7 +314,11 @@ describe('KSTAR review inference', () => {
         }],
       }),
     });
-    expect(rejected.inferenceMethod).toBe('unknown');
+    // 2026-10-02 契约更新：引用不实的**该条**归因被丢弃，模型评审本体保留
+    //（inferenceMethod=model；旧版整份作废降级成 unknown——一个坏 token 丢掉
+    // 全部推理结论）。次级归因由确定性兜底回填 insufficient_evidence（detailsFor
+    // 的既定回填语义），不再阻断评审。
+    expect(rejected.inferenceMethod).toBe('model');
     expect(rejected.review.attributionDetails).toMatchObject([{
       category: 'insufficient_evidence',
       source: 'deterministic',

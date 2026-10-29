@@ -41,6 +41,7 @@ const _chipState = {
   signInTimeout: null,
   lastFocusRefresh: 0,
   meCache: { at: 0, displayName: null },
+  meGeneration: 0,
   // ── 融合面板交互（点击开合，无 hover / 钉住状态）──
   isOpen: false,
   settingsActive: false, // 当前视图是否为 settings（boot.js 同步）
@@ -74,15 +75,31 @@ async function _chipStatus() {
   return res.status;
 }
 
+// Invalidation also fences requests already awaiting IPC in the same login session.
+function _invalidateChipName() {
+  _chipState.meGeneration++;
+  _chipState.meCache = { at: 0, displayName: null };
+}
+
+function _chipNameOwnerIsCurrent(generation, accountId) {
+  return generation === _chipState.meGeneration
+    && _chipState.mode === 'signed-in'
+    && _chipState.status?.signed_in
+    && _chipState.status.account_id === accountId;
+}
+
 /** 打开菜单时异步补 display_name（hub-account.me，60s 缓存，失败静默）。 */
 async function _chipDisplayName() {
   const cache = _chipState.meCache;
+  const generation = _chipState.meGeneration;
+  const accountId = _chipState.status?.account_id;
   if (cache.displayName && Date.now() - cache.at < _ME_CACHE_MS) return cache.displayName;
   try {
     const res = await _chipInvoke('hub-account.me');
     const name = res.me && res.me.account && res.me.account.community_profile
       ? (res.me.account.community_profile.display_name || null)
       : null;
+    if (!_chipNameOwnerIsCurrent(generation, accountId)) return null;
     cache.at = Date.now();
     cache.displayName = name;
     return name;
@@ -167,7 +184,10 @@ function _renderChip() {
   // 已登录：异步补 display_name（复用 60s 缓存的 hub-account.me 通道，
   // 失败静默保持脱敏 ID；渲染可能已切换状态，先回读再写）。
   if (signedIn) {
+    const generation = _chipState.meGeneration;
+    const accountId = status.account_id;
     void _chipDisplayName().then((displayName) => {
+      if (!_chipNameOwnerIsCurrent(generation, accountId)) return;
       const rootNow = _chipRoot();
       const nameEl = rootNow && rootNow.querySelector('[data-chip-role="name"]');
       const avatarEl = rootNow && rootNow.querySelector('.hub-chip-avatar.is-gradient');
@@ -224,7 +244,9 @@ async function _renderMenu() {
   // 已登录：账号头部 + 设置 + 退出 + 收起。
   // P3394 ACCOUNT-01/03：菜单只保留当前账号状态、设置、退出登录；
   // 不再提供「账号概览」「登录设备」入口，也不展示 LocalIdentity 绑定状态。
+  const generation = _chipState.meGeneration;
   const displayName = await _chipDisplayName();
+  if (!_chipNameOwnerIsCurrent(generation, status.account_id)) return;
   if (displayName) {
     identity.name = displayName;
     identity.avatar = { text: String(displayName).trim().charAt(0).toUpperCase() || '?', variant: 'gradient' };
@@ -332,6 +354,8 @@ async function _refresh() {
   } catch (err) {
     _chipLog.warn('hub chip status refresh failed', { error: (err && err.message) || String(err) });
   }
+  if (_chipState.status?.account_id !== status?.account_id
+    || !!_chipState.status?.signed_in !== !!status?.signed_in) _invalidateChipName();
   _chipState.status = status;
   if (status && status.signed_in) {
     _setSignedIn();
@@ -350,7 +374,7 @@ async function _onMenuAction(action) {
     if (!window.confirm(t('hub.account.sign_out_confirm'))) return;
     try {
       await _chipInvoke('hub-account.logout');
-      _chipState.meCache = { at: 0, displayName: null };
+      _invalidateChipName();
       await _refresh();
     } catch (err) {
       _chipLog.warn('hub sign-out failed', { error: (err && err.message) || String(err) });
@@ -403,6 +427,7 @@ function _initChip() {
     try {
       window.cogseed.onPushEvent('hub-account:state-changed', (change) => {
         _chipLog.info('hub chip state change received', { reason: (change && change.reason) || 'unknown' });
+        _invalidateChipName();
         void _refresh();
       });
     } catch (err) {

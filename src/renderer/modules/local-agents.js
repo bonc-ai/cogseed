@@ -132,7 +132,6 @@ async function loadLocalCliEntries({ force = false } = {}) {
 // genuinely empties the selector still re-routes through this branch.
 const EXT_CLI_NONE = '__none__';
 
-let _extCliSelectApi = null;
 
 // 「正在扫描本机 CLI…」的最小可见时长：本机探测很快（实测约 200ms），
 // 若探测一返回就立刻切到最终列表，扫描态会被 modal 打开动画吞掉，用户
@@ -221,26 +220,111 @@ async function toggleP3394Peer(agentId, disabled) {
   return res;
 }
 
-async function mountExternalCliSelect(onChange) {
-  const mount = document.getElementById('agent-modal-ext-cli-select');
-  if (!mount) return null;
-  const noneLabel = t('agent_modal.ext_cli_none');
-  const scanningLabel = t('agent_modal.ext_cli_scanning');
-  const handleChange = (v) => {
-    const cli = (!v || v === EXT_CLI_NONE) ? null : v;
-    if (typeof onChange === 'function') onChange(cli);
+// 「外接」tab 的卡片选择（2026-10-20 改版，替代原下拉框）：本机识别到的智能体一张卡片一个，
+// 已安装的可选；未检测到的置灰，点一下在下方说明原因。选中状态由 `_extCliValue` 保存，
+// `getExternalCliValue` / `setExternalCliValue` 接口不变。
+let _extCliValue = EXT_CLI_NONE;
+let _extCliOnChange = null;
+let _extCliCards = [];
+
+function _extCliStatusText(card) {
+  if (!card.available) return t('agent_modal.ext_card_missing');
+  const bits = [];
+  if (card.version) bits.push(`v${String(card.version).replace(/^v/i, '')}`);
+  if (card.running) bits.push(t('agent_modal.ext_card_running'));
+  else if (card.boundNames.length) bits.push(t('agent_modal.ext_card_bound', { n: card.boundNames.length }));
+  else bits.push(t('agent_modal.ext_card_installed'));
+  return bits.join(' · ');
+}
+
+function _resetExternalPickHint() {
+  const hint = document.getElementById('agent-ext-missing-hint');
+  if (!hint) return;
+  hint.textContent = t('agent_modal.ext_pick_hint');
+  hint.removeAttribute('title');
+  hint.classList.remove('is-warning');
+}
+
+function _renderExternalCliCards(mount) {
+  if (!mount) return;
+  // 统一的字母图标（品牌绿底；未检测到的灰底），不用按名字随机配色。
+  const avatar = (card) => `<span class="agent-ext-card__letter">${escapeHtml(Array.from(card.name).slice(0, 2).join(''))}</span>`;
+  // ARIA radio 组使用 roving tabindex：已选项是唯一 Tab 落点；还没选时用第一个可用项。
+  const focusableType = (_extCliCards.find((card) => card.available && card.type === _extCliValue)
+    || _extCliCards.find((card) => card.available) || {}).type || '';
+  mount.innerHTML = _extCliCards.map((card) => {
+    const selected = card.available && card.type === _extCliValue;
+    const unavailableReason = card.available ? '' : getLocalCliUnavailableHint(card.entry);
+    const titleText = unavailableReason || (card.boundNames.length ? card.boundNames.join(' / ') : '');
+    const title = titleText ? ` title="${escapeHtml(titleText)}"` : '';
+    const ariaLabel = [card.name, _extCliStatusText(card), unavailableReason].filter(Boolean).join('. ');
+    return `<div class="agent-ext-card${selected ? ' is-selected' : ''}${card.available ? '' : ' is-unavailable'}" role="radio"
+        aria-label="${escapeHtml(ariaLabel)}" aria-checked="${selected ? 'true' : 'false'}"${card.available ? '' : ' aria-disabled="true"'} tabindex="${card.available && card.type === focusableType ? '0' : '-1'}" data-ext-cli="${escapeHtml(card.type)}"${title}>
+        <span class="agent-ext-card__avatar">${avatar(card)}</span>
+        <span class="agent-ext-card__text"><strong>${escapeHtml(card.name)}</strong><span>${escapeHtml(_extCliStatusText(card))}</span></span>
+        <span class="agent-ext-card__check" aria-hidden="true">${selected && typeof uiIconHtml === 'function' ? uiIconHtml('check', 'ui-icon') : ''}</span>
+      </div>`;
+  }).join('');
+  if (mount.dataset.extWired === 'true') return;
+  mount.dataset.extWired = 'true';
+  const cardElement = (type) => Array.from(mount.querySelectorAll('[data-ext-cli]'))
+    .find((el) => el.dataset.extCli === type);
+  const select = (card, { focus = false } = {}) => {
+    _resetExternalPickHint();
+    _extCliValue = card.type;
+    _renderExternalCliCards(mount);
+    if (focus) cardElement(card.type)?.focus();
+    if (typeof _extCliOnChange === 'function') _extCliOnChange(_extCliValue);
   };
+  const pick = (el, { focus = false } = {}) => {
+    if (!el) return;
+    const card = _extCliCards.find((c) => c.type === el.dataset.extCli);
+    const hint = document.getElementById('agent-ext-missing-hint');
+    if (!card) return;
+    if (!card.available) {
+      // 不静默：告诉用户为什么不能选、该怎么处理（WorkBuddy 无需注册 PATH，见 getLocalCliUnavailableHint）。
+      // 原因写进标题行的提示里，不新增一行，弹窗高度不变。
+      if (hint) {
+        hint.textContent = `${card.name}：${getLocalCliUnavailableHint(card.entry)}`;
+        hint.title = hint.textContent; // 一行放不下时悬停看全文
+        hint.classList.add('is-warning');
+      }
+      return;
+    }
+    select(card, { focus });
+  };
+  mount.addEventListener('click', (e) => pick(e.target.closest('[data-ext-cli]')));
+  mount.addEventListener('keydown', (e) => {
+    const current = e.target.closest('[data-ext-cli]');
+    if (!current) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      pick(current, { focus: true });
+      return;
+    }
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+    const available = _extCliCards.filter((card) => card.available);
+    if (!available.length) return;
+    e.preventDefault();
+    const currentIndex = Math.max(0, available.findIndex((card) => card.type === current.dataset.extCli));
+    const delta = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1;
+    const nextIndex = e.key === 'Home' ? 0
+      : e.key === 'End' ? available.length - 1
+        : (currentIndex + delta + available.length) % available.length;
+    select(available[nextIndex], { focus: true });
+  });
+}
+
+async function mountExternalCliSelect(onChange) {
+  const mount = document.getElementById('agent-ext-pick');
+  if (!mount) return null;
+  _extCliOnChange = onChange;
+  _extCliValue = EXT_CLI_NONE;
+  if (typeof onChange === 'function') onChange(null);
+  _resetExternalPickHint();
   // Clear the previous result immediately. This makes the real local probe
-  // visible instead of leaving a stale cached menu on screen while IPC runs.
-  const scanningOptions = [{ value: EXT_CLI_NONE, label: scanningLabel }];
-  if (!_extCliSelectApi) {
-    _extCliSelectApi = _aiSelectMount(mount, {
-      options: scanningOptions, value: EXT_CLI_NONE,
-      placeholder: noneLabel, onChange: handleChange,
-    });
-  } else {
-    _extCliSelectApi.setOptions(scanningOptions, { value: EXT_CLI_NONE });
-  }
+  // visible instead of leaving stale cards on screen while IPC runs.
+  mount.innerHTML = `<div class="agent-ext-pick-scanning" role="status">${escapeHtml(t('agent_modal.ext_cli_scanning'))}</div>`;
   // The modal may have been opened before the user installed a CLI. Re-probe
   // on every open so the renderer's longer-lived cache cannot preserve a
   // stale "not installed" result for the rest of the app session.
@@ -254,74 +338,37 @@ async function mountExternalCliSelect(onChange) {
     await _sleep(EXT_CLI_SCAN_MIN_VISIBLE_MS - scanElapsed);
   }
   const entryByType = new Map(entries.map((entry) => [entry.type, entry]));
-
-  // 不可用预设的可见引导（不静默消失）：用户能知道"为什么没有这一项、
-  // 该怎么处理"——WorkBuddy 提示无需注册 PATH（见 getLocalCliUnavailableHint）。
-  const missingHint = document.getElementById('agent-ext-missing-hint');
-  const missing = EXTERNAL_DEFAULT_CLI_TYPES
-    .map((type) => entryByType.get(type))
-    .filter((entry) => entry && !entry.available);
-  if (missingHint) {
-    missingHint.style.display = missing.length ? '' : 'none';
-    missingHint.innerHTML = '';
-    if (missing.length) {
-      const title = document.createElement('div');
-      title.className = 'agent-ext-missing-title';
-      title.textContent = t('agent_modal.ext_cli_missing_label');
-      missingHint.appendChild(title);
-      for (const entry of missing) {
-        const item = document.createElement('div');
-        item.className = 'agent-ext-missing-item';
-        const name = document.createElement('span');
-        name.className = 'agent-ext-missing-name';
-        name.textContent = (getCliDefaults(entry.type)?.name) || entry.type;
-        item.appendChild(name);
-        item.appendChild(document.createTextNode(' — ' + getLocalCliUnavailableHint(entry)));
-        missingHint.appendChild(item);
-      }
-    }
-  }
   // Stable five-Agent order; local discovery controls whether a preset is
   // selectable and supplies its absolute binary path + detected version.
-  const available = EXTERNAL_DEFAULT_CLI_TYPES
+  _extCliCards = EXTERNAL_DEFAULT_CLI_TYPES
     .map((type) => entryByType.get(type))
-    .filter((entry) => entry && entry.available);
-  const runningLabel = t('agent_modal.ext_cli_running');
-  const connectedLabel = t('agent_modal.ext_cli_connected');
-  const options = [
-    { value: EXT_CLI_NONE, label: noneLabel },
-    ...available.map(e => {
-      const gw = gateways.find(g => g && g.cli === e.type);
-      const status = gw && gw.running ? runningLabel : '';
-      // 同 CLI 允许多个外接 agent；已绑定只打标不禁用，让用户看到当前
-      // 实例已有该 CLI 的成员（含名字，方便识别是哪个在占用）。
-      const boundNames = (bound && Array.isArray(bound[e.type])) ? bound[e.type] : [];
-      // label 最终经 textContent 渲染（不解析 HTML），直接以原文拼接名字即可。
-      const boundMark = boundNames.length
-        ? ` ${connectedLabel}(${boundNames.join('/')})`
-        : '';
+    .filter(Boolean)
+    .map((entry) => {
+      const gw = gateways.find((g) => g && g.cli === entry.type);
+      // 同 CLI 允许多个外接 agent；已绑定只标注不禁用（名字放在 title 里，方便识别）。
+      const boundNames = (bound && Array.isArray(bound[entry.type])) ? bound[entry.type] : [];
       return {
-        value: e.type,
-        label: `${(getCliDefaults(e.type)?.name) || e.type}${e.version ? ` (${e.version})` : ''}${status ? ' ' + status : ''}${boundMark}`,
+        type: entry.type,
+        name: (getCliDefaults(entry.type)?.name) || entry.type,
+        version: entry.version || '',
+        available: !!entry.available,
+        running: !!(gw && gw.running),
+        boundNames,
+        entry,
       };
-    }),
-  ];
-  if (!_extCliSelectApi) {
-    _extCliSelectApi = _aiSelectMount(mount, {
-      options, value: EXT_CLI_NONE,
-      placeholder: noneLabel,
-      onChange: handleChange,
     });
-  } else {
-    _extCliSelectApi.setOptions(options, { value: EXT_CLI_NONE });
+  if (!_extCliCards.length) {
+    mount.innerHTML = `<div class="agent-ext-pick-scanning">${escapeHtml(t('agent_modal.ext_cli_missing_label'))}</div>`;
+    return null;
   }
-  return _extCliSelectApi;
+  _renderExternalCliCards(mount);
+  return { getValue: () => _extCliValue, setValue: (v) => { _extCliValue = v || EXT_CLI_NONE; _renderExternalCliCards(mount); } };
 }
 
 /** Read the currently-selected CLI type from the External tab, or null
  *  when the user kept the "not selected" sentinel. */
 function getExternalCliValue() {
-  const v = _extCliSelectApi ? _extCliSelectApi.getValue() : EXT_CLI_NONE;
+  const v = _extCliValue;
   if (!v || v === EXT_CLI_NONE) return null;
   return v;
 }
@@ -330,8 +377,8 @@ function getExternalCliValue() {
  *  to seed from the bound CLI). Pass null to revert to the "not
  *  selected" sentinel. */
 function setExternalCliValue(cliType) {
-  if (!_extCliSelectApi) return;
-  _extCliSelectApi.setValue(cliType || EXT_CLI_NONE);
+  _extCliValue = cliType || EXT_CLI_NONE;
+  _renderExternalCliCards(document.getElementById('agent-ext-pick'));
 }
 
 window.loadLocalCliEntries = loadLocalCliEntries;

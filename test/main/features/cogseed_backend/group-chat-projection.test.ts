@@ -53,7 +53,7 @@ describe('CogSeed Group Chat projection bridge', () => {
     });
     expect(groupChatProcessDataForProjection('tool.finished', { name: 'read_file', isError: false })).toEqual({
       type: 'event',
-      event: { stream: 'tool', data: { phase: 'result', name: 'read_file', isError: false } },
+      event: { stream: 'tool', data: { phase: 'end', name: 'read_file', isError: false } },
     });
     expect(groupChatProcessDataForProjection('task.started', { kind: 'task.completed' })).toEqual({
       type: 'event',
@@ -149,6 +149,10 @@ describe('CogSeed Group Chat projection bridge', () => {
     });
 
     const settled = await store.readRun(userId, cid, run!.run_id);
+    // R-11（真机 2026-10-14 16:24 事故）：唤醒/后端派发的工人走的是这条投影
+    // 终态路径，此前**从不问**"commander 是否欠一次汇报"，于是工人交付后没有
+    // 汇报回合——commander 上一句仍停在"等你批准"，用户看到谁在执行的错觉。
+    expect(settled).toMatchObject({ actor_report_enqueued: true });
     expect(settled).toMatchObject({
       status: 'completed',
       actors: [{
@@ -170,6 +174,67 @@ describe('CogSeed Group Chat projection bridge', () => {
       }),
     ]);
     await bus.dropConv(userId, cid);
+  });
+
+  it.each(['transcript_correction_incomplete', 'transcript_confirmation_required', 'transcript_scope_mismatch'])('keeps the durable collaboration summary incomplete for %s', async (code) => {
+    const chats = await import('../../../../src/main/features/chats');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const store = await import('../../../../src/main/features/group_chat/run_store');
+    const { cogseedGroupChatProjection } = await import('../../../../src/main/features/cogseed_backend/group-chat-projection');
+    const userId = 'projection-correction-user';
+    const agentId = 'agent-correction';
+    const conversation = await chats.createConversation(userId, { title: 'Correction gate regression' });
+    const cid = conversation.conversation_id;
+    const run = await store.createRun({ uid: userId, cid, submittedText: 'Summarize meeting', memberAgentIds: [agentId], mentionAgentIds: [agentId] });
+    const base = { userId, conversationId: cid, agentId, taskId: `cogseed-task-${cid}`, sessionId: `cogseed-session-${cid}`, groupChatRunId: run!.run_id };
+    await cogseedGroupChatProjection.project({ ...base, event: { eventId: `start-${cid}`, type: 'task.started', payload: {} } });
+    const detail = code === 'transcript_confirmation_required' ? '- 「原词」 → 「建议词」 (1)\n  原始上下文' : 'Correction not complete';
+    await cogseedGroupChatProjection.project({ ...base, event: { eventId: `stop-${cid}`, type: 'task.failed', payload: { code, error: detail } } });
+    expect((await store.readRun(userId, cid, run!.run_id))?.status).not.toBe('completed');
+    const messages = await groupChat.readMessages(userId, cid);
+    expect(messages.find(message => message.from === agentId)).toMatchObject({ failure_code: code });
+    if (code === 'transcript_confirmation_required') expect(messages.find(message => message.from === agentId)?.text).toContain(detail);
+    expect(messages.some(message => message.run_summary?.status === 'completed')).toBe(false);
+    await bus.dropConv(userId, cid);
+  });
+
+  it('projects confirmation as waiting and resumes the same task in a fresh bubble exactly once', async () => {
+    const { createCogSeedGroupChatProjection } = await import('../../../../src/main/features/cogseed_backend/group-chat-projection');
+    const appendTerminalMessage = vi.fn(async (_input: unknown) => true);
+    const projection = createCogSeedGroupChatProjection({
+      conversationExists: async () => true,
+      appendProcessEvent: vi.fn(async () => undefined),
+      appendTerminalMessage,
+    });
+    const base = { userId: 'waiting-user', conversationId: 'waiting-cid', agentId: 'meeting-agent', taskId: 'cogseed-task-waiting', sessionId: 'cogseed-session-waiting' };
+    await projection.project({ ...base, event: { eventId: 'start-initial', type: 'task.started', payload: {} } });
+    await projection.project({ ...base, event: { eventId: 'wait-initial', type: 'task.waiting_user', payload: { text: 'Please choose corrections.' } } });
+    expect(appendTerminalMessage).toHaveBeenLastCalledWith(expect.objectContaining({ terminalStatus: 'waiting_input', text: 'Please choose corrections.' }));
+    const payload = { continuationRequestId: 'req-confirmation' };
+    await projection.project({ ...base, event: { eventId: 'start-resume', type: 'task.started', payload } });
+    const terminal = { ...base, event: { eventId: 'done-resume', type: 'task.completed' as const, payload: { ...payload, text: 'Minutes ready.' } } };
+    await projection.project(terminal);
+    expect(await projection.project(terminal)).toBe('duplicate');
+    expect(appendTerminalMessage).toHaveBeenCalledTimes(2);
+    expect(appendTerminalMessage.mock.calls[1][0]).toMatchObject({ terminalStatus: 'completed', text: 'Minutes ready.', turnId: 'cogseed-task-waiting-req-confirmation' });
+  });
+
+  it('shows the Agent ask instead of the raw candidate list when it answered a pending confirmation', async () => {
+    const { createCogSeedGroupChatProjection } = await import('../../../../src/main/features/cogseed_backend/group-chat-projection');
+    const appendTerminalMessage = vi.fn(async (_input: unknown) => true);
+    const projection = createCogSeedGroupChatProjection({
+      conversationExists: async () => true,
+      appendProcessEvent: vi.fn(async () => undefined),
+      appendTerminalMessage,
+    });
+    const base = { userId: 'reply-user', conversationId: 'reply-cid', agentId: 'meeting-agent', taskId: 'cogseed-task-reply', sessionId: 'cogseed-session-reply' };
+    await projection.project({ ...base, event: { eventId: 'start-reply', type: 'task.started', payload: {} } });
+    await projection.project({ ...base, event: { eventId: 'wait-reply', type: 'task.waiting_user', payload: {
+      code: 'transcript_confirmation_required', error: '- 「机制」 → 「机智」 (1)\n  ctx', reply: '机制要改成机智吗？' } } });
+    const text = (appendTerminalMessage.mock.lastCall![0] as { text: string }).text;
+    expect(text).toContain('机制要改成机智吗？');
+    expect(text).not.toContain('「机制」 → 「机智」');
   });
 
   it('lets deletion finish while a detached projection waits, then rejects every late side effect', async () => {

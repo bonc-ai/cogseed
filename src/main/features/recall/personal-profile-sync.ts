@@ -13,7 +13,7 @@ import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { ensurePersonalProfileEntry as _legacyEnsurePersonalProfileEntry } from '../memory';
 
 /**
- * 画像投影桥退役（2026-09-22 清单 #11）：背景块已从资产库渲染（profile-block），
+ * 画像投影桥退役：背景块已从资产库渲染（profile-block），
  * "把资产抄进 USER.md 供背景块读"这条投影没有消费者了——默认写入改为 no-op
  * （角色模板字段的写入不受影响）。保留 legacy 实现引用供回滚。
  */
@@ -29,7 +29,7 @@ import {
   removeRoleTemplateValuesForRecallAsset,
 } from '../personal_ontology_contract';
 import { routeCandidateToField, type RouteDecision } from '../personal_ontology_router';
-import { listAbilityAssets } from './asset-service';
+import { abilityAssetActiveVersion, listAbilityAssets, matchesAbilityAssetActiveVersion, readAbilityAsset } from './asset-service';
 import { readRecallJsonRecord, updateRecallJsonRecord } from './store';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import type { RecallJsonRecord } from './types';
@@ -85,6 +85,8 @@ export interface PersonalProfileSyncDependencies {
   listCatalog?: (userId: string) => Promise<TemplateCatalogEntry[]>;
   routeAsset?: (userId: string, statement: string, catalog: TemplateCatalogEntry[]) => Promise<RouteDecision>;
   appendFieldValue?: typeof appendRoleTemplateFieldValue;
+  /** Re-read the source asset inside the PO write lock; tests inject this. */
+  readAsset?: (userId: string, assetId: string) => Promise<RecallAbilityAssetRecord | undefined>;
   writeProfileEntry?: typeof _legacyEnsurePersonalProfileEntry;
 }
 
@@ -296,7 +298,7 @@ async function syncAsset(
   userId: string,
   asset: RecallAbilityAssetRecord,
   catalog: TemplateCatalogEntry[],
-  deps: Required<Pick<PersonalProfileSyncDependencies, 'routeAsset' | 'appendFieldValue'>>,
+  deps: Required<Pick<PersonalProfileSyncDependencies, 'routeAsset' | 'appendFieldValue' | 'readAsset'>>,
   target?: PersonalProfileTarget,
 ): Promise<'written' | 'skipped' | 'unmatched' | { failed: string }> {
   if (!isEligibleTemplateAsset(asset)) return 'skipped';
@@ -364,7 +366,11 @@ async function syncAsset(
     // and detach the @asset marker from its value.
     const projectionValue = String(asset.statement || '').replace(/[\r\n]+/g, ' ').replace(/[\t ]+/g, ' ').trim();
     if (!projectionValue) throw new Error('personal asset statement is empty');
-    const write = await deps.appendFieldValue(userId, fieldRef, projectionValue, '智能', undefined, asset.id);
+    const write = await deps.appendFieldValue(userId, fieldRef, projectionValue, '智能', undefined, asset.id, async () => {
+      const current = await deps.readAsset(userId, asset.id).catch(() => undefined);
+      return Boolean(current) && current.status === 'active' && current.type === 'personal'
+        && matchesAbilityAssetActiveVersion(current, abilityAssetActiveVersion(asset));
+    });
     if (!write.ok) throw new Error(write.error || 'profile field write failed');
 
     // 回执记「值实际落在哪」。fieldRef 是持久化的，schema 改名/移动之后 placement
@@ -397,17 +403,17 @@ export async function removePersonalProfileProjectionForAsset(
   assetId: string,
 ): Promise<{ ok: boolean; removed: number; error?: string }> {
   if (!safeId(userId) || !safeId(assetId)) return { ok: false, removed: 0, error: 'invalid profile projection identity' };
+  // 投影记录缺失/非 applied 也可能是历史投影；按资产所有权标记扫模板值，
+  // 不因回执缺失就把副本留在 USER.md/角色模板里。
   const existing = await readRecallJsonRecord(userId, PROJECTION_COLLECTION, projectionIdFor(assetId));
-  if (!existing || existing.status !== 'applied') return { ok: true, removed: 0 };
-  if (Number(existing.projectionVersion || 1) < 2) {
-    return { ok: false, removed: 0, error: 'legacy profile projection needs review before cleanup' };
-  }
   const result = await removeRoleTemplateValuesForRecallAsset(userId, assetId);
   if (!result.ok) return result;
-  await updateRecallJsonRecord(userId, PROJECTION_COLLECTION, projectionIdFor(assetId), (current) => {
-    if (!current) throw new Error('profile projection record not found');
-    return { ...current, status: 'removed', updatedAt: new Date().toISOString() } as PersonalProfileProjectionRecord;
-  });
+  if (existing) {
+    await updateRecallJsonRecord(userId, PROJECTION_COLLECTION, projectionIdFor(assetId), (current) => {
+      if (!current) throw new Error('profile projection record not found');
+      return { ...current, status: 'removed', updatedAt: new Date().toISOString() } as PersonalProfileProjectionRecord;
+    });
+  }
   return result;
 }
 
@@ -427,13 +433,13 @@ export async function syncPersonalProfileFromRecallAssets(
   const listCatalog = dependencies.listCatalog || listTemplateFileCatalog;
   const routeAsset = dependencies.routeAsset || routeCandidateToField;
   const appendFieldValue = dependencies.appendFieldValue || appendRoleTemplateFieldValue;
-  const writeProfileEntry: typeof _legacyEnsurePersonalProfileEntry = dependencies.writeProfileEntry
-    || ((_userId: string, sourceId: string) => ({
-      ok: true,
-      // 退役 no-op（2026-09-22）：同步签名（与 legacy 一致），伪造最小 record
-      // 满足调用方判定；不写任何文件。
-      record: { recordId: `retired-${sourceId}`, text: '', contentSha256: '' },
-    })) as unknown as typeof _legacyEnsurePersonalProfileEntry;
+  const readAsset = dependencies.readAsset || readAbilityAsset;
+  // 画像记忆桥退役：背景块已从资产库渲染（profile-block），
+  // 真实写入器只经 dependencies 注入（单测锁旧单元行为 / 回滚用）；生产默认
+  // 路径如实记 skipped。退役期的默认实现是个 no-op——却返回 ok 并伪造 record，
+  // 于是每条 Personal 资产都落一张 'applied' 投影、profileWritten 逐年虚高：
+  // 没写任何东西却报成功。no-op 不是写入，不能再伪装成写入。
+  const writeProfileEntry: typeof _legacyEnsurePersonalProfileEntry | null = dependencies.writeProfileEntry || null;
 
   const assets = await listAssets(userId);
   // USER.md is the independent personal-profile projection. A temporary
@@ -467,7 +473,11 @@ export async function syncPersonalProfileFromRecallAssets(
   // template being installed. Role-template fields are an optional second
   // projection handled below.
   for (const asset of personalAssets) {
-    const outcome = await syncProfileMemoryAsset(userId, asset, writeProfileEntry);
+    // 未注入写入器（生产默认）：这条链路没有消费者也没有写入，直接 skipped，
+    // 不落投影、不计数——「没发生」与「发生并成功」必须分得开。
+    const outcome = writeProfileEntry
+      ? await syncProfileMemoryAsset(userId, asset, writeProfileEntry)
+      : 'skipped' as const;
     if (outcome === 'written') result.profileWritten! += 1;
     else if (outcome === 'skipped') result.profileSkipped! += 1;
     else {
@@ -487,7 +497,7 @@ export async function syncPersonalProfileFromRecallAssets(
   }
 
   for (const asset of personalAssets) {
-    const outcome = await syncAsset(userId, asset, catalog, { routeAsset, appendFieldValue }, options.target);
+    const outcome = await syncAsset(userId, asset, catalog, { routeAsset, appendFieldValue, readAsset }, options.target);
     if (outcome === 'written') result.written += 1;
     else if (outcome === 'skipped') result.skipped += 1;
     else if (outcome === 'unmatched') result.unmatched += 1;

@@ -194,6 +194,14 @@ async function _dispatchNextQueued(cid) {
     _updateConvSidebarBadge(cid);
     if (cid === currentCid) renderMessageQueue(cid);
   };
+  // Rows persisted before every enqueue path minted a request id can never
+  // match an acceptance receipt and would replay after each stream end.
+  // Backfill once and persist so retries of this row stay idempotent.
+  if (!String(extra.submit_request_id || '').trim()) {
+    extra.submit_request_id = `req_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    next.extra = { ...(next.extra && typeof next.extra === 'object' ? next.extra : {}), submit_request_id: extra.submit_request_id };
+    _saveQueueToStorage(cid);
+  }
   const submitRequestId = String(extra.submit_request_id || '');
   _queueDispatchInFlight.set(cid, next.id);
   let result = null;

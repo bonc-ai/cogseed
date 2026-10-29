@@ -338,9 +338,22 @@ function lockFile(uid: string): string {
   return path.join(userLocalRoot(uid), 'migrations', 'project-layout-v5.lock');
 }
 
-function alreadyApplied(uid: string): boolean {
+/**
+ * marker 的语义（2026-10-08 审计修正）：
+ *   - 没跑过 / 版本不符 → 全量跑
+ *   - 跑过且没有失败项 → 幂等短路（除非 `force`）
+ *   - 跑过但有 `failed_project_ids` → **只重试这些项目**
+ *
+ * 为什么不是"跑过就一律短路"：单个项目失败（权限、占用、半同步状态）此前只记一条 warning，
+ * 但 marker 仍写"已完成"，于是**下次启动再也不会重试**——一次瞬时失败等于永久放弃那批数据。
+ * 现在把失败项目记进 marker，下次启动只补做它们；成功的项目不会重跑。
+ */
+function readMarker(uid: string): { applied: boolean; failedProjectIds: string[] } {
   const marker: any = readJsonSync(markerFile(uid));
-  return Number(marker?.version) === MIGRATION_VERSION;
+  const applied = Number(marker?.version) === MIGRATION_VERSION;
+  const raw = Array.isArray(marker?.failed_project_ids) ? marker.failed_project_ids : [];
+  const failedProjectIds = raw.filter((pid: unknown) => typeof pid === 'string' && safeId(pid));
+  return { applied, failedProjectIds };
 }
 
 function processIsAlive(pid: number): boolean {
@@ -386,7 +399,8 @@ function acquireMigrationLock(uid: string): number | null {
  * v5 搬移执行入口（T0.3 搬移 + T0.4 幂等/加锁/版本标记）。
  * 对每个有 space_id 的项目，把会话/会话状态/附件/产物搬到空间内容目录，
  * 并把会话索引行 `space_id` 置为项目 space_id（project_id 保留，双字段兼容）。
- * 幂等：marker 版本 = MIGRATION_VERSION 时直接返回空统计；加锁防并发；force 强制重跑。
+ * 幂等：marker 版本 = MIGRATION_VERSION 且无失败项时直接返回空统计；有失败项则只重试
+ * 这些项目；加锁防并发；`force` 强制全量重跑（sync 拉取迟到数据后使用）。
  */
 export function migrateProjectLayoutV5(
   uid: string,
@@ -397,7 +411,13 @@ export function migrateProjectLayoutV5(
     stats.warnings.push(`invalid uid: ${String(uid)}`);
     return stats;
   }
-  if (!opts.force && alreadyApplied(uid)) return stats;
+
+  const marker = readMarker(uid);
+  if (!opts.force && marker.applied && marker.failedProjectIds.length === 0) return stats;
+  // 上一轮失败过的项目：只补做它们，成功过的不重跑（force 才全量重来）。
+  const retryOnly = !opts.force && marker.applied && marker.failedProjectIds.length > 0
+    ? new Set(marker.failedProjectIds)
+    : null;
 
   fs.mkdirSync(path.dirname(markerFile(uid)), { recursive: true });
   const fd = acquireMigrationLock(uid);
@@ -405,22 +425,27 @@ export function migrateProjectLayoutV5(
 
   try {
     const before = collectProjectSpaceStats(uid);
+    const failedNow: string[] = [];
 
     for (const pid of listProjectIds(uid)) {
+      if (retryOnly && !retryOnly.has(pid)) continue;
       const meta: any = readJsonSync(projectMetaFile(uid, pid));
       const sid = typeof meta?.space_id === 'string' && safeId(meta.space_id) ? meta.space_id : '';
       if (!sid) continue; // orphan 项目（无 space_id）→ 阶段 4 处理
       try {
         migrateProjectToSpace(uid, pid, sid, stats);
       } catch (err) {
+        failedNow.push(pid);
         stats.warnings.push(`migrate project ${pid} → space ${sid} failed: ${(err as Error).message}`);
       }
     }
 
+    // 记录本轮失败项：下次启动只重试它们，而不是把一次瞬时失败当成永久完成。
     writeJsonSync(markerFile(uid), {
       version: MIGRATION_VERSION,
       migrated_at: new Date().toISOString(),
       stats,
+      failed_project_ids: failedNow,
     });
 
     if (stats.projects_migrated || stats.warnings.length) {
@@ -432,6 +457,8 @@ export function migrateProjectLayoutV5(
           projects_orphan: before.projects_orphan,
           conversations_total: before.conversations_total,
         },
+        retry_only: retryOnly ? retryOnly.size : 0,
+        failed_project_ids: failedNow,
         ...stats,
       });
     }

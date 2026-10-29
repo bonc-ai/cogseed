@@ -128,6 +128,33 @@ describe('model authorization discovery', () => {
     expect(result.models.length).toBeGreaterThan(0);
   });
 
+  it('uses explicit-user provider and model catalogs after an active-user switch', async () => {
+    const auth = await import('../../../src/main/features/auth');
+    const users = await import('../../../src/main/features/users');
+    const legacyProviders = vi.spyOn(auth, 'listProviders').mockResolvedValue({ providers: [] });
+    const legacyModels = vi.spyOn(auth, 'listModels').mockResolvedValue({ models: [{ id: 'wrong-user-model', name: 'wrong-user-model' }] });
+    const scopedProviders = vi.spyOn(auth, 'listProvidersForUser').mockImplementation(async (userId) => {
+      users.activateUser('discovery-other-user');
+      return { providers: [{ id: userId === UID ? 'anthropic' : 'wrong-user-provider', manualModel: false } as any] };
+    });
+    const scopedModels = vi.spyOn(auth, 'listModelsForUser').mockResolvedValue({ models: [{ id: 'requested-user-model', name: 'Requested' }] });
+    try {
+      const discovery = await import('../../../src/main/features/model_authorization_discovery');
+      const result = await discovery.discoverAuthorizationModels(UID, { kind: 'builtin', providerId: 'anthropic' });
+      expect(result).toEqual({ ok: true, source: 'catalog', models: [{ id: 'requested-user-model', name: 'Requested' }] });
+      expect(scopedProviders).toHaveBeenCalledWith(UID);
+      expect(scopedModels).toHaveBeenCalledWith(UID, 'anthropic');
+      expect(legacyProviders).not.toHaveBeenCalled();
+      expect(legacyModels).not.toHaveBeenCalled();
+    } finally {
+      users.activateUser(UID);
+      scopedModels.mockRestore();
+      scopedProviders.mockRestore();
+      legacyModels.mockRestore();
+      legacyProviders.mockRestore();
+    }
+  });
+
   it('routes manualModel providers (openai-compatible) to the manual entry step instead of an empty list', async () => {
     const discovery = await import('../../../src/main/features/model_authorization_discovery');
     const result = await discovery.discoverAuthorizationModels(UID, { kind: 'builtin', providerId: 'openai-compatible' });

@@ -9,6 +9,9 @@
  * spawned.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import type { ConnectorInstance, ToolSchema } from '../../../../src/main/features/connectors/types';
 
@@ -530,6 +533,30 @@ describe('call_connector_tool', () => {
     expect(received).toEqual({ uid: UID, id: 'notion', name: 'search', args: { query: 'plan' } });
   });
 
+  it('spills a meeting transcript to the workspace and returns transcript_path', async () => {
+    fixtures.instances = [makeInstance({ id: 'tencent-meeting', tools: [{ name: 'get_transcript', description: 'transcript', input_schema: { type: 'object', properties: {} } }] })];
+    fixtures.callTool = async () => ({
+      record_file_id: 'rec-1',
+      text: 'hello transcript '.repeat(80),
+      paragraphs: [{ pid: 0, text: 'hello transcript' }],
+      more: false,
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'connector-spill-'));
+    try {
+      const { createConnectorMetaTools } = await loadModule();
+      const [, call] = await createConnectorMetaTools({ userId: UID });
+      const r = await call.execute({ connector_id: 'tencent-meeting', tool_name: 'get_transcript', args: {} }, { workingDir: dir, signal: undefined } as never);
+      expect(r.isError).toBeFalsy();
+      const payload = JSON.parse(String(r.content));
+      expect(payload.transcript_path).toBe(path.join(dir, 'transcript_rec-1.txt'));
+      expect(fs.readFileSync(payload.transcript_path, 'utf8')).toContain('hello transcript');
+      expect(payload.paragraphs).toBeUndefined();
+      expect(String(payload.preview).length).toBeLessThanOrEqual(1_201);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('connector not in actor scope → E_CONNECTOR_NOT_VISIBLE (does not invoke manager.callTool)', async () => {
     fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
     let calledManager = false;
@@ -627,5 +654,82 @@ describe('stringifyMcpResult (via call_connector_tool)', () => {
     const [, call] = await createConnectorMetaTools({ userId: UID });
     const r = await runTool(call, { connector_id: 'notion', tool_name: 'search', args: { query: 'x' } });
     expect(r.content).toContain('"type":"image"');
+  });
+});
+
+// ── instanceIds：per-agent 连接器白名单（"配置两个 MCP 的访问权限"）────────
+//
+// 背景：`agentId` 存在时适配器把 `undefined` 和 `[]` 都当"零连接器"，于是任务会话
+// 无法表达"继承 commander"。runner 解析 `agent.enabled_connectors` 后经 `instanceIds`
+// 传入，这里锁住三态语义。
+
+describe('instanceIds — per-agent connector allowlist', () => {
+  const NOTION = () => makeInstance({ id: 'notion', tools: NOTION_TOOLS });
+  const GITHUB = () => makeInstance({ id: 'github', tools: GITHUB_TOOLS });
+
+  it('undefined = 不收窄（继承 commander，存量行为不变）', async () => {
+    fixtures.instances = [NOTION(), GITHUB()];
+    const { createConnectorMetaTools } = await loadModule();
+    const tools = await createConnectorMetaTools({ userId: UID, instanceIds: undefined });
+    const list = tools.find((t) => t.name === 'list_connector_tools')!;
+    // 两个连接器都能被发现
+    expect((await runTool(list, { connector_id: 'notion' })).isError).toBeFalsy();
+    expect((await runTool(list, { connector_id: 'github' })).isError).toBeFalsy();
+  });
+
+  it('非空数组 = 收窄到白名单内的实例', async () => {
+    fixtures.instances = [NOTION(), GITHUB()];
+    const { createConnectorMetaTools } = await loadModule();
+    const tools = await createConnectorMetaTools({ userId: UID, instanceIds: ['notion'] });
+    const list = tools.find((t) => t.name === 'list_connector_tools')!;
+    expect((await runTool(list, { connector_id: 'notion' })).isError).toBeFalsy();
+    const denied = await runTool(list, { connector_id: 'github' });
+    expect(denied.isError).toBe(true);
+    expect(denied.content).toContain('E_CONNECTOR_NOT_VISIBLE');
+  });
+
+  it('[] = 零连接器（显式禁止，不得退化成继承）', async () => {
+    fixtures.instances = [NOTION(), GITHUB()];
+    const { createConnectorMetaTools } = await loadModule();
+    const tools = await createConnectorMetaTools({ userId: UID, instanceIds: [] });
+    // 连 add_custom_connector 之外的 meta-tool 都不该产出
+    expect(tools.find((t) => t.name === 'list_connector_tools')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'call_connector_tool')).toBeUndefined();
+  });
+
+  it('白名单里的 id 不存在时，等于零可见（不报错、不泄漏其它实例）', async () => {
+    fixtures.instances = [NOTION(), GITHUB()];
+    const { createConnectorMetaTools } = await loadModule();
+    const tools = await createConnectorMetaTools({ userId: UID, instanceIds: ['meshseed'] });
+    expect(tools.find((t) => t.name === 'list_connector_tools')).toBeUndefined();
+  });
+
+  it('call_connector_tool 同样受白名单约束（不能绕过 list 直接调用）', async () => {
+    fixtures.instances = [NOTION(), GITHUB()];
+    let called = false;
+    fixtures.callTool = async () => { called = true; return 'OK'; };
+    const { createConnectorMetaTools } = await loadModule();
+    const tools = await createConnectorMetaTools({ userId: UID, instanceIds: ['notion'] });
+    const call = tools.find((t) => t.name === 'call_connector_tool')!;
+    const r = await runTool(call, { connector_id: 'github', tool_name: 'list_issues', args: {} });
+    expect(r.isError).toBe(true);
+    expect(called).toBe(false);
+  });
+
+  it('system prompt 的 ## Connectors 块同样按白名单渲染', async () => {
+    fixtures.instances = [NOTION(), GITHUB()];
+    const { getConnectorPromptBlock } = await loadModule();
+    const block = await getConnectorPromptBlock(UID, undefined, ['github']);
+    expect(block).toContain('**github**');
+    expect(block).not.toContain('**notion**');
+  });
+
+  it('instanceIds 优先于 agentId（runner 已解析完白名单，适配器不再二次查表）', async () => {
+    // agentId 指向一个白名单为空的 agent；若 instanceIds 生效，则应看到 notion
+    fixtures.instances = [NOTION(), GITHUB()];
+    fixtures.agents = { a1: { agent_id: 'a1', enabled_connectors: [] } };
+    const { getConnectorPromptBlock } = await loadModule();
+    const block = await getConnectorPromptBlock(UID, 'a1', ['notion']);
+    expect(block).toContain('**notion**');
   });
 });

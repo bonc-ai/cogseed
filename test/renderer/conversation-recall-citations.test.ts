@@ -88,11 +88,11 @@ function activateAssetCitation(assetId: string, options: { lazyOpener?: boolean 
 }
 
 describe('conversation Recall citations', () => {
-  it('keeps recall_citations in the persisted message record and renders the feedback footer', () => {
-    // 本地产品决定（保留版）：recall_citations 在消息透传 + 渲染「本次使用的
-    // 记忆」（2026-09-28 拍板项 #8 起与投影卡合并为一张卡，标题统一）
-    // footer（有帮助/需改进反馈走 recall.usage.feedback）。远端曾按「后端可见
-    // 即可」移除 footer，合并时保留本地版（用户实际在使用该反馈 UI）。
+  it('keeps recall_citations in the persisted message record and renders per-row feedback', () => {
+    // 本地产品决定（保留版）：recall_citations 在消息透传 + 渲染「本次关联的
+    // 认知」（与投影卡合并为一张卡，标题统一）
+    // 反馈（有帮助/需改进走 recall.usage.feedback）。远端曾按「后端可见
+    // 即可」移除反馈入口，合并时保留本地版（用户实际在使用该反馈 UI）。
     expect(source).toContain('recall_citations');
     expect(source).toContain('_renderRecallCitationsHtml');
     expect(source).toContain('_hydrateRecallCitations');
@@ -103,16 +103,59 @@ describe('conversation Recall citations', () => {
     expect(source).toContain('window.recallMemoryCardHtml(citations)');
   });
 
+  it('骨架认知卡默认收起，与挂载后的缺省折叠态一致', () => {
+    const html = renderCitations([{ asset_id: 'a1', title: 'Saved item', type: 'cognition', scope: 'general' }]);
+    expect(html).toContain('<section class="chat-recall-citations is-collapsed">');
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it('mounts persisted recall citations when a live streaming bubble is finalized', () => {
+    // Live placeholders do not pass through appendChatMessage. The finalizer
+    // must mount the same memory card immediately instead of requiring a
+    // conversation reload before cited assets become visible.
+    expect(source).toContain('function _mountFinalRecallMemoryCard(ph, gm, cid)');
+    expect(source).toContain('_renderRecallCitationsHtml(gm.recall_citations)');
+    expect(source).toContain('_hydrateRecallCitations(ph, cid, gm.id)');
+    expect(source).toContain('citations: Array.isArray(gm.recall_citations) ? gm.recall_citations : []');
+    expect(source).toContain('_mountFinalRecallMemoryCard(ph, gm, cid);');
+  });
+
   it('lets users open a cited asset from the answer memory card', () => {
     const html = renderCitations([{ asset_id: 'asset-1', title: '项目复盘规则', type: 'rule', scope: 'project' }]);
 
     expect(html).toContain('data-asset-citation="asset-1"');
     expect(html).toContain('chat-recall-citation-open');
     expect(html).toContain('>项目复盘规则</button>');
-    // 合并卡：被实际引用的行带「已引用」标记（带入未引用行没有）。
-    expect(html).toContain('已引用');
+    // 运行回执只证明资产已进入模型上下文，不证明最终回答实际采用了它。
+    expect(html).toContain('已进入模型上下文');
+    expect(html).toContain('进入模型上下文不代表最终回答实际采用');
     expect(source).toContain("closest('[data-asset-citation]')");
     expect(source).toContain('window.openCognitionAssetById(assetId)');
+  });
+
+  it('feedback buttons live on each cited row and target that asset, not the whole message', () => {
+    // 逐行反馈：每条已引用行一对 有帮助/需改进，按钮钉
+    // data-recall-asset-id；卡尾不再有整条消息级的反馈按钮。
+    const html = renderCitations([
+      { asset_id: 'asset-1', title: '项目复盘规则', type: 'rule', scope: 'project' },
+      { asset_id: 'asset-2', title: '周报模板', type: 'template', scope: 'global' },
+    ]);
+    const feedbackButtons = [...html.matchAll(/<button[^>]*data-recall-feedback=[^>]*>/g)].map((match) => match[0]);
+    const pairs = feedbackButtons.map((tag) => {
+      const feedback = tag.match(/data-recall-feedback="([^"]+)"/)![1];
+      const asset = tag.match(/data-recall-asset-id="([^"]+)"/)![1];
+      return `${asset}:${feedback}`;
+    });
+    expect(pairs).toEqual([
+      'asset-1:positive', 'asset-1:negative', 'asset-2:positive', 'asset-2:negative',
+    ]);
+    // 卡尾反馈区只剩提示句/投影操作的位置，不再承载消息级按钮。
+    const footer = html.match(/<div class="chat-recall-feedback-actions">[\s\S]*?(<\/div>)\s*(<\/section>|$)/);
+    expect(footer).toBeTruthy();
+    expect(footer![0]).not.toContain('data-recall-feedback');
+    // 逐行交互契约：conversation.js 侧按按钮自带的资产定向调用反馈通道。
+    expect(source).toContain("const assetId = String(button.dataset.recallAssetId || '')");
+    expect(source).toContain('recall.usage.feedback');
   });
 
   it('routes activation of the shared citation button to the existing asset detail opener', () => {

@@ -28,6 +28,8 @@ export interface WorldModelAbilityAsset {
   title: string;
   type: AbilityAssetType;
   statement: string;
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
   scope: string;
   maturity: RecallAbilityAssetRecord['maturity'];
   learningSignal?: KstarLearningSignal;
@@ -54,16 +56,15 @@ export interface WorldModelOntologyFact {
   source: 'personal_ontology' | 'user_profile' | 'shared_memory';
   projectId?: string;
   /** 信息截至年月（`@asof:YYYY-MM` marker on the group field value; absent
-   *  when the value carries no time marker). Blueprint R26 temporal integrity:
+   *  when the value carries no time marker). Temporal integrity:
    *  the as-of date is when the VALUE was correct, never the read date. */
   asOf?: string;
-  /** 矛盾标记（specs/014 US-903 / D8）：该字段存在两条语义矛盾的值。
+  /** 矛盾标记：该字段存在两条语义矛盾的值。
    *  `conflictedWith` 只装**非受限**对端（≤2 条、每条截 MAX_ONTOLOGY_FACT_VALUE）；
-   *  对端受限时只置 `disputed` 不带文本（受限正文不进模型侧标记，B5/A9）。 */
+   *  对端受限时只置 `disputed` 不带文本（受限正文不进模型侧标记）。 */
   disputed?: true;
   conflictedWith?: string[];
-  /** User verification level (2026-09-20 assertion-verification; spec 007 two
-   *  tiers): true = source-supported (bare `@verified`), 'independent' =
+  /** User verification level: true = source-supported (bare `@verified`), 'independent' =
    *  independently verified (`@verified:independent`). Manual-only: the
    *  confirmation write path never sets it and no receipt chain promotes it. */
   verified?: boolean | 'independent';
@@ -78,7 +79,7 @@ export interface CausalRule {
   cause: string;
   /** Optional deterministic predicate key used to match the rule against an
    *  A-Box snapshot. When absent, the rule participates only in the LLM
-   *  simulation layer, not the deterministic F002 risk pass. */
+   *  simulation layer, not the deterministic risk pass. */
   predicateKey?: WorldModelPredicateKey;
   /** The predicted failure or consequence when `cause` is present. */
   effect: string;
@@ -89,7 +90,7 @@ export interface CausalRule {
   deltaR: number | 'unknown';
 }
 
-/** Built-in A-Box predicates used by the deterministic F002 risk pass. */
+/** Built-in A-Box predicates used by the deterministic risk pass. */
 export type WorldModelPredicateKey =
   | 'workspace_unavailable'
   | 'model_not_configured'

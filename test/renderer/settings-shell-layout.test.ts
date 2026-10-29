@@ -27,10 +27,12 @@ describe('standalone settings shell and sidebar UserMenu', () => {
     }
     expect(html).toContain('id="settings-back-btn"');
     expect(html.match(/class="settings-pane-title"/g)).toHaveLength(7);
-    expect(css).toMatch(/body:has\(#panel-settings\.active\) > \.app-container > \.sidebar,[\s\S]*?display:\s*none;/);
+    // Settings categories live in the shell sidebar (specs/008-shell-rail-layout).
+    expect(html).toMatch(/data-sidebar-for="settings"[^>]*>\s*<nav class="settings-tabs sidebar-nav"/);
+    expect(css).not.toMatch(/body:has\(#panel-settings\.active\) > \.app-container > \.sidebar/);
     expect(css).toMatch(/#panel-settings\s*\{[^}]*padding:\s*0;/s);
-    expect(css).toMatch(/\.settings-container\s*\{[^}]*grid-template-columns:\s*var\(--layout-settings-nav-width\) minmax\(0, 1fr\);/s);
-    expect(shellCss).toContain('body:has(#panel-settings.active) #settings-page-header .ui-page-header');
+    expect(css).toMatch(/\.settings-container\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/s);
+    expect(shellCss).toContain('.sidebar .sidebar-nav .settings-back-btn');
   });
 
   it('uses the shared UserMenu renderer in the real shell and gallery', () => {

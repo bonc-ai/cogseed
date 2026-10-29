@@ -64,6 +64,7 @@ function createHarness(options: {
   initialSpaceId?: string;
 } = {}) {
   const panelListeners = new Map<string, (event: any) => void>();
+  const navListeners = new Map<string, (event: any) => void>();
   const documentListeners = new Map<string, (event: any) => void>();
   const diagnosticsRequests: Deferred<any>[] = [];
   const agentRequests: Deferred<any>[] = [];
@@ -77,7 +78,7 @@ function createHarness(options: {
   let startFailure = options.startFailure;
   let agentRegistryCalls = 0;
 
-  const rebuildControls = (markup: string) => {
+  const buildControls = (markup: string): any[] => {
     const nextControls: any[] = [];
     const tagPattern = /<(button|input|textarea|select|dialog|details)\b([^>]*)>/g;
     let match: RegExpExecArray | null;
@@ -128,7 +129,7 @@ function createHarness(options: {
       if (tag === 'dialog') element.showModal = () => { element.open = true; };
       nextControls.push(element);
     }
-    controls = nextControls;
+    return nextControls;
   };
 
   const matchingControls = (selector: string) => selector.split(',').flatMap((part) => {
@@ -145,7 +146,24 @@ function createHarness(options: {
     set innerHTML(value: string) {
       html = value;
       renderCount += 1;
-      rebuildControls(value);
+      controls = buildControls(value);
+    },
+  };
+  // 视图 tab 在 1.4.0 搬到了 shell 侧栏（`#sidebar-run-center-nav`，specs/008 D5），
+  // 由 renderSidebarNav() 单独写入。所有 id 都返回同一个 panel 会让这段导航把 panel
+  // 的 innerHTML 覆盖掉（实测只剩 817 字符、create 弹窗消失）。这里给它一个独立宿主。
+  let navHtml = '';
+  let navControls: any[] = [];
+  const navHost: any = {
+    addEventListener: (type: string, listener: (event: any) => void) => navListeners.set(type, listener),
+    querySelector: (selector: string) => navControls.find((control) => control.matches(selector)) || null,
+    querySelectorAll: (selector: string) => navControls.filter((control) => control.matches(selector)),
+    contains: (element: unknown) => navControls.includes(element),
+    get firstElementChild() { return navControls[0] || null; },
+    get innerHTML() { return navHtml; },
+    set innerHTML(value: string) {
+      navHtml = value;
+      navControls = buildControls(value);
     },
   };
 
@@ -214,7 +232,7 @@ function createHarness(options: {
       CogSeedRunCenterAgents: { render: () => '' },
     },
     document: Object.assign(documentState, {
-      getElementById: () => panel,
+      getElementById: (id: string) => (id === 'sidebar-run-center-nav' ? navHost : panel),
       addEventListener: (type: string, listener: (event: any) => void) => documentListeners.set(type, listener),
     }),
     t: (key: string) => key,

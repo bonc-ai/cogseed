@@ -7,7 +7,7 @@ import { getWorkspacePath } from '../user_workspace';
 import { loadCommittedProjectionKnowledge } from '../recall/projection-knowledge';
 import { listAbilityAssets } from '../recall/asset-service';
 import {
-  filterRecallAssetsForAgentRead,
+  filterRecallAssetsForDefaultInjection,
   filterRecallAssetsForCommittedProjection,
 } from '../recall/prompt-injection';
 import { evaluateRules } from '../recall/rule-engine';
@@ -16,7 +16,6 @@ import {
   buildWorldModelForecastRecord,
   collectWorldSnapshot,
   readWorldModelForecast,
-  saveWorldModelSnapshot,
   saveWorldModelForecast,
 } from '../recall/world-model';
 import {
@@ -315,7 +314,7 @@ async function commitCommanderForecastUnlocked(
     ...(effectiveWorkspaceId ? { workspaceId: effectiveWorkspaceId } : {}),
     taskText,
   };
-  const readablePersonalAssets = await filterRecallAssetsForAgentRead(
+  const readablePersonalAssets = await filterRecallAssetsForDefaultInjection(
     userId,
     allAssets.filter((asset) => asset.type === 'personal'),
     runtimeContext,
@@ -387,7 +386,6 @@ async function commitCommanderForecastUnlocked(
       ...(matchedRules.length ? { matchedRules } : {}),
     },
     s: {
-      snapshotId: snapshot.id,
       ...(effectiveWorkspaceId ? { workspaceId: effectiveWorkspaceId } : {}),
       conversationSummary: taskText,
       environment: {
@@ -452,13 +450,11 @@ async function commitCommanderForecastUnlocked(
     projectionConfirmedAt: knowledge.projectionConfirmedAt,
     assetVersions: knowledge.assetVersions,
     ruleRefs: [...new Set(matchedRules.map((rule) => rule.ruleId))],
-    snapshotId: snapshot.id,
     forecast,
     simulationInput,
   });
 
   try {
-    await saveWorldModelSnapshot(userId, snapshot);
     await saveWorldModelForecast(userId, record);
     await replaceKstarRequirement(userId, {
       ...requirement,

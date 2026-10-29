@@ -66,6 +66,8 @@ export interface ReverifyResult {
   /** Why the previous receipt did not apply. `null` when it did. */
   staleReason: StaleReason | null;
   receipt: SecurityReceipt | null;
+  /** True when the caller canceled the scan; no receipt was written. */
+  canceled?: boolean;
 }
 
 function _decisionOf(report: { ok: boolean; violations: Array<{ rule: string }> }): ReceiptDecision {
@@ -225,6 +227,7 @@ export function reverifySkill(uid: string, skillId: string): ReverifyResult {
     // this change closes, so leaving it unlabelled would reopen it one layer
     // down.
     scanner: 'local',
+    ...(decision === 'blocked' ? { verdictSource: 'local' as const } : {}),
     ...(top?.rule ? { topRule: top.rule } : {}),
     ...(top?.level ? { topLevel: top.level } : {}),
   });
@@ -257,6 +260,26 @@ export function reverifySkill(uid: string, skillId: string): ReverifyResult {
  * evidence, and silently storing it as though it were would re-create the same
  * blind spot one layer down.
  */
+/** 正在跑的深扫：取消要能落到那一次子进程上，而不只是让渲染层不再等。 */
+const inflightReverify = new Map<string, AbortController>();
+
+function inflightKey(uid: string, skillId: string): string {
+  return `${uid}\u0000${skillId}`;
+}
+
+/**
+ * 取消某个技能正在进行的深扫。
+ *
+ * 返回 true 表示确实中止了一次在途扫描；false 表示没有可取消的任务（已经结束，
+ * 或从未开始）。取消后不会写回执：一次被取消的扫描不能变成「扫过且干净」。
+ */
+export function cancelReverify(uid: string, skillId: string): boolean {
+  const controller = inflightReverify.get(inflightKey(uid, skillId));
+  if (!controller) return false;
+  controller.abort();
+  return true;
+}
+
 export async function reverifySkillDeep(uid: string, skillId: string): Promise<ReverifyResult> {
   const skillDir = _resolveSkillDir(uid, skillId);
   if (!skillDir) {
@@ -265,7 +288,14 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
       staleReason: 'payload_unreadable', receipt: null,
     };
   }
-  return _reverifyDeep(uid, skillId, skillDir);
+  const key = inflightKey(uid, skillId);
+  const controller = new AbortController();
+  inflightReverify.set(key, controller);
+  try {
+    return await _reverifyDeep(uid, skillId, skillDir, undefined, controller.signal);
+  } finally {
+    if (inflightReverify.get(key) === controller) inflightReverify.delete(key);
+  }
 }
 
 /**
@@ -279,11 +309,16 @@ async function _reverifyDeep(
   skillId: string,
   skillDir: string,
   agentId?: string,
+  signal?: AbortSignal,
 ): Promise<ReverifyResult> {
+  if (signal?.aborted) {
+    return { skillId, decision: 'unknown', rescanned: false, staleReason: null, receipt: null, canceled: true };
+  }
   const scannerExempt = _scannerVerdict(uid, skillId, skillDir);
   if (scannerExempt) return scannerExempt;
 
-  const { stale, reason } = isReceiptStale(uid, skillId, skillDir, agentId);
+  const { stale, reason } = isReceiptStale(uid, skillId, skillDir, agentId,
+    { requireVerdictSource: true });
   const cached = stale ? null : readReceipt(uid, skillId, agentId);
   // A local-only receipt does not satisfy a deep check, even when the hash still
   // matches. Treated as stale so the full scan runs once and upgrades the receipt
@@ -318,6 +353,10 @@ async function _reverifyDeep(
   let decision = _decisionOf(report);
   const top = _topViolation(report.violations);
   let scanner: 'deep' | 'local' = 'local';
+  // Only meaningful when the final decision is `blocked`: the local validator
+  // may block while the deep scan passes (or is unavailable), and the table has
+  // to be able to say which check refused the skill.
+  let verdictSource: 'local' | 'deep' = 'local';
   let topRule = top?.rule;
   let topLevel = top?.level;
   // Evidence about *how well* the check was done, as opposed to what it
@@ -342,7 +381,7 @@ async function _reverifyDeep(
 
   try {
     const { scanSkillDir } = await import('./security/sentry-adapter');
-    const scan = await scanSkillDir(skillDir, 'thirdparty');
+    const scan = await scanSkillDir(skillDir, 'thirdparty', { signal });
     // Captured for any completed outcome, including `blocked` and `restricted`:
     // the disclosure matters most when the verdict is not a clean pass.
     if (scan.outcome !== 'unknown') {
@@ -364,9 +403,18 @@ async function _reverifyDeep(
     if (scan.outcome === 'blocked') {
       decision = 'blocked';
       scanner = 'deep';
-      // Prefer the deep scanner's rule id — it is the one that explains the
-      // block, and the local report may have no EXTREME hit at all here.
-      const first = scan.blockingRules?.[0] || scan.localRedLines?.[0];
+      // `scanSkillDir` folds the local red lines into the SAME `blocked` outcome
+      // as the gate's own refusal. They are different checks: a local red line
+      // can refuse a skill the deep scanner scored 100. Naming the wrong one
+      // recreates the "blocked but 100" confusion this field exists to fix.
+      const blockedByLocal = (scan.localRedLines?.length || 0) > 0;
+      const blockedByDeep = (scan.blockingRules?.length || 0) > 0;
+      verdictSource = blockedByLocal && !blockedByDeep ? 'local' : 'deep';
+      // Prefer the rule from the check that actually decided. The local report
+      // may have no EXTREME hit at all when the deep scanner is the one refusing.
+      const first = verdictSource === 'local'
+        ? scan.localRedLines?.[0]
+        : scan.blockingRules?.[0] || scan.localRedLines?.[0];
       if (first) {
         topRule = first;
         topLevel = 'EXTREME';
@@ -386,6 +434,11 @@ async function _reverifyDeep(
     });
   }
 
+  // 取消：不写回执、不改判定。一次被中止的扫描只说明「没扫完」，不能当成证据。
+  if (signal?.aborted) {
+    return { skillId, decision: 'unknown', rescanned: false, staleReason: null, receipt: null, canceled: true };
+  }
+
   // Declaration check — ADVISORY ONLY, and deliberately last.
   //
   // Nothing below may touch `decision`. The engine answers "does this skill's
@@ -401,6 +454,7 @@ async function _reverifyDeep(
     decision,
     violationCount: report.violations.length,
     scanner,
+    ...(decision === 'blocked' ? { verdictSource } : {}),
     ...deepEvidence,
     ...(topRule ? { topRule } : {}),
     ...(topLevel ? { topLevel } : {}),

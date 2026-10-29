@@ -26,8 +26,20 @@ import type { ContributionAdmission } from './admission';
 import type { PreviewManifest } from './preview';
 import type { PackageSnapshot } from './package';
 import { emptyDeclarations, type Declarations } from './declarations';
+import type { AgentAdmission } from './agent-admission';
+import type { AgentStaging } from './agent-staging';
+import type { SensitiveHint } from './agent-sensitive-hints';
 
 const log = createLogger('contribution/session');
+
+/** Agent 会话的附加状态。Skill 会话没有它；`staging` 字段对 Agent 会话仍指向同一副本目录。 */
+export interface AgentSessionState {
+  staging: AgentStaging;
+  /** 最近一次 Agent 准入结论；副本变化后作废为 `null`。 */
+  admission: AgentAdmission | null;
+  /** 预览页"可能包含本机信息"的提示；有提示时确认预览须用户明确确认已看过。 */
+  hints: SensitiveHint[];
+}
 
 export interface ContributionSession {
   token: string;
@@ -50,12 +62,14 @@ export interface ContributionSession {
    */
   declarations: Declarations;
   createdAt: number;
+  /** 仅 Agent 会话存在。 */
+  agent?: AgentSessionState;
 }
 
 /** uid → token → session。分桶见模块文档。 */
 const _sessions = new Map<string, Map<string, ContributionSession>>();
 
-export function createSession(uid: string, staging: ContributionStaging): ContributionSession {
+export function createSession(uid: string, staging: ContributionStaging, agent?: AgentStaging): ContributionSession {
   const session: ContributionSession = {
     token: staging.token,
     uid,
@@ -67,6 +81,7 @@ export function createSession(uid: string, staging: ContributionStaging): Contri
     uploadController: null,
     declarations: emptyDeclarations(),
     createdAt: Date.now(),
+    ...(agent ? { agent: { staging: agent, admission: null, hints: [] } } : {}),
   };
   let bucket = _sessions.get(uid);
   if (!bucket) { bucket = new Map(); _sessions.set(uid, bucket); }
@@ -121,6 +136,7 @@ export async function endAllSessions(uid: string): Promise<number> {
  */
 export function invalidate(session: ContributionSession): void {
   session.admission = null;
+  if (session.agent) { session.agent.admission = null; session.agent.hints = []; }
   session.confirmedPreview = null;
   session.confirmedPackage = null;
   session.idempotencyKey = null;

@@ -21,6 +21,8 @@
 
 import { createInterface } from 'node:readline';
 
+import { installEmbedWorkerGuards, runEmbedWorkerMain } from './kb_embed_worker_guards';
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let embedder: any = null;
 
@@ -108,4 +110,8 @@ async function main(): Promise<void> {
   });
 }
 
-void main();
+// 护栏必须装在 main() 之前：模型初始化（数秒）期间父进程可能已经 kill 掉本进程
+// 或关闭读端，此时写 ready/fatal 会拿到 EPIPE —— 没有护栏时它会变成未捕获异常，
+// 进程在已加载 onnxruntime 的情况下 abort（macOS 每次留一份崩溃报告）。
+installEmbedWorkerGuards();
+void runEmbedWorkerMain(main);

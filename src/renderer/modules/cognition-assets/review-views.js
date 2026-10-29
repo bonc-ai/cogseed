@@ -1,9 +1,11 @@
 /* ============================================================================
- * 认知资产 · 视图层：待我处理页（cognition-assets/review-views.js）
+ * 认知资产 · 视图层：认知生长页（cognition-assets/review-views.js）
  *
- * 2026-09-29 自 views.js 机械拆出（零行为变更）：viewReview 整段迁入。
- * 候选族零件（卡片/清单谓词/异常展开区/候选详情）经 NS.candidate 取用，
- * 共享零件经 NS.ui 取用——本文件必须晚于 review-candidate.js 加载。
+ * 收敛：认知生长只承接已形成的夜间认知建议和真实处理历史。
+ * viewActivity 提供需要关注（默认）与已处理两个视角：
+ *  - 需要关注：夜间价值判断通过、提取完成且证据齐全的具体认知建议。
+ *  - 已处理：保留候选的真实终态与历史；后台任务和治理问题不入列。
+ * 候选详情（route.candidateId）复用 review-candidate.js 的 viewCandidate。
  * ========================================================================== */
 (function () {
   'use strict';
@@ -12,286 +14,839 @@
   if (!NS) return;
   const { T, esc, fmtDate } = NS;
   const S = NS.store;
-  const { btn, roleBtn, hero, empty, sectionHead, termNote, otherActions } = NS.ui;
+  const { btn, empty, chip } = NS.ui;
   const {
-    card: candidateCard,
-    viewCandidate,
-    pending: candidatePending,
-    awaiting: candidateAwaiting,
     evidenceMostlyUnavailable,
     title: candidateTitle,
-    sourceIssuesSection,
-    taskFailedSection,
   } = NS.candidate;
 
-  /* ────────────────────────── 视图：待我处理 ────────────────────────── */
+  /* ────────────────────────── 视图：认知生长 ────────────────────────── */
 
-  function viewReview(route) {
-    if (route.candidateId) return viewCandidate(route);
-    // A5（2026-09-29）：候选清单读取失败进显式错误态——不再把「没读到」伪装
-    // 成「没有要你决定的」空态（此前 soft 降级空数组，用户会误以为清净了）。
-    if (S.candidatesError) {
-      return `${hero(T('cognition.review_title', '待我处理'), '')}
-      <div class="sect-block">${empty(
-        T('cognition.review_load_failed_title', '清单没能读取'),
-        T('cognition.review_load_failed_hint', '待确认内容的清单没有读到。可以稍后重试；重试仍失败时，重启应用通常能恢复。'),
-        { label: T('cognition.review_load_retry', '重试'), attrs: { 'data-act': 'retry-candidates' } },
-      )}</div>`;
+  const normalizeActivityText = value => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+  function activityScope(scope) {
+    const key = ['general', 'personal', 'report', 'code', 'review', 'product'].includes(scope) ? 'cognition.capture.scope_' + scope : '';
+    return key ? T(key, scope) : scope || T('cognition.activity_scope_unknown', '范围待核对');
+  }
+  const activityDecisionLabels = {
+    create: ['cognition.activity_decision_create', '确认保存'], update: ['cognition.activity_decision_update', '核对更新'],
+    limit_scope: ['cognition.activity_decision_limit_scope', '核对范围'], pause: ['cognition.activity_decision_pause', '确认停用'],
+    keep_current: ['cognition.activity_decision_keep_current', '确认保留现有内容'], reject: ['cognition.activity_decision_reject', '确认忽略'],
+  };
+  const activityOutcomeLabels = {
+    confirmed: ['cognition.activity_outcome_confirmed', '已保存'], integrated: ['cognition.activity_outcome_integrated', '已纳入本体'],
+    rejected: ['cognition.activity_outcome_rejected', '已拒绝'], ignored: ['cognition.activity_outcome_ignored', '已忽略'], superseded: ['cognition.candidate_status_expired', '已失效'], expired: ['cognition.activity_outcome_expired', '已过期'],
+    update: ['cognition.activity_outcome_update', '已更新'], limit_scope: ['cognition.activity_outcome_limit_scope', '已调整范围'], pause: ['cognition.activity_outcome_pause', '已停用'],
+    keep_current: ['cognition.activity_outcome_keep_current', '已保留现有内容'], reject: ['cognition.activity_outcome_reject', '已忽略'],
+  };
+  function activityResult(candidate, waiting) {
+    if (candidate.contentPurgedAt) return T('cognition.content_purged', '内容已清除');
+    if (candidate.organizationReceipt?.undoneAt) return T('cognition.organization_undone', '本次整理已撤销');
+    if (!waiting) {
+      // A proposed action describes intent, not the recorded outcome of a completed write.
+      if (candidate.status === 'confirmed' && !candidate.promotedAssetId && !candidate.organizationReceipt)
+        return T('cognition.activity_result_unlocated', '保存结果待核对');
+      const label = activityOutcomeLabels[candidate.status];
+      return label ? T(label[0], label[1]) : T('cognition.activity_check', '需要核对');
     }
-    const stats = NS.stats();
-    // 两线不拆（2026-09-17 二次定调）：KSTAR 提案与对话候选同池确认，
-    // 候选卡自带来源徽章（KSTAR 复盘/KSTAR 偏好/会话整理）区分出身。
-    // 分组顺序（2026-09-21 原型 v7 契约）：等待确认 → 来源已删 → 证据不足
-    // → 已稍后处理 → 终态折叠 → 处理记录折叠——需要行动的组永远排在
-    // 低打扰组之前。可操作组（等待/来源已删/证据不足/已稍后）的判定全部
-    // 来自后端 capabilities（displayState/isSnoozed），不看本地 status 猜；
-    // 终态折叠与处理记录两组读原始 status/displayState——capabilities 只
-    // 建模可操作状态（candidate-capabilities 的 displayState 表不含
-    // confirmed/rejected/expired 等终态），终态不可变、读原始字段无漂移
-    // 风险（2026-09-29 B5 复审校正口径）。
-    const pending = S.candidates.filter(candidatePending);
-    const displayState = (c) => String(((c || {}).capabilities || {}).displayState || '');
-    const awaiting = pending.filter(candidateAwaiting);
-    const broken = awaiting.filter(evidenceMostlyUnavailable);
-    const weak = awaiting.filter((c) => !evidenceMostlyUnavailable(c) && displayState(c) === 'weak_evidence');
-    const ready = awaiting.filter((c) => !evidenceMostlyUnavailable(c) && displayState(c) !== 'weak_evidence');
-    const snoozed = pending.filter((c) => c.capabilities && c.capabilities.isSnoozed);
-    const terminal = S.candidates.filter((c) => ['expired', 'superseded'].includes(displayState(c)) && !candidatePending(c)).slice(0, 8);
-    const processed = S.candidates
-      .filter((c) => ['confirmed', 'rejected', 'ignored'].includes(String(c.status || '')))
-      .slice(0, 5);
-    // 处理结果按真实状态如实显示——此前无论保存还是拒绝都写「已保存」，
-    // 与筛选口径（confirmed/rejected/ignored 三种）不符（用户实测抓出）。
-    const processedLabel = (c) => ({
-      confirmed: T('cognition.candidate_status_promoted', '已保存'),
-      rejected: T('cognition.candidate_status_rejected', '未保存'),
-      ignored: T('cognition.candidate_status_ignored', '已忽略'),
-    }[String(c.status || '')] || T('cognition.candidate_status_other', '已处理'));
-    const attention = [];
-    // 注：治理待办（cognition.inbox：未分级 / 规则缺边界 / 分类冲突等）曾在此
-    // 列出，但新 UI 尚无资产分级与边界编辑入口——报了警却无处处理，只会
-    // 制造焦虑（2026-09-14 撤下）。等治理动作入口恢复后，连同每类的动作
-    // 指引一起重上。此处只保留有明确处理出口的两条。
-    if (stats.sourceIssues) {
-      // 来源异常就地展开（2026-09-15：来源健康无常态页，异常驱动）。
-      // specs/017 整改二：正文回正文字色——颜色只留给短状态章，不再整句刷黄。
-      attention.push(`<div class="notice-row" data-act="toggle-source-issues" ${roleBtn()}><div class="notice-copy"><div class="notice-title">${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(stats.sourceIssues) }))}</div></div><span class="sp"></span>${btn(T('common.handle', '处理'), 'toggle-source-issues', { small: true, className: 'o' })}</div>`);
+    if (NS.candidate.saveOutcomeUncertain(candidate)) return T('cognition.activity_result_unlocated', '保存结果待核对');
+    const caps = candidate.capabilities || {};
+    const reasons = caps.ineligibleReasons || [];
+    const target = (S.assets || []).find(asset => String(asset.id) === String(candidate.targetAssetId));
+    if (S.candidateVersionConflict?.candidateId === candidate.id || (target && candidate.targetVersionUsed
+      && String(target.activeVersion || target.version) !== String(candidate.targetVersionUsed)))
+      return T('cognition.activity_attention_version', '需重核版本');
+    if (reasons.includes('type_conflicts_with_existing')) return T('cognition.activity_attention_conflict', '需裁定冲突');
+    if (reasons.some(reason => ['rule_boundary_required', 'rule_missing_boundary'].includes(reason))) return T('cognition.activity_attention_boundary', '需补充边界');
+    if (caps.displayState === 'weak_evidence' || evidenceMostlyUnavailable(candidate) || reasons.includes('evidence_missing'))
+      return T('cognition.activity_attention_evidence', '需补充或核对证据');
+    if (caps.eligibility === 'ineligible') return T('cognition.activity_attention_content', '需修改内容后重核');
+    const label = activityDecisionLabels[candidate.suggestedAction || 'create'];
+    return label ? T(label[0], label[1]) : T('cognition.activity_check', '需要核对');
+  }
+  function activityModel(runFilter) {
+    const attention = [], done = [];
+    const candidates = (S.candidates || []).filter(c => !runFilter || runFilter.candidates.has(String(c.id)));
+    const excluded = new Set(candidates.filter(c => c.activityExclusionReason || NS.isKstarCandidate?.(c)).map(c => c.id));
+    const decisionGroups = new Map();
+    const sorted = [...candidates].sort((a,b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
+    for (const c of sorted) {
+      if (excluded.has(c.id)) continue;
+      const waiting = NS.candidate.attentionReady(c);
+      if (!waiting && !c.contentPurgedAt && !['confirmed', 'integrated', 'rejected', 'ignored', 'expired', 'superseded'].includes(c.status)) continue;
+      if (!c.contentPurgedAt && c.status === 'weak_observation' && !c.capabilities?.countsAsPending) continue;
+      const action = c.suggestedAction || 'create';
+      const result = activityResult(c, waiting);
+      const activityAt = waiting ? c.createdAt || c.updatedAt || '' : c.updatedAt || c.createdAt || '';
+      const proposedText = c.proposalTarget === 'ontology' ? (c.ontologyFormation?.previewChanges || []).map(change => change.after?.description || change.after?.requirement || '').filter(Boolean).join('；') : '';
+      const kind = c.contentOrganization || c.stockOrganizationProvenance ? 'organize'
+        : (c.suggestedAction && c.suggestedAction !== 'create') ? 'update' : 'add';
+      const assetIds = [...new Set([c.targetAssetId, c.mergedIntoAssetId,
+        ...(c.contentOrganization?.draft.sourceAssetIds || [])].filter(Boolean).map(String))];
+      const row = { key: 'candidate:' + c.id, title: candidateTitle(c), detail: proposedText || c.judgment || c.value || '', scope: activityScope(c.suggestedScope), rawAt: activityAt, at: fmtDate(activityAt), result: waiting && (c.activityDeferredAt || c.capabilities?.isSnoozed) ? T('cognition.activity_deferred_result', '稍后 · 待处理') + ' · ' + result : result, route: { candidateId: c.id }, candidateIds: [c.id], kind, source: c.stockOrganizationProvenance ? 'inspection' : 'discovery', assetIds };
+      // 只折叠完全相同、同范围且同治理边界的建议；不同冲突/版本/风险绝不能合并。
+      const hasConflict = (S.inbox || []).some(item => item.candidateId === c.id && item.kind !== 'candidate_pending_review');
+      const identity = waiting && !hasConflict && !NS.candidate.saveOutcomeUncertain(c) ? JSON.stringify([normalizeActivityText(c.judgment), c.suggestedType, normalizeActivityText(c.suggestedScope), action, c.targetAssetId, c.targetVersionUsed, c.scopePolicy, c.applicableWhen, c.forbiddenWhen, c.risk, c.capabilities?.displayState, c.capabilities?.eligibility, c.ontologyFormation, c.contentOrganization?.operationId])
+        : !waiting && c.reviewDecisionId ? JSON.stringify(['decision', c.reviewDecisionId, c.promotedAssetId || c.targetAssetId, c.suggestedType, c.suggestedScope, normalizeActivityText(c.judgment)]) : row.key;
+      const previous = decisionGroups.get(identity);
+      if (previous) { previous.candidateIds.push(c.id); continue; }
+      decisionGroups.set(identity, row);
+      (waiting ? attention : done).push(row);
     }
-    if (stats.failedTasks) {
-      // 落点（2026-09-15）：重试按钮在「整理」页的任务流里。
-      attention.push(`<div class="notice-row" data-act="go-organize" ${roleBtn()}><div class="notice-copy"><div class="notice-title">${esc(T('cognition.overview_failed_tasks', '{count} 个整理任务需要重试', { count: String(stats.failedTasks) }))}</div></div><span class="sp"></span>${btn(T('common.handle', '处理'), 'go-organize', { small: true, className: 'o' })}</div>`);
+    const assetTitle = assetId => (S.assets || []).find(asset => String(asset.id) === String(assetId))?.title || '';
+    const inspectionAt = S.captureStats?.sweep?.lastResult?.finishedAt || S.captureStats?.sweep?.lastRunAt || '';
+    for (const item of S.inbox || []) {
+      if (item.kind !== 'inspection_finding') continue;
+      if (runFilter && !runFilter.findings.has(String(item.id))) continue;
+      const category = item.findingCategory;
+      const title = (item.assetIds || []).map(assetTitle).filter(Boolean).join(' / ')
+        || item.title || T('cognition.activity_inbox_untitled', '巡检发现');
+      const kind = category === 'conflict' ? 'conflict' : category === 'outdated' ? 'outdated' : 'organize';
+      attention.push({
+        key: `inbox:${item.id}`,
+        title,
+        detail: item.detail || '',
+        scope: T('cognition.activity_scope_assets', '已有内容'),
+        rawAt: inspectionAt,
+        at: inspectionAt ? fmtDate(inspectionAt) : '',
+        result: item.deferred ? T('cognition.activity_deferred_result', '稍后 · 待处理') : T('cognition.activity_inbox_pending', '巡检发现 · 待处理'),
+        route: { inboxId: item.id },
+        candidateIds: [],
+        kind,
+        source: 'inspection',
+        assetIds: [...(item.assetIds || [])],
+      });
     }
-    if (stats.taskFailed) {
-      // 任务执行失败（承接表 01 / G1）：与整理失败**分别反馈**——这是任务没跑
-      // 出结果（未得到回复），重跑入口在会话本身，不是整理重试。
-      // A4（2026-09-29）：此前「处理」按钮跳系统活动页，但那类会话在那边
-      // 属低价值排除行、没有任何动作——按钮带你去一个处理不了的地方。
-      // 现在就地展开逐条列出，每条给「回到会话」入口（重跑=在会话里再说一次）。
-      attention.push(`<div class="notice-row" data-act="toggle-task-failed" ${roleBtn()}><div class="notice-copy"><div class="notice-title">${esc(T('cognition.overview_task_failed', '{count} 个任务执行失败（未得到回复）', { count: String(stats.taskFailed) }))}</div></div><span class="sp"></span>${btn(T('cognition.review_task_failed_open', '看是哪几次'), 'toggle-task-failed', { small: true, className: 'o' })}</div>`);
+    for (const item of S.inboxResolved || []) {
+      if (item.kind !== 'inspection_finding') continue;
+      if (runFilter && !runFilter.findings.has(String(item.id))) continue;
+      const category = item.findingCategory;
+      const title = (item.assetIds || []).map(assetTitle).filter(Boolean).join(' / ')
+        || item.title || T('cognition.activity_inbox_untitled', '巡检发现');
+      const kind = category === 'conflict' ? 'conflict' : category === 'outdated' ? 'outdated' : 'organize';
+      done.push({
+        key: `inbox:${item.id}`,
+        title,
+        detail: item.detail || '',
+        scope: T('cognition.activity_scope_assets', '已有内容'),
+        rawAt: item.at || '',
+        at: item.at ? fmtDate(item.at) : '',
+        result: T('cognition.activity_inbox_dismissed', '不再提醒'),
+        route: { inboxId: item.id },
+        candidateIds: [],
+        kind,
+        source: 'inspection',
+        assetIds: [...(item.assetIds || [])],
+      });
     }
-    // 治理待办 / 待确认清单（2026-09-25 重上，specs/008 T051；2026-09-26 分组呈现，
-    // specs/010 T014~T016 / US-301）：分组可用时按「治理待办」分区呈现（顺序由主进程
-    // groupCognitionInbox 唯一给出：敏感级与催办三组删除后为 冲突 → 其他）；拿不到
-    // groups（旧主进程 / 读失败）时**逐字退回**既有扁平清单。渲染层只渲染读模型给的
-    // 动作（`item.actions`），不自己判"哪些动作可用"；取词一律内联 T()。
-    const inboxItems = Array.isArray(S.inbox) ? S.inbox : [];
-    const inboxGroups = Array.isArray(S.inboxGroups) ? S.inboxGroups : null;
-    const INBOX_ACTION_LABELS = {
-      accept: T('cognition.inbox_action_accept', '保存'),
-      reject: T('cognition.inbox_action_reject', '拒绝'),
-      defer: T('cognition.inbox_action_defer', '稍后处理'),
-      ignore: T('cognition.inbox_action_ignore', '忽略'),
-    };
-    const PROPOSAL_ACTION_LABELS = {
-      accept: T('cognition.inbox_action_accept_update', '保存更新'),
-      defer: T('cognition.inbox_action_defer_later', '稍后处理'),
-      reject: T('cognition.inbox_action_reject_proposal', '拒绝'),
-    };
-    const FINDING_ACTION_LABELS = {
-      reject: T('cognition.inbox_action_dismiss', '不管它'),
-      defer: T('cognition.inbox_action_look_later', '回头再看'),
-    };
-    const actionLabelsFor = (kind) => (kind === 'asset_change_pending'
-      ? PROPOSAL_ACTION_LABELS
-      : kind === 'cleanup_uncertain' || kind === 'inspection_finding' ? FINDING_ACTION_LABELS : INBOX_ACTION_LABELS);
-    // 标题一行截断（2026-09-26 真机取证）：inbox 的 title 可能是资产正文全文，
-    // 五行大标题把整页压垮；全文进 title 悬浮，行上只给一句能扫的。
-    const rowTitle = (row) => {
-      const raw = String(row.title || '');
-      const cut = raw.length > 60 ? `${raw.slice(0, 60)}…` : raw;
-      return `<div class="notice-title" title="${esc(raw)}">${esc(cut)}</div>`;
-    };
-    // 既有扁平行的渲染（降级路径与「其他」组共用，语义不变）。
-    // 三件套（specs/018 T011）：首个动作 = 推荐动作（primary 视觉），
-    // 其余收「其他处理」折叠；没有一键动作的仍给资产详情落点。
-    // A1（2026-09-29）：缺边界规则恢复「就地补条件」表单（specs/010 T028
-    // 原口径）——后端处置链与 boundary 预填字段一直都在（inbox-adapter 的
-    // set_boundary 分支 + 同一道规则闸门），两页重整只删了前端表单，按钮
-    // 裸出工程词且点了必报错。表单按行内 data-f 就地读取，多值用顿号分隔。
-    const boundaryFormRow = (row) => {
-      const id = String(row.id || '');
-      const boundary = row.boundary && typeof row.boundary === 'object' ? row.boundary : {};
-      const joinList = (list) => (Array.isArray(list) ? list.map(String).filter(Boolean).join('、') : '');
-      const suffix = id.replace(/[^a-z0-9_-]/gi, '');
-      return `<div class="notice-row ca-inbox-boundary" data-inbox-boundary-form>
-        <div class="notice-copy">
-          ${rowTitle(row)}
-          <div class="notice-detail">${esc(T('cognition.inbox_rule_boundary_hint', '没写适用范围的规矩不会被自动带入任务；补齐后才会生效。'))}</div>
-          <div class="ca-inbox-boundary-form">
-            ${window.uiInput({ id: `inbox-boundary-applicable-${suffix}`, value: joinList(boundary.applicableWhen), attrs: { 'data-f': 'boundary-applicable', placeholder: T('cognition.inbox_boundary_field_applicable', '适用情形') } })}
-            ${window.uiInput({ id: `inbox-boundary-forbidden-${suffix}`, value: joinList(boundary.forbiddenWhen), attrs: { 'data-f': 'boundary-forbidden', placeholder: T('cognition.inbox_boundary_field_forbidden', '禁用情形') } })}
-            <div class="note">${esc(T('cognition.inbox_boundary_save_effect', '保存后：主进程重新校验，通过后这条规则恢复自动带入；不通过会把原因留在这里。'))}</div>
-          </div>
-        </div>
-        <span class="sp"></span>${btn(T('cognition.inbox_boundary_submit', '保存边界'), 'inbox-boundary-save', { small: true, primary: true, data: { id } })}
-      </div>`;
-    };
-    const flatInboxRow = (row) => {
-      if (String(row.kind || '') === 'rule_boundary_missing') return boundaryFormRow(row);
-      const actions = Array.isArray(row.actions) ? row.actions : [];
-      const labels = actionLabelsFor(String(row.kind || ''));
-      const [recommended, ...rest] = actions;
-      const primaryBtn = recommended
-        ? btn(labels[recommended] || String(recommended), 'inbox-resolve', {
-          small: true, primary: true, data: { id: String(row.id || ''), action: String(recommended) },
-        })
-        : '';
-      const restBtns = otherActions(rest.map((action) => btn(labels[action] || String(action), 'inbox-resolve', {
-        small: true, className: 'o', data: { id: String(row.id || ''), action: String(action) },
-      })).join(''));
-      // 没有一键动作的：给落点（资产详情里的编辑入口），而不是只报警。
-      const fallback = actions.length || !row.assetId
-        ? ''
-        : btn(T('cognition.inbox_go_asset', '去资产详情处理'), 'go-inbox-asset', { small: true, className: 'o', data: { id: String(row.assetId) } });
-      return `<div class="notice-row">
-        <div class="notice-copy">${rowTitle(row)}${row.detail ? `<div class="notice-detail">${esc(String(row.detail))}</div>` : ''}</div>
-        <span class="sp"></span>${fallback}${primaryBtn}${restBtns}
-      </div>`;
-    };
-    // ── 治理分区的取词（内联，i18n 门禁扫得到；不信任主进程下发的 titleKey）──
-    // 组名走人话（specs/018 §4）。敏感级「扩权/未分级」与「缺边界催办」三个
-    // 分组已随机制整体删除（2026-09-28 两页重整：待我处理只剩等你拍板的事；
-    // 边界的编辑入口保留在资产编辑表单）——主进程分组枚举收窄后这里只剩
-    // 冲突与其他；历史残留 category 落 other 兜底、行沿 flatInboxRow。
-    const GROUP_TITLES = {
-      conflict: T('cognition.inbox_group_conflict', '冲突与重复'),
-      other: T('cognition.inbox_group_other', '其他待处理'),
-    };
-    const GROUP_HINTS = {
-      conflict: T('cognition.inbox_classification_conflict_hint', '同一句话被归到两个类型，两边都不会晋升，需要你裁定。'),
-    };
-    // ── 各分区的行渲染器（动作仍以 item.actions 为准，渲染层不自判）──
-    const governanceRow = (row) => {
-      const actions = Array.isArray(row.actions) ? row.actions : [];
-      const has = (action) => actions.includes(action);
-      const id = String(row.id || '');
-      // 聚合行的 detail 与组 hint 同文（真机截图取证）：不重复摆第二遍。
-      const detail = row.aggregate ? '' : row.detail;
-      const head = `<div class="notice-copy">${rowTitle(row)}${detail ? `<div class="notice-detail">${esc(String(detail))}</div>` : ''}</div>`;
-      if (row.kind === 'classification_conflict' && has('claim')) {
-        return `<div class="notice-row">${head}<span class="sp"></span>${btn(T('cognition.inbox_action_claim', '保留这一条'), 'inbox-conflict-claim', { small: true, primary: true, data: { id } })}${otherActions([has('reject') ? btn(INBOX_ACTION_LABELS.reject, 'inbox-resolve', { small: true, className: 'o', data: { id, action: 'reject' } }) : '', has('defer') ? btn(INBOX_ACTION_LABELS.defer, 'inbox-resolve', { small: true, className: 'o', data: { id, action: 'defer' } }) : ''].join(''))}</div>`;
-      }
-      if (row.kind === 'inspection_finding' && (has('keep') || has('merge'))) {
-        // 巡检冲突/重复（specs/010 T033）：选边归档或合并。目标 = 本行锚定的
-        // 资产（data-anchor）；data-target 携带另一方 id（展示与测试锚点）。
-        const anchor = String(row.assetId || '');
-        const other = String((row.assetIds || []).find((assetId) => String(assetId) !== anchor) || '');
-        return `<div class="notice-row">${head}<span class="sp"></span>${has('keep') ? btn(T('cognition.inbox_action_keep', '保留这一条，归档另一条'), 'inbox-inspection-keep', { small: true, primary: true, data: { id, anchor, target: other } }) : ''}${otherActions([has('merge') ? btn(T('cognition.inbox_action_merge_pair', '合并到这一条'), 'inbox-inspection-merge', { small: true, className: 'o', data: { id, anchor, target: other } }) : '', has('reject') ? btn(FINDING_ACTION_LABELS.reject, 'inbox-resolve', { small: true, className: 'o', data: { id, action: 'reject' } }) : '', has('defer') ? btn(FINDING_ACTION_LABELS.defer, 'inbox-resolve', { small: true, className: 'o', data: { id, action: 'defer' } }) : ''].join(''))}</div>`;
-      }
-      // 其余（含没有就地处断动作的）沿用既有扁平行（落点按钮同现状）。
-      return flatInboxRow(row);
-    };
-    // ── 决策队列（specs/018 v2 · 2026-09-26 真机重做）：后端 urgency
-    //（confirm/low_disturbance）决定分区；组名只作区内小节；计数三口径
-    // 统一成「要你拍板 / 低打扰 / 证据异常」，与页签角标同一来源。
-    const isConfirm = (row) => String(row.urgency || '') === 'confirm';
-    const groupBlock = (group, items) => {
-      const title = GROUP_TITLES[group.category] || GROUP_TITLES.other;
-      const hint = GROUP_HINTS[group.category];
-      const rows = items.map((row) => (group.category === 'other' ? flatInboxRow(row) : governanceRow(row))).join('');
-      // 计数口径（T016）：显示本拆分区条目数（未分级组「显示 total」的特判
-      // 已随分级待办整体删除，2026-09-28）。
-      return `<div class="sect-block"><div class="tt">${esc(title)}<span class="note">${esc(String(items.length))}</span></div>${hint ? `<p class="note">${esc(hint)}</p>` : ''}${rows}</div>`;
-    };
-    const confirmBlocks = [];
-    const lowBlocks = [];
-    let confirmCount = 0;
-    let lowCount = 0;
-    if (inboxGroups && inboxGroups.length) {
-      for (const group of inboxGroups) {
-        if (!group || !Array.isArray(group.items) || !group.items.length) continue;
-        const confirmItems = group.items.filter(isConfirm);
-        const lowItems = group.items.filter((row) => !isConfirm(row));
-        if (confirmItems.length) { confirmCount += confirmItems.length; confirmBlocks.push(groupBlock(group, confirmItems)); }
-        if (lowItems.length) { lowCount += lowItems.length; lowBlocks.push(groupBlock(group, lowItems)); }
-      }
-    } else if (inboxItems.length) {
-      // 降级路径：拿不到 groups（旧主进程/读失败）逐字退回既有扁平清单。
-      const inboxRows = inboxItems.map(flatInboxRow).join('');
-      confirmBlocks.push(`<div class="sect-block"><div class="tt">${esc(T('cognition.inbox_section', '待确认清单'))}<span class="note">${esc(String(inboxItems.length))}</span></div>${inboxRows}</div>`);
-      confirmCount += inboxItems.length;
+    // Asset update approvals already have their own version-checked decision service.
+    // Project them directly; never manufacture nightly extraction provenance.
+    for (const proposal of S.assetApprovals || []) {
+      if (runFilter) continue;
+      if (!proposal?.id || !proposal.assetId || !proposal.payload || !Array.isArray(proposal.fields)
+        || !['pending', 'deferred', 'confirmed', 'rejected', 'superseded'].includes(proposal.state)) continue;
+      const asset = (S.assets || []).find(item => String(item.id) === String(proposal.assetId));
+      const waiting = !proposal.contentPurgedAt && ['pending', 'deferred'].includes(proposal.state);
+      const label = proposal.contentPurgedAt ? T('cognition.content_purged', '内容已清除') : proposal.state === 'confirmed' ? T('cognition.activity_outcome_update', '已更新')
+        : proposal.state === 'rejected' ? T('cognition.inbox_action_reject', '拒绝')
+          : proposal.state === 'superseded' ? T('cognition.candidate_status_expired', '已失效')
+            : proposal.state === 'deferred' ? T('cognition.activity_deferred_result', '稍后 · 待处理')
+              : T('cognition.candidate_status_pending', '待确认');
+      const at = waiting ? proposal.createdAt : proposal.decidedAt || proposal.createdAt;
+      (waiting ? attention : done).push({ key: 'approval:' + proposal.id,
+        title: proposal.contentPurgedAt ? T('cognition.content_purged', '内容已清除') : asset?.title || proposal.assetId, detail: proposal.reason, scope: activityScope(asset?.scope),
+        result: label, rawAt: at, at: fmtDate(at), route: { approvalId: proposal.id }, candidateIds: [],
+        kind: 'update', source: 'approval', assetIds: [String(proposal.assetId)],
+      });
     }
-    const decideCount = confirmCount + ready.length;
-    const lowTotal = lowCount + snoozed.length;
-    const evidenceCount = broken.length + weak.length;
-    const allQuiet = !attention.length && !confirmCount && !lowCount && !pending.length && !terminal.length && !processed.length;
-    /* 导语（specs/018 T010）：一句话回答「现在要我拍板什么」。概览计数收成
-     * 导语里两个可点数字（拍板数 / 证据异常数），点数字滚到对应分区——
-     * 统计条与分组计数的重复就此砍掉。「预计分钟数」是硬编码经验值（2026-09-28
-     * 两页重整删除）：数字看着像承诺，实际不是测量。 */
-    const leadNum = (value, anchor) => `<span class="chip-link ca-jump-num" data-act="review-jump" data-id="${esc(anchor)}" aria-label="${esc(T('cognition.review_lead_jump_aria', '跳到「{where}」', { where: anchor === 'ca-review-decide' ? T('cognition.review_queue_decide', '要你拍板') : anchor === 'ca-review-evidence' ? T('cognition.review_lead_evidence', '条证据要补') : T('cognition.overview_list_title', '资产明细') }))}" ${roleBtn()}>${esc(String(value))}</span>`;
-    /* 分段拼导语（迭代轮 1 修）：拍板段只在 >0 时出现，锚点也随之恒在。 */
-    const decidePart = decideCount
-      ? `${leadNum(decideCount, 'ca-review-decide')} ${esc(T('cognition.review_lead_decide', '件事等你拍板'))}`
+    // 本体逐次保存历史只在对应对象的详情查看；共同确认结果由候选的 integrated 记录承载。
+    const rows = [...attention, ...done];
+    for (const row of rows) {
+      const ids = new Set(row.assetIds || []);
+      if (!ids.size) { row.relatedSuggestionIds = []; continue; }
+      row.relatedSuggestionIds = rows
+        .filter(other => other.key !== row.key && (other.assetIds || []).some(id => ids.has(String(id))))
+        .map(other => other.key)
+        .slice(0, 4);
+    }
+    return { attention, done, excludedCount: excluded.size };
+  }
+  NS.activityModel = activityModel;
+
+  const ACTIVITY_PAGE_SIZE = 50;
+  const ACTIVITY_ACTIONS = Object.freeze(['activity-edit', 'activity-edit-cancel', 'activity-select', 'activity-tab', 'activity-clear', 'activity-page-select', 'activity-close', 'activity-expand', 'activity-expand-close', 'activity-next', 'activity-save-draft', 'activity-defer', 'activity-history', 'activity-undo-automatic', 'activity-undo-organization', 'activity-approval', 'formation-recheck', 'activity-inbox', 'activity-filter']);
+  const ACTIVITY_WRITE_ACTIONS = Object.freeze(['activity-save-draft', 'activity-defer']);
+  const activityDrafts = new Map();
+  const activityEditors = new Set();
+  const activityReadingPositions = new Map();
+  let activitySelection = '';
+  let activityDrawer = false;
+  let activityExpanded = false;
+  let activityRendered = false;
+  let activityWasNarrow = false;
+  let activityQueryTimer;
+  let activityFilterApis = [];
+  let activityFilterFocus = '';
+  const candidateFields = { contentCategory: 'contentCategory', judgment: 'judgment', value: 'value', uncertainty: 'uncertainty', summary: 'summary', scope: 'suggestedScope', applicable: 'applicableWhen', forbidden: 'forbiddenWhen' };
+  const narrowActivity = () => !!window.matchMedia && window.matchMedia('(max-width: 1100px), (max-height: 500px)').matches;
+  function focusAfterFrame(run) {
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(run);
+    else run();
+  }
+  function blockingOverlay() {
+    const modal = document.querySelector?.('.ui-modal:not([hidden]), .ca-modal:not([hidden])');
+    if (modal) {
+      if (typeof modal.getClientRects !== 'function') return true;
+      if (!modal.closest?.('[hidden]') && modal.getClientRects().length) return true;
+    }
+    const viewer = document.querySelector?.('.chat-file-viewer.is-open');
+    if (!viewer) return false;
+    if (typeof viewer.getClientRects !== 'function') return true;
+    return !viewer.closest?.('[hidden]') && viewer.getClientRects().length > 0;
+  }
+  const activityRoute = (patch = {}) => Object.assign({}, S.route, { name: 'activity', candidateId: '', inboxId: '', poCandidateId: '', captureId: '', approvalId: '' }, patch);
+  function selectedActivityKey(route) {
+    return route.approvalId ? 'approval:' + route.approvalId : route.candidateId ? 'candidate:' + route.candidateId : route.inboxId ? 'inbox:' + route.inboxId : route.poCandidateId ? 'legacy:' + route.poCandidateId : activitySelection;
+  }
+  function activityModelForRoute(route) {
+    if (!route.activityRunId) return activityModel();
+    const receipt = S.captureStats?.sweep?.receipt;
+    const matching = receipt && String(receipt.runId) === String(route.activityRunId);
+    const candidates = new Set(matching && Array.isArray(receipt.candidateIds) ? receipt.candidateIds.map(String) : []);
+    const findings = new Set(matching && Array.isArray(receipt.findingKeys) ? receipt.findingKeys.map(key => 'inspection:' + String(key)) : []);
+    return { ...activityModel({ candidates, findings }), runUnavailable: !matching };
+  }
+  function activityRowsFor(route, model = activityModelForRoute(route)) {
+    const processed = route.activityView === 'done' || route.activityDone === '1';
+    const query = normalizeActivityText(route.activityQuery).toLocaleLowerCase();
+    const filter = String(route.activityFilter || 'all');
+    return (processed ? model.done : model.attention).filter(row =>
+      (filter === 'all' || row.kind === filter)
+      && normalizeActivityText(row.title + ' ' + row.detail + ' ' + row.scope + ' ' + row.result).toLocaleLowerCase().includes(query))
+      .sort((a,b) => String(b.rawAt).localeCompare(String(a.rawAt)));
+  }
+  function activityCandidate(row, processed) {
+    const original = S.candidates.find(c => String(c.id) === String(row.route.candidateId));
+    if (!original) return '';
+    const draft = activityDrafts.get(String(original.id));
+    const candidate = Object.assign({}, original, draft || {});
+    // A processed record stays read-only even if a stale server snapshot carries old capabilities.
+    if (processed || !NS.candidate.attentionReady(original)) candidate.capabilities = Object.assign({}, candidate.capabilities, { canEdit: false, canPromote: false, canReject: false, canContinueOntology: false, isTerminal: processed || !!original.capabilities?.isTerminal });
+    const actor = original.processingActor;
+    const reason = original.processingReason || original.decisionNote;
+    const processing = processed ? `<div class="ca-activity-processing" role="status"><strong>${esc(row.result)} · ${esc(T('cognition.activity_readonly', '本记录为只读'))}</strong><p>${esc(T('cognition.activity_actor', '处理者'))}：${esc(actor || T('cognition.activity_actor_unknown', '历史记录未提供'))}</p><p>${esc(T('cognition.activity_reason', '处理依据'))}：${esc(reason || T('cognition.activity_reason_unknown', '历史记录未提供处理依据'))}</p></div>` : '';
+    return NS.candidate.formCard(candidate, { compact: true, editing: activityEditors.has(String(candidate.id)), processing }) + (row.candidateIds.length > 1 ? `<p class="note">${esc(T('cognition.activity_related_proposals', '相同建议已在列表合并，原始建议和来源仍分别保留。'))} ${esc(String(row.candidateIds.length))}</p>` : '');
+  }
+  const approvalFields = ['value', 'statement', 'scope', 'applicableWhen', 'forbiddenWhen', 'tags'];
+  function readableApproval(proposal) {
+    if (proposal.contentPurgedAt) return false;
+    const fields = [...new Set([...(proposal.fields || []), ...Object.keys(proposal.payload || {})])];
+    return fields.length > 0 && fields.every(key => approvalFields.includes(key));
+  }
+  function activityApproval(row, processed) {
+    const proposal = (S.assetApprovals || []).find(item => String(item.id) === String(row.route.approvalId));
+    if (!proposal) return '';
+    if (proposal.contentPurgedAt) return `<p role="status">${esc(T('cognition.content_purged_note', '关联资产的内容已清除。此记录保留处理状态，不能编辑、确认或恢复内容。'))}</p>`;
+    const asset = (S.assets || []).find(item => String(item.id) === String(proposal.assetId));
+    const read = (label, value) => `<dl class="ca-approval-fact"><dt>${esc(label)}</dt><dd class="content-text">${esc(Array.isArray(value) ? value.join('；') : value || T('cognition.activity_not_recorded', '未记录'))}</dd></dl>`;
+    const labels = {
+      value: T('cognition.detail_future_use', '用途'),
+      statement: T('cognition.asset_version_diff_statement', '正文'), scope: T('cognition.asset_version_diff_scope', '适用范围'),
+      applicableWhen: T('cognition.asset_version_applicable', '适用场景'), forbiddenWhen: T('cognition.asset_version_forbidden', '禁用场景'),
+      tags: T('cognition.asset_edit_field_tags', '标签'),
+    };
+    const related = proposed => proposed ? NS.ui.cognitionRelated(proposed) : '';
+    const target = asset ? T('cognition.activity_approval_target', '目标：{title} · 当前 v{current} · 提议基于 v{baseline}', { title: asset.title, current: asset.version, baseline: proposal.baselineActiveVersion || proposal.baselineVersion }) : T('cognition.activity_target_missing', '未读到目标资产');
+    const requestedFields = [...new Set([...proposal.fields, ...Object.keys(proposal.payload)])];
+    const fields = requestedFields.filter(key => Object.prototype.hasOwnProperty.call(labels, key));
+    const baseline = NS.ui.versionContent(proposal.assetId, proposal.baselineActiveVersion || proposal.baselineVersion);
+    const saved = proposal.state === 'confirmed' ? NS.ui.savedDecisionContent('approval', proposal) : null;
+    const proposed = proposal.state === 'confirmed' ? saved?.content : baseline ? { ...baseline, ...proposal.payload } : null;
+    const canConfirm = !!baseline && readableApproval(proposal) && !processed && !S.loading && !S.candidatesError && !S.assetsError && asset && ['active', 'paused'].includes(asset.status) && String(asset.version) === String(proposal.baselineVersion) && String(asset.activeVersion || asset.version) === String(proposal.baselineActiveVersion || proposal.baselineVersion);
+    const blocked = !processed && !canConfirm ? `<p role="status">${esc(T('cognition.activity_approval_blocked', '目标资产不可用、版本已变化或清单读取失败，请刷新核对后再处理。'))}</p>` : '';
+    return `${proposed ? NS.ui.cognitionContentFields(proposed, { part: 'body', omitUseHint: true }) : `<p role="status">${esc(T(proposal.state === 'confirmed' ? 'cognition.detail_saved_unavailable' : 'cognition.detail_baseline_unavailable', proposal.state === 'confirmed' ? '保存版本尚未读到，请读取版本记录后核对。' : '原版本内容不可用，请读取版本记录后核对。'))}</p>${btn(T('common.retry', '重试'), 'asset-versions-retry', { id: proposal.assetId })}`}
+      <section class="ca-review-content"><h3>${esc(T('cognition.detail_changes', '本次变化'))}</h3><h4>${esc(T('cognition.formation_before', '修改前'))}</h4>${fields.map(key => read(labels[key], baseline?.[key] ?? proposal.beforeValues?.[key])).join('')}</section>
+      ${NS.ui.cognitionSources(proposed?.evidenceRefs, 'asset:' + proposal.assetId, { fold: false, empty: proposed ? undefined : '',
+        before: `<p class="content-text">${esc(proposal.reason)}</p>` })}
+      ${proposed ? NS.ui.cognitionContentFields(proposed, { part: 'boundary', omitUseHint: true }) : ''}
+      ${related(proposed) || ''}
+      ${processed ? `<section class="ca-review-result"><h3>${esc(T('cognition.activity_result', '处理结果'))}</h3>${read(T('cognition.activity_result', '处理结果'), row.result)}${read(T('cognition.activity_time', '发生时间'), fmtDate(proposal.decidedAt || proposal.createdAt))}${saved?.version ? `<p class="note">${esc(T('cognition.detail_saved_version', '已保存 v{n}', { n: String(saved.version) }))}</p>` : ''}${saved?.assetId ? btn(T('cognition.candidate_detail_open_asset', '查看已保存资产'), 'go-inbox-asset', { id: saved.assetId, small: true }) : ''}</section>` : `<details class="details ca-review-impact"><summary>${esc(T('cognition.activity_impact_title', '保存的影响'))}</summary><p>${esc(T('cognition.activity_approval_impact', '批准后更新目标资产并记录新版本；稍后处理保留待审批状态，拒绝会关闭此提议。'))}</p><p class="note">${esc(T('cognition.activity_approval_origin', 'AI 提出的资产修改建议；是否生效以审批结果与版本记录为准。'))}</p></details>`}
+      ${NS.ui.cognitionHistory(read(T('cognition.activity_target_label', '目标 / 版本'), target))}
+      ${blocked}
+      ${processed ? '' : `<div class="actions actions-right" data-activity-primary-actions>${btn(T('cognition.activity_save_update', '保存更新'), 'activity-approval', { id: proposal.id, data: { decision: 'confirm' }, primary: true, disabled: !canConfirm })}${btn(T('cognition.activity_defer', '稍后处理'), 'activity-approval', { id: proposal.id, data: { decision: 'defer' }, disabled: !!S.candidatesError })}${btn(T('cognition.inbox_action_reject', '拒绝'), 'activity-approval', { id: proposal.id, data: { decision: 'reject' }, danger: true, disabled: !!S.candidatesError })}</div>`}`;
+  }
+  function activityInbox(row, processed) {
+    const item = [...(S.inbox || []), ...(S.inboxResolved || [])]
+      .find(entry => String(entry.id) === String(row.route.inboxId));
+    if (!item) return `<p role="status">${esc(T('cognition.activity_inbox_missing', '这条建议已处理或已刷新。'))}</p>${btn(T('common.refresh', '刷新'), 'refresh', { small: true })}`;
+    const assets = (item.assetIds || [])
+      .map(assetId => (S.assets || []).find(asset => String(asset.id) === String(assetId)))
+      .filter(Boolean);
+    const category = item.findingCategory;
+    const categoryLabel = category === 'duplicate' ? T('cognition.activity_inbox_duplicate', '疑似重复')
+      : category === 'conflict' ? T('cognition.activity_inbox_conflict', '类型冲突')
+        : category === 'outdated' ? T('cognition.activity_inbox_outdated', '长期未更新')
+          : T('cognition.activity_inbox_type', '巡检发现');
+    const pair = category === 'duplicate' || category === 'conflict';
+    const cards = assets.map(asset => `<div class="ca-inbox-asset">
+      <strong>${esc(asset.title || asset.id)}</strong>
+      <p class="note">${esc(String(asset.statement || '').slice(0, 240))}</p>
+      <p class="note">${esc(T('cognition.activity_inbox_saved_version', '保存版本 v{n}', { n: String(asset.activeVersion || asset.version || '') }))}</p>
+      ${pair && !processed ? `<div class="actions">${btn(T('cognition.activity_inbox_keep', '保留这条'), 'activity-inbox', { small: true, data: { id: item.id, action: 'keep', target: asset.id } })}${btn(T('cognition.activity_inbox_merge', '合并到这条'), 'activity-inbox', { small: true, data: { id: item.id, action: 'merge', target: asset.id } })}</div>` : ''}
+    </div>`).join('');
+    const actions = category === 'outdated'
+      ? `<div class="actions actions-right">${assets[0] ? btn(T('cognition.activity_inbox_open', '去资产详情'), 'go-inbox-asset', { id: assets[0].id, small: true }) : ''}${btn(T('cognition.activity_defer', '稍后处理'), 'activity-inbox', { small: true, data: { id: item.id, action: 'defer' } })}${btn(T('cognition.inbox_action_reject', '不再提醒'), 'activity-inbox', { small: true, data: { id: item.id, action: 'reject' } })}</div>`
+      : `<div class="actions actions-right">${btn(T('cognition.activity_defer', '稍后处理'), 'activity-inbox', { small: true, data: { id: item.id, action: 'defer' } })}${btn(T('cognition.inbox_action_reject', '不再提醒'), 'activity-inbox', { small: true, data: { id: item.id, action: 'reject' } })}</div>`;
+    const related = (row.relatedSuggestionIds || []).length
+      ? `<p class="note">${esc(T('cognition.activity_inbox_related', '这处内容还有 {n} 条可能相关的建议；处理前可先核对它们。', { n: String(row.relatedSuggestionIds.length) }))}</p>`
       : '';
-    const evidencePart = evidenceCount ? `${leadNum(evidenceCount, 'ca-review-evidence')} ${esc(T('cognition.review_lead_evidence', '条证据要补'))}` : '';
-    const lowPart = lowTotal ? esc(T('cognition.review_lead_low', '{n} 条不急，先收着', { n: String(lowTotal) })) : '';
-    const leadHtml = [decidePart, evidencePart, lowPart].filter(Boolean).length
-      ? `<div class="sub">${[decidePart, evidencePart, lowPart].filter(Boolean).join(' · ')}</div>`
-      : '';
-    /* 确认后两分钟内回到本页时，提供到刚保存资产详情的明确入口。
-     * 认知树保留全景导航职责，不承载单条资产详情。 */
-    const promoted = S.lastPromoted && (Date.now() - Number(S.lastPromoted.at || 0) < 120000)
-      ? S.lastPromoted
-      : null;
-    const truncate = (text, limit) => (NS.truncateText ? NS.truncateText(text, limit) : String(text || '').slice(0, limit));
-    const promotedHtml = promoted ? `<div class="notice-stack ca-promoted-note"><div class="notice-row">
-      <div class="notice-copy"><div class="notice-title">${esc(T('cognition.review_promoted_title', '已确认 · 已保存为正式资产'))}</div>
-      ${promoted.title ? `<div class="notice-detail">${esc(truncate(promoted.title, 60))}</div>` : ''}</div>
-      <span class="sp"></span>${promoted.assetId ? btn(T('cognition.review_promoted_go', '查看这条资产'), 'go-inbox-asset', { id: String(promoted.assetId), small: true, primary: true }) : ''}
-    </div></div>` : '';
-    const decideHtml = decideCount ? `<div id="ca-review-decide">${sectionHead(T('cognition.review_queue_decide', '要你拍板'), String(decideCount))}
-      <div class="note sect-note">${esc(T('cognition.review_queue_decide_hint', '每条都卡在这里等你：动作与后果写在条上，处理一条少一条。'))}</div>
-      ${confirmBlocks.join('')}
-      ${ready.length ? `${sectionHead(T('cognition.review_group_wait', '等待你确认'), String(ready.length))}<div class="note sect-note">${esc(T('cognition.review_group_wait_note', '保存后生成第一版，来源与撤销入口都保留'))} · ${esc(termNote('candidate'))}</div>${ready.map((c) => candidateCard(c, false)).join('')}` : ''}</div>` : '';
-    const lowHtml = lowTotal ? `<details class="details fold fold-low"><summary>${esc(T('cognition.review_queue_low', '低打扰'))}<span class="n">${lowTotal}</span></summary><div class="dbody"><div class="note">${esc(T('cognition.review_queue_low_hint', '不急，但不会自己消失：有空时逐条处理。'))}</div>${lowBlocks.join('')}</div></details>` : '';
-    /* 「其他异常」组（specs/018 T013）：整理失败 / 任务执行失败 / 来源异常
-     * 不再混在治理区——它们不是拍板事项，归页尾折叠；展开态跟随
-     * route.sourceIssueOpen，点「处理」不会把刚展开的名单又折回去。 */
-    const attentionHtml = attention.length
-      ? `<details class="details fold fold-attention"${String(route.sourceIssueOpen || '') === 'open' ? ' open' : ''}><summary>${esc(T('cognition.review_other_issues', '其他异常'))}<span class="n">${attention.length}</span></summary><div class="dbody"><div class="note">${esc(T('cognition.review_other_issues_hint', '不是等你拍板的事：整理没跑成、任务没得到回复、来源读取异常；处理入口在「系统活动」。'))}</div>${attention.join('')}${sourceIssuesSection(route)}${taskFailedSection(route)}</div></details>`
-      : '';
-    return `${hero(T('cognition.review_title', '待我处理'), '', leadHtml)}
-    ${promotedHtml}
-    ${allQuiet ? `<div class="sect-block">${empty(
-      T('cognition.inbox_empty', '没有需要你确认的事项。'),
-      T('cognition.review_all_quiet_hint', '现在没有要你决定的，系统继续在后台沉淀；有新待办时会回到这里。'),
-      { label: T('cognition.review_empty_go_activity', '去看看系统在忙什么'), attrs: { 'data-act': 'go-organize' } },
-    )}</div>` : `${decideHtml}
-    ${broken.length || weak.length ? `<div id="ca-review-evidence">
-    ${broken.length ? `${sectionHead(T('cognition.review_group_evidence', '来源已删除的候选'), String(broken.length))}<div class="note sect-note">${esc(T('cognition.review_group_evidence_note', '这些候选的原始出处已被删除；可以点开确认后仍要保存，或选择不保存'))}</div>${broken.map((c) => candidateCard(c, true)).join('')}` : ''}
-    ${weak.length ? `${sectionHead(T('cognition.review_group_weak', '证据不足（先补证据）'), String(weak.length))}<div class="note sect-note">${esc(T('cognition.review_group_weak_note', '可以修改内容并补上证据后保存，或先稍后处理'))}</div>${weak.map((c) => candidateCard(c, false)).join('')}` : ''}
-    </div>` : ''}
-    ${lowHtml}`}
-    ${snoozed.length ? `<details class="details fold fold-snoozed"><summary>${esc(T('cognition.review_group_snoozed', '已稍后处理'))}<span class="n">${snoozed.length}</span></summary><div class="dbody"><div class="note">${esc(T('cognition.review_group_snoozed_note', '静音中，不计入待确认'))}</div>${snoozed.map((c) => candidateCard(c, false)).join('')}</div></details>` : ''}
-    ${terminal.length ? `<details class="details fold fold-terminal"><summary>${esc(T('cognition.review_group_terminal', '已失效的候选'))}<span class="n">${terminal.length}</span></summary><div class="dbody"><div class="note">${esc(T('cognition.review_group_terminal_note', '已过期或被取代，仅保留记录'))}</div>${terminal.map((c) => candidateCard(c, false)).join('')}</div></details>` : ''}
-    ${processed.length ? `<details class="details fold fold-processed"><summary>${esc(T('cognition.inbox_processed_badge', '处理记录'))}<span class="n">${processed.length}</span></summary><div class="dbody"><div class="note">${esc(T('cognition.inbox_processed_hint', '按处理时间倒序，只显示已处理的决定'))}</div>${processed.map((c) => `
-      <div class="vrow">
-        <div class="vt"><div class="v1">${esc(candidateTitle(c))}${String(c.status || '') === 'confirmed' && c.promotedAssetId ? ` <span class="chip-link" data-act="go-inbox-asset" data-id="${esc(String(c.promotedAssetId))}" ${roleBtn()}>${esc(T('cognition.review_promoted_go', '查看这条资产'))}</span>` : ''}</div>
-        <div class="v2">${esc(fmtDate(c.updatedAt || c.createdAt))} · ${esc(processedLabel(c))}</div></div>
-      </div>`).join('')}</div></details>` : ''}
-    ${attentionHtml}`;
+    return `<p class="content-text">${esc(item.detail || '')}</p><p class="note">${esc(categoryLabel)}</p>${related}${cards}${processed ? '' : actions}`;
   }
 
-  NS.viewReview = viewReview;
+  function activityChrome(presentation) {
+    return NS.ui.detailTitleActions({
+      expandAct: presentation === 'expanded' ? '' : 'activity-expand',
+      closeAct: presentation === 'expanded' ? 'activity-expand-close' : 'activity-close',
+    });
+  }
+  function activityDetail(row, processed, options = {}) {
+    const chrome = activityChrome(options.presentation);
+    if (!row) {
+      if (S.route.approvalId) {
+        const message = empty(
+          T(S.loading ? 'cognition.activity_loading' : S.candidatesError ? 'cognition.review_load_failed_title' : 'cognition.activity_approval_missing', S.loading ? '正在读取活动…' : S.candidatesError ? '清单没能读取' : '这条提议暂不可用'),
+          T('cognition.activity_approval_missing_hint', '请刷新核对；不会改为打开其他提议。'));
+        return `<header class="ca-activity-detail-head ca-detail-head"><div class="ca-library-detail-title"><h2>${esc(T('cognition.activity_detail', '活动详情'))}</h2>${chrome}</div></header><div class="ca-activity-detail-body ca-detail-body" data-activity-key="approval:${esc(S.route.approvalId)}" role="${!S.loading && S.candidatesError ? 'alert' : 'status'}">${message}</div>`;
+      }
+      return '';
+    }
+    let content;
+    if (row.route.candidateId) content = activityCandidate(row, processed);
+    else if (row.route.approvalId) content = activityApproval(row, processed);
+    else if (row.route.inboxId) content = activityInbox(row, processed);
+    else content = '';
+    let fixedActions = '';
+    const actionPattern = (row.route.candidateId || row.route.approvalId) ? /<div class="actions actions-right" data-activity-primary-actions>([\s\S]*?)<\/div>/ : /<div class="actions actions-right">([\s\S]*?)<\/div>/;
+    content = content.replace(actionPattern, (match, actions) => { fixedActions = actions; return ''; });
+    const original = row.route.candidateId && S.candidates.find(item => String(item.id) === String(row.route.candidateId));
+    const candidate = original ? Object.assign({}, original, processed ? {} : activityDrafts.get(String(original.id)) || {}) : null;
+    const ontologyOnly = candidate?.proposalTarget === 'ontology';
+    const ontologyChanges = candidate?.ontologyFormation?.previewChanges || [];
+    const proposal = row.route.approvalId && (S.assetApprovals || []).find(item => item.id === row.route.approvalId);
+    const inboxItem = row.route.inboxId && [...(S.inbox || []), ...(S.inboxResolved || [])]
+      .find(item => String(item.id) === String(row.route.inboxId));
+    const baseline = proposal && !proposal.contentPurgedAt && NS.ui.versionContent(proposal.assetId, proposal.baselineActiveVersion || proposal.baselineVersion);
+    const saved = processed && !candidate?.contentPurgedAt && !proposal?.contentPurgedAt ? (candidate?.status === 'confirmed' && !candidate.contentOrganization ? NS.ui.savedDecisionContent('candidate', candidate) : proposal?.state === 'confirmed' ? NS.ui.savedDecisionContent('approval', proposal) : null) : null;
+    const detailTitle = saved?.content.title || (ontologyOnly && ontologyChanges.length === 1 ? ontologyChanges[0].after?.name : '') || (candidate ? String(candidate.summary || row.title) : baseline?.title || row.title);
+    const version = saved?.version || (ontologyOnly && ontologyChanges.length === 1 ? processed && candidate.status === 'integrated' ? ontologyChanges[0].after?.version : ontologyChanges[0].before?.version : '') || candidate?.targetVersionUsed || proposal?.baselineActiveVersion || proposal?.baselineVersion;
+    const type = inboxItem ? T('cognition.activity_inbox_type', '巡检发现') : ontologyOnly ? T('cognition.ontology_record', '本体记录') : candidate ? NS.ui.contentCategoryLabel(candidate) : baseline ? NS.ui.contentCategoryLabel(baseline) : '';
+    const subtitle = [version ? T(saved || (ontologyOnly && processed && candidate.status === 'integrated') ? 'cognition.detail_saved_version' : 'cognition.detail_based_version', saved || (ontologyOnly && processed && candidate.status === 'integrated') ? '已保存 v{n}' : '基于 v{n}', { n: String(version) }) : ''].filter(Boolean).join(' · ');
+    const actionLabel = processed ? '' : inboxItem ? T('cognition.activity_inbox_action', '核对建议') : candidate ? NS.candidate.suggestedActionLabel(candidate) : proposal ? T('cognition.activity_operation_update', '建议更新') : '';
+    const relatedHtml = !row.route.inboxId && (row.relatedSuggestionIds || []).length
+      ? `<p class="note">${esc(T('cognition.activity_related_suggestions', '这处内容还有 {n} 条可能相关的建议；处理前可先核对它们。', { n: String(row.relatedSuggestionIds.length) }))}</p>`
+      : '';
+    return `<header class="ca-activity-detail-head ca-detail-head"><div class="ca-library-detail-title"><h2>${esc(detailTitle)}</h2>${chrome}</div><div class="ca-library-facts">${type ? window.uiTag({ label: type }) : ''}${actionLabel ? chip(actionLabel, 'green') : ''}${chip(processed ? row.result : T('cognition.candidate_status_pending', '待确认'), processed ? 'line' : 'amber')}${subtitle ? `<span class="note">${esc(subtitle)}</span>` : ''}</div></header><div class="ca-activity-detail-body ca-detail-body" data-activity-key="${esc(row.key)}">${relatedHtml}${content}</div><footer class="ca-activity-detail-footer ca-detail-footer">${fixedActions}${processed ? btn(T('cognition.activity_next_item', '下一项'), 'activity-next', { small: true }) + btn(T('cognition.activity_back_pending', '返回需要关注 ›'), 'activity-tab', { id: 'attention', small: true, className: 'o' }) : ''}</footer>`;
+  }
+
+  function viewActivity(route) {
+    const model = activityModelForRoute(route);
+    const isNarrow = narrowActivity();
+    if (!activityRendered && isNarrow && (route.candidateId || route.approvalId || route.inboxId || route.poCandidateId)) activityDrawer = true;
+    if (activityRendered && isNarrow !== activityWasNarrow) activityDrawer = false;
+    activityRendered = true; activityWasNarrow = isNarrow;
+    const processed = route.activityView === 'done' || route.activityDone === '1';
+    const activeFilter = String(route.activityFilter || 'all');
+    const filterSource = processed ? model.done : model.attention;
+    const filterCounts = { all: filterSource.length };
+    for (const row of filterSource) filterCounts[row.kind || 'add'] = (filterCounts[row.kind || 'add'] || 0) + 1;
+    const filterDefs = [
+      ['all', T('cognition.activity_filter_all_types', '全部类型')],
+      ['add', T('cognition.activity_filter_add', '新增')],
+      ['update', T('cognition.activity_filter_update', '更新')],
+      ['organize', T('cognition.activity_filter_organize', '整理')],
+      ['conflict', T('cognition.activity_filter_conflict', '冲突')],
+      ['outdated', T('cognition.activity_filter_outdated', '建议复核')],
+    ];
+    const all = activityRowsFor(route, model);
+    const page = Math.max(0, Math.min(Number(route.activityPage) || 0, Math.max(0, Math.ceil(all.length / ACTIVITY_PAGE_SIZE) - 1)));
+    const rows = all.slice(page * ACTIVITY_PAGE_SIZE, (page + 1) * ACTIVITY_PAGE_SIZE);
+    S.activityRows = rows;
+    const key = selectedActivityKey(route);
+    let selected = all.find(row => row.key === key || row.candidateIds.includes(route.candidateId));
+    // Deep links can refer to an excluded or already processed item; retain its original content.
+    if (!selected && !route.activityRunId && (route.candidateId || route.approvalId || route.inboxId || route.poCandidateId)) {
+      selected = [...model.attention, ...model.done].find(row => row.key === key || row.candidateIds.includes(route.candidateId));
+      if (!selected && route.candidateId) {
+        const historical = S.candidates.find(c => c.id === route.candidateId);
+        if (historical) selected = { key, title: candidateTitle(historical), detail: historical.judgment || '',
+          scope: activityScope(historical.suggestedScope), route: { candidateId: route.candidateId },
+          candidateIds: [route.candidateId], result: activityResult(historical, false) };
+      }
+    }
+
+    if (selected) activitySelection = selected.key;
+    else if (!(route.candidateId || route.approvalId || route.inboxId || route.poCandidateId)) activitySelection = '';
+    S.activityDetailTarget = selected?.route || null;
+    const showDetail = !!selected || !!route.approvalId;
+    if (!showDetail) activityExpanded = false;
+    const showDrawer = isNarrow && showDetail && activityDrawer;
+    const failed = S.candidatesError || S.inboxError;
+    const incomplete = failed || S.loading || model.runUnavailable;
+    const count = value => incomplete ? T('cognition.activity_count_unknown', '待核对') : String(value);
+    const viewOptions = ['attention', 'done'].map((value, index) => ({ value,
+      label: `${T(index ? 'cognition.activity_done' : 'cognition.activity_attention', index ? '已处理' : '需要关注')} ${count(index ? model.done.length : model.attention.length)}` }));
+    const typeOptions = filterDefs.map(([value, label]) => ({ value, label: `${label} ${count(filterCounts[value] || 0)}` }));
+    const listEmpty = failed
+      ? empty(T('cognition.review_load_failed_title', '清单没能读取'), T('cognition.activity_read_failed', '部分变化未能读取，请重试；不能据此判断没有待处理内容。'), { label: T('common.retry', '重试'), attrs: { 'data-act': 'refresh' } })
+      : S.loading
+        ? empty(T('cognition.activity_loading', '正在读取活动…'), '')
+        : route.activityQuery
+          ? empty(T('cognition.activity_search_empty', '没有匹配的变化，请调整搜索条件。'), '', { label: T('cognition.library_clear', '清空筛选'), attrs: { 'data-act': 'activity-clear' } })
+          : activeFilter !== 'all'
+            ? empty(T('cognition.activity_filter_empty', '当前筛选下没有建议。'), '', { label: T('cognition.activity_filter_clear', '查看全部'), attrs: { 'data-act': 'activity-filter', 'data-id': 'all' } })
+          : model.runUnavailable
+            ? empty(T('cognition.activity_run_unavailable', '本轮记录暂不可用'), T('cognition.activity_run_unavailable_hint', '请返回资产设置查看最近运行。'))
+          : route.activityRunId
+            ? empty(T('cognition.activity_run_empty', '本轮没有此类建议'), T('cognition.activity_run_empty_hint', '可切换“需要关注”或“已处理”查看。'))
+          : selected
+            ? empty(T('cognition.list_beside_selection', '当前筛选下无其他条目'), T('cognition.list_beside_selection_hint', '正在查看的这条不在当前列表中。'))
+            : processed
+            ? empty(T('cognition.activity_done_empty', '暂无已处理的认知变化'), T('cognition.activity_empty_hint', '没有有价值的结果时，这里保持空白。'))
+            : empty(T('cognition.activity_empty', '当前没有需要关注的认知变化'), T('cognition.activity_organize_hint', '可以到资产设置整理已有内容。进入设置只打开整理操作，不会自动开始扫描。'), { label: T('cognition.activity_go_organize', '前往整理'), attrs: { 'data-act': 'go-organize-settings' } });
+    const table = rows.length ? `<table class="ca-activity-table"><thead><tr><th>${esc(T('cognition.activity_proposed_change', '建议变化'))}</th><th>${esc(T('cognition.activity_scope', '适用范围'))}</th><th>${esc(T('cognition.activity_time', '发生时间'))}</th><th>${esc(T(processed ? 'cognition.activity_result' : 'cognition.activity_decision', processed ? '处理结果' : '需要你决定'))}</th></tr></thead><tbody>${rows.map(row => `<tr role="button" tabindex="0" aria-pressed="${selected?.key === row.key}" aria-label="${esc(row.title + '，' + row.result)}" class="${selected?.key === row.key ? 'is-selected' : ''}" data-act="activity-select" data-id="${esc(row.key)}"><td><strong>${esc(row.title)}</strong><p>${esc(normalizeActivityText(row.detail))}</p></td><td>${esc(row.scope)}</td><td>${esc(row.at)}</td><td>${esc(row.result)}<span aria-hidden="true"> ›</span></td></tr>`).join('')}</tbody></table>`
+      : listEmpty;
+    const pages = Math.max(1, Math.ceil(all.length / ACTIVITY_PAGE_SIZE));
+    const detailProcessed = processed || (!!selected?.route.approvalId && model.done.some(row => row.key === selected.key)) || (!!selected?.route.candidateId && model.done.some(row => row.candidateIds.includes(selected.route.candidateId)));
+    const activityCard = presentation => {
+      const overlay = showDrawer && presentation !== 'expanded';
+      const mirror = presentation === 'mirror';
+      return window.uiCard({ tag: 'section', readonly: true, className: 'ca-detail-card ca-activity-detail' + (overlay ? ' is-drawer-open' : '') + (mirror ? ' is-mirror' : ''), attrs: { 'aria-label': T('cognition.activity_detail', '活动详情'), ...(overlay ? { role: 'dialog', 'aria-modal': 'true' } : {}), ...(mirror ? { 'data-detail-mirror': 'true' } : {}) }, bodyHtml: activityDetail(selected, detailProcessed, { presentation: mirror ? 'panel' : presentation }) });
+    };
+    const mirrorIds = html => html.replace(/\s(id|for|aria-controls)="([^"]+)"/g, (_, name, value) => ` ${name}="${value}-mirror"`);
+    const expandHtml = showDetail && activityExpanded ? `<div class="ca-detail-expand" role="dialog" aria-modal="true" aria-label="${esc(T('cognition.detail_expand', '展开详情'))}"><div class="ca-detail-expand-panel">${activityCard('expanded')}</div></div>` : '';
+    const detailHtml = !showDetail ? '' : activityExpanded ? `<div class="ca-detail-mirror" data-detail-mirror="true" inert>${mirrorIds(activityCard('mirror'))}</div>` : activityCard('panel');
+    return `<section class="ca-activity-page">${expandHtml}
+      ${route.activityRunId ? `<p class="note">${esc(T('cognition.activity_run_only', '正在查看本轮建议。'))} ${btn(T('cognition.settings_view_all_suggestions', '查看全部建议'), 'go-review', { small: true })}</p>` : ''}
+      <div class="ca-activity-toolbar" ${showDrawer ? 'inert' : ''}><div class="ca-prototype-search">${window.uiIconHtml('cognition-search')}${window.uiInput({ id: 'ca-activity-query', type: 'search', value: route.activityQuery || '', placeholder: T('cognition.activity_search_placeholder', '搜索标题、摘要或适用范围'), attrs: { 'aria-label': T('cognition.activity_search', '搜索变化内容或适用范围') } })}</div>${route.activityQuery ? btn(T('cognition.activity_clear_search', '清空搜索'), 'activity-clear', { small: true }) : ''}</div>
+      <div class="ca-library-filters" data-activity-selects ${showDrawer ? 'inert' : ''}><div class="ca-library-filter">${window.uiSelect({ id: 'ca-activity-view-filter', ariaLabel: T('cognition.activity_views', '活动视角'), value: processed ? 'done' : 'attention', options: viewOptions })}</div><div class="ca-library-filter">${window.uiSelect({ id: 'ca-activity-kind-filter', ariaLabel: T('cognition.activity_filters', '建议类型'), value: activeFilter, options: typeOptions })}</div><div class="ca-library-refresh"><span class="note ca-activity-sync" ${failed ? 'role="alert"' : 'role="status"'}>${esc(S.loading ? T('cognition.activity_loading', '正在读取活动…') : failed ? T('cognition.activity_read_failed', '部分变化未能读取，请重试；不能据此判断没有待处理内容。') : T('cognition.activity_updated', '已更新'))}</span>${btn(T(failed ? 'common.retry' : 'common.refresh', failed ? '重试' : '刷新'), 'refresh', { small: true })}</div></div>
+      <div class="ca-activity-layout"><div class="ca-activity-list" ${showDrawer ? 'inert' : ''}><div class="ca-activity-table-wrap">${table}</div><div class="ca-activity-pagination"><span>${esc(T('cognition.activity_pagination', '每页 50 条 · 第 {start}–{end} 条 / 共 {total} 条（合并后）', { start: String(all.length ? page * ACTIVITY_PAGE_SIZE + 1 : 0), end: String(Math.min(all.length, (page + 1) * ACTIVITY_PAGE_SIZE)), total: incomplete ? T('cognition.activity_count_unknown', '待核对') : String(all.length) }))}</span><div>${btn(T('common.previous', '上一页'), 'activity-page-select', { id: String(page - 1), small: true, disabled: page === 0 })}<span>${page + 1} / ${pages}</span>${btn(T('common.next', '下一页'), 'activity-page-select', { id: String(page + 1), small: true, disabled: page + 1 >= pages })}</div></div></div>${detailHtml}</div>${showDrawer && !activityExpanded ? window.uiButton({ label: T('common.close', '关闭'), role: 'ghost', className: 'ca-activity-scrim', attrs: { 'data-act': 'activity-close', 'aria-label': T('common.close', '关闭'), tabindex: '-1' } }) : ''}</section>`;
+  }
+
+  async function mayLeaveActivity() {
+    const id = activitySelection.startsWith('candidate:') ? activitySelection.slice(10) : '';
+    if (!id || !activityDrafts.has(id)) return true;
+    const leave = await NS.confirmUser(T('cognition.activity_unsaved_leave', '有尚未保存的修改。放弃修改并离开这条建议？'));
+    if (leave) activityDrafts.delete(id);
+    return !!leave;
+  }
+  function selectActivityRow(row, focusDetail = false) {
+    if (!row) return;
+    if (row.key !== activitySelection) activityExpanded = false;
+    activitySelection = row.key;
+    activityDrawer = narrowActivity();
+    activityWasNarrow = narrowActivity();
+    NS.router.go(activityRoute(row.route), { replace: true });
+    if (focusDetail) document.querySelector?.('.ca-activity-detail [data-act="activity-close"]')?.focus();
+  }
+  NS.activityController = {
+    handledActions: ACTIVITY_ACTIONS,
+    writeActions: ACTIVITY_WRITE_ACTIONS,
+    closeFilters() {
+      for (const api of activityFilterApis) typeof api.destroy === 'function' ? api.destroy() : api.close();
+      activityFilterApis = [];
+    },
+    hydrateFilters(root) {
+      if (!root?.querySelectorAll || typeof window._aiSelectMount !== 'function') return;
+      const filters = root.querySelector?.('[data-activity-selects]');
+      if (!filters) return;
+      const change = async (id, value) => {
+        const isView = id === 'ca-activity-view-filter';
+        const previous = isView ? (S.route.activityView === 'done' || S.route.activityDone === '1' ? 'done' : 'attention') : String(S.route.activityFilter || 'all');
+        if (activityQueryTimer) { window.clearTimeout(activityQueryTimer); activityQueryTimer = undefined; }
+        if (!(await mayLeaveActivity())) {
+          filters.querySelector?.(`#${id}`)?._uiSelectApi?.setValue(previous);
+          return;
+        }
+        activitySelection = ''; activityDrawer = false;
+        activityFilterFocus = id;
+        const patch = isView ? { activityView: value, activityDone: value === 'done' ? '1' : '', activityPage: '', activityQuery: '' }
+          : { activityFilter: value, activityPage: '' };
+        NS.router.go(activityRoute(patch), { replace: true });
+      };
+      const callbacks = {};
+      for (const id of ['ca-activity-view-filter', 'ca-activity-kind-filter']) callbacks[id] = value => change(id, value);
+      activityFilterApis = window.hydrateUiFormSelects(filters, callbacks);
+      if (activityFilterFocus) {
+        const id = activityFilterFocus;
+        activityFilterFocus = '';
+        root.querySelector?.(`#${id} .ai-select-trigger`)?.focus({ preventScroll: true });
+      }
+    },
+    // An explicit conversation deep link is an open-detail action, unlike a
+    // default list selection or a desktop-to-narrow resize.
+    openLinkedDetail() {
+      activityDrawer = narrowActivity();
+      activityWasNarrow = narrowActivity();
+    },
+    closeForSourcePreview() {
+      if (!activityDrawer) return;
+      activityDrawer = false;
+      NS.notify();
+    },
+    focusFormationRecovery(candidateId, operation) {
+      const focus = () => {
+        if (S.route.name !== 'activity' || activitySelection !== 'candidate:' + candidateId
+          || (operation && activitySelection !== operation.selection)) return;
+        // Retain an in-flight edit; saving the draft reveals the existing recheck action.
+        const button = document.querySelector?.('.ca-detail-expand [data-act="formation-recheck"]')
+          || document.querySelector?.('.ca-activity-detail:not(.is-mirror) [data-act="formation-recheck"]')
+          || document.querySelector?.('.ca-detail-expand [data-act="activity-save-draft"]')
+          || document.querySelector?.('.ca-activity-detail:not(.is-mirror) [data-act="activity-save-draft"]');
+        if (!button || button.dataset.id !== candidateId) return;
+        for (let parent = button.parentElement; parent; parent = parent.parentElement) {
+          if (parent.tagName === 'DETAILS') parent.open = true;
+        }
+        button.scrollIntoView?.({ block: 'nearest' });
+        button.focus({ preventScroll: true });
+      };
+      // notify batches DOM replacement into a frame; focus its resulting control.
+      if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(focus);
+      else focus();
+    },
+    captureRenderState(root) {
+      const listed = typeof root?.querySelectorAll === 'function' ? Array.from(root.querySelectorAll('.ca-activity-detail-body')) : [];
+      const body = listed.find(node => node.closest?.('.ca-detail-expand')) || root?.querySelector?.('.ca-activity-detail-body');
+      const list = root?.querySelector?.('.ca-activity-table-wrap');
+      if (!body && !list) return null;
+      const details = Array.from(body?.querySelectorAll?.('details') || []);
+      return {
+        key: body?.dataset.activityKey || '',
+        bodyTop: body?.scrollTop || 0,
+        listTop: list?.scrollTop || 0,
+        listLeft: list?.scrollLeft || 0,
+        fields: Array.from(body?.querySelectorAll?.('[data-f]') || []).map(field => ({
+          name: field.dataset.f,
+          top: field.scrollTop || 0,
+          left: field.scrollLeft || 0,
+          active: field === document.activeElement,
+          start: field.selectionStart,
+          end: field.selectionEnd,
+          direction: field.selectionDirection,
+        })),
+        disclosures: details.filter(d => !d.dataset?.detailFoldKey).map(d => d.open),
+        sections: Object.fromEntries(details.filter(d => d.dataset?.detailFoldKey).map(d => [d.dataset.detailFoldKey, d.open])),
+      };
+    },
+    restoreRenderState(root, state) {
+      const listed = typeof root?.querySelectorAll === 'function' ? Array.from(root.querySelectorAll('.ca-activity-detail-body')) : [];
+      const body = listed.find(node => node.closest?.('.ca-detail-expand')) || root?.querySelector?.('.ca-activity-detail-body');
+      const list = root?.querySelector?.('.ca-activity-table-wrap');
+      if (list && state) { list.scrollTop = state.listTop; list.scrollLeft = state.listLeft; }
+      if (!body) return;
+      // 新条目从头阅读；后台更新同一条目时，保留阅读位置和输入光标。
+      const sameItem = state?.key && state.key === body.dataset.activityKey;
+      if (sameItem) {
+        let index = 0;
+        Array.from(body.querySelectorAll?.('details') || []).forEach(details => {
+          const key = details.dataset?.detailFoldKey;
+          const open = key ? state.sections?.[key] : state.disclosures[index++];
+          // History renders its open state from the lazy-load controller.
+          // A captured DOM value predates the click and must not undo it.
+          if (details.querySelector?.(':scope > summary[data-act="activity-history"]')) return;
+          if (open !== undefined) details.open = open;
+        });
+      }
+      for (const field of Array.from(body.querySelectorAll?.('[data-f]') || [])) {
+        const saved = sameItem && state.fields.find(item => item.name === field.dataset.f);
+        if (saved?.active) {
+          field.focus?.({ preventScroll: true });
+          if (typeof saved.start === 'number' && typeof field.setSelectionRange === 'function') {
+            try { field.setSelectionRange(saved.start, saved.end, saved.direction); } catch (_) { /* Native selects do not have text selection. */ }
+          }
+        }
+        field.scrollTop = saved ? saved.top : 0;
+        field.scrollLeft = saved ? saved.left : 0;
+      }
+      body.scrollTop = sameItem ? state.bodyTop : 0;
+    },
+    async handleClick(el) {
+      const act = el.dataset.act, id = el.dataset.id || '';
+      if (activityQueryTimer) { window.clearTimeout(activityQueryTimer); activityQueryTimer = undefined; }
+      if (act === 'cand-decide' && !(await mayLeaveActivity())) return true;
+      if (!ACTIVITY_ACTIONS.includes(act)) return false;
+      if (el.disabled || el.getAttribute('disabled') !== null) return true;
+      if (act === 'activity-edit' || act === 'activity-edit-cancel') {
+        const candidate = S.candidates.find(item => String(item.id) === id);
+        if (!candidate || !NS.candidate.attentionReady(candidate) || !candidate.capabilities?.canEdit) return true;
+        if (act === 'activity-edit') {
+          activityReadingPositions.set(id, (document.querySelector?.('.ca-detail-expand .ca-activity-detail-body') || document.querySelector?.('.ca-activity-detail:not(.is-mirror) .ca-activity-detail-body'))?.scrollTop || 0);
+          activityEditors.add(id);
+        }
+        else {
+          if (!(await mayLeaveActivity())) return true;
+          activityEditors.delete(id);
+        }
+        NS.notify();
+        const restoreFocus = () => {
+          const detail = document.querySelector?.('.ca-detail-expand .ca-activity-detail') || document.querySelector?.('.ca-activity-detail:not(.is-mirror)');
+          const body = detail?.querySelector('.ca-activity-detail-body');
+          if (body) body.scrollTop = act === 'activity-edit' ? 0 : activityReadingPositions.get(id) || 0;
+          detail?.querySelector(act === 'activity-edit' ? candidate.proposalTarget === 'ontology' ? '[data-f="judgment"]' : '[data-f]' : '[data-act="activity-edit"]')?.focus({ preventScroll: act !== 'activity-edit' });
+        };
+        // notify replaces the detail DOM in the next frame; focus the new node.
+        if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(restoreFocus);
+        else restoreFocus();
+        return true;
+      }
+      if (act === 'formation-recheck') {
+        if (activityDrafts.has(id)) {
+          await NS.alertUser(T('cognition.formation_recheck_save_first', '请先点「保存修改并校验」保留当前修改，再核对关联本体建议。'));
+          return true;
+        }
+        await NS.actions.recheckCandidateFormation(id);
+        return true;
+      }
+      if (act === 'activity-approval') {
+        const proposal = (S.assetApprovals || []).find(item => String(item.id) === id);
+        const decision = el.dataset.decision;
+        if (!proposal || proposal.contentPurgedAt || !['pending', 'deferred'].includes(proposal.state) || S.loading || S.candidatesError
+          || !['confirm', 'defer', 'reject'].includes(decision)) return true;
+        if (decision === 'confirm') {
+          const asset = (S.assets || []).find(item => String(item.id) === String(proposal.assetId));
+          if (!NS.ui.versionContent(proposal.assetId, proposal.baselineActiveVersion || proposal.baselineVersion) || S.assetsError || !readableApproval(proposal) || !asset || !['active', 'paused'].includes(asset.status) || String(asset.version) !== String(proposal.baselineVersion) || String(asset.activeVersion || asset.version) !== String(proposal.baselineActiveVersion || proposal.baselineVersion)) return true;
+        }
+        const operation = this.beginDecision();
+        el.setAttribute('aria-busy', 'true'); el.setAttribute('disabled', 'disabled');
+        try {
+          let result;
+          // The IPC client throws for ok:false, including conflicts. Re-read in
+          // finally so a failed response cannot leave a superseded item editable.
+          try { result = await NS.api.call('recall.assets.approval.decide', { proposalId: id, decision }); }
+          finally { await NS.reload(); }
+          if (!result?.ok) throw new Error(result?.message || T('cognition.activity_approval_blocked', '目标资产不可用、版本已变化或清单读取失败，请刷新核对后再处理。'));
+          if (decision !== 'defer') this.afterDecision('', false, operation);
+          NS.notify();
+        } catch (error) { await NS.alertUser(NS.recallErrorText ? NS.recallErrorText(error) : String(error.message || error)); }
+        finally { el.removeAttribute('aria-busy'); el.removeAttribute('disabled'); }
+        return true;
+      }
+      if (act === 'activity-undo-automatic') {
+        const candidate = S.candidates.find(item => String(item.id) === id);
+        if (!candidate?.capabilities?.canUndoAutomatic || el.getAttribute('aria-busy') === 'true') return true;
+        el.setAttribute('aria-busy', 'true'); el.setAttribute('disabled', 'disabled');
+        try {
+          const result = await NS.api.call('recall.candidates.undoAutomaticPreview', { candidateId: id });
+          const preview = result.preview;
+          if (!result.ok || !preview?.token || !Array.isArray(preview.ontologyChanges)) throw new Error(T('cognition.automatic_undo_changed', '保存内容已有变化，请刷新后重新核对。'));
+          if (preview.alreadyUndone) { await NS.reload(); return true; }
+          const note = T('cognition.automatic_undo_preserves_history', '原决定和版本历史继续保留。有后续修改或引用时，系统会要求重新核对。');
+          const change = preview.assetChange;
+          const assetHtml = change ? `<section class="ca-review-notice"><h3>${esc(change.title)}</h3><h4>${esc(T('cognition.automatic_undo_before', '当前内容：'))}</h4><p class="content-text">${esc(change.before)}</p><h4>${esc(T('cognition.automatic_undo_after', '恢复后的内容：'))}</h4><p class="content-text">${esc(change.action === 'delete' ? T('cognition.automatic_undo_delete', '撤销新增：移入已删除，保留历史。') : change.after)}</p></section>` : '';
+          const ontologyHtml = preview.ontologyChanges.length ? NS.candidate.formationPreviewHtml({ ...candidate,
+            ontologyFormation: { schemaVersion: 1, reason: note, blockedReasons: [], requiresTReview: false,
+              previewChanges: preview.ontologyChanges.map(item => ({ ...item, intent: 'undo_command', recordId: item.after.id,
+                box: item.after.kind === 'rule' ? 'R' : ['module', 'definition', 'reference'].includes(item.after.kind) ? 'T' : 'A' })) } }, true) : '';
+          if (typeof window.uiModal !== 'function' || !document.getElementById('ca-root')) throw new Error(T('cognition.automatic_undo_changed', '保存内容已有变化，请刷新后重新核对。'));
+          const dialog = window.uiModal({ title: T('cognition.automatic_undo_title', '撤销本次自动保存'), size: 'md',
+            closeLabel: T('common.close', '关闭'), bodyHtml: `<p>${esc(note)}</p>${assetHtml}${ontologyHtml}`,
+            actions: [{ id: 'cancel', label: T('common.cancel', '取消') }, { id: 'confirm', label: T('common.confirm', '确认'), role: 'danger' }] });
+          document.getElementById('ca-root').appendChild(dialog.overlay);
+          if ((await dialog).value !== 'confirm') return true;
+          const saved = await NS.api.call('recall.candidates.undoAutomatic', { candidateId: id, previewToken: preview.token });
+          if (!saved.ok || !saved.candidate?.automaticUndo) throw new Error(T('cognition.automatic_undo_changed', '保存内容已有变化，请刷新后重新核对。'));
+          delete (S.activityHistory || {})[id];
+          await NS.reload();
+        } catch (error) { await NS.alertUser(NS.recallErrorText ? NS.recallErrorText(error) : String(error.message || error)); }
+        finally { el.removeAttribute('aria-busy'); el.removeAttribute('disabled'); NS.notify(); }
+        return true;
+      }
+      if (act === 'activity-undo-organization') {
+        if (!(await mayLeaveActivity())) return true;
+        const response = await NS.api.call('recall.candidates.organization.undoPreview', { candidateId: id });
+        const preview = response.preview;
+        if (!preview || preview.alreadyUndone) { await NS.reload(); return true; }
+        const detail = `${T('cognition.organization_restore', '恢复原条目')}：${preview.restore.map(row => row.title).join('、')}\n${T('cognition.organization_archive_results', '归档本次结果')}：${preview.archive.map(row => row.title).join('、')}\n${T('cognition.organization_undo_note', '本体关系随本次整理恢复，版本与处理历史保留。')}`;
+        const ontologyImpact = (preview.ontologyChanges || []).map(row => `${row.before ? T('cognition.organization_restore', '恢复原条目') : T('cognition.organization_archive_results', '归档本次结果')}：${row.after.name || row.after.id}`).join('\n');
+        if (!(await NS.confirmUser([detail, ontologyImpact].filter(Boolean).join('\n')))) return true;
+        await NS.api.call('recall.candidates.organization.undo', { candidateId: id, previewToken: preview.token });
+        await NS.reload(); return true;
+      }
+      if (act === 'activity-history') {
+        if (!S.candidates.some(item => String(item.id) === id)) return true;
+        const histories = S.activityHistory || (S.activityHistory = {});
+        const state = histories[id] || (histories[id] = { open: false, items: [], loaded: false, loading: false });
+        state.open = state.error ? true : !state.open;
+        if (!state.open || state.loaded || state.loading) { NS.notify(); return true; }
+        state.loading = true; state.error = ''; NS.notify();
+        try {
+          const result = await NS.api.call('recall.candidates.history', { candidateId: id });
+          if (!Array.isArray(result.items)) throw new Error(T('cognition.activity_history_unavailable', '本条处理记录暂时无法读取，请重试。'));
+          state.items = result.items; state.loaded = true;
+        } catch (error) { state.error = T('cognition.activity_history_unavailable', '本条处理记录暂时无法读取，请重试。'); }
+        finally { state.loading = false; NS.notify(); }
+        return true;
+      }
+      if (ACTIVITY_WRITE_ACTIONS.includes(act)) {
+        if (el.getAttribute('aria-busy') === 'true') return true;
+        el.setAttribute('aria-busy', 'true'); el.setAttribute('disabled', 'disabled');
+        const operation = this.beginDecision();
+        try {
+          const candidate = S.candidates.find(item => String(item.id) === id);
+          if (!candidate || !NS.candidate.attentionReady(candidate)) return true;
+          const card = el.closest?.('.ca-candidate-detail') || el.closest?.('.ca-detail-expand')?.querySelector('.ca-candidate-detail') || el.closest?.('.ca-activity-detail')?.querySelector('.ca-candidate-detail');
+          const values = {};
+          for (const [field, property] of Object.entries(candidateFields)) {
+            const control = card?.querySelector('[data-f="' + field + '"]');
+            if (control) values[property] = ['applicableWhen', 'forbiddenWhen'].includes(property) ? String(control.value).split(/\r?\n/).map(value => value.trim()).filter(Boolean) : property === 'suggestedScope' ? control.dataset.savedScope ?? String(control.value) : String(control.value);
+          }
+          if (card?.dataset.candType) values.suggestedType = card.dataset.candType;
+          if (act === 'activity-save-draft') {
+            let result;
+            if (candidate.contentOrganization) {
+              const outputs = NS.candidate.readOrganizationOutputs(candidate, card);
+              result = await NS.api.call('recall.candidates.organization.update', { candidateId: id, outputs });
+            } else result = await NS.api.call('recall.candidates.update', Object.assign({}, candidate, values, { candidateId: id, sourceRefs: candidate.sourceRefs || candidate.evidenceRefs || [], evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || [] }));
+            if (!result?.candidate?.id) throw new Error(T('cognition.activity_draft_missing', '没有读到保存后的候选，请刷新后核对。'));
+            S.candidates[S.candidates.findIndex(item => String(item.id) === id)] = result.candidate;
+            activityDrafts.delete(id);
+            activityEditors.delete(id);
+            (S.activityDraftValidation || (S.activityDraftValidation = {}))[id] = true;
+            if (S.activityHistory?.[id]) S.activityHistory[id].loaded = false;
+            NS.toast(candidate.proposalTarget === 'ontology' ? T('cognition.ontology_request_saved', '要求已保存。请重新生成建议，核对结果后确认。') : T('cognition.activity_draft_saved', '修改已保存；正式保存仍以最新校验结果为准。'), 'success'); NS.notify();
+            const restoreAfterSave = () => {
+              const body = document.querySelector?.('.ca-detail-expand .ca-activity-detail-body') || document.querySelector?.('.ca-activity-detail:not(.is-mirror) .ca-activity-detail-body');
+              if (body) body.scrollTop = activityReadingPositions.get(id) || 0;
+              if (candidate.proposalTarget === 'ontology') this.focusFormationRecovery(id, operation);
+              else (document.querySelector?.('.ca-detail-expand [data-act="activity-edit"]') || document.querySelector?.('.ca-activity-detail:not(.is-mirror) [data-act="activity-edit"]'))?.focus({ preventScroll: true });
+            };
+            // notify replaces the detail DOM in the next frame; restore scroll and focus there.
+            if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(restoreAfterSave);
+            else restoreAfterSave();
+          } else {
+            if (!(await mayLeaveActivity())) return true;
+            const result = await NS.api.call('recall.candidates.defer', { candidateId: id });
+            if (!result?.candidate?.id) throw new Error(T('cognition.activity_defer_missing', '没有读到稍后处理的结果，请刷新后核对。'));
+            S.candidates[S.candidates.findIndex(item => String(item.id) === id)] = result.candidate;
+            NS.toast(T('cognition.activity_deferred_hint', '已标记稍后处理，仍保留在需要关注中。')); this.afterDecision(id, true, operation); NS.notify();
+          }
+        } catch (error) { await NS.alertUser(NS.recallErrorText ? NS.recallErrorText(error) : String(error.message || error)); }
+        finally { el.removeAttribute('aria-busy'); el.removeAttribute('disabled'); }
+        return true;
+      }
+      if (act === 'activity-inbox') {
+        const inboxId = String(el.dataset.id || '');
+        const action = String(el.dataset.action || '');
+        const targetAssetId = el.dataset.target ? String(el.dataset.target) : undefined;
+        if (!inboxId || !action) return true;
+        el.setAttribute('aria-busy', 'true');
+        el.setAttribute('disabled', '');
+        try {
+          await NS.actions.resolveInbox(inboxId, action, targetAssetId ? { targetAssetId } : {});
+          activitySelection = '';
+          activityDrawer = false;
+          NS.toast(action === 'reject' ? T('cognition.inbox_action_dismiss', '已不再提醒')
+            : action === 'defer' ? T('cognition.activity_deferred_saved', '已标记稍后处理，仍保留在需要关注中。')
+              : T('common.done', '已完成'), 'success');
+          await NS.loadRoute();
+          NS.notify();
+        } catch (error) {
+          await NS.alertUser(NS.recallErrorText ? NS.recallErrorText(error) : String(error.message || error));
+        } finally {
+          el.removeAttribute('aria-busy');
+          el.removeAttribute('disabled');
+        }
+        return true;
+      }
+      if (act === 'activity-expand') {
+        if (!(activitySelection || S.route.candidateId || S.route.approvalId || S.route.inboxId || S.route.poCandidateId)) return true;
+        activityExpanded = true; NS.notify(); return true;
+      }
+      if (act === 'activity-expand-close') { activityExpanded = false; NS.notify(); focusAfterFrame(() => document.querySelector?.('.ca-activity-detail:not(.is-mirror) [data-act="activity-expand"]')?.focus?.({ preventScroll: true })); return true; }
+      if (act === 'activity-select' && id === activitySelection) { selectActivityRow((S.activityRows || []).find(row => row.key === id), narrowActivity()); return true; }
+      if (!(await mayLeaveActivity())) return true;
+      if (act === 'activity-select') selectActivityRow((S.activityRows || []).find(row => row.key === id), narrowActivity());
+      else if (act === 'activity-tab') { activitySelection = ''; activityDrawer = false; NS.router.go(activityRoute({ activityView: id, activityDone: id === 'done' ? '1' : '', activityPage: '', activityQuery: '' }), { replace: true }); }
+      else if (act === 'activity-clear') NS.router.go(activityRoute({ activityQuery: '', activityPage: '' }), { replace: true });
+      else if (act === 'activity-page-select') { activitySelection = ''; activityDrawer = false; NS.router.go(activityRoute({ activityPage: id }), { replace: true }); }
+      else if (act === 'activity-filter') { activitySelection = ''; activityDrawer = false; NS.router.go(activityRoute({ activityFilter: id, activityPage: '' }), { replace: true }); }
+      else if (act === 'activity-next') this.afterDecision('', true);
+      else if (act === 'activity-close') {
+        const previous = activitySelection;
+        activityDrawer = false; activityExpanded = false; activitySelection = '';
+        NS.router.go(activityRoute(), { replace: true });
+        focusAfterFrame(() => {
+          const row = Array.from(document.querySelectorAll?.('[data-act="activity-select"]') || []).find(node => node.dataset.id === previous);
+          row?.focus();
+        });
+      }
+      return true;
+    },
+    handleInput(event) {
+      const field = event.target;
+      if (field.id === 'ca-activity-query' && !event.isComposing) {
+        if (activityQueryTimer) window.clearTimeout(activityQueryTimer);
+        const value = field.value, caret = field.selectionStart;
+        activityQueryTimer = window.setTimeout(async () => { if (!(await mayLeaveActivity())) return; NS.router.go(activityRoute({ activityQuery: value, activityPage: '' }), { replace: true }); const input = document.getElementById('ca-activity-query'); input?.focus(); try { input?.setSelectionRange(caret, caret); } catch (_) { /* search inputs do not support selection in all engines */ } }, 180);
+        return true;
+      }
+      const card = field.closest?.('.ca-candidate-detail');
+      if (card?.closest?.('[data-detail-mirror]')) return false;
+      const property = candidateFields[field.dataset?.f];
+      if (card && field.dataset?.orgField) {
+        const candidateId = String(card.dataset.candId);
+        const candidate = S.candidates.find(item => item.id === candidateId);
+        if (!candidate?.contentOrganization) return false;
+        const contentOrganization = structuredClone(candidate.contentOrganization);
+        contentOrganization.draft.outputs = NS.candidate.readOrganizationOutputs(candidate, card);
+        activityDrafts.set(candidateId, { contentOrganization });
+        return true;
+      }
+      if (!card || !property) return false;
+      const candidateId = String(card.dataset.candId);
+      const draft = Object.assign({}, activityDrafts.get(candidateId) || {}, { suggestedType: card.dataset.candType });
+      draft[property] = ['applicableWhen', 'forbiddenWhen'].includes(property) ? String(field.value).split(/\r?\n/).map(value => value.trim()).filter(Boolean) : String(field.value);
+      activityDrafts.set(candidateId, draft);
+      if (S.activityDraftValidation) delete S.activityDraftValidation[candidateId];
+      card.querySelector?.('[data-draft-validation]')?.remove?.();
+      return true;
+    },
+    async handleKeydown(event) {
+      if (event.isComposing || event.keyCode === 229 || event.defaultPrevented || blockingOverlay()) return false;
+      if (event.key === 'Tab' && activityExpanded) {
+        const controls = Array.from(document.querySelectorAll('.ca-detail-expand button:not(:disabled), .ca-detail-expand input:not(:disabled), .ca-detail-expand textarea:not(:disabled), .ca-detail-expand select:not(:disabled), .ca-detail-expand [tabindex="0"]')).filter(control => !control.hidden && control.getAttribute('aria-hidden') !== 'true');
+        if (controls.length && ((event.shiftKey && event.target === controls[0]) || (!event.shiftKey && event.target === controls[controls.length - 1]))) { event.preventDefault(); (event.shiftKey ? controls[controls.length - 1] : controls[0]).focus(); }
+        return true;
+      }
+      if (event.key === 'Tab' && activityDrawer && narrowActivity()) {
+        const controls = Array.from(document.querySelectorAll('.ca-activity-detail button:not(:disabled), .ca-activity-detail input:not(:disabled), .ca-activity-detail textarea:not(:disabled), .ca-activity-detail select:not(:disabled), .ca-activity-detail [tabindex="0"]')).filter(control => !control.hidden && control.getAttribute('aria-hidden') !== 'true');
+        if (controls.length && ((event.shiftKey && event.target === controls[0]) || (!event.shiftKey && event.target === controls[controls.length - 1]))) { event.preventDefault(); (event.shiftKey ? controls[controls.length - 1] : controls[0]).focus(); }
+        return false;
+      }
+      if (event.key === 'Escape' && activityExpanded) { event.preventDefault(); activityExpanded = false; NS.notify(); focusAfterFrame(() => document.querySelector?.('.ca-activity-detail:not(.is-mirror) [data-act="activity-expand"]')?.focus?.({ preventScroll: true })); return true; }
+      if (event.key === 'Escape' && (activityDrawer || activitySelection || S.route.candidateId || S.route.approvalId)) { event.preventDefault(); await this.handleClick({ dataset: { act: 'activity-close' }, getAttribute: () => null }); return true; }
+      const row = event.target.closest?.('[data-act="activity-select"]');
+      if (!row) return false;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const rows = Array.from(document.querySelectorAll('[data-act="activity-select"]')); const index = rows.indexOf(row); rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]?.focus(); return true; }
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); await this.handleClick(row); return true; }
+      return false;
+    },
+    async guardNavigation() { if (activityQueryTimer) { window.clearTimeout(activityQueryTimer); activityQueryTimer = undefined; } return mayLeaveActivity(); },
+    clearDraft(candidateId) { activityDrafts.delete(String(candidateId)); activityEditors.delete(String(candidateId)); },
+    beginDecision() { return { selection: activitySelection, routeName: S.route.name, view: S.route.activityView || S.route.activityDone || '', query: S.route.activityQuery || '', page: S.route.activityPage || '' }; },
+    afterDecision(candidateId, nextOnly = false, operation) {
+      if (candidateId) activityDrafts.delete(String(candidateId).replace(/^candidate:/, ''));
+      if (operation && (S.route.name !== operation.routeName || activitySelection !== operation.selection || (S.route.activityView || S.route.activityDone || '') !== operation.view || (S.route.activityQuery || '') !== operation.query || (S.route.activityPage || '') !== operation.page)) return false;
+      const previous = S.activityRows || [];
+      const index = previous.findIndex(row => row.key === activitySelection || row.candidateIds.includes(candidateId));
+      const available = activityRowsFor(S.route);
+      const next = nextOnly ? available[(Math.max(0, available.findIndex(row => row.key === activitySelection)) + 1) % available.length] : available.find(row => row.key === previous[index + 1]?.key) || available[Math.min(Math.max(0, index), available.length - 1)];
+      activitySelection = next?.key || '';
+      NS.router.go(activityRoute(Object.assign({}, next?.route || {}, { activityPage: String(Math.max(0, Math.floor(available.indexOf(next) / ACTIVITY_PAGE_SIZE))) })), { replace: true });
+      return true;
+    },
+  };
+
+  NS.viewActivity = viewActivity;
+  // 兼容别名：旧深链/测试曾调 NS.viewReview；行为同 viewActivity（review 路由
+  // 已在 router.go 归一到 activity）。
+  NS.viewReview = viewActivity;
 })();

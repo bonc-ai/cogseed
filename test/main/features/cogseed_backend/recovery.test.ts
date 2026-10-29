@@ -44,7 +44,7 @@ describe('CogSeed worker recovery', () => {
     await lifecycle.transitionCogSeedTask(USER, running.taskId, 'running');
     const waiting = (await tasks.createCogSeedTask(USER, {
       requestId: 'req-recovery-waiting',
-      task: 'Must not remain attached to a missing worker.',
+      task: 'Preserve the pending user decision across restart.',
       conversationId: 'cid-recovery',
       agentId: 'agent-recovery',
     })).task;
@@ -57,14 +57,14 @@ describe('CogSeed worker recovery', () => {
       projectTaskEvent: vi.fn(async (input) => { projected.push(input); }),
     } as any);
 
-    expect(report).toMatchObject({ recoveredCount: 3, dispatchedCount: 0 });
+    expect(report).toMatchObject({ recoveredCount: 2, dispatchedCount: 0 });
     await expect(tasks.readCogSeedTask(USER, queued.taskId)).resolves.toMatchObject({ status: 'recoverable' });
     await expect(tasks.readCogSeedTask(USER, running.taskId)).resolves.toMatchObject({ status: 'recoverable' });
-    await expect(tasks.readCogSeedTask(USER, waiting.taskId)).resolves.toMatchObject({ status: 'recoverable' });
+    await expect(tasks.readCogSeedTask(USER, waiting.taskId)).resolves.toMatchObject({ status: 'waiting_user' });
     await expect(events.readCogSeedTaskEvents(USER, running.taskId, 0, 20)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'task.recoverable', payload: { errorCode: 'worker_restart' } }),
     ]));
-    expect(projected.map((input) => input.event.type)).toEqual(['task.recoverable', 'task.recoverable', 'task.recoverable']);
+    expect(projected.map((input) => input.event.type)).toEqual(['task.recoverable', 'task.recoverable']);
     expect(projected.every((input) => input.event.payload.errorCode === 'worker_restart')).toBe(true);
   });
 

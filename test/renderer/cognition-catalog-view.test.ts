@@ -1,22 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { renderCognition } from './helpers/cognition-renderer';
+import { describe, expect, it, vi } from 'vitest';
+import { renderCognitionWithDialogs as renderCognition, loadCognitionAssets } from './helpers/cognition-renderer';
 
-/* 计量词条（2026-09-28 词表统一）文本随 locale 同步更新——按 zh.json 派生，
- * 断言钉「用了哪个键 + 数字」，词条改文前后都成立。 */
-const zh = JSON.parse(readFileSync(resolve(__dirname, '../../src/renderer/locales/zh.json'), 'utf8')) as Record<string, string>;
-const zhPhrase = (key: string, vars: Record<string, string> = {}) => {
-  let text = zh[key] ?? key;
-  for (const [name, value] of Object.entries(vars)) text = text.replace(`{${name}}`, value);
-  return text;
-};
-
-/**
- * 资产目录视图（2026-09-18）：面板上多一个"模型视角"的目录——模型挑资产时
- * 看的就是这份（`search_ability_assets` 目录模式），用户在同一份目录上核对
- * 模型的选择。不新增 tab：同一个列表页换行形态（route.assetView）。
- */
+/** 最新原型统一使用 20 条分页表格；本体保留独立入口，旧 catalog/family/manage 不再改变页面结构。 */
 const asset = {
   id: 'aa-cat0001',
   title: '性能归因规则',
@@ -31,128 +16,193 @@ const asset = {
 };
 
 describe('资产目录视图', () => {
-  it('目录视图：一行一条（标题 / 一句话 / 类型·范围·版本·使用次数），并给回列表的入口', () => {
-    const html = renderCognition(
-      { name: 'overview', assetView: 'catalog' },
-      {
-        assets: [asset],
-        // 2026-09-25 US-602：目录行的次数与列表/详情同口径（「被带入任务」）——
-        // 一次带入在数据层是 projection_confirmed + 同投影 usage 两条记录，按投影
-        // 去重后算 1 次（没有投影关联的 usage 行不重复计数）。
-        proofs: [
-          { kind: 'projection_confirmed', occurredAt: '2026-09-18T01:00:00.000Z', refs: { assetId: 'aa-cat0001', projectionId: 'proj-cat' } },
-          { kind: 'usage_recorded', occurredAt: '2026-09-18T01:00:00.000Z', refs: { assetId: 'aa-cat0001', projectionId: 'proj-cat' } },
-        ],
-      },
-    );
-    expect(html).toContain('资产目录（模型视角）');
-    expect(html).toContain('性能归因规则');
-    // 一句话 = 正文首句压到 22 字（2026-09-28 与主进程 catalogOneLine 同口径，
-    // 两边同一句；不是全文，全文点进去看）
-    expect(html).toContain('性能类提问需用真实日志做分层归因，先给链路再');
-    expect(html).not.toContain('再给瓶颈');
-    expect(html).not.toContain('后半句是看不到的正文');
-    // 元信息：类型白话 + 范围白话 + 在用版 + 被带入次数
-    expect(html).toContain('规则与偏好');
-    expect(html).toContain('所有对话');
-    expect(html).toContain('v2');
-    expect(html).toContain(zhPhrase('cognition.catalog_used_times', { n: '1' }));
-    // 切换回列表视图
-    expect(html).toContain('列表视图');
-    // 行仍可点进详情
-    expect(html).toContain('data-go-asset="aa-cat0001"');
+  it('页面说明出现在对应页头，不在正文重复', () => {
+    const cases = [
+      ['overview', '查找已保存的内容，理解依据，再决定如何使用。', '启用不代表所有任务自动使用'],
+      ['activity', '集中浏览建议，逐项核对后处理。', '保存不代表任务已采用。'],
+      ['settings', '从对话中发现新认知，整理已有认知与本体；在认知生长查看建议和处理结果。', ''],
+    ];
+    for (const [name, description, removed] of cases) {
+      const header = vi.fn(({ title, meta }) => `<header><h1>${title}</h1><span>${meta || ''}</span></header>`);
+      const html = loadCognitionAssets({}, { name }, { uiPageHeader: header }).render();
+      expect(header).toHaveBeenCalledWith(expect.objectContaining({ meta: description }));
+      expect(html.split(description)).toHaveLength(2);
+      if (removed) expect(html).not.toContain(removed);
+    }
+  });
+  it('后台刷新和切页保留可交互页签节点，角标变化不替换整排导航', () => {
+    const loaded = loadCognitionAssets({}, { name: 'overview' });
+    const items = new Map(['tree', 'overview', 'ontology', 'review', 'activity', 'settings'].map(id => [id, { innerHTML: '', classList: { toggle: vi.fn() } }]));
+    const replaceNav = vi.fn();
+    const nav = {
+      querySelector: (selector: string) => items.get(selector.match(/data-id="([^"]+)"/)?.[1] || ''),
+      set innerHTML(value: string) { replaceNav(value); },
+    };
+    const root = loaded.context.document.getElementById('ca-root');
+    loaded.context.document.getElementById = (id: string) => (({ 'ca-root': root, 'ca-tabs-nav': nav, 'ca-banner-slot': { innerHTML: '' }, 'ca-scroll': { innerHTML: '', querySelector: () => null } } as Record<string, unknown>)[id] || null);
+    loaded.render();
+    loaded.store.route.name = 'ontology';
+    const previousStats = loaded.ns.stats;
+    loaded.ns.stats = () => ({ ...previousStats(), pending: 1 });
+    loaded.ns.mountPersonalOntology = vi.fn();
+    loaded.render();
+    expect(replaceNav).not.toHaveBeenCalled();
+    expect(items.get('ontology')!.classList.toggle).toHaveBeenLastCalledWith('is-on', true);
+    expect(items.get('overview')!.classList.toggle).toHaveBeenLastCalledWith('is-on', false);
+    expect(items.get('activity')!.innerHTML).toContain('bdg');
   });
 
-  it('从来没被任务用过的资产如实标注', () => {
-    const html = renderCognition({ name: 'overview', assetView: 'catalog' }, { assets: [asset], proofs: [] });
-    expect(html).toContain(zhPhrase('cognition.catalog_never_used'));
+  it('后台刷新保留同一本体路由挂载和图谱状态，显式切换模块重新挂载', () => {
+    const loaded = loadCognitionAssets({ prevRouteName: 'ontology', ontologyMountRouteKey: JSON.stringify(['module-a', '', '', '']) }, { name: 'ontology', moduleId: 'module-a' });
+    const main = { innerHTML: 'existing graph and form', querySelector: () => null };
+    const mount = { querySelector: () => ({}) };
+    const root = loaded.context.document.getElementById('ca-root');
+    loaded.context.document.getElementById = (id: string) => (({ 'ca-root': root, 'ca-tabs-nav': { innerHTML: '' }, 'ca-banner-slot': { innerHTML: '' }, 'ca-scroll': main, 'ca-ontology-mount': mount } as Record<string, unknown>)[id] || null);
+    const mountSpy = vi.fn();
+    loaded.ns.mountPersonalOntology = mountSpy;
+    loaded.render();
+    expect(main.innerHTML).toBe('existing graph and form');
+    expect(mountSpy).not.toHaveBeenCalled();
+    loaded.store.route.moduleId = 'module-b';
+    loaded.render();
+    expect(main.innerHTML).toContain('ca-ontology-mount');
+    expect(mountSpy).toHaveBeenCalledWith(expect.objectContaining({ moduleId: 'module-b' }));
   });
 
-  it('默认仍是列表视图（目录是切换项，不是默认）', () => {
-    const html = renderCognition({ name: 'overview' }, { assets: [asset], proofs: [] });
-    expect(html).toContain('资产明细');
+  it('我的认知仅列正式资产，本体保留独立入口和确切模块路由', () => {
+    const loaded = loadCognitionAssets({ assets: [asset], ontologySnapshot: { records: {
+      'module-a': { id: 'module-a', kind: 'module', name: '项目甲本体', status: 'active', version: 7 },
+    }, history: [] } });
+    const html = loaded.render();
+    expect(html).toContain('ca-library-table');
+    expect(html).toContain(asset.title);
+    expect(html).not.toContain('项目甲本体');
+    expect(html).toContain('data-id="ontology"');
+    loaded.ns.router.go({ name: 'ontology', moduleId: 'module-a' });
+    expect(loaded.store.route).toMatchObject({ name: 'ontology', moduleId: 'module-a' });
+  });
+  it('系统活动不铺开本体底层保存日志', () => {
+    const html = renderCognition({ name: 'activity', activityDone: '1' }, { ontologySnapshot: { records: {}, history: [{ recordedAt: '2026-10-07T00:00:00Z', intent: 'correct', after: {
+      id: 'entity-a', kind: 'entity', moduleId: 'module-a', name: '历史人物', version: 3, source: { label: '原始依据' },
+    } }] } });
+    expect(html).not.toContain('历史人物');
+    expect(html).not.toContain('data-id="ontology:entity-a@3"');
+    expect(html).not.toContain('实际采用');
+    expect(html).not.toContain('保存不代表任务已采用');
+  });
+  it('正式资产读取失败保留缓存并提供重试，本体读取状态不污染资产表格', () => {
+    const html = renderCognition({ name: 'overview' }, { assets: [asset], assetsError: 'cannot read', ontologyError: 'unrelated ontology error' });
+    expect(html).toContain(asset.title);
+    expect(html).toContain('上次读取');
+    expect(html).toContain('data-act="library-refresh"');
+    expect(html).not.toContain('本体暂时无法加载');
+    const empty = renderCognition({ name: 'overview' }, { assets: [], assetsError: 'cannot read' });
+    expect(empty).toContain('认知内容未能读取');
+    expect(empty).not.toContain('这里还没有内容');
+  });
+
+  it('统一表格显示内容、对象范围和状态，在用版本与完整正文在详情核对', () => {
+    const loaded = loadCognitionAssets({ assets: [asset], proofs: [
+      { kind: 'projection_confirmed', refs: { assetId: asset.id, projectionId: 'proj-cat' } },
+      { kind: 'usage_recorded', refs: { assetId: asset.id, projectionId: 'proj-cat', usageOutcome: 'injected' } },
+    ] }, { name: 'overview', assetView: 'catalog', assetId: asset.id });
+    const html = loaded.render();
+    const table = html.match(/<table class="ca-library-table"[\s\S]*?<\/table>/)?.[0] || '';
+    expect(table).toContain(asset.title);
+    expect(table).not.toContain('规则与偏好');
+    expect(table).not.toContain('<th>类型</th>');
+    expect(table).toContain('未限定使用对象');
+    expect(table).toContain('启用');
+    expect(table).toContain('data-act="library-select" data-id="aa-cat0001"');
+    expect(html).toContain('在用 v2');
+    expect(html).toContain(asset.statement);
+    expect(loaded.ui.broughtInCountFor(asset.id)).toBe(1);
     expect(html).not.toContain('资产目录（模型视角）');
-    // specs/018 T031：目录视图收进「管理」模式——默认视图只有管理小切换入口。
-    expect(html).toContain('管理');
-    expect(html).not.toContain('data-go-asset="aa-cat0001" data-act="asset-view"');
-    const managed = renderCognition({ name: 'overview', manage: '1' }, { assets: [asset], proofs: [] });
-    expect(managed).toContain('目录视图');
+    expect(html).not.toContain('data-act="asset-view"');
   });
 
-  it('模型挂着标记（2026-09-18）：被模型自选的资产在目录行上可辨认', () => {
-    const other = { ...asset, id: 'aa-cat0003', title: '没被挂的资产' };
-    const html = renderCognition(
-      { name: 'overview', assetView: 'catalog' },
-      { assets: [asset, other], proofs: [], modelSelectedAssetIds: ['aa-cat0001'] },
-    );
-    const marked = html.split('模型挂着').length - 1;
-    expect(marked).toBe(1);
-    const [rowWith, rowWithout] = html.split('data-go-asset=').slice(1);
-    expect(rowWith).toContain('模型挂着');
-    expect(rowWithout).not.toContain('模型挂着');
+  it('没有真实使用证据时计数为零，详情不冒充采用', () => {
+    const loaded = loadCognitionAssets({ assets: [asset], proofs: [] });
+    expect(loaded.ui.broughtInCountFor(asset.id)).toBe(0);
+    const html = loaded.render() + loaded.ns.renderLibraryDialog('records', asset.id);
+    expect(html).toContain('还没有被真实使用过');
+    expect(html).toContain('还没有可核对的采用证据');
+    expect(html).not.toContain('已实际采用');
   });
 
-  it('空态（可用性）：没有资产时目录视图给明确空态，而不是空白表头', () => {
-    const html = renderCognition({ name: 'overview', assetView: 'catalog' }, { assets: [], proofs: [] });
-    expect(html).toContain('资产目录（模型视角）');
-    expect(html).toContain('还没有正式资产');
-    expect(html).not.toContain('data-go-asset=');
+  it('默认与旧catalog/manage深链均使用同一工作台，不恢复退役视图切换', () => {
+    for (const route of [{ name: 'overview' }, { name: 'overview', assetView: 'catalog', manage: '1' }]) {
+      const html = renderCognition(route, { assets: [asset], proofs: [] });
+      expect(html).toContain('ca-library-page');
+      expect(html).toContain('ca-library-table');
+      expect(html).not.toContain('data-act="overview-manage-toggle"');
+      expect(html).not.toContain('data-act="asset-view"');
+    }
   });
 
-  it('长列表（可用性）：35 条资产全部渲染，计数与实际条目一致', () => {
-    const many = Array.from({ length: 35 }, (_, index) => ({
-      ...asset,
-      id: `aa-many${String(index).padStart(4, '0')}`,
-      title: `批量资产 ${index + 1}`,
-    }));
-    const html = renderCognition({ name: 'overview', assetView: 'catalog' }, { assets: many, proofs: [] });
-    const rows = html.split('data-go-asset=').length - 1;
-    expect(rows).toBe(35);
-    expect(html).toContain('全部 35');
-  });
-
-  it('视图切换与分类筛选互不打扰（O7）：目录视图下仍带分类 chips，筛选态在切换后保持', () => {
-    const template = { ...asset, id: 'aa-cat0002', title: '复盘模板', type: 'template' };
-    const catalog = renderCognition(
-      { name: 'overview', assetView: 'catalog', category: 'rule' },
-      { assets: [asset, template], proofs: [] },
-    );
-    // 目录视图照样有分类 chips，且当前分类高亮（筛选未被视图切换清掉）。
-    expect(catalog).toContain('data-act="filter-cat"');
-    expect(catalog).toContain('chip on');
-    // 筛选生效：只出 rule，不出 template。
-    expect(catalog).toContain('性能归因规则');
-    expect(catalog).not.toContain('复盘模板');
-
-    const list = renderCognition(
-      { name: 'overview', assetView: '', category: 'rule' },
-      { assets: [asset, template], proofs: [] },
-    );
-    expect(list).toContain('资产明细');
-    expect(list).not.toContain('复盘模板');
-  });
-
-// 大类分组视图（2026-09-22 清单 #2）：same_family 连通分量成组、组头带计数、
-// 无血缘合并；目录视图（模型视角）保持平铺。组头话术 2026-09-25 随 specs/012
-// T008 降级为「同源」口径（族名 = 同源血缘，不是主题分类；分组行为不变）。
-describe('family-grouped asset list', () => {
-  it('groups same_family assets under one head with a count, others under unsorted', async () => {
-    const { renderCognition } = await import('./helpers/cognition-renderer');
-    // specs/018 T031：同源血缘分组只在「管理」模式出现。
-    const html = renderCognition({ name: 'overview', manage: '1' }, {
-      assets: [
-        { id: 'aa-1', type: 'personal', title: '不用比喻', statement: '内容一。', status: 'active', version: '1', updatedAt: '2026-09-22T01:00:00Z', relations: [{ kind: 'same_family', assetId: 'aa-2' }] },
-        { id: 'aa-2', type: 'personal', title: '标识符括号解释', statement: '内容二。', status: 'active', version: '1', updatedAt: '2026-09-22T02:00:00Z', relations: [{ kind: 'same_family', assetId: 'aa-1' }] },
-        { id: 'aa-3', type: 'rule', title: '接口变更同步文档', statement: '内容三。', status: 'active', version: '1', updatedAt: '2026-09-22T03:00:00Z' },
-      ],
+  it('旧固定引用和模型选择状态不再显示对话绑定栏', () => {
+    const html = renderCognition({ name: 'overview' }, {
+      assets: [asset], modelSelectedAssetIds: [asset.id],
+      libraryConversation: { conversationId: 'conv-library', title: '季度复盘', projections: [{
+        id: 'proj-pinned', conversationId: 'conv-library', status: 'confirmed', purpose: 'user_pinned', authorization: 'user_confirmed',
+        assetIds: [asset.id], assetVersions: { [asset.id]: '1' },
+      }] },
     });
-    expect(html).toContain('fam-hd');
-    expect(html).toContain('标识符括号解释'); // 组名取组内最新
-    expect(html).toContain('2 条同源');
-    expect(html).toContain('无同源血缘');
-    // 旧话术不再指称族（与标签的「未分类」撞车，specs/012 T008）。
-    expect(html).not.toContain('条同类');
-    expect(html).not.toContain('未归类');
+    expect(html).not.toContain('季度复盘');
+    expect(html).not.toContain('性能归因规则 · v1');
+    expect(html).not.toContain('data-act="library-detach"');
+    expect(html).not.toContain('模型挂着');
+  });
+
+  it('空目录给出夜间发现说明和确认结果入口，不显示空白表头', () => {
+    const html = renderCognition({ name: 'overview', assetView: 'catalog' }, { assets: [], proofs: [] });
+    expect(html).toContain('这里还没有已保存的认知');
+    expect(html).not.toContain('data-act="cand-create"');
+    expect(html).toContain('data-act="go-review"');
+    expect(html).toContain('夜间发现的完整建议');
+    expect(html).not.toContain('data-act="library-select"');
+    expect(html).not.toContain('<table class="ca-library-table"');
+  });
+
+  it('35条资产按20条分页，两个页面无重叠且合计对应全部真实条目', () => {
+    const many = Array.from({ length: 35 }, (_, index) => ({ ...asset, id: `aa-many${String(index).padStart(4, '0')}`, title: `批量资产 ${index + 1}` }));
+    const loaded = loadCognitionAssets({ assets: many, proofs: [] });
+    const ids = (html: string) => [...html.matchAll(/data-act="library-select" data-id="([^"]+)"/g)].map(match => match[1]);
+    const first = ids(loaded.render());
+    expect(first).toHaveLength(20);
+    expect(loaded.render()).toContain('每页 20 条 · 1–20 / 35');
+    loaded.ns.library.state.page = 2;
+    const second = ids(loaded.render());
+    expect(second).toHaveLength(15);
+    expect(loaded.render()).toContain('每页 20 条 · 21–35 / 35');
+    expect(new Set([...first, ...second]).size).toBe(35);
+    expect(loaded.ns.library.filtered()).toHaveLength(35);
+  });
+
+  it('旧分类深链进入统一列表，旧视图参数不再按类型隐藏内容', () => {
+    const template = { ...asset, id: 'aa-cat0002', title: '复盘模板', type: 'template' };
+    for (const assetView of ['catalog', '']) {
+      const html = renderCognition({ name: 'overview', assetView, category: 'rule' }, { assets: [asset, template] });
+      expect(html).not.toContain('id="ca-library-type"');
+      expect(html).toContain('性能归因规则');
+      expect(html).toContain('复盘模板');
+      expect(html).not.toContain('data-act="filter-cat"');
+    }
+  });
+
+// 同源关系是资产元信息，不再改变统一表格的分组、分页或条目身份。
+describe('统一表格中的同源资产', () => {
+  it('同源关系保留在记录中，但不再分组或减少统一表格的独立条目', () => {
+    const records = [
+      { ...asset, id: 'aa-family-1', title: '同源一', relations: [{ kind: 'same_family', assetId: 'aa-family-2' }] },
+      { ...asset, id: 'aa-family-2', title: '同源二', relations: [{ kind: 'same_family', assetId: 'aa-family-1' }] },
+      { ...asset, id: 'aa-independent', title: '独立条目' },
+    ];
+    const loaded = loadCognitionAssets({ assets: records }, { name: 'overview', manage: '1' });
+    const html = loaded.render();
+    expect(html.match(/data-act="library-select"/g)).toHaveLength(3);
+    expect(html).not.toContain('fam-hd');
+    expect(loaded.store.assets[0].relations).toEqual(records[0].relations);
   });
 
   it('catalog view stays flat (model perspective)', async () => {
@@ -207,7 +257,7 @@ describe('asset status chip wording (2026-09-22 快赢)', () => {
         status: 'active', version: '1', updatedAt: '2026-09-22T00:00:00Z',
       }],
     });
-    expect(html).toContain('生效中');
+    expect(html).toContain('启用');
     expect(html).not.toContain('已确认');
   });
 });

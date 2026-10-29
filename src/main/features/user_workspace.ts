@@ -35,6 +35,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { dialog, BrowserWindow, shell } from 'electron';
 
@@ -145,7 +146,19 @@ function _writeEntry(cfg: WorkspaceConfig, projectId: string | undefined, entry:
 }
 
 function _isWorkspaceSelectionBlocked(dirPath: string): ReturnType<typeof macosTccWorkspaceBlockedPath> {
-  return macosTccWorkspaceBlockedPath(path.resolve(dirPath));
+  const resolved = path.resolve(dirPath);
+  const blocked = macosTccWorkspaceBlockedPath(resolved);
+  if (!blocked) return null;
+  // ADR-001: Desktop / Documents / Downloads are valid user-selected
+  // workspaces. The TCC guard still protects Library, Pictures, Movies, Music,
+  // the home root and system roots from background scanning.
+  const home = path.resolve(os.homedir());
+  const selectable = ['Desktop', 'Documents', 'Downloads']
+    .map((name) => path.join(home, name));
+  if (selectable.some((root) => resolved === root || resolved.startsWith(root + path.sep))) {
+    return null;
+  }
+  return blocked;
 }
 
 /** Effective path for a given scope: project's selection (if any) → default's
@@ -208,6 +221,11 @@ function _isManagedWorkspaceRoot(dirPath: string): boolean {
 
 // ── Public API ──────────────────────────────────────────────────────────
 
+/** Same effective selection as execution, without provisioning the default root. */
+export function getWorkspacePathReadOnly(userId: string, projectId?: string): string {
+  return _effectivePath(readConfig(userId), projectId);
+}
+
 /**
  * Synchronous resolver. `projectId` is optional — when omitted the default
  * scope is used. Callers with a cid in scope should resolve cid → project_id
@@ -217,7 +235,17 @@ function _isManagedWorkspaceRoot(dirPath: string): boolean {
  */
 export function getWorkspacePath(userId: string, projectId?: string): string {
   const cfg = readConfig(userId);
-  return _effectivePath(cfg, projectId);
+  const resolved = _effectivePath(cfg, projectId);
+  // A1: the default workspace is where runs get their writable root, so it must
+  // exist before anything asks for it — a run pointed at a missing directory has
+  // no writable root and only search tools (P2-1). Safe to create: the path is
+  // always CogSeed-owned (~/.cogseed/...), never a user directory.
+  // Short-circuit: getWorkspacePath sits on the file-tool resolution hot path, so
+  // only pay for mkdir when the directory is actually missing.
+  if (!fs.existsSync(resolved)) {
+    try { fs.mkdirSync(resolved, { recursive: true }); } catch { /* read-only fs */ }
+  }
+  return resolved;
 }
 
 /**

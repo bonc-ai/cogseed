@@ -24,17 +24,82 @@ rules_source / ruleset_version 字段追溯。
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml  # type: ignore
-except Exception:
-    yaml = None  # type: ignore
-
 ENGINE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_RULESET_VERSION = "v1.1.0"
 RULESETS_DIR = ENGINE_DIR / "rulesets"
+
+
+def _current_ruleset_version() -> str:
+    """从 ``rulesets/CURRENT`` 读当前版本，而不是在代码里写死。
+
+    2.2.0 的文档说「版本由 CURRENT 声明（不是硬编码在代码里）」，但引擎这边
+    一直写死 ``v1.1.0``：新增 v1.2.0 规则包、改了 CURRENT，引擎仍会加载旧包，
+    而覆盖信息会显示「ruleset v1.1.0」——版本升级静默失效，正是这份文档要
+    防住的那类失败。
+    """
+    try:
+        declared = (RULESETS_DIR / "CURRENT").read_text("utf-8").strip()
+    except OSError:
+        declared = ""
+    if declared and (RULESETS_DIR / declared).is_dir():
+        return declared
+    return "v1.1.0"
+
+
+DEFAULT_RULESET_VERSION = _current_ruleset_version()
+
+
+def ruleset_dir(version: str) -> Path | None:
+    """该版本的规则包目录；不存在返回 None（调用方必须把 None 当覆盖缺口）。"""
+    path = RULESETS_DIR / version
+    return path if path.is_dir() else None
+
+#: skill 自带的 PyYAML 副本（随 skill 一起发布，见 vendor/PyYAML-LICENSE）。
+VENDOR_DIR = ENGINE_DIR.parent / "vendor"
+
+
+def _import_yaml() -> Any:
+    """取一个可用的 YAML 解析器；环境没有 pyyaml 时用 skill 自带的 vendor 副本。
+
+    为什么不能只依赖运行环境的 pyyaml
+    ---------------------------------
+    `vendor/yaml` 是随 skill 发布的 PyYAML 副本，存在的意义就是让扫描器在任何
+    python3 上都读得到 `rulesets/*/text-rules.yaml`。但这份副本此前**没有被接进
+    sys.path**，于是「运行环境恰好装了 pyyaml」变成了完整规则集能否生效的隐藏前提：
+
+    - 装了 pyyaml 的环境 → `ruleset v1.1.0 … 12 组规则`，181 条规则；
+    - 没装 pyyaml 的环境 → `builtin (pyyaml 未安装…)`，**64 条规则**，12 个组里的
+      扩展规则全部失效。
+
+    而应用自带的运行时（`resources/runtime/python/**`）与仓库 venv 都没有 pyyaml，
+    安全扫描适配器又明确用自带运行时跑 skill-sentry（见
+    `src/main/util/bundled-runtime.ts` 的 bundledPythonExecutable 注释）：也就是说
+    出厂形态下扫的是 64 条内置规则，而「43 个官方 Skill 误报 0、恶意样本一律
+    DO_NOT_INSTALL」这套标定结果只在装了 pyyaml 的机器上成立。
+
+    顺序：先用环境里的 pyyaml，缺失时才把 vendor/ 插到 sys.path 前面重试。
+    不无条件抢先生效，是为了不改动已装 pyyaml 环境的解析行为。
+    """
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+        return _yaml
+    except Exception:
+        pass
+    if (VENDOR_DIR / "yaml" / "__init__.py").is_file():
+        if str(VENDOR_DIR) not in sys.path:
+            sys.path.insert(0, str(VENDOR_DIR))
+        try:
+            import yaml as _yaml  # noqa: PLC0415
+            return _yaml
+        except Exception:
+            return None
+    return None
+
+
+yaml = _import_yaml()
 
 #: 允许出现在规则包里的规则组名。白名单而非「YAML 里所有键」——后者会让
 #: ``version`` / ``metadata`` 一类元数据键被当成规则组传进匹配循环。
@@ -314,7 +379,14 @@ def load_rules(version: str = DEFAULT_RULESET_VERSION) -> dict[str, Any]:
         return rules
 
     if yaml is None:
-        rules["_rules_source"] = "builtin (pyyaml 未安装，使用内置默认规则)"
+        # 回退到内置规则就是「请求的版本没有解析」，必须如实标记：这个字段是上层
+        # 判断「我扫的是 v1.1.0 还是 64 条内置规则」的唯一依据，而此前这里漏标，
+        # 于是「pyyaml 不可用 → 规则集缩水 65%」在审计面上看不出来。
+        rules["_ruleset_resolved"] = False
+        rules["_rules_source"] = (
+            "builtin (无可用 YAML 解析器：环境未安装 pyyaml，且 skill 自带的 "
+            "vendor/yaml 缺失，回退内置默认规则)"
+        )
         rules["_invalid_rules"] = validate_rules(rules)
         return rules
 

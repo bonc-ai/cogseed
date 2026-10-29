@@ -1,19 +1,7 @@
 /**
- * 探针 r1（边界测试员）：个人本体候选池的并发双写 / 删除后复活。
- *
- * 推演链：confirmCandidate / rejectCandidate 对 candidates.md 是
- * 「读全文 → 改内存 → 整文件回写」（personal_ontology_candidates.ts:951/963/981），
- * 全程没有文件锁（writeCandidates 用 writeTextAtomicSync 直写）。
- * 两个并发确认各拿到同一份快照，各自删掉自己那条后回写——后写者把
- * 先写者已删除的另一条候选**复活**回池。已确认内容却已进 USER.md，
- * 复活的候选可被再次确认 → 重复写入记忆。
- *
- * 风格对齐 test/main/features/po/po-store.test.ts。
- *
- * 2026-09-30 r1 收尾（记账员）：用例 1/2 对应待议 P-r1-1（fileEditLock 包
- * 读写段 vs CAS 重读，锁范围取舍待拍板）→ it.skip；断言锁定的是「现状复活
- * 发生」，修复后反转为「池清空无复活」。用例 3（串行对照组）保留 active：
- * 锁定串行正确路径，不依赖漏洞，修复 P-r1-1 后应持续绿。见 round-1-甄别.md。
+ * 候选池并发写串行化回归（写路径使用 fileEditLock）：并发驳回、
+ * 驳回与回流新增交错，池状态始终等于串行世界的某个顺序结果——无复活、
+ * 无丢写。旧确认入口退役后的只读对照保留。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -22,7 +10,7 @@ import * as path from 'node:path';
 
 vi.mock('../../src/main/features/kb_indexer', () => ({
   enqueue: () => {},
-  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+  kbEvents: { on: () => {}, emit: () => {}, off: () => {} },
 }));
 vi.mock('../../src/main/features/search', () => ({
   upsertContext: () => {},
@@ -73,61 +61,57 @@ async function seedPool(ids: string[]): Promise<void> {
   fs.writeFileSync(candidatesMd(), cands.serializeCandidatesMarkdown(list));
 }
 
-describe('probe r1 › 候选池并发双写（待议项已 skip）', () => {
-  // 待议 P-r1-1：候选池并发双写复活已处理候选（读全文→改→整文件回写无锁）。
-  it.skip('并发确认两条候选：池中复活一条（已写记忆的候选回到待确认）', async () => {
+describe('候选池并发写串行化', () => {
+  it('并发驳回两条候选：双双成功，池清空，无复活', async () => {
     await seedPool(['cand-a', 'cand-b']);
     const cands = await loadCands();
 
-    // 模拟渲染层连点两张卡的确认按钮（两个 IPC 在主进程并发执行）
+    // 模拟渲染层连点两张卡的驳回按钮（两个 IPC 在主进程并发执行）。
     const [ra, rb] = await Promise.all([
-      cands.confirmCandidate(UID, 'cand-a'),
-      cands.confirmCandidate(UID, 'cand-b'),
+      cands.rejectCandidate(UID, 'cand-a', '不要'),
+      cands.rejectCandidate(UID, 'cand-b', '不要'),
     ]);
     expect(ra.ok).toBe(true);
     expect(rb.ok).toBe(true);
 
+    // 串行世界的正确结果：0 条。锁化后读改写在锁内拿新鲜池——后写者不再把
+    // 先写者删掉的行带回来（复活消失）。
     const after = await cands.listCandidates(UID);
-    // 串行世界的正确结果：0 条。并发世界：后写者把先写者删的那条带回来了。
-    const poolIds = after.candidate_updates.map((c) => c.candidate_id);
-    expect(poolIds.length).toBe(1); // 复活了一条
-
-    // 复活的候选可被再次确认（状态机倒退成「待确认」）
-    const dup = await cands.confirmCandidate(UID, poolIds[0]);
-    expect(dup.ok).toBe(true);
-    // 记忆层：addEntry 对 user 轨按文本去重（memory.ts records.some(text===trimmed)），
-    // 所以重复数据侥幸被挡住——但审查决定账本会再记一次 accept，池状态也失真
-    const memory = fs.readFileSync(userMd(), 'utf8');
-    const needle = `确认内容-${poolIds[0]}`;
-    expect(memory.split(needle).length - 1).toBe(1); // 去重兜底生效
-    expect((await cands.listCandidates(UID)).candidate_updates.length).toBe(0);
+    expect(after.candidate_updates.length).toBe(0);
+    // 驳回不写记忆。
+    expect(fs.existsSync(userMd())).toBe(false);
   });
 
-  // 待议 P-r1-1（同上）：驳回可被并发确认的回写复活。
-  it.skip('并发确认 + 驳回：驳回可被并发确认的回写复活（用户以为已丢弃又出现）', async () => {
+  it('并发驳回 + 回流新增：驳回不被新增回写复活，新增不被驳回吞掉', async () => {
     await seedPool(['cand-c', 'cand-d']);
     const cands = await loadCands();
 
-    const [confirmRes, rejectRes] = await Promise.all([
-      cands.confirmCandidate(UID, 'cand-c'),
-      cands.rejectCandidate(UID, 'cand-d', '不要'),
+    const [rejectRes, addRes] = await Promise.all([
+      cands.rejectCandidate(UID, 'cand-c', '不要'),
+      cands.addCandidate(UID, {
+        candidate_id: 'asset-backflow-y1',
+        kind: 'rule',
+        summary: '回流候选',
+        memory_text: '回流内容',
+      }),
     ]);
-    expect(confirmRes.ok).toBe(true);
     expect(rejectRes.ok).toBe(true);
+    expect(addRes.ok).toBe(true);
 
+    // 串行世界应为 [cand-d, 回流]：被驳回的 cand-c 不复活，回流新增不丢。
     const after = await cands.listCandidates(UID);
-    // 串行世界应为 0 条；被驳回的 cand-d 有概率出现在池里
-    expect(after.candidate_updates.length).toBe(1);
-    expect(after.candidate_updates[0].candidate_id).toBe('cand-d');
+    expect(after.candidate_updates.map((c) => c.candidate_id).sort())
+      .toEqual(['asset-backflow-y1', 'cand-d']);
   });
 
-  // 保留 active（串行对照组）：不依赖漏洞，锁定串行正确路径；P-r1-1 修复后应持续绿。
-  it('对照组（串行）：逐条确认后池清空、无复活——证明上面是并发独有', async () => {
+  // 串行对照保留旧入口退役后的读取与持久化边界。
+  it('对照组：旧确认writer已退役，读取保留原池且不写记忆', async () => {
     await seedPool(['cand-e', 'cand-f']);
     const cands = await loadCands();
-    expect((await cands.confirmCandidate(UID, 'cand-e')).ok).toBe(true);
-    expect((await cands.confirmCandidate(UID, 'cand-f')).ok).toBe(true);
-    const after = await cands.listCandidates(UID);
-    expect(after.candidate_updates.length).toBe(0);
+    const before = fs.readFileSync(candidatesMd(), 'utf8');
+    expect(cands).not.toHaveProperty('confirmCandidate');
+    expect((await cands.listCandidates(UID)).candidate_updates.map(c => c.candidate_id)).toEqual(['cand-e', 'cand-f']);
+    expect(fs.readFileSync(candidatesMd(), 'utf8')).toBe(before);
+    expect(fs.existsSync(userMd())).toBe(false);
   });
 });

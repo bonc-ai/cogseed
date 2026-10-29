@@ -21,7 +21,6 @@ export * from './execution-boundary';
 // Ability Pack 线已按决策一删除（capability-load.ts 已移除）。这里只剩
 // `CapabilityPackAssetRef` 类型，仍被出生继承与 recall/cognition-selection 真实使用。
 export * from './capability-pack';
-export * from './cost-telemetry';
 export * from '../p3394_bridge/envelope';
 export * from '../p3394_bridge/identity';
 export * from '../p3394_bridge/capability-profile';

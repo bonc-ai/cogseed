@@ -49,10 +49,9 @@ describe('connectors shared UI adoption', () => {
   it('uses the shared modal shell for the custom connector form', () => {
     const source = read('src/renderer/modules/connectors.js');
 
-    expect(source).toContain("overlay.className = 'ui-modal-overlay'");
-    expect(source).toContain('class="ui-modal connector-custom-dialog"');
-    expect(source).toContain('class="ui-modal__header"');
-    expect(source).toContain('class="ui-modal__body"');
+    expect(source).toContain('const modal = uiFormModal({ ...labels(), bodyHtml: formHtml()');
+    expect(source).not.toContain('class="ui-modal connector-custom-dialog"');
+    expect(source).not.toContain('const controller = typeof uiModalController');
     expect(source).not.toContain("overlay.className = 'modal-overlay ui-dialog-overlay'");
   });
 });

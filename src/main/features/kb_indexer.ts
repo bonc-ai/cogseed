@@ -22,7 +22,7 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
-import { userContextsDir } from '../paths';
+import { userContextsDir, ONTOLOGY_GROUPS_DIR_NAME } from '../paths';
 import { createLogger } from '../logger';
 import { fileToChunks } from '../util/file_to_chunks';
 import { logErrorSummary, logPathRef, maskId } from '../util/log-redact';
@@ -596,6 +596,9 @@ const RECONCILE_FILE_CONCURRENCY = 4;
  *
  * Skipped from the walk: dot-prefixed entries (e.g. `.kb/`), the root-level
  * `_INDEX.md`, and any filename whose extension is not in the supported set.
+ * Exception: the po render-copy dir `.personal_ontology_groups/` is walked —
+ * po/store.ts enqueues those files into `kb_files`, so an invisible walk would
+ * make reconcile enqueue deletes for them on every boot (P-r1-99).
  */
 export async function reconcile(uid: string, signal?: AbortSignal): Promise<ReconcileResult> {
   const startedAt = Date.now();
@@ -770,7 +773,11 @@ async function walk(
     for (const e of items) {
       if (signal?.aborted) return { files: out, complete: false, reusedHashes };
       // `.kb/` (vector DB), `.organize-snapshots/`, `.organize-state.json`, DS_Store — all hidden.
-      if (e.name.startsWith('.')) continue;
+      // `.personal_ontology_groups/` is the one whitelisted dot-dir: its render
+      // copies are enqueued into kb_files by po/store.ts, so the walk must see
+      // them or reconcile deletes the rows at boot (P-r1-99).
+      if (e.name.startsWith('.')
+        && !(e.isDirectory() && e.name === ONTOLOGY_GROUPS_DIR_NAME)) continue;
       // Root-level `_INDEX.md` is generated for human browsing, not KB content.
       // Subdir `_INDEX.md` files are legacy (pre-kb-vector) — also skip.
       if (e.name === '_INDEX.md') continue;

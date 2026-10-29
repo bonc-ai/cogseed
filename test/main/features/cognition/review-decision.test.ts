@@ -195,3 +195,31 @@ describe('review-decision › 已处理历史（listRecentReviewDecisions）', (
     expect(page.items).toHaveLength(3);
   });
 });
+
+describe('review-decision › 短确认语集合定义', () => {
+  /**
+   * 回归（round-1 F-r1-5）：SHORT_CONFIRMATIONS 曾把 'yes' 写了两遍——
+   * Set 去重后行为无差异，但字面量重复是笔误死条目。这里从源文件解析
+   * 该集合的字面量成员，锁定「每个成员恰好出现一次」。
+   */
+  it('SHORT_CONFIRMATIONS 字面量成员不重复', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../../../../src/main/features/cognition/review-decision.ts'),
+      'utf8',
+    );
+    const match = src.match(/const SHORT_CONFIRMATIONS = new Set\(\[(.*?)\]\);/s);
+    expect(match, 'SHORT_CONFIRMATIONS 定义应保持单行 new Set([...]) 形式').not.toBeNull();
+    const members = (match![1].match(/'[^']*'/g) ?? []).map((literal) => literal.slice(1, -1));
+    expect(members.length).toBeGreaterThan(0);
+    expect(new Set(members).size, `字面量成员有重复: ${JSON.stringify(members)}`).toBe(members.length);
+  });
+
+  it('全部短确认语成员都命中 isShortConfirmation（含大小写与空白归一）', async () => {
+    const m = await loadMod();
+    for (const word of ['accept', 'yes', 'confirm', '采用', '确认', '是', 'ok']) {
+      expect(m.isShortConfirmation(word)).toBe(true);
+      expect(m.isShortConfirmation(`  ${word.toUpperCase()}  `)).toBe(true);
+    }
+    expect(m.isShortConfirmation('这个规则不适用')).toBe(false);
+  });
+});

@@ -11,6 +11,8 @@
 
 import { Mutex, Semaphore, type MutexInterface, type SemaphoreInterface } from 'async-mutex';
 
+export type { MutexInterface };
+
 const sessionLocks = new Map<string, MutexInterface>();
 
 /** Return (creating on demand) the Mutex for a session id. */
@@ -103,4 +105,3 @@ export async function acquireSemWithTimeout(
     throw err;
   }
 }
-

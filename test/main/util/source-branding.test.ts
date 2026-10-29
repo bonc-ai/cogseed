@@ -20,9 +20,12 @@ describe('CogSeed source-run branding', () => {
   });
 
   it('launches the prepared integration-specific macOS bundle', () => {
+    // 启动逻辑收口到共享脚本：变体名由 source-launch.cjs 解析，bundle 路径随之拼装。
     const source = read('run.sh');
-    expect(source).toContain('CogSeed.app');
-    expect(source).toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/CogSeed.app"');
+    const launch = read('scripts/lib/source-launch.sh');
+    expect(source).toContain('scripts/lib/source-launch.sh');
+    expect(launch).toContain('APP_NAME="${LAUNCH_FIELDS[1]}"');
+    expect(launch).toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/$APP_NAME.app"');
   });
 
   it('uses CogSeed in cross-platform launcher output', () => {

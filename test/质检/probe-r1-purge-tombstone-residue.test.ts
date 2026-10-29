@@ -1,21 +1,5 @@
-/**
- * 探针 r1（红队-数据与注入，新一轮 r1）：purge 墓碑可识别内容残留。
- *
- * 发现：purgeAbilityAsset 的清理清单（asset-service.ts:1351-1377）清了
- * title/statement/evidenceRefs/familyName/maturity/… 却漏了 causalRule
- * （cause/effect/mitigation 三段 human-readable 正文，world-model-types.ts:76）、
- * tags（用户手写主题标签，与被清的 familyName 同为「用户手写的分类名（元数据）」
- * ——asset-service.ts:1371-1373 清 familyName 的理由逐字适用于 tags）、
- * scope（进注入提示词的自由文本，prompt-injection.ts:428）、learningProvenance
- * （归因/动作/结果差异明细）。asAsset purged 分支（:203-205）原样透传这些字段。
- *
- * 违反 purge 自我声明「删除内容、版本和可识别副本，仅保留不可识别的审计最小项」。
- * 风格对齐 regression-r1-asset-lifecycle.test.ts（同域探针）。
- * 2026-09-30 r1 收尾（记账员）：对应待议 P-r1-4（high：墓碑四字段残留 +
- * 存量 purged 墓碑处理二选一，涉数据取舍待拍板）→ it.skip。断言锁定的
- * 是「四字段原样留在墓碑上」的现状，拍板修复后反转（含 scope 必须清 ''
- * 不能 undefined 的硬约束）。
- */
+/** 彻底清除后的墓碑语义字段残留；覆盖 causalRule、tags、scope 及来源信息。 */
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -55,9 +39,9 @@ async function loadAssets() {
 }
 
 async function mkAsset(id: string) {
-  const assets = await loadAssets();
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(UID, {
+  // 直接落历史记录（test-only 种子）：本探针考墓碑字段清理面，不考创建门。
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'personal', title: '演示纪律', statement: `陈述 ${id}。`,
@@ -69,29 +53,37 @@ async function mkAsset(id: string) {
 
 const ACT = { actor: 'user' as const, reason: 'probe' };
 
-describe('probe r1 › purge 墓碑可识别内容残留（待议 P-r1-4，拍板前 skip）', () => {
-  it.skip('purge 后 causalRule/tags/scope/learningProvenance 原样留在墓碑上（对照组：title/statement/familyName 已清）', async () => {
+describe('purge 墓碑可识别内容清理面', () => {
+  it('purge 后 causalRule/tags/scope/learningProvenance 及扩展面全部清空（含盘上与读回口径）', async () => {
     const assets = await loadAssets();
     await mkAsset('aa-purge-residue');
 
-    // 手工把四类可识别内容写上资产（模拟晋升时冻结的因果规则 + 用户打的标签、
-    // 手写的 scope、复盘归因明细——都是产品真实写路径会产生的字段）
+    // 手工把可识别内容写上资产（模拟晋升时冻结的因果规则 + 用户打的标签、
+    // 手写的 scope、复盘归因明细、敏感分级与编辑决定——都是产品真实写路径
+    // 会产生的字段）
     const rawPath = assetFile('aa-purge-residue');
-    const raw = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as Record<string, unknown>;
     raw.causalRule = {
-      cause: '在客户演示环境执行部署脚本',
-      effect: '演示数据被覆盖，客户当场看到内部测试记录',
-      mitigation: '演示环境一律先打快照再执行任何写操作',
+      cause: '在合成测试工作区执行覆盖写入脚本',
+      effect: '临时测试数据被覆盖，基线比较无法复用',
+      mitigation: '对合成测试工作区执行写操作前先打快照',
       severity: 'high',
       deltaR: -0.5,
     };
-    raw.tags = ['客户演示', '部署纪律'];
-    raw.scope = '适用于所有对外演示环境';
-    raw.familyName = '部署族';
+    raw.tags = ['合成写入', '快照纪律'];
+    raw.scope = '仅限合成测试工作区';
+    raw.familyName = '合成快照族';
     raw.learningProvenance = {
       projectionId: 'proj-1', episodeId: 'ep-1', ruleRefs: [],
       attribution: 'execution_gap',
       actionDelta: { missingTools: [], unexpectedTools: [], missingActors: [], unexpectedActors: [], missingPlanSteps: ['先打快照'], extraActions: [], failedActions: [], orderMismatch: false },
+    };
+    raw.sensitivity = 'L1';
+    raw.userEditDecision = {
+      id: 'ed_probe-r1-purge-01', ownerId: UID, cid: 'cid-probe-1', sourceMessageId: 'msg-probe-1',
+      method: 'exact_patch', targetId: 'aa-purge-residue', previousVersion: '1',
+      previousActiveVersion: '1', committedVersion: '1', changedFields: ['statement'],
+      patch: { statement: '陈述 aa-purge-residue。' }, createdAt: new Date().toISOString(),
     };
     fs.writeFileSync(rawPath, JSON.stringify(raw));
 
@@ -106,23 +98,39 @@ describe('probe r1 › purge 墓碑可识别内容残留（待议 P-r1-4，拍�
     expect((purged as unknown as Record<string, unknown>).familyName).toBeUndefined();
     expect(purged.evidenceRefs).toEqual([]);
 
-    // 发现主体：四类内容原样留在墓碑上
+    // 应然契约：四类内容在返回值里全部清空（scope 是 string 必填 → 空串口径）
     const residue = purged as unknown as Record<string, unknown>;
-    expect(residue.causalRule).toEqual(raw.causalRule);
-    expect(residue.tags).toEqual(['客户演示', '部署纪律']);
-    expect(residue.scope).toBe('适用于所有对外演示环境');
-    expect(residue.learningProvenance).toBeDefined();
+    expect(residue.causalRule).toBeUndefined();
+    expect(residue.tags).toBeUndefined();
+    expect(residue.scope).toBe('');
+    expect(residue.learningProvenance).toBeUndefined();
+    // 扩展清理面：分级声明与内嵌 patch 的编辑/授权凭据同样不留
+    expect(residue.sensitivity).toBeUndefined();
+    expect(residue.userEditDecision).toBeUndefined();
+    expect(residue.standingPreferenceAuthority).toBeUndefined();
 
-    // 盘上同样残留（不是只在返回值里）
-    const onDisk = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
-    expect(onDisk.causalRule).toEqual(raw.causalRule);
-    expect(onDisk.tags).toEqual(['客户演示', '部署纪律']);
-    expect(onDisk.scope).toBe('适用于所有对外演示环境');
+    // 盘上同样清空（不是只在返回值里）
+    const onDisk = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as Record<string, unknown>;
+    expect(onDisk.causalRule).toBeUndefined();
+    expect(onDisk.tags).toBeUndefined();
+    expect(onDisk.scope).toBe('');
+    expect(onDisk.learningProvenance).toBeUndefined();
+    expect(onDisk.sensitivity).toBeUndefined();
+    expect(onDisk.userEditDecision).toBeUndefined();
 
-    // 墓碑读回口径：asAsset purged 分支原样透传（历史回执读墓碑能看到这些内容）
+    // 墓碑读回口径：asAsset purged 分支不再透传这些字段（历史回执读墓碑
+    // 看不到内容；老墓碑读到也归一）。再手工把老口径字段塞回盘上模拟存量墓碑。
+    const legacy = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as Record<string, unknown>;
+    legacy.causalRule = raw.causalRule;
+    legacy.tags = ['合成写入'];
+    legacy.scope = '仅限合成测试工作区';
+    legacy.learningProvenance = raw.learningProvenance;
+    fs.writeFileSync(rawPath, JSON.stringify(legacy));
     const tomb = await assets.readAbilityAsset(UID, 'aa-purge-residue');
     const tombResidue = tomb as unknown as Record<string, unknown>;
-    expect(tombResidue.causalRule).toEqual(raw.causalRule);
-    expect(tombResidue.tags).toEqual(['客户演示', '部署纪律']);
+    expect(tombResidue.causalRule).toBeUndefined();
+    expect(tombResidue.tags).toBeUndefined();
+    expect(tombResidue.scope).toBe('');
+    expect(tombResidue.learningProvenance).toBeUndefined();
   });
 });

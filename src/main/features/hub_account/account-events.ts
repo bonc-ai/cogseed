@@ -39,7 +39,7 @@ export function broadcastHubLoginOutcome(outcome: HubLoginOutcome): void {
  * preload change is needed.
  */
 export interface HubStateChange {
-  reason: 'signed_out' | 'account_deleted';
+  reason: 'signed_out' | 'account_deleted' | 'profile_updated';
 }
 
 export function broadcastHubStateChanged(change: HubStateChange): void {

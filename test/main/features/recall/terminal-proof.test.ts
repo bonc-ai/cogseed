@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -48,7 +49,7 @@ async function eventually(assertion: () => Promise<void> | void): Promise<void> 
 
 async function confirmedProjection(taskRunId: string) {
   const { candidates, refs, projection } = await modules();
-  const candidate = await candidates.saveRecallCandidate('user-a', {
+  const candidate = await createNightlyCandidateFixture('user-a', {
     judgment: 'Use confirmed evidence in task reviews.',
     summary: 'Confirmed evidence habit',
     suggestedType: 'rule',
@@ -208,7 +209,7 @@ describe('Recall terminal transfer proof handler', () => {
     const { asset, projection } = await confirmedProjection('run-receipt-first');
     const { candidates } = await modules();
     // 另一条真实资产：本次运行真的注入了它，但它不在提交投影的冻结清单里。
-    const other = await candidates.saveRecallCandidate('user-a', {
+    const other = await createNightlyCandidateFixture('user-a', {
       judgment: 'Live-loaded asset outside the committed projection.',
       summary: 'Asset loaded live',
       suggestedType: 'rule',
@@ -257,7 +258,7 @@ describe('Recall terminal transfer proof handler', () => {
     // 覆盖即算迁移证明成立。
     const { asset, projection } = await confirmedProjection('run-union-receipts');
     const { candidates } = await modules();
-    const other = await candidates.saveRecallCandidate('user-a', {
+    const other = await createNightlyCandidateFixture('user-a', {
       judgment: 'Second asset injected in a later turn of the same run.',
       summary: 'Asset injected later',
       suggestedType: 'rule',

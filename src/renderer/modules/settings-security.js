@@ -89,12 +89,86 @@
     return t(`settings.security.sev_${sev}`);
   }
 
+  /**
+   * 规则 id 与类别名都是给开发者看的。默认层只显示人话标题：
+   * 规则查得到就用专门标题，查不到就退到「与「类别」有关的一条提示」。
+   */
+  function techOpenAttr() {
+    return state.showTech ? ' open' : '';
+  }
+
+  function categoryLabel(category) {
+    const key = `settings.security.cat_${category}`;
+    const label = t(key);
+    return label === key ? t('settings.security.cat_other') : label;
+  }
+
+  function ruleTitle(ruleId, category) {
+    const key = `settings.security.rule_${ruleId}`;
+    const label = t(key);
+    return label === key
+      ? t('settings.security.rule_generic', { category: categoryLabel(category) })
+      : label;
+  }
+
+  function ctxLabel(ctx) {
+    const key = `settings.security.ctx_${ctx}`;
+    const label = t(key);
+    return label === key ? String(ctx) : label;
+  }
+
+  /** ALLOW / CAUTION / DO_NOT_INSTALL 是引擎的枚举，不是给用户看的建议。 */
+  function recommendationLabel(value) {
+    const slug = String(value || '').toLowerCase().replace(/-/g, '_');
+    const key = `settings.security.rec_${slug}`;
+    const label = t(key);
+    return label === key ? String(value || '') : label;
+  }
+
+  function confLabel(confidence) {
+    const key = `settings.security.conf_${confidence}`;
+    const label = t(key);
+    return label === key ? t('settings.security.conf_unknown') : label;
+  }
+
   // ── 状态模型 ────────────────────────────────────────────────────────────
+  // 渲染层本地偏好（与会话的 localStorage 约定一致）：默认收起技术细节，
+  // 需要深挖的用户打开一次后对所有安全页生效。
+  const TECH_DETAILS_KEY = 'security.tech-details.v1';
+
+  function readTechPref() {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(TECH_DETAILS_KEY) === '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function saveTechPref() {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(TECH_DETAILS_KEY, state.showTech ? '1' : '0');
+      }
+    } catch (_) { /* 存储不可用时只在本次会话生效 */ }
+  }
+
   const state = {
     status: null,          // skills.security.status 结果
     receipts: [],          // skills.trust.list
     skills: [],            // skills.list（选择器与总数）
-    loading: true,
+    loading: true,         // 首屏骨架：只在还没有任何状态可显示时为 true
+    refreshing: false,     // 一次读取在途；连点/切 tab 都靠它去重
+    // 读取失败与「确实没有」是两件事。{ status, receipts } 标记哪一路没读到：
+    // 没有它，一次 IPC 失败会被 hero 读成「发现异常」，被表格读成「无异常」。
+    loadError: null,
+    skillsError: false,    // skills.list 没读到时，选择器不能把空列表说成「没有技能」
+    updatedAt: 0,          // 最近一次状态读取成功的时刻（页面的新鲜度）
+    lastHtml: null,        // 上一次渲染的内容（不含 live/时间戳），用于跳过无变化的重建
+    // 行内动作触发的重绘会把按钮本身换掉；按钮在 loading 时又是 disabled，
+    // 浏览器拒绝把焦点放回去。记下用户刚点的那个动作，等它可用后再还原。
+    focusReturn: null,
+    checkingSince: 0,      // 这一批重扫从什么时候开始：超过「通常几秒」后要给出实际耗时
+    ticker: null,          // 耗时文字每秒更新一次，不重绘整页
     filter: 'all',         // all | pass | risk | blocked | unchecked
     expanded: false,
     pickerOpen: false,
@@ -108,6 +182,7 @@
     compositionLoading: false,
     compositionError: null,
     coverageExpanded: false,   // 能力行：默认只列需要注意的项
+    showTech: readTechPref(),  // 技术细节默认展开（本地偏好）
     openRow: null,             // 展开的防护项：skills | coverage | composition
   };
 
@@ -122,6 +197,11 @@
     const st = state.status || {};
     if (st.scanner !== 'present' && st.scanner !== 'absent_by_build') return true;
     return st.scannerIntegrity === 'tampered' || st.declarationIntegrity === 'tampered';
+  }
+
+  /** 检查记录没读到：此时任何「无异常 / 全部正常」都是无据的结论。 */
+  function receiptsUnavailable() {
+    return Boolean(state.loadError && state.loadError.receipts);
   }
 
   function heroKind() {
@@ -140,6 +220,9 @@
     // scanner state, or tamper evidence is alert-level.
     if (st.scanner !== 'present' && st.scanner !== 'absent_by_build') return 'bad';
     if (st.scannerIntegrity === 'tampered' || st.declarationIntegrity === 'tampered') return 'bad';
+    // 回执读不到时不能落到 'ok'：「所有安全检查正常」是关于扫描结果的断言，
+    // 而我们手上一条结果都没有。单独一档，避免借用降级文案。
+    if (receiptsUnavailable()) return 'unreadable';
     if (st.scanner !== 'present' || st.scannerIntegrity !== 'verified' || st.declarationIntegrity !== 'verified') return 'warn';
     if ((st.capabilities || []).some((c) => c.status === 'degraded')) return 'warn';
     if (counts.risk > 0) return 'warn';
@@ -205,6 +288,15 @@
   }
 
   function receiptDecisionText(r) {
+    // A block can come from two different checks: the deep scanner, or the local
+    // declaration/red-flag validator (which may refuse a skill the deep scanner
+    // scored 100). Saying only "已拦截" next to that score reads as a scoring bug.
+    if (r && r.decision === 'blocked' && r.verdictSource === 'local') {
+      return t('settings.security.decision_blocked_local');
+    }
+    if (r && r.decision === 'blocked' && r.verdictSource === 'deep') {
+      return t('settings.security.decision_blocked_deep');
+    }
     return receiptIsDeclarationOnly(r)
       ? t('settings.security.decision_declaration') : decisionText(r.decision);
   }
@@ -294,23 +386,27 @@
   function heroHtml(kind) {
     const st = state.status || {};
     const tagTone = kind === 'ok' ? TONE_SUCCESS
-      : kind === 'warn' ? TONE_ATTENTION : TONE_CRITICAL;
+      : (kind === 'warn' || kind === 'unreadable') ? TONE_ATTENTION : TONE_CRITICAL;
     const tagText = kind === 'ok' ? t('settings.security.tag_ok')
-      : kind === 'warn' ? t('settings.security.tag_attention') : t('settings.security.tag_alert');
+      : (kind === 'warn' || kind === 'unreadable') ? t('settings.security.tag_attention') : t('settings.security.tag_alert');
     // 'bad' has two distinct causes and they need different words: a tampered or
     // broken scanner is "reinstall the app", a blocked skill is "look at the list
     // below". Picking by kind alone sent the user to the wrong action — measured:
     // a scanner-free build with one blocked skill showed the tamper wording,
     // blaming the scanner for something a skill did.
     const level = kind === 'bad' ? (scannerIsFaulty() ? 'alert' : 'blocked') : kind;
+    // 'unreadable' 是「回执没读到」，不能让 hero 借用 'warn' 的降级文案：
+    // 「部分组件缺少发布哈希比对」在扫描器完好的机器上是假话。
     const title = level === 'ok' ? t('settings.security.hero_ok')
       : level === 'warn' ? t('settings.security.hero_attention')
-        : level === 'blocked' ? t('settings.security.hero_blocked')
-          : t('settings.security.hero_alert');
+        : level === 'unreadable' ? t('settings.security.hero_receipts_failed')
+          : level === 'blocked' ? t('settings.security.hero_blocked')
+            : t('settings.security.hero_alert');
     const desc = level === 'ok' ? t('settings.security.hero_ok_desc')
       : level === 'warn' ? t('settings.security.hero_attention_desc')
-        : level === 'blocked' ? t('settings.security.hero_blocked_desc')
-          : t('settings.security.hero_alert_desc');
+        : level === 'unreadable' ? t('settings.security.hero_receipts_failed_desc')
+          : level === 'blocked' ? t('settings.security.hero_blocked_desc')
+            : t('settings.security.hero_alert_desc');
     const last = state.receipts[0];
     const lastAt = last && last.scannedAt
       ? t('settings.security.last_checked_at', { time: relTime(last.scannedAt) }) : '';
@@ -340,7 +436,10 @@
       </div>
       <div class="sec-hero-actions">
         ${ui('uiButton', {
-          label: t('settings.security.refresh'), role: 'primary', size: 'sm', icon: 'refresh',
+          // 刷新在途时如果有别的动作触发了重绘，重绘出来的按钮也得是忙态，
+          // 否则同一次请求会出现「已经转圈」与「看起来没在跑」两种画面。
+          label: state.refreshing ? t('settings.security.refreshing') : t('settings.security.refresh'),
+          role: 'primary', size: 'sm', icon: 'refresh', loading: state.refreshing,
           attrs: { 'data-action': 'refresh' },
         })}
         ${ui('uiButton', {
@@ -351,8 +450,30 @@
           label: t('settings.security.export'), size: 'sm', icon: 'download',
           attrs: { 'data-action': 'export' },
         })}
+        ${freshnessHtml()}
       </div>
     </section>`;
+  }
+
+  /**
+   * 「刚才那一下做了什么」的唯一可见答案。
+   *
+   * 刷新按钮原先没有任何状态：不转圈、不禁用、完成后界面不变（成功消息只写进
+   * 视觉隐藏的 live region），于是点刷新等于没点。这里把它变成一行会变的小字，
+   * 刷新中写「正在读取…」，完成后写「更新于 刚刚」。
+   */
+  function freshnessText() {
+    if (!state.updatedAt) return '';
+    return t('settings.security.updated_at', {
+      time: relTime(new Date(state.updatedAt).toISOString()),
+    });
+  }
+
+  function freshnessHtml() {
+    // relTime 的粒度是「刚刚 / N 分钟前」，同一分钟内重复刷新得到同一个字符串，
+    // 所以把它放进内容串不会让每次刷新都重建页面；刷新在途时由 updateFreshness()
+    // 直接改写这一行，不走重绘。
+    return `<p class="sec-freshness" data-busy="0">${esc(freshnessText())}</p>`;
   }
 
   /**
@@ -433,11 +554,20 @@
     }
     const tools = st.externalTools || [];
     const rules = st.rules || {};
+    // 原生检测后端的规模。「能力可用」是一个状态，用户还需要知道它背后有
+    // 多少条规则/公告；否则「已完善」只能靠相信。
+    const packs = st.signaturePacks || {};
+    const vulnerabilityDb = packs.vulnerabilityDb || null;
     // 注意力倒置：默认只列「需要注意」的项。旧版把 16 格全摊开，13 格是「可用」，
     // 真正要处理的 3 项排在第 14–16 格。展开态也把需要注意的排在最前。
     const attention = caps.filter((c) => c.status !== 'implemented');
     const healthy = caps.filter((c) => c.status === 'implemented');
-    const listed = state.coverageExpanded ? [...attention, ...healthy] : attention;
+    // 没有需要注意的项时，「默认只列需要注意的项」会把列表清空：行体里只剩
+    // 一个空容器，而 `.sec-caps` 自带卡片边框和内边距，渲染出来就是一块
+    // 无内容的圆角空白格（实机报障）。注意力倒置的前提是确实有需要看的项；
+    // 一项都没有时，「全部可用」本身就是结论，列表直接给全量。
+    const showAll = state.coverageExpanded || attention.length === 0;
+    const listed = showAll ? [...attention, ...healthy] : attention;
     const chips = listed.map((c) => {
       const reason = c.reason ? ` · ${t(`settings.security.cap_reason_${c.reason}`)}` : '';
       return `<li class="sec-cap" data-status="${esc(c.status)}">
@@ -450,7 +580,10 @@
       label: `${tool.id}${tool.available ? '' : ` · ${t('settings.security.tool_missing')}`}`,
       variant: tool.available ? 'success' : 'outline',
     })).join(' ');
-    const toggle = caps.length > attention.length
+    // 没有需要注意的项时列表已经全量渲染，切换按钮没有可切换的目标；
+    // 留着它只会出现「展开全部 16 项」按下去却还是那 16 项，以及展开后
+    // 反过来写「只显示 0 项降级」这种自相矛盾的文案。
+    const toggle = attention.length > 0 && caps.length > attention.length
       ? ui('uiButton', {
         label: state.coverageExpanded
           ? t('settings.security.coverage_show_attention', { n: attention.length })
@@ -461,19 +594,39 @@
       })
       : '';
 
+    // 默认层只留两句人话：检查了多少类风险、多少条规则会直接拦截。
+    // 规则总数、漏洞库、YARA、解释器与外部工具都是证据，收进「技术细节」。
+    const humanChips = [
+      (rules.groups || []).length ? ui('uiTag', {
+        label: t('settings.security.rule_groups_value', { n: rules.groups.length }),
+      }) : '',
+      rules.hardBlock ? ui('uiTag', {
+        label: t('settings.security.hard_block_value', { n: rules.hardBlock }),
+      }) : '',
+      rules.versioned ? '' : ui('uiTag', {
+        label: t('settings.security.rules_builtin_only'), variant: 'outline',
+      }),
+    ].filter(Boolean).join(' ');
+    const techChips = [
+      rules.total ? ui('uiTag', { label: t('settings.security.rule_count_value', { n: rules.total }) }) : '',
+      vulnerabilityDb ? ui('uiTag', {
+        label: t('settings.security.vulnerability_db_value', {
+          n: vulnerabilityDb.entries, date: vulnerabilityDb.asOf || '—',
+        }),
+      }) : '',
+      packs.yaraRules ? ui('uiTag', {
+        label: t('settings.security.yara_rules_value', { n: packs.yaraRules }),
+      }) : '',
+      st.interpreter ? ui('uiTag', { label: t('settings.security.interpreter_ok'), variant: 'success' }) : '',
+      tools.length ? `<span class="sec-aside-label">${esc(t('settings.security.external_tools'))}</span> ${toolChips}` : '',
+    ].filter(Boolean).join(' ');
+
     return `<div class="sec-rowbody">
-      ${rules.total ? `<div class="sec-rulebar">
-        ${ui('uiTag', { label: t('settings.security.rule_count_value', { n: rules.total }) })}
-        ${ui('uiTag', { label: t('settings.security.hard_block_value', { n: rules.hardBlock }) })}
-        ${(rules.groups || []).length ? ui('uiTag', {
-          label: t('settings.security.rule_groups_value', { n: rules.groups.length }),
-        }) : ''}
-        ${rules.versioned ? '' : ui('uiTag', {
-          label: t('settings.security.rules_builtin_only'), variant: 'outline',
-        })}
-        ${st.interpreter ? ui('uiTag', { label: t('settings.security.interpreter_ok'), variant: 'success' }) : ''}
-        ${tools.length ? `<span class="sec-aside-label">${esc(t('settings.security.external_tools'))}</span> ${toolChips}` : ''}
-      </div>` : ''}
+      ${humanChips ? `<div class="sec-rulebar">${humanChips}</div>` : ''}
+      ${techChips ? `<details class="sec-rulebar-tech"${techOpenAttr()}>
+        <summary>${esc(t('settings.security.tech_details'))}</summary>
+        <div class="sec-rulebar">${techChips}</div>
+      </details>` : ''}
       <ul class="sec-caps">${chips}</ul>
       ${toggle ? `<div class="sec-rowfoot">${toggle}</div>` : ''}
     </div>`;
@@ -505,13 +658,22 @@
   function receiptRow(r) {
     const findings = typeof r.violationCount === 'number' && r.violationCount > 0
       ? `${r.violationCount} ${t('settings.security.col_findings')}` : '';
+    const busy = state.checking.has(r.skillId);
     const sub = [
-      relTime(r.scannedAt),
+      busy ? t('settings.security.checking') : relTime(r.scannedAt),
       r.rulesDegraded ? t('skills.security_rules_degraded') : '',
       findings,
     ].filter(Boolean).join(' · ');
-    const busy = state.checking.has(r.skillId);
-    return `<tr data-skill="${esc(r.skillId)}">
+    // 两个动作都渲染，由 `tr[data-checking]` 决定显示哪一个：检查开始时只翻这个
+    // 属性，不重建表格——所以「取消」按钮必须在渲染时就存在。
+    const rowAction = `${ui('uiButton', {
+      label: t('settings.security.recheck'), role: 'ghost', size: 'sm', className: 'sec-link',
+      attrs: { 'data-action': 'recheck', 'data-skill': r.skillId, 'data-role': 'row-recheck' },
+    })}${ui('uiButton', {
+      label: t('settings.security.cancel_check'), role: 'ghost', size: 'sm', className: 'sec-link',
+      attrs: { 'data-action': 'cancel-check', 'data-skill': r.skillId, 'data-role': 'row-cancel' },
+    })}`;
+    return `<tr data-skill="${esc(r.skillId)}" data-checking="${busy ? '1' : '0'}">
       <td>
         <div class="sec-id">
           <div class="sec-dot" aria-hidden="true">${esc(String(r.skillId).slice(0, 1).toUpperCase())}</div>
@@ -528,12 +690,7 @@
           label: t('settings.security.detail'), role: 'ghost', size: 'sm', className: 'sec-link',
           attrs: { 'data-action': 'detail', 'data-skill': r.skillId },
         })}
-        ${ui('uiButton', {
-          label: busy ? t('settings.security.checking') : t('settings.security.recheck'),
-          role: 'ghost', size: 'sm', className: 'sec-link',
-          loading: busy,
-          attrs: { 'data-action': 'recheck', 'data-skill': r.skillId },
-        })}
+        ${rowAction}
       </td>
     </tr>`;
   }
@@ -549,7 +706,27 @@
     </div>`;
   }
 
+  /** 检查记录读取失败的可见态：说明 + 重试，绝不降级成空列表。 */
+  function receiptsErrorHtml() {
+    return `<div class="sec-rowbody">
+      <div class="sec-issues" role="list">
+        <div class="sec-issue" data-tone="attention" role="listitem">
+          <span class="sec-issue-icon" aria-hidden="true">${icon('warning')}</span>
+          <span>${esc(t('settings.security.receipts_load_failed'))}</span>
+          ${ui('uiButton', {
+            label: t('common.retry'), role: 'ghost', size: 'sm',
+            className: 'sec-link sec-issue-action',
+            attrs: { 'data-action': 'refresh' },
+          })}
+        </div>
+      </div>
+    </div>`;
+  }
+
   function receiptsBodyHtml() {
+    // 没读到 ≠ 没有。空列表会渲染成「还没有检查记录」，那是在替一次失败的读取
+    // 编结论；这里给失败态 + 重试，等真的读到 0 条时走下面的空态。
+    if (receiptsUnavailable()) return receiptsErrorHtml();
     const counts = receiptCounts();
     const filterItems = [
       { key: 'all', label: t('settings.security.stat_all'), count: state.skills.length },
@@ -585,6 +762,9 @@
           <span>${esc(note)}</span>
         </div>`).join('')}</div>`
       : '';
+    // 并发重扫时，行内按钮各转各的圈：滚出视口就再也看不到「还有任务在跑」。
+    // 一条汇总把数量说出来，并用 shared loading spinner 说明它确实在动。
+    const checkingHtml = checkingSlotHtml();
     const empty = state.filter === 'all'
       ? ui('uiEmptyState', {
         kind: 'explained',
@@ -607,6 +787,7 @@
         })}
       </div>
       ${notesHtml}
+      ${checkingHtml}
       <div class="sec-table-wrap">
         <table class="sec-table">
           <caption class="sec-visually-hidden">${esc(t('settings.security.recent_title'))}</caption>
@@ -631,6 +812,89 @@
     </div>`;
   }
 
+  /** 并发重扫的汇总；检查开始时只替换这一块，不重画表格。 */
+  function checkingNoteHtml() {
+    if (!state.checking.size) return '';
+    return `<p class="sec-checking-note" role="status">
+      <span class="sec-loading-spinner" aria-hidden="true">${icon('loader', 'sec-loading-spinner-icon')}</span>
+      <span>${esc(t('settings.security.recheck_running', { n: state.checking.size }))}</span>
+      <span data-role="checking-hint">${esc(hintText())}</span>
+      <span class="sec-checking-elapsed" data-role="checking-elapsed">${esc(elapsedText())}</span>
+    </p>`;
+  }
+
+  function checkingSlotHtml() {
+    return `<div data-role="checking-slot">${checkingNoteHtml()}</div>`;
+  }
+
+  function updateCheckingSlot() {
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function') return;
+    const slot = body.querySelector('[data-role="checking-slot"]');
+    if (!slot) return;
+    const note = checkingNoteHtml();
+    if (slot.innerHTML !== note) slot.innerHTML = note;
+    updateElapsed();
+  }
+
+  /**
+   * 检查开始/结束时只翻行的状态，不重建表格。
+   * 两个动作（重新检查 / 取消）都在渲染时就存在，由 CSS 按 `data-checking` 显示其一。
+   */
+  function setRowChecking(skillId, busy) {
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function') return;
+    const row = body.querySelector(`tr[data-skill="${skillId}"]`);
+    if (!row || !row.dataset) return;
+    row.dataset.checking = busy ? '1' : '0';
+  }
+
+  /**
+   * 只重画 hero：库内最低分、最近检查时间与「是否需要留意」都来自回执，
+   * 重扫后可能变。hero 是一个独立 <section>，替换它不影响下面的行。
+   */
+  function patchHero() {
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function') return;
+    const hero = body.querySelector('.sec-hero');
+    if (!hero) return;
+    const sig = focusSignature() || state.focusReturn;
+    hero.outerHTML = heroHtml(heroKind());
+    updateFreshness();
+    if (restoreFocus(sig)) state.focusReturn = null;
+  }
+
+  /**
+   * 只重画「技能检查」这一行。
+   *
+   * 重扫结果只影响这一行（判定/分数/计数）；整页重绘会顺带重建 hero、检测能力与
+   * 组合风险，丢掉它们的悬停与滚动位置。这里只换行体与行状态。
+   */
+  function patchSkillsRow() {
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function' || !state.status) {
+      render();
+      return;
+    }
+    const details = body.querySelector('.ui-accordion__item');
+    const item = protectionRowItems()[0];
+    if (!details || !item) {
+      render();
+      return;
+    }
+    if (item.tone) details.setAttribute('data-tone', item.tone);
+    else details.removeAttribute('data-tone');
+    const status = details.querySelector('.ui-accordion__status');
+    if (status && status.innerHTML !== item.statusHtml) status.innerHTML = item.statusHtml;
+    const rowBody = details.querySelector('.ui-accordion__body');
+    if (rowBody && rowBody.innerHTML !== item.bodyHtml) {
+      const sig = focusSignature() || state.focusReturn;
+      rowBody.innerHTML = item.bodyHtml;
+      if (restoreFocus(sig)) state.focusReturn = null;
+    }
+    updateElapsed();
+  }
+
   /**
    * 「检查指定技能…」的选择器。
    *
@@ -640,6 +904,18 @@
    * 且复用共享 uiDrawer，不新增页面本地浮层。
    */
   function pickerListHtml() {
+    // 没读到 ≠ 没有：空列表会渲染成「没有匹配的技能」，那是在替一次失败的读取
+    // 编结论——用户会以为自己的技能库是空的。
+    if (state.skillsError) {
+      return `<div class="sec-picker-error" role="alert">
+        <p class="sec-row-note">${esc(t('settings.security.skills_load_failed'))}</p>
+        ${ui('uiButton', {
+          label: t('common.retry'), role: 'ghost', size: 'sm',
+          className: 'sec-link',
+          attrs: { 'data-action': 'retry-skills' },
+        })}
+      </div>`;
+    }
     const q = state.pickerQuery || '';
     const matches = state.skills
       .filter((sk) => !q || String(sk.id || '').toLowerCase().includes(q.toLowerCase())
@@ -664,9 +940,12 @@
             label: t('settings.security.detail'), role: 'ghost', size: 'sm', className: 'sec-link',
             attrs: { 'data-action': 'detail', 'data-skill': sk.id },
           })}
-          ${ui('uiButton', {
-            label: busy ? t('settings.security.checking') : t('settings.security.check_action'),
-            role: 'ghost', size: 'sm', className: 'sec-link', loading: busy,
+          ${busy ? ui('uiButton', {
+            label: t('settings.security.cancel_check'), role: 'ghost', size: 'sm', className: 'sec-link',
+            attrs: { 'data-action': 'cancel-check', 'data-skill': sk.id },
+          }) : ui('uiButton', {
+            label: t('settings.security.check_action'),
+            role: 'ghost', size: 'sm', className: 'sec-link',
             attrs: { 'data-action': 'check', 'data-skill': sk.id },
           })}
         </span>
@@ -719,6 +998,10 @@
       const action = el.dataset.action;
       if (action === 'check') {
         if (el.dataset.skill) recheckSkill(el.dataset.skill).then(refreshPickerList);
+      } else if (action === 'cancel-check') {
+        if (el.dataset.skill) cancelSkillCheck(el.dataset.skill);
+      } else if (action === 'retry-skills') {
+        loadAll().then(refreshPickerList);
       } else if (action === 'detail') {
         if (el.dataset.skill) openDrawer(el.dataset.skill);
       }
@@ -827,10 +1110,16 @@
     const coverage = (comp && comp.coverage) || {};
     // 空态原先是约 350px 的居中大图标 + 三行说明，把页面撑出一个洞。
     // 现在是一行文字，动作按钮固定在行尾。
+    const analyzedCount = coverage.analyzedSkills || 0;
+    const totalCount = coverage.resolvableSkills || analyzedCount;
+    const remainingCount = Math.max(0, totalCount - analyzedCount);
+    const runLabel = state.compositionLoading
+      ? t('settings.security.composition_running')
+      : (remainingCount > 0
+        ? t('settings.security.composition_run_continue', { n: remainingCount })
+        : t('settings.security.composition_run'));
     const runButton = `<div class="sec-rowfoot"><span></span>${ui('uiButton', {
-      label: state.compositionLoading
-        ? t('settings.security.composition_running')
-        : t('settings.security.composition_run'),
+      label: runLabel,
       role: 'secondary', size: 'sm', loading: state.compositionLoading,
       attrs: { 'data-action': 'run-composition' },
     })}</div>`;
@@ -852,7 +1141,9 @@
       total: coverage.resolvableSkills || coverage.analyzedSkills || 0,
     });
     const notes = [];
-    if (coverage.budgetLimited) notes.push(t('settings.security.composition_budget'));
+    if (coverage.budgetLimited && remainingCount > 0) {
+      notes.push(t('settings.security.composition_budget', { n: remainingCount }));
+    }
     // 目录里有名字但没有文件的条目要报出来：不报的话「已分析 48 / 48」会
     // 让人以为库只有 48 个技能，而面板里能搜到更多。
     if (coverage.unresolvedSkills) {
@@ -903,7 +1194,8 @@
    * 完整性，再留一行就是同一信息两处出现。原先记录的逐行「扫描方式 / 隔离状态」
    * 同样每行都一样，移入了技能详情抽屉。
    */
-  function protectionRowsHtml() {
+  /** 三行的数据模型。单独抽出来，行级更新（重扫后只换技能检查那一行）复用它。 */
+  function protectionRowItems() {
     const st = state.status || {};
     const counts = receiptCounts();
     const caps = st.capabilities || [];
@@ -913,21 +1205,33 @@
 
     // 文案必须和右侧胶囊说同一件事：原来只要 blocked==0 就说「无异常」，
     // 于是出现「60 个已检查 · 无异常」旁边挂着「需要留意」的矛盾。
-    const skillsStatus = counts.blocked > 0
-      ? t('settings.security.row_status_skills', { checked: state.receipts.length, blocked: counts.blocked })
-      : (counts.risk > 0
-        ? t('settings.security.row_status_skills_risk', { checked: state.receipts.length, risk: counts.risk })
-        : t('settings.security.row_status_skills_clean', { checked: state.receipts.length }));
+    const skillsStatus = receiptsUnavailable()
+      ? t('settings.security.row_status_receipts_failed')
+      : (counts.blocked > 0
+        ? t('settings.security.row_status_skills', { checked: state.receipts.length, blocked: counts.blocked })
+        : (counts.risk > 0
+          ? t('settings.security.row_status_skills_risk', { checked: state.receipts.length, risk: counts.risk })
+          // 0 条也是读到 0 条，但「0 个已检查 · 无异常」把「没扫过」说成「没问题」。
+          : (state.receipts.length === 0
+            ? t('settings.security.row_status_skills_none')
+            : t('settings.security.row_status_skills_clean', { checked: state.receipts.length }))));
     const coverageStatus = caps.length
       ? (attention.length
         ? t('settings.security.row_status_coverage', { ok: caps.length - attention.length, attention: attention.length })
         : t('settings.security.row_status_coverage_clean', { ok: caps.length }))
       : t('settings.security.scanner_not_present_sub');
+    // 覆盖不全时不能只说「未发现组合路径」：那读起来像「全库都看过了」。
+    const compCoverage = (comp && comp.coverage) || {};
+    const compAnalyzed = compCoverage.analyzedSkills || 0;
+    const compTotal = compCoverage.resolvableSkills || compAnalyzed;
+    const compRemaining = Math.max(0, compTotal - compAnalyzed);
     const compositionStatus = !comp
       ? t('settings.security.row_status_composition_idle')
       : (paths.length
         ? t('settings.security.row_status_composition_paths', { n: paths.length })
-        : t('settings.security.row_status_composition_clean'));
+        : (compRemaining > 0
+          ? t('settings.security.row_status_composition_partial', { analyzed: compAnalyzed, total: compTotal })
+          : t('settings.security.row_status_composition_clean')));
 
     // 只有需要注意的行才给胶囊；健康行的 statusHtml 是纯文字。
     const pill = (label, tone) => ui('uiStatusPill', { label, tone });
@@ -937,12 +1241,16 @@
       {
         title: t('settings.security.row_skills'),
         icon: 'shield-check',
-        tone: counts.blocked > 0 ? TONE_CRITICAL : (counts.risk > 0 ? TONE_ATTENTION : ''),
-        statusHtml: counts.blocked > 0
-          ? `${plain(skillsStatus)}${pill(t('settings.security.row_tone_critical'), TONE_CRITICAL)}`
-          : (counts.risk > 0
-            ? `${plain(skillsStatus)}${pill(t('settings.security.row_tone_attention'), TONE_ATTENTION)}`
-            : plain(skillsStatus)),
+        tone: receiptsUnavailable()
+          ? TONE_ATTENTION
+          : (counts.blocked > 0 ? TONE_CRITICAL : (counts.risk > 0 ? TONE_ATTENTION : '')),
+        statusHtml: receiptsUnavailable()
+          ? `${plain(skillsStatus)}${pill(t('settings.security.row_tone_attention'), TONE_ATTENTION)}`
+          : (counts.blocked > 0
+            ? `${plain(skillsStatus)}${pill(t('settings.security.row_tone_critical'), TONE_CRITICAL)}`
+            : (counts.risk > 0
+              ? `${plain(skillsStatus)}${pill(t('settings.security.row_tone_attention'), TONE_ATTENTION)}`
+              : plain(skillsStatus))),
         open: state.openRow === 'skills',
         bodyHtml: receiptsBodyHtml(),
       },
@@ -966,37 +1274,238 @@
       },
     ];
 
+    return items;
+  }
+
+  function protectionRowsHtml() {
+    // 技术细节默认收起；需要的人在这里一次打开，偏好记在本地。
+    const techToggle = `<div class="sec-tech-toggle" data-action="toggle-tech">
+      <span class="sec-tech-toggle-label" aria-hidden="true">${esc(t('settings.security.show_tech'))}</span>
+      ${ui('uiSwitch', { label: t('settings.security.show_tech'), checked: state.showTech })}
+    </div>`;
     return `<section class="sec-section">
-      <h3 class="sec-section-label">${esc(t('settings.security.section_protection'))}</h3>
-      ${ui('uiAccordion', { items, defaultOpen: [] })}
+      <div class="sec-section-head">
+        <h3 class="sec-section-label">${esc(t('settings.security.section_protection'))}</h3>
+        ${techToggle}
+      </div>
+      ${ui('uiAccordion', { items: protectionRowItems(), defaultOpen: [] })}
     </section>`;
   }
 
-  function loadingHtml() {
-    return `<div class="sec-loading">
-      ${ui('uiSkeleton', { ariaLabel: t('settings.security.loading'), lines: [40, 92, 76] })}
-      ${ui('uiSkeleton', { ariaLabel: t('settings.security.loading'), lines: [100, 100, 88, 64] })}
+  /**
+   * 读取失败且没有任何可显示的状态。
+   *
+   * 这一屏以前会被 hero 渲染成「系统保护已开启 · 发现异常」——把一次没回来的
+   * 请求说成扫描器被人动过。失败就是失败：说清楚、给重试，不猜结论。
+   */
+  function loadErrorHtml() {
+    return `<section class="sec-hero sec-hero--error" data-kind="error" role="alert">
+      <span class="sec-load-error-icon" aria-hidden="true">${icon('warning', 'ui-icon')}</span>
+      <div class="sec-hero-main">
+        <h2 class="sec-hero-title">${esc(t('settings.security.load_failed_title'))}</h2>
+        <p class="sec-hero-desc">${esc(t('settings.security.load_failed_desc'))}</p>
+      </div>
+      <div class="sec-hero-actions">
+        ${ui('uiButton', {
+          label: t('common.retry'), role: 'primary', size: 'sm', icon: 'refresh',
+          attrs: { 'data-action': 'refresh' },
+        })}
+        ${freshnessHtml()}
+      </div>
+    </section>`;
+  }
+
+  /** 有旧状态可看、但这次刷新没成功：保留旧数据，同时把「这是旧的」说清楚。 */
+  function loadErrorNoticeHtml() {
+    // 只负责「状态是旧的」这一种。回执读不到由技能检查那一行自己说明——
+    // 首屏失败时并没有「上次读取」可言，一句「刷新失败」会凭空造出旧数据。
+    if (!state.loadError || !state.loadError.status || !state.status) return '';
+    return `<div class="sec-issues" role="list">
+      <div class="sec-issue" data-tone="attention" role="listitem">
+        <span class="sec-issue-icon" aria-hidden="true">${icon('warning')}</span>
+        <span>${esc(t('settings.security.refresh_failed_status'))}</span>
+        ${ui('uiButton', {
+          label: t('common.retry'), role: 'ghost', size: 'sm',
+          className: 'sec-link sec-issue-action',
+          attrs: { 'data-action': 'refresh' },
+        })}
+      </div>
     </div>`;
+  }
+
+  function loadingHtml() {
+    // 骨架按真实布局搭：hero（环 + 文案 + 动作）和三行防护项，而不是两块
+    // 通用灰条——后者加载完页面会整体跳一下，观感上就是「没做完」。
+    // 装饰性骨架全部 aria-hidden，可访问的加载说明只有上面这一句。
+    const label = t('settings.security.loading');
+    const bar = (w) => `<span class="sec-skel-bar" style="--sec-skel-w:${w}%"></span>`;
+    const row = (w) => `<div class="sec-skel-row" aria-hidden="true">
+      <span class="sec-skel-dot"></span>
+      <span class="sec-skel-bars">${bar(w)}${bar(Math.max(12, w - 8))}</span>
+      <span class="sec-skel-chip"></span>
+    </div>`;
+    return `<div class="sec-loading">
+      <p class="sec-loading-caption" role="status">
+        <span class="sec-loading-spinner" aria-hidden="true">${icon('loader', 'sec-loading-spinner-icon')}</span>
+        <span>${esc(label)}</span>
+      </p>
+      <div class="sec-skel-hero" aria-hidden="true">
+        <span class="sec-skel-disc"></span>
+        <span class="sec-skel-bars sec-skel-bars--hero">${bar(34)}${bar(62)}${bar(44)}</span>
+        <span class="sec-skel-actions">
+          <span class="sec-skel-chip"></span><span class="sec-skel-chip"></span><span class="sec-skel-chip"></span>
+        </span>
+      </div>
+      ${row(26)}${row(22)}${row(30)}
+    </div>`;
+  }
+
+  function focusSignature() {
+    const el = typeof document !== 'undefined' ? document.activeElement : null;
+    if (!el || typeof el.closest !== 'function') return null;
+    const action = el.closest('[data-action]');
+    if (!action || !action.dataset) return null;
+    return {
+      action: String(action.dataset.action || ''),
+      skill: String(action.dataset.skill || ''),
+    };
+  }
+
+  function restoreFocus(sig) {
+    if (!sig || !sig.action) return false;
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function') return false;
+    const selector = sig.skill
+      ? `[data-action="${sig.action}"][data-skill="${sig.skill}"]`
+      : `[data-action="${sig.action}"]`;
+    const next = body.querySelector(selector);
+    if (!next || typeof next.focus !== 'function') return false;
+    // 按钮在 loading 时是 disabled，浏览器会静默拒绝聚焦；这时把记录留着，
+    // 等它恢复可用后的那次重绘再放回去。
+    if (next.disabled) return false;
+    try {
+      next.focus({ preventScroll: true });
+    } catch (_) {
+      return false;
+    }
+    return true;
   }
 
   function render() {
     const body = $('#settings-security-body');
     if (!body) return;
+    // 一次读取结束时由 render 收尾；busy 标记不跟着 innerHTML 一起消失。
+    if (typeof body.removeAttribute === 'function') body.removeAttribute('aria-busy');
     if (state.loading && !state.status) {
+      state.lastHtml = null;
       body.innerHTML = loadingHtml();
       return;
     }
+    // 没有状态可用：不再让 hero 猜结论。
+    if (!state.status) {
+      state.lastHtml = null;
+      body.innerHTML = loadErrorHtml();
+      wire();
+      updateFreshness();
+      return;
+    }
+    // 刷新按钮的 busy 是直接改在已渲染的 DOM 上的；如果这次内容没变、不重建，
+    // 就必须把按钮自己还原，否则它会一直停在「刷新中…」。
+    setRefreshBusy(false);
+    // 整页重绘会把被点的那个按钮换掉；先记下它，重绘后把焦点放回去，
+    // 否则键盘用户每点一次行内动作就被丢回页面顶部。
+    const sig = focusSignature() || state.focusReturn;
     const kind = heroKind();
-    body.innerHTML = `
+    // live 区与「更新于 …」不进缓存串：它们每次都要跟着走，而且它们的变化
+    // 不代表页面内容变了（否则每次刷新都会因为时间戳不同而整页重建）。
+    const html = `
       ${heroHtml(kind)}
+      ${loadErrorNoticeHtml()}
       ${issuesHtml(kind)}
       ${protectionRowsHtml()}
       <div class="sec-protect">
         <span class="sec-protect-icon" aria-hidden="true">${icon('lock', 'ui-icon')}</span>
         <span>${esc(t('settings.security.protection_sub'))}</span>
       </div>
-      <div class="sec-live" role="status" aria-live="polite">${esc(state.liveMessage)}</div>`;
-    wire();
+      <div class="sec-live" role="status" aria-live="polite"></div>`;
+    // 内容没变就不碰 DOM：点刷新但数据没变、切回 tab、重扫后结论相同，这些
+    // 都是最常见的路径，重建一次页面只会丢掉 hover/选中/滚动锚点，换不来新信息。
+    if (html !== state.lastHtml) {
+      state.lastHtml = html;
+      body.innerHTML = html;
+      wire();
+      if (restoreFocus(sig)) state.focusReturn = null;
+    } else {
+      state.focusReturn = null;
+    }
+    if (state.checking.size === 0) stopTicker();
+    updateLive();
+    updateFreshness();
+    updateElapsed();
+  }
+
+  function updateLive() {
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function') return;
+    const el = body.querySelector('.sec-live');
+    if (el) el.textContent = state.liveMessage;
+  }
+
+  /** 刷新时间与「正在读取…」单独写：它们是状态，不是页面内容。 */
+  function updateFreshness() {
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function') return;
+    const el = body.querySelector('.sec-freshness');
+    if (!el) return;
+    const busy = Boolean(state.refreshing);
+    el.dataset.busy = busy ? '1' : '0';
+    el.textContent = busy ? t('settings.security.refreshing_hint') : freshnessText();
+  }
+
+  /** 「通常几秒完成」只在正常时长内成立；跑过头就换成真实耗时。 */
+  const RECHECK_EXPECTED_SECONDS = 8;
+
+  function recheckSeconds() {
+    if (state.checking.size === 0 || !state.checkingSince) return 0;
+    return Math.floor((Date.now() - state.checkingSince) / 1000);
+  }
+
+  // 「通常几秒完成」与真实耗时不并存：等了 12 秒还挂着「通常几秒」是自相矛盾，
+  // 所以过线后这句消失，换成实际秒数。
+  function elapsedText() {
+    const sec = recheckSeconds();
+    if (sec < RECHECK_EXPECTED_SECONDS) return '';
+    return ` · ${t('settings.security.recheck_elapsed', { n: sec })}`;
+  }
+
+  function hintText() {
+    if (state.checking.size === 0) return '';
+    if (recheckSeconds() >= RECHECK_EXPECTED_SECONDS) return '';
+    return ` · ${t('settings.security.recheck_running_hint')}`;
+  }
+
+  function updateElapsed() {
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function') return;
+    const hint = body.querySelector('[data-role="checking-hint"]');
+    if (hint) hint.textContent = hintText();
+    const el = body.querySelector('[data-role="checking-elapsed"]');
+    if (el) el.textContent = elapsedText();
+  }
+
+  /**
+   * 每秒只改这一个 span 的文字：不重绘页面、不重建表格，也不碰滚动位置。
+   * 计时器只在这一批重扫期间存在，最后一个任务结束时清掉。
+   */
+  function startTicker() {
+    if (state.ticker || typeof setInterval !== 'function') return;
+    state.ticker = setInterval(() => updateElapsed(), 1000);
+  }
+
+  function stopTicker() {
+    if (!state.ticker) return;
+    if (typeof clearInterval === 'function') clearInterval(state.ticker);
+    state.ticker = null;
   }
 
   // ── 详情抽屉 ────────────────────────────────────────────────────────────
@@ -1047,20 +1556,31 @@
     </section>`;
   }
 
+  /**
+   * 一张发现卡片。默认层只回答三件事：这是什么、在哪、我该怎么办。
+   * 规则 id、CWE/OWASP 编号、置信度与上下文都收进「技术细节」，因为它们是
+   * 证据，不是结论——摆在第一屏只会让用户不知道自己该看哪一行。
+   */
   function findingCard(f, acceptances) {
     const loc = f.line ? `${f.file}:${f.line}` : f.file;
     const accepted = (acceptances || []).find((a) => a.fingerprint === f.fingerprint);
-    const tags = [
-      ...f.cwe.map((c) => ui('uiTag', { label: c })),
-      ...f.owaspLlm.map((c) => ui('uiTag', { label: `OWASP ${c}` })),
-      ...f.owaspAgentic.map((c) => ui('uiTag', { label: c })),
+    const techTags = [
+      ...(f.cwe || []).map((c) => ui('uiTag', { label: c })),
+      ...(f.owaspLlm || []).map((c) => ui('uiTag', { label: `OWASP ${c}` })),
+      ...(f.owaspAgentic || []).map((c) => ui('uiTag', { label: c })),
       ...(f.owaspAst || []).map((c) => ui('uiTag', { label: c })),
     ].join(' ');
+    // 引擎对没有专门文案的规则会生成「命中规则 X（类别）」这种句子——正是
+    // 用户看不懂的那类话；标题已经给了人话，这里不再重复。
+    const showDesc = f.description && !/^命中规则\s/.test(f.description.trim());
+    const refs = f.references && f.references.length
+      ? `<div class="sec-finding-refs">${f.references.slice(0, 3).map((url) =>
+        `<a href="${esc(url)}" target="_blank" rel="noreferrer noopener">${esc(url.replace(/^https?:\/\//, ''))}</a>`).join('')}</div>`
+      : '';
     return `<li class="sec-finding" data-severity="${esc(f.severity)}" data-suppressed="${f.suppressed ? '1' : '0'}">
       <div class="sec-finding-head">
         ${ui('uiStatusPill', { label: sevLabel(f.severity), tone: sevTone(f.severity) })}
-        <span class="sec-finding-rule">${esc(f.ruleId)}</span>
-        <span class="sec-finding-loc">${esc(loc)}</span>
+        <span class="sec-finding-title">${esc(ruleTitle(f.ruleId, f.category))}</span>
         ${f.hardBlock ? ui('uiBadge', { label: t('settings.security.badge_hard_block'), tone: TONE_CRITICAL }) : ''}
         ${f.demoted ? ui('uiBadge', {
           label: t('settings.security.badge_demoted', { level: sevLabel(f.originalSeverity) }), tone: TONE_NEUTRAL,
@@ -1076,21 +1596,23 @@
           label: t('settings.security.badge_suppression_refused'), tone: TONE_CRITICAL,
         }) : ''}
       </div>
-      <p class="sec-finding-desc">${esc(f.description)}</p>
-      ${tags ? `<div class="sec-finding-tags">${tags}</div>` : ''}
-      <dl class="sec-finding-meta">
-        <div><dt>${esc(t('settings.security.field_confidence'))}</dt><dd>${esc(t(`settings.security.conf_${f.confidence}`))}</dd></div>
-        <div><dt>${esc(t('settings.security.field_context'))}</dt><dd>${esc(t(`settings.security.ctx_${f.context}`) === `settings.security.ctx_${f.context}` ? f.context : t(`settings.security.ctx_${f.context}`))}</dd></div>
-        <div><dt>${esc(t('settings.security.field_category'))}</dt><dd>${esc(f.category)}</dd></div>
-      </dl>
+      <p class="sec-finding-loc">${esc(t('settings.security.finding_at', { loc }))}</p>
+      ${showDesc ? `<p class="sec-finding-desc">${esc(f.description)}</p>` : ''}
       ${f.remediation ? `<div class="sec-finding-fix">
         <span class="sec-finding-fix-label">${esc(t('settings.security.field_remediation'))}</span>
         <span>${esc(f.remediation)}</span>
       </div>` : ''}
-      ${f.references && f.references.length
-        ? `<div class="sec-finding-refs">${f.references.slice(0, 3).map((url) =>
-          `<a href="${esc(url)}" target="_blank" rel="noreferrer noopener">${esc(url.replace(/^https?:\/\//, ''))}</a>`).join('')}</div>`
-        : ''}
+      <details class="sec-finding-tech"${techOpenAttr()}>
+        <summary>${esc(t('settings.security.tech_details'))}</summary>
+        <dl class="sec-finding-meta">
+          <div><dt>${esc(t('settings.security.field_rule'))}</dt><dd><code>${esc(f.ruleId)}</code></dd></div>
+          <div><dt>${esc(t('settings.security.field_confidence'))}</dt><dd>${esc(confLabel(f.confidence))}</dd></div>
+          <div><dt>${esc(t('settings.security.field_context'))}</dt><dd>${esc(ctxLabel(f.context))}</dd></div>
+          <div><dt>${esc(t('settings.security.field_category'))}</dt><dd>${esc(categoryLabel(f.category))}</dd></div>
+        </dl>
+        ${techTags ? `<div class="sec-finding-tags">${techTags}</div>` : ''}
+        ${refs}
+      </details>
       <div class="sec-finding-actions">
         ${findingAcceptAction(f, accepted)}
       </div>
@@ -1137,6 +1659,10 @@
     const d = state.drawer;
     if (!d) return '';
     if (d.loading) {
+      // 这里曾有一条 `value: 40` 的共享进度条。主进程是一次 IPC 返回、
+      // 不报中间进度，40% 是编的：用户看到它停在 40% 不动，第一反应是「卡死了」。
+      // 未知时长的加载按仓库约定交给骨架屏（会自己呼吸），再用旋转图标和
+      // 「检查范围」说清正在做什么，不再假装知道百分比。
       const stages = [
         t('settings.security.progress_rules'),
         t('settings.security.progress_text'),
@@ -1144,21 +1670,53 @@
         t('settings.security.progress_deps'),
         t('settings.security.progress_instruction'),
       ];
-      return `<div class="sec-drawer-loading">
-        ${ui('uiProgressBar', { ariaLabel: t('settings.security.progress_aria'), value: 40, max: 100 })}
-        <ol class="sec-stages">${stages.map((s, i) =>
-          `<li class="${i === 0 ? 'is-active' : ''}">${esc(s)}</li>`).join('')}</ol>
-        ${ui('uiSkeleton', { ariaLabel: t('settings.security.loading'), lines: [70, 100, 92, 60] })}
+      const skeletonLabel = t('settings.security.loading_results');
+      const scopeItems = stages.map((stage, i) => {
+        const sep = i < stages.length - 1
+          ? '<span class="sec-loading-scope-sep" aria-hidden="true">·</span>' : '';
+        return `<span class="sec-loading-scope-item">${esc(stage)}${sep}</span>`;
+      }).join('');
+      return `<div class="sec-drawer-loading" aria-busy="true">
+        <div class="sec-loading-head">
+          <span class="sec-loading-spinner" aria-hidden="true">${icon('loader', 'sec-loading-spinner-icon')}</span>
+          <div class="sec-loading-head-text">
+            <p class="sec-loading-title">${esc(t('settings.security.loading_title'))}</p>
+            <p class="sec-loading-sub">${esc(t('settings.security.loading_sub'))}</p>
+          </div>
+        </div>
+        <p class="sec-loading-scope">
+          <span class="sec-loading-scope-label">${esc(t('settings.security.loading_scope'))}</span>
+          ${scopeItems}
+        </p>
+        <div class="sec-loading-results">
+          <div class="sec-loading-card">
+            ${ui('uiSkeleton', { withMedia: true, lines: [46, 88], ariaLabel: skeletonLabel })}
+          </div>
+          <div class="sec-loading-card" aria-hidden="true">
+            ${ui('uiSkeleton', { lines: [40, 94, 72], ariaLabel: skeletonLabel })}
+          </div>
+          <div class="sec-loading-card" aria-hidden="true">
+            ${ui('uiSkeleton', { lines: [36, 90, 64], ariaLabel: skeletonLabel })}
+          </div>
+        </div>
       </div>`;
     }
     if (d.error || !d.evidence) {
+      const reason = d.error || 'scan_failed';
+      const reasonKey = `settings.security.detail_failed_${reason}`;
       return ui('uiEmptyState', {
-        kind: 'explained',
+        // 失败要能当场重试。原先只有一句说明，用户只能关掉抽屉再点一次详情——
+        // 而且关掉再点有几率撞上同一份坏缓存。
+        kind: 'actionable',
         title: t('settings.security.detail_failed'),
-        hint: t(`settings.security.detail_failed_${d.error || 'scan_failed'}`) === `settings.security.detail_failed_${d.error || 'scan_failed'}`
+        hint: t(reasonKey) === reasonKey
           ? t('settings.security.detail_failed_hint')
-          : t(`settings.security.detail_failed_${d.error || 'scan_failed'}`),
+          : t(reasonKey),
         icon: 'warning',
+        action: {
+          label: t('common.retry'), role: 'secondary', size: 'sm', icon: 'refresh',
+          attrs: { 'data-action': 'retry-drawer', 'data-skill': d.skillId },
+        },
       });
     }
     const e = d.evidence;
@@ -1194,9 +1752,22 @@
         views: Object.keys(e.coverage.derivedViews || {}).join('、'),
       }));
     }
+    // osv-scanner 只扩大依赖漏洞的覆盖范围，内置快照已经交付了这条能力；
+    // 它缺席不是「有东西没扫」。gitleaks 仍按增强工具提示（内置规则在跑）。
     if (e.coverage && e.coverage.externalTools
-      && Object.values(e.coverage.externalTools).some((v) => v && v !== 'OK' && v !== 'static-only')) {
+      && Object.entries(e.coverage.externalTools)
+        .some(([key, v]) => key !== 'osv_scanner' && v && v !== 'OK' && v !== 'static-only')) {
       notices.push(t('settings.security.notice_external_tools'));
+    }
+    // The drawer renders a FRESH deep scan; the library row's verdict may be a
+    // local block. Without this line the drawer shows 100/ALLOW for a skill the
+    // table calls blocked, and neither surface explains the other.
+    const drawerReceipt = state.receipts.find((r) => r.skillId === d.skillId);
+    if (drawerReceipt && drawerReceipt.decision === 'blocked'
+      && drawerReceipt.verdictSource === 'local') {
+      notices.push(t('settings.security.notice_local_block', {
+        rule: drawerReceipt.topRule || '—',
+      }));
     }
 
     return `
@@ -1214,10 +1785,15 @@
           </div>
           <dl class="sec-drawer-meta">
             <div><dt>${esc(t('settings.security.field_scanned_at'))}</dt><dd>${esc(fmtTime(e.scannedAt))}</dd></div>
-            ${e.scannerVersion ? `<div><dt>${esc(t('settings.security.sentry_engine'))}</dt><dd>${esc(e.scannerVersion)}</dd></div>` : ''}
-            ${e.rulesetVersion ? `<div><dt>${esc(t('settings.security.ruleset'))}</dt><dd>${esc(e.rulesetVersion)}</dd></div>` : ''}
-            ${e.recommendation ? `<div><dt>${esc(t('settings.security.field_recommendation'))}</dt><dd>${esc(e.recommendation)}</dd></div>` : ''}
+            ${e.recommendation ? `<div><dt>${esc(t('settings.security.field_recommendation'))}</dt><dd>${esc(recommendationLabel(e.recommendation))}</dd></div>` : ''}
           </dl>
+          ${(e.scannerVersion || e.rulesetVersion) ? `<details class="sec-drawer-tech"${techOpenAttr()}>
+            <summary>${esc(t('settings.security.scan_info'))}</summary>
+            <dl class="sec-drawer-meta">
+              ${e.scannerVersion ? `<div><dt>${esc(t('settings.security.sentry_engine'))}</dt><dd>${esc(e.scannerVersion)}</dd></div>` : ''}
+              ${e.rulesetVersion ? `<div><dt>${esc(t('settings.security.ruleset'))}</dt><dd>${esc(e.rulesetVersion)}</dd></div>` : ''}
+            </dl>
+          </details>` : ''}
         </div>
       </div>
       ${e.outcome === 'unknown'
@@ -1270,6 +1846,16 @@
       [t('settings.security.cov_groups'), String((c.ruleGroups || []).length)],
       [t('settings.security.cov_hard_block'), String(c.hardBlockRules)],
       [t('settings.security.cov_ruleset'), c.rulesetResolved ? (c.rulesetVersion || '—') : t('settings.security.cov_builtin')],
+      [t('settings.security.cov_vuln_db'), c.vulnerabilityDb
+        ? (c.vulnerabilityDb.status === 'OK'
+          ? `${c.vulnerabilityDb.entries} · ${c.vulnerabilityDb.asOf || '—'}`
+          : t('settings.security.cov_not_loaded'))
+        : t('settings.security.cov_not_loaded')],
+      [t('settings.security.cov_yara'), c.signaturePack
+        ? (c.signaturePack.status === 'OK'
+          ? String(c.signaturePack.rules)
+          : t('settings.security.cov_not_loaded'))
+        : t('settings.security.cov_not_loaded')],
       [t('settings.security.cov_gitleaks'), String((c.externalTools || {}).gitleaks || '—')],
       [t('settings.security.cov_osv'), String((c.externalTools || {}).osv_scanner || '—')],
       [t('settings.security.cov_views'), String(Object.keys(c.derivedViews || {}).length)],
@@ -1443,6 +2029,8 @@
         await revokeRisk(el.dataset.fingerprint);
       } else if (action === 'export-report') {
         await exportReport(el.dataset.format);
+      } else if (action === 'retry-drawer') {
+        await loadDrawer(el.dataset.skill || (state.drawer && state.drawer.skillId));
       }
     });
   }
@@ -1553,39 +2141,138 @@
     try {
       const r = await window.cogseed.invoke('skills.trust.list', {});
       state.receipts = Array.isArray(r && r.receipts) ? r.receipts : [];
+      // 这一路已经读到了，就不能让「检查记录读取失败」继续挂在行上。
+      if (state.loadError && state.loadError.receipts) {
+        state.loadError = state.loadError.status ? { status: true, receipts: false } : null;
+      }
     } catch (_) { /* keep old */ }
-    render();
+    patchHero();
+    patchSkillsRow();
   }
 
-  async function loadAll() {
-    // First load shows skeletons; re-entry refreshes silently
-    // (stale-while-revalidate) so an engine install/restore or a rescan shows
-    // up the next time the user opens the tab instead of staying on the
-    // snapshot from the first visit.
-    if (!state.status) {
+  /**
+   * 点「刷新」后，忙态至少可见这么久（毫秒）。
+   *
+   * 一次读取多数命中缓存，几十毫秒就回来了：按钮闪一下、页面没变化、时间戳
+   * 还是「刚刚」，用户会判定这一下没生效——「太快」在这里比「慢」更像 bug。
+   * 只给按钮触发的刷新用：切 tab 时的静默重读不人为拖长，首屏骨架也不受影响。
+   */
+  const REFRESH_MIN_VISIBLE_MS = 600;
+
+  /**
+   * @param {{ holdMs?: number }} [options] `holdMs` 只由「刷新」按钮传入，
+   *   给忙态一个可见下限；其余调用方（切 tab、选择器）不传，保持原来的即时性。
+   */
+  async function loadAll(options) {
+    // 连点「刷新」、反复切设置 tab 都会进这里：同一时刻只允许一次读取，
+    // 否则后回来的旧结果会覆盖新结果，用户看到的是回滚的页面。
+    if (state.refreshing) return;
+    const holdMs = options && Number(options.holdMs) > 0 ? Number(options.holdMs) : 0;
+    const startedAt = Date.now();
+    const firstLoad = !state.status;
+    state.refreshing = true;
+    if (firstLoad) {
       state.loading = true;
       render();
+    } else {
+      setRefreshBusy(true);
+      // 视觉上已有一条「正在读取…」，读屏用户走同一句话（live region 是视觉隐藏的）。
+      setLive(t('settings.security.refreshing_hint'));
     }
+
     const [statusRes, trustRes, skillsRes] = await Promise.allSettled([
       window.cogseed.invoke('skills.security.status', {}),
       window.cogseed.invoke('skills.trust.list', {}),
       window.cogseed.invoke('skills.list', {}),
     ]);
-    state.status = statusRes.status === 'fulfilled'
-      ? ((statusRes.value && statusRes.value.status) || null) : null;
-    state.receipts = trustRes.status === 'fulfilled' && Array.isArray(trustRes.value && trustRes.value.receipts)
-      ? trustRes.value.receipts : [];
-    state.skills = skillsRes.status === 'fulfilled' && Array.isArray(skillsRes.value && skillsRes.value.skills)
-      ? skillsRes.value.skills : [];
+
+    // 空对象和拒绝一样算「没读到」：拿一份空状态去渲染，等于替用户编结论。
+    const nextStatus = statusRes.status === 'fulfilled' && statusRes.value && statusRes.value.status
+      ? statusRes.value.status : null;
+    const nextReceipts = trustRes.status === 'fulfilled'
+      && trustRes.value && Array.isArray(trustRes.value.receipts)
+      ? trustRes.value.receipts : null;
+    const statusFailed = !nextStatus;
+    const receiptsFailed = nextReceipts === null;
+
+    // 失败时保留上一次的结果（stale-while-revalidate 的另一半）：旧数据配一句
+    // 「这是旧的」比清空页面有用；首屏失败则没有旧数据，走错误态。
+    if (!statusFailed) state.status = nextStatus;
+    // 新鲜度只记录「整页都读到了」的时刻：状态成功、回执失败时写「更新于刚刚」
+    // 会让人以为下面那份列表也是新的。
+    if (!statusFailed && !receiptsFailed) state.updatedAt = Date.now();
+    if (!receiptsFailed) state.receipts = nextReceipts;
+    const nextSkills = skillsRes.status === 'fulfilled'
+      && skillsRes.value && Array.isArray(skillsRes.value.skills)
+      ? skillsRes.value.skills : null;
+    if (nextSkills) {
+      state.skills = nextSkills;
+      state.skillsError = false;
+    } else {
+      // 选择器是唯一用它的地方；页面其余部分不受影响，所以不升级成整页错误。
+      state.skillsError = true;
+    }
+    state.loadError = (statusFailed || receiptsFailed)
+      ? { status: statusFailed, receipts: receiptsFailed }
+      : null;
+    // 忙态撑满下限：命中缓存的刷新只有这一段能让人看见「它真的读了一次」。
+    // 真实耗时超过下限时 remaining <= 0，不额外等待。
+    if (holdMs) {
+      const remaining = holdMs - (Date.now() - startedAt);
+      if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+    }
     state.loading = false;
+    state.refreshing = false;
     render();
-    setLive(t('settings.security.status_loaded'));
+    setLive(state.loadError
+      ? t('settings.security.status_load_failed_live')
+      : t('settings.security.status_loaded'));
+  }
+
+  /**
+   * 刷新在途时的即时反馈。
+   *
+   * 直接改按钮而不是整页重绘：重绘会把用户刚点的按钮连同焦点一起换掉，
+   * 为了显示一个转圈反而让人丢了位置。收尾的 render() 会重建整个 hero，
+   * 所以这里改的文案与类名不需要手动回收。
+   */
+  function setRefreshBusy(busy) {
+    const body = $('#settings-security-body');
+    if (!body || typeof body.querySelector !== 'function') return;
+    const btn = body.querySelector('[data-action="refresh"]');
+    if (btn) {
+      if (btn.classList && typeof btn.classList.toggle === 'function') {
+        btn.classList.toggle('is-loading', busy);
+      }
+      if (typeof btn.setAttribute === 'function') {
+        btn.setAttribute('aria-busy', busy ? 'true' : 'false');
+      }
+      const label = typeof btn.querySelector === 'function'
+        ? btn.querySelector('.ui-button__label') : null;
+      if (label) {
+        label.textContent = (busy || state.refreshing)
+          ? t('settings.security.refreshing')
+          : t('settings.security.refresh');
+      }
+    }
+    updateFreshness();
+    if (typeof body.setAttribute === 'function') {
+      body.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+  }
+
+  /** 开关变化后，把已经渲染出来的折叠区（包括抽屉）统一到新偏好。 */
+  function syncTechDetails() {
+    if (typeof document.querySelectorAll !== 'function') return;
+    const nodes = document.querySelectorAll(
+      '.sec-finding-tech, .sec-rulebar-tech, .sec-drawer-tech',
+    );
+    nodes.forEach((el) => { el.open = state.showTech; });
   }
 
   function setLive(message) {
     state.liveMessage = message;
-    const el = document.querySelector('#settings-security-body .sec-live');
-    if (el) el.textContent = message;
+    updateLive();
   }
 
   /**
@@ -1602,15 +2289,21 @@
    * 以及失败。收尾的 toast 用共享 `uiToast`（层序在抽屉之上）。
    */
   async function recheckSkill(skillId) {
+    if (state.checking.size === 0) state.checkingSince = Date.now();
     state.checking.add(skillId);
-    render();
-    // 抽屉不在页面里，必须单独刷新，否则看不到「检查中…」。
+    startTicker();
+    // 不重绘页面：只翻这一行的动作、更新汇总条。
+    setRowChecking(skillId, true);
+    updateCheckingSlot();
+    // 抽屉不在页面里，必须单独刷新，否则看不到列表里的进行中状态。
     refreshPickerList();
     setLive(t('settings.security.checking_live', { skill: skillId }));
     let outcome = 'failed';
     try {
       const res = await window.cogseed.invoke('skills.trust.reverify', { skillId });
-      if (!res || res.ok === false) {
+      if (res && res.result && res.result.canceled) {
+        outcome = 'canceled';
+      } else if (!res || res.ok === false) {
         outcome = 'failed';
       } else {
         // `rescanned` 由主进程给出：false 表示回执仍然适用（内容与规则包都没变），
@@ -1622,15 +2315,27 @@
       outcome = 'failed';
     }
     state.checking.delete(skillId);
-    try {
-      await refreshReceipts();
-    } catch (_) { /* 刷新失败也必须给出反馈，不能因此静默 */ }
+    if (state.checking.size === 0) {
+      stopTicker();
+      state.checkingSince = 0;
+    }
+    setRowChecking(skillId, false);
+    updateCheckingSlot();
+    if (outcome === 'canceled') {
+      // 没有新回执可拿：动作已还原，行里的结论不变，不需要再画任何东西。
+    } else {
+      try {
+        await refreshReceipts();
+      } catch (_) { /* 刷新失败也必须给出反馈，不能因此静默 */ }
+    }
     refreshPickerList();
     // 结论文案带上**刷新后**的判定，否则用户只能靠对比两行文字。
     const fresh = state.receipts.find((r) => r.skillId === skillId);
     const label = outcome === 'failed'
       ? t('settings.security.recheck_failed', { skill: skillId })
-      : outcome === 'rescanned'
+      : outcome === 'canceled'
+        ? t('settings.security.recheck_canceled', { skill: skillId })
+        : outcome === 'rescanned'
         ? t('settings.security.recheck_done_result', {
           skill: skillId, verdict: fresh ? receiptDecisionText(fresh) : '',
         })
@@ -1641,10 +2346,39 @@
     });
   }
 
+  /**
+   * 取消一次在途重扫。
+   *
+   * 取消是主进程的动作（它会杀掉扫描子进程），渲染层只负责发起与说清楚结果：
+   * 任务已经结束、或压根没注册上时，不能假装取消成功。
+   */
+  async function cancelSkillCheck(skillId) {
+    if (!skillId) return;
+    // 立刻给点击一个回应：主进程杀进程是毫秒级的，但「点完没变化」本身就已经
+    // 是这个页面被抱怨过的问题。按钮变成「正在取消…」并禁用到结果回来。
+    const body = $('#settings-security-body');
+    const row = body && typeof body.querySelector === 'function'
+      ? body.querySelector(`tr[data-skill="${skillId}"]`) : null;
+    const btn = row && row.querySelector ? row.querySelector('[data-role="row-cancel"]') : null;
+    if (btn) {
+      btn.disabled = true;
+      const label = btn.querySelector ? btn.querySelector('.ui-button__label') : null;
+      if (label) label.textContent = t('settings.security.canceling');
+    }
+    let res = null;
+    try {
+      res = await window.cogseed.invoke('skills.trust.cancel', { skillId });
+    } catch (_) { res = null; }
+    if (!res || res.canceled !== true) {
+      ui('uiToast', t('settings.security.cancel_failed', { skill: skillId }), { variant: 'warning' });
+    }
+  }
+
   function exportReceipts() {
     const payload = state.receipts.map((r) => ({
       skillId: r.skillId,
       decision: r.decision,
+      verdictSource: r.verdictSource,
       scannedAt: r.scannedAt,
       securityScore: r.securityScore,
       scanner: r.scanner,
@@ -1711,11 +2445,20 @@
       if (action === 'recheck' || action === 'check') {
         const skillId = el.dataset.skill
           || (el.closest('tr') && el.closest('tr').dataset.skill);
-        if (skillId) recheckSkill(skillId);
+        if (skillId) {
+          // 该按钮马上会进入 loading（disabled），焦点放不回去；记下来等结果重绘时还原。
+          state.focusReturn = { action, skill: skillId };
+          recheckSkill(skillId);
+        }
+      } else if (action === 'cancel-check') {
+        const skillId = el.dataset.skill
+          || (el.closest('tr') && el.closest('tr').dataset.skill);
+        if (skillId) cancelSkillCheck(skillId);
       } else if (action === 'detail') {
         if (el.dataset.skill) openDrawer(el.dataset.skill);
       } else if (action === 'refresh') {
-        loadAll();
+        // 用户点的这一下必须有可见回执：读取常常几十毫秒就返回，不加下限会像没反应。
+        loadAll({ holdMs: REFRESH_MIN_VISIBLE_MS });
       } else if (action === 'export') {
         exportReceipts();
       } else if (action === 'toggle-all') {
@@ -1723,6 +2466,11 @@
         render();
       } else if (action === 'run-composition') {
         runComposition();
+      } else if (action === 'toggle-tech') {
+        state.showTech = !state.showTech;
+        saveTechPref();
+        render();
+        syncTechDetails();
       } else if (action === 'toggle-coverage') {
         state.coverageExpanded = !state.coverageExpanded;
         render();
@@ -1770,10 +2518,10 @@
     window.__securitySettingsInternals = {
       scoreRing, scoreBand, heroKind, scannerIsFaulty, receiptCounts, libraryScore,
       filterValueFromLabel,
-      compositionBodyHtml, findingAcceptAction,
+      compositionBodyHtml, findingAcceptAction, drawerBodyHtml,
       // 重新检查的反馈与选择器列表都是可见契约（"点了没反应"是真实报障），
       // 抽屉本体需要真实 DOM，所以这两个纯函数留给集成测试直接调用。
-      recheckSkill, pickerListHtml, receiptDecisionText, staleReceipts,
+      recheckSkill, cancelSkillCheck, pickerListHtml, receiptDecisionText, staleReceipts,
       __setState(patch) { Object.assign(state, patch); },
       __getState() { return state; },
       __render: render,

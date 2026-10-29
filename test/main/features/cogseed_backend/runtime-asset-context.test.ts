@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -27,8 +28,9 @@ async function seedConfirmedProjection(userId: string, cid: string, judgment: st
     import('../../../../src/main/storage'),
     import('../../../../src/main/util/project-layout'),
   ]);
-  const candidate = await candidates.saveRecallCandidate(userId, {
+  const candidate = await createNightlyCandidateFixture(userId, {
     judgment,
+    rawStatement: true,
     summary,
     suggestedType: 'rule',
     suggestedScope: 'review,project',
@@ -49,7 +51,7 @@ async function seedConfirmedProjection(userId: string, cid: string, judgment: st
   return confirmed;
 }
 
-describe('Mate runtime asset context assembly (Decision 2 = connect)', () => {
+describe('Runtime asset context assembly', () => {
   it('builds a text runtime context item from confirmed projections, read-only', async () => {
     await seedConfirmedProjection(
       'user-a', 'cid-a',
@@ -121,5 +123,15 @@ describe('Mate runtime asset context assembly (Decision 2 = connect)', () => {
     // taskId 缺席时（旧调用方）不落收据——没有稳定锚就不编造。
     await buildRuntimeAssetContext('user-a', 'cid-receipts');
     expect(await listInjectionReceipts('user-a', 'task-rt-1')).toHaveLength(1);
+  });
+  it('binds new Runtime injections to the host task, exact projection version and stable result anchor', async () => {
+    const projection = await seedConfirmedProjection('user-a', 'cid-runtime-anchor', '解释先说结论，再列依据。', '回答结构');
+    const { buildRuntimeAssetContext } = await import('../../../../src/main/features/cogseed_backend/runtime-asset-context');
+    expect(await buildRuntimeAssetContext('user-a', 'cid-runtime-anchor', 'task-runtime-anchor', 'cogseed-exec-anchor')).toHaveLength(1);
+    const { listInjectionReceipts } = await import('../../../../src/main/features/recall/injection-receipt');
+    expect(await listInjectionReceipts('user-a', 'task-runtime-anchor')).toEqual([expect.objectContaining({
+      channel: 'runtime', projectionId: projection.id, messageId: 'runtime-result-cogseed-exec-anchor', status: 'injected',
+      assetVersion: projection.assetVersions![projection.assetIds[0]],
+    })]);
   });
 });

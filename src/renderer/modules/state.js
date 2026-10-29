@@ -97,6 +97,13 @@ function _setViewFromSidebar(targetView) {
   setView(targetView);
 }
 
+function _openTaskModule() {
+  const cid = typeof lastConversationCid === 'string' ? lastConversationCid : '';
+  const known = cid && Array.isArray(conversations) && conversations.some((c) => c.conversation_id === cid);
+  if (known) setView('conversation', cid);
+  else setView('new-chat');
+}
+
 // Public agent creation has no analytics dependency, but its click handler
 // intentionally keeps the same hook as the commercial build.
 function _trackAgentCreateOpen() {}
@@ -344,11 +351,13 @@ function bindStaticHandlers() {
     if (typeof _bumpConvToTop === 'function') _bumpConvToTop(cid);
   });
 
-  // Sidebar nav
-  // 首页保持进入新建会话页（panel-new-chat）；「新任务」独立按钮已移除。
+  // Sidebar nav: rail entries + the task sidebar (specs/008-shell-rail-layout).
+  // 「新建任务」在任务模块侧栏；rail「任务」回到上次打开的任务，没有则进新建页。
   document.getElementById('new-chat-btn').addEventListener('click', () => _setViewFromSidebar('new-chat'));
+  document.getElementById('task-nav-btn')?.addEventListener('click', _openTaskModule);
   document.getElementById('auto-btn')?.addEventListener('click', () => _setViewFromSidebar('auto'));
   document.getElementById('kb-btn')?.addEventListener('click', () => _setViewFromSidebar('kb'));
+  document.getElementById('contacts-btn')?.addEventListener('click', () => _setViewFromSidebar('contacts'));
   document.getElementById('run-center-btn')?.addEventListener('click', () => _setViewFromSidebar('run-center'));
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
@@ -427,6 +436,7 @@ function bindStaticHandlers() {
     if (typeof load !== 'function') return;
     load('marketplace').then(() => openMarketplace('agent')).catch(() => {});
   });
+  document.getElementById('agents-mine-btn')?.addEventListener('click', () => { void _openAgentContributions(); });
   document.getElementById('agents-back-btn')?.addEventListener('click', () => _showAgentsGridView());
   document.getElementById('agent-use-btn')?.addEventListener('click', () => {
     if (_selectedAgent && !_agentsCache?.some((a) => a.agent_id === _selectedAgent.id && a.enabled === false)) {

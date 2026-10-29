@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 候选「可确认」契约：审批阶段与晋升阶段必须用同一套准入语义。
  *
@@ -149,7 +150,7 @@ describe('候选 eligibility 的落库与编辑行为', () => {
 
   it('编辑不得把分类不合格的候选洗成 pending_review', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('u1', {
+    const saved = await createNightlyCandidateFixture('u1', {
       ...PROJECT_FACT, sourceRefs: REFS as never, forceWeakObservation: true,
     });
     expect(saved.status).toBe('weak_observation');
@@ -163,7 +164,7 @@ describe('候选 eligibility 的落库与编辑行为', () => {
 
   it('真正改成合格内容后允许迁回 pending_review', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('u1', {
+    const saved = await createNightlyCandidateFixture('u1', {
       ...PROJECT_FACT, sourceRefs: REFS as never, forceWeakObservation: true,
     });
     const fixed = await candidates.updateRecallCandidate('u1', saved.id, {
@@ -175,7 +176,7 @@ describe('候选 eligibility 的落库与编辑行为', () => {
 
   it('可确认候选真实走通 promote → 正式资产', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('u1', {
+    const saved = await createNightlyCandidateFixture('u1', {
       ...DURABLE_PREFERENCE, sourceRefs: REFS as never,
     });
     expect(getRecallCandidateCapabilities(saved).canPromote).toBe(true);
@@ -190,7 +191,7 @@ describe('候选 eligibility 的落库与编辑行为', () => {
 
   it('不变量：canPromote 为 true 的候选，promote 不因 formal asset bar 被拒', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('u1', {
+    const saved = await createNightlyCandidateFixture('u1', {
       ...DURABLE_PREFERENCE, sourceRefs: REFS as never,
     });
     const before = await candidates.readRecallCandidate('u1', saved.id);
@@ -203,7 +204,7 @@ describe('候选 eligibility 的落库与编辑行为', () => {
 
   it('最后一道防线仍在：不合格候选即使绕过 UI 直接 promote 也会被拒', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('u1', {
+    const saved = await createNightlyCandidateFixture('u1', {
       ...PROJECT_FACT, sourceRefs: REFS as never, forceWeakObservation: true,
     });
     expect(getRecallCandidateCapabilities(saved).canPromote).toBe(false);

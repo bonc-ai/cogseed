@@ -32,6 +32,8 @@ better-sqlite3 12.10.0                MIT      https://github.com/WiseLibs/bette
 electron-log 5.4.4                    MIT      https://github.com/megahertz/electron-log
 esbuild 0.28.2                       MIT      https://github.com/evanw/esbuild
 get-tsconfig 4.14.0                   MIT      https://github.com/privatenumber/get-tsconfig
+imapflow 2.3.0                         MIT      https://github.com/postalsys/imapflow
+mailparser 3.9.37                      MIT      https://github.com/nodemailer/mailparser
 resolve-pkg-maps 1.0.0                MIT      https://github.com/privatenumber/resolve-pkg-maps
 fastembed 2.1.0                       MIT      https://github.com/Anush008/fastembed-js
 @jsquash/webp 1.5.0                   Apache-2.0  https://github.com/jamsinclair/jSquash
@@ -105,6 +107,15 @@ qrcode-generator (qrcode.js)
 xterm.js (xterm.js, xterm.css, addon-fit.js)
     (c) the xterm.js authors and Source/contributors, https://xtermjs.org/
     License: MIT
+
+d3-force 3.0.0 (d3-force.min.js, with d3-quadtree 3.0.1, d3-dispatch 3.0.1, d3-timer 3.0.1)
+    Copyright (c) 2010-2021 Mike Bostock, https://d3js.org/d3-force/
+    Source: https://cdn.jsdelivr.net/npm/d3-force@3.0.0/dist/d3-force.min.js
+    License: ISC
+    License text: third_party_licenses/d3-force/LICENSE.md
+    CogSeed vendors the unmodified UMD distributions for offline Renderer use;
+    they are loaded on demand by the ontology relation graph and only compute
+    node positions (rendering stays in CogSeed's own SVG layer).
 
 Chart.js 4.5.1 (chart.umd.min.js)
     Copyright (c) 2014-2024 Chart.js Contributors
@@ -312,6 +323,21 @@ Dual/multi-licensed production components used under a permissive option
 9. Adapted source code
 --------------------------------------------------------------------
 
+Mem0 JSON extraction
+    Copyright [2023] [Taranjeet Singh]
+    Source: https://github.com/mem0ai/mem0
+    Source commit: abb81c88e1f738a8117d8293530fbc31a5ef8fd9
+    Source functions: removeCodeBlocks / extractJson in
+      mem0-ts/src/oss/src/prompts/index.ts (lines 744-904)
+    Source link: https://github.com/mem0ai/mem0/blob/abb81c88e1f738a8117d8293530fbc31a5ef8fd9/mem0-ts/src/oss/src/prompts/index.ts#L744-L904
+    License: Apache-2.0
+    License text: LICENSES/Apache-2.0.txt
+    Adapted portion: src/main/features/cognition_kernel/judge.ts,
+      extractJudgeObject (JSON extraction only).
+    CogSeed limits extraction to eight objects, accepts objects only,
+    prefers objects containing routing keys, and returns null on failure.
+    The root MIT License does not relicense this adapted portion.
+
 AI Agent Board
     Copyright (c) 2025 AI Agent Board Contributors
     Source: https://github.com/DanWahlin/ai-agent-board
@@ -339,11 +365,12 @@ assistant-ui
 10. License text policy
 --------------------------------------------------------------------
 
-The license files above are copied verbatim from the exact package versions
-recorded in package-lock.json. When upgrading a dependency, refresh the
-corresponding retained file(s) and update the version, copyright, source,
-and license entries together. The original package license files under
-node_modules remain authoritative for an installed checkout.
+The license files above are copied verbatim from the package versions
+recorded in package-lock.json or the source commits identified in the
+adapted-source entries. When upgrading a dependency or adapted source,
+refresh the corresponding retained file(s) and update the version or commit,
+copyright, source, and license entries together. The original package license
+files under node_modules remain authoritative for an installed checkout.
 
 
 --------------------------------------------------------------------

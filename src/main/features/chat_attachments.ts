@@ -12,6 +12,8 @@
  *   spreadsheet  — .xlsx / .xlsm
  *   presentation — .pptx / .pptm
  *   image  — .png / .jpg / .jpeg / .webp / .gif
+ *   archive — .zip (kept intact; available to local file tools, not extracted on upload)
+ *   folder  — copied directory snapshot, preserving its internal hierarchy
  *   video  — .mp4 / .webm / .mov / .m4v / .ogv (display-only, not sent to
  *            the model; bytes streamed to the renderer via the
  *            `chat-media://` protocol)
@@ -54,6 +56,7 @@ import {
 import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { toCompressedGrayJpeg } from '../util/image-transform';
+import { MAX_BYTES_DOCX, MAX_BYTES_OFFICE, MAX_BYTES_PDF } from '../util/document-size-limits';
 import {
   invalidateFileCache,
   purgeFileCacheByCid,
@@ -76,6 +79,7 @@ const IMAGE_EXTS: ReadonlySet<string> = new Set(['.png', '.jpg', '.jpeg', '.webp
 const LOCAL_DISPLAY_IMAGE_EXTS: ReadonlySet<string> = new Set([...IMAGE_EXTS, '.svg']);
 const VIDEO_EXTS: ReadonlySet<string> = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv']);
 const AUDIO_EXTS: ReadonlySet<string> = new Set(['.mp3', '.wav', '.ogg', '.opus', '.m4a', '.aac', '.flac']);
+const ARCHIVE_EXTS: ReadonlySet<string> = new Set(['.zip']);
 const PDF_EXT = '.pdf';
 const DOCX_EXTS: ReadonlySet<string> = new Set(['.docx', '.docm']);
 const SPREADSHEET_EXTS: ReadonlySet<string> = new Set(['.xlsx', '.xlsm']);
@@ -83,16 +87,23 @@ const PRESENTATION_EXTS: ReadonlySet<string> = new Set(['.pptx', '.pptm']);
 export const ALLOWED_EXTENSIONS: ReadonlySet<string> = new Set([
   ...TEXT_EXTS,
   PDF_EXT, ...DOCX_EXTS, ...SPREADSHEET_EXTS, ...PRESENTATION_EXTS,
-  ...IMAGE_EXTS, ...VIDEO_EXTS, ...AUDIO_EXTS,
+  ...IMAGE_EXTS, ...VIDEO_EXTS, ...AUDIO_EXTS, ...ARCHIVE_EXTS,
 ]);
 
 const MAX_BYTES_TEXT  = 5   * 1024 * 1024;
-const MAX_BYTES_DOCX  = 20  * 1024 * 1024;
-const MAX_BYTES_OFFICE = 50 * 1024 * 1024;
 const MAX_BYTES_IMAGE = 20  * 1024 * 1024;
-const MAX_BYTES_PDF   = 100 * 1024 * 1024;
 const MAX_BYTES_VIDEO = 200 * 1024 * 1024;
 const MAX_BYTES_AUDIO = 50  * 1024 * 1024;
+const MAX_BYTES_ARCHIVE = 200 * 1024 * 1024;
+
+/** Folder imports are bounded so a dependency tree cannot silently turn one
+ * chat turn into thousands of attachments. */
+export const MAX_FOLDER_IMPORT_FILES = 200;
+export const MAX_FOLDER_IMPORT_BYTES = 200 * 1024 * 1024;
+const FOLDER_IMPORT_IGNORED_DIRS: ReadonlySet<string> = new Set(['node_modules']);
+const FOLDER_STORAGE_DIR = 'folders';
+const FOLDER_INDEX_FILE = 'index.json';
+const FOLDER_REF_PREFIX = 'folder:';
 
 const MAX_FILENAME_LEN = 200;
 const MAX_CONVERSATION_ATTACHMENT_INDEX_FILES = 40;
@@ -107,7 +118,9 @@ export type AttachmentKind =
   | 'presentation'
   | 'image'
   | 'video'
-  | 'audio';
+  | 'audio'
+  | 'archive'
+  | 'folder';
 export type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
 
 export interface AttachmentInfo {
@@ -115,6 +128,18 @@ export interface AttachmentInfo {
   bytes: number;
   kind: AttachmentKind;
   mtime: number;      // epoch seconds
+  /** User-facing source folder name. Present only for `kind: folder`. */
+  displayName?: string;
+  /** Number of regular files copied into a folder snapshot. */
+  fileCount?: number;
+}
+
+interface FolderAttachmentRecord {
+  id: string;
+  name: string;
+  bytes: number;
+  fileCount: number;
+  mtime: number;
 }
 
 export type Result<T = {}> = ({ ok: true } & T) | { ok: false; error: string };
@@ -135,6 +160,87 @@ function safeAttachmentName(name: unknown): string {
     throw new Error(t('errors.unsupported_file_ext', { ext: ext || t('errors.unsupported_file_no_ext') }));
   }
   return s;
+}
+
+function folderStorageDir(attachmentDir: string): string {
+  return path.join(attachmentDir, FOLDER_STORAGE_DIR);
+}
+
+function folderIndexPath(attachmentDir: string): string {
+  return path.join(folderStorageDir(attachmentDir), FOLDER_INDEX_FILE);
+}
+
+function safeFolderId(value: unknown): string | null {
+  return typeof value === 'string' && /^folder-[A-Za-z0-9_-]{8,80}$/.test(value) ? value : null;
+}
+
+function folderReference(id: string, name: string): string {
+  return `${FOLDER_REF_PREFIX}${id}:${encodeURIComponent(name)}`;
+}
+
+function parseFolderReference(value: unknown): { id: string; displayName: string } | null {
+  if (typeof value !== 'string' || !value.startsWith(FOLDER_REF_PREFIX)) return null;
+  const body = value.slice(FOLDER_REF_PREFIX.length);
+  const marker = body.indexOf(':');
+  if (marker <= 0) return null;
+  const id = safeFolderId(body.slice(0, marker));
+  if (!id) return null;
+  try {
+    const displayName = decodeURIComponent(body.slice(marker + 1));
+    if (!displayName || displayName.length > MAX_FILENAME_LEN || displayName.includes('/') || displayName.includes('\\') || displayName.includes('\x00')) return null;
+    return { id, displayName };
+  } catch { return null; }
+}
+
+export function isFolderAttachmentReference(value: unknown): boolean {
+  return parseFolderReference(value) !== null;
+}
+
+function readFolderIndex(attachmentDir: string): FolderAttachmentRecord[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(fs.readFileSync(folderIndexPath(attachmentDir), 'utf8')); }
+  catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+  const records: FolderAttachmentRecord[] = [];
+  for (const raw of parsed) {
+    if (!raw || typeof raw !== 'object') continue;
+    const value = raw as Record<string, unknown>;
+    const id = safeFolderId(value.id);
+    const name = typeof value.name === 'string' ? value.name : '';
+    const bytes = Number(value.bytes);
+    const fileCount = Number(value.fileCount);
+    const mtime = Number(value.mtime);
+    if (!id || !name || name.length > MAX_FILENAME_LEN || name.includes('/') || name.includes('\\') || name.includes('\x00')
+      || !Number.isSafeInteger(bytes) || bytes < 0
+      || !Number.isSafeInteger(fileCount) || fileCount < 0
+      || !Number.isSafeInteger(mtime) || mtime < 0) continue;
+    const snapshot = path.join(folderStorageDir(attachmentDir), id);
+    try {
+      if (!fs.statSync(snapshot).isDirectory()) continue;
+    } catch { continue; }
+    records.push({ id, name, bytes, fileCount, mtime });
+  }
+  return records;
+}
+
+function writeFolderIndex(attachmentDir: string, records: FolderAttachmentRecord[]): void {
+  const storage = folderStorageDir(attachmentDir);
+  fs.mkdirSync(storage, { recursive: true });
+  const target = folderIndexPath(attachmentDir);
+  const temp = path.join(storage, `.index-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`);
+  fs.writeFileSync(temp, JSON.stringify(records));
+  fs.renameSync(temp, target);
+}
+
+function folderInfo(record: FolderAttachmentRecord): AttachmentInfo {
+  return {
+    name: folderReference(record.id, record.name),
+    displayName: record.name,
+    bytes: record.bytes,
+    fileCount: record.fileCount,
+    kind: 'folder',
+    mtime: record.mtime,
+  };
 }
 
 function safeCid(cid: unknown): string {
@@ -164,6 +270,7 @@ function kindOf(ext: string): AttachmentKind {
   if (IMAGE_EXTS.has(e)) return 'image';
   if (VIDEO_EXTS.has(e)) return 'video';
   if (AUDIO_EXTS.has(e)) return 'audio';
+  if (ARCHIVE_EXTS.has(e)) return 'archive';
   return 'text';
 }
 
@@ -175,6 +282,7 @@ function maxBytesFor(ext: string): number {
   if (IMAGE_EXTS.has(e)) return MAX_BYTES_IMAGE;
   if (VIDEO_EXTS.has(e)) return MAX_BYTES_VIDEO;
   if (AUDIO_EXTS.has(e)) return MAX_BYTES_AUDIO;
+  if (ARCHIVE_EXTS.has(e)) return MAX_BYTES_ARCHIVE;
   return MAX_BYTES_TEXT;
 }
 
@@ -183,6 +291,14 @@ function _moveFileBestEffort(from: string, to: string): void {
   catch {
     fs.copyFileSync(from, to);
     try { fs.unlinkSync(from); } catch { /* best-effort */ }
+  }
+}
+
+function _moveDirectoryBestEffort(from: string, to: string): void {
+  try { fs.renameSync(from, to); }
+  catch {
+    fs.cpSync(from, to, { recursive: true, dereference: false, errorOnExist: true });
+    fs.rmSync(from, { recursive: true, force: true });
   }
 }
 
@@ -519,6 +635,137 @@ export async function importAttachmentFromPath(
   });
 }
 
+export interface AttachmentFolderFile {
+  /** Absolute source path selected from the local folder. */
+  abs: string;
+  /** Path relative to the selected folder, for progress and diagnostics. */
+  rel: string;
+}
+
+/**
+ * Recursively enumerate uploadable files from a user-selected folder.
+ * Symlinks and hidden entries are deliberately ignored: attachments are
+ * copied, and following a link would disclose files outside the selected root.
+ */
+export async function collectImportableAttachmentFilesFromDir(absDir: string): Promise<AttachmentFolderFile[]> {
+  const out: AttachmentFolderFile[] = [];
+  const compareNames = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+
+  async function walk(dir: string, rel: string): Promise<void> {
+    if (out.length >= MAX_FOLDER_IMPORT_FILES) return;
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+    catch { return; }
+    entries.sort((a, b) => compareNames(a.name, b.name));
+    for (const entry of entries) {
+      if (out.length >= MAX_FOLDER_IMPORT_FILES) return;
+      if (entry.name.startsWith('.')) continue;
+      const entryRel = rel ? path.join(rel, entry.name) : entry.name;
+      const entryAbs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!FOLDER_IMPORT_IGNORED_DIRS.has(entry.name)) await walk(entryAbs, entryRel);
+      } else if (entry.isFile() && ALLOWED_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        out.push({ abs: entryAbs, rel: entryRel });
+      }
+    }
+  }
+
+  await walk(path.resolve(absDir), '');
+  return out;
+}
+
+/**
+ * Copy a selected folder into the conversation attachment pool as one stable
+ * attachment. The source is never retained as a live path grant: this makes
+ * the sent message reproducible even after the user edits, moves, or deletes
+ * the original folder.
+ */
+export async function importFolderAttachment(
+  userId: string,
+  cid: string,
+  sourcePath: string,
+): Promise<Result<{ info: AttachmentInfo }>> {
+  let safeConvId: string;
+  try { safeConvId = safeCid(cid); }
+  catch (err) { return { ok: false, error: (err as Error).message }; }
+
+  const source = path.resolve(String(sourcePath || ''));
+  let sourceStat: fs.Stats;
+  try { sourceStat = fs.lstatSync(source); }
+  catch { return { ok: false, error: 'folder not found' }; }
+  if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) return { ok: false, error: 'folder not found' };
+  const sourceName = path.basename(source);
+  if (!sourceName || sourceName.length > MAX_FILENAME_LEN) return { ok: false, error: 'invalid folder name' };
+
+  return withAttachmentWriteLock(userId, safeConvId, async () => {
+    await warmConversationSpace(userId, safeConvId);
+    const attachmentDir = ensureDir(userId, safeConvId);
+    const storage = folderStorageDir(attachmentDir);
+    fs.mkdirSync(storage, { recursive: true });
+    const id = `folder-${Date.now().toString(36)}-${crypto.randomBytes(8).toString('hex')}`;
+    const staging = path.join(storage, `.${id}.tmp`);
+    const snapshot = path.join(storage, id);
+    let fileCount = 0;
+    let bytes = 0;
+
+    const cleanup = () => {
+      try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* best-effort */ }
+    };
+    const copy = (from: string, to: string): void => {
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(from, { withFileTypes: true }); }
+      catch (err) { throw new Error(`cannot read folder: ${(err as Error).message}`); }
+      entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        if (entry.isSymbolicLink()) continue;
+        const fromEntry = path.join(from, entry.name);
+        const toEntry = path.join(to, entry.name);
+        if (entry.isDirectory()) {
+          if (FOLDER_IMPORT_IGNORED_DIRS.has(entry.name)) continue;
+          fs.mkdirSync(toEntry, { recursive: true });
+          copy(fromEntry, toEntry);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        let stat: fs.Stats;
+        try { stat = fs.statSync(fromEntry); }
+        catch { continue; }
+        if (fileCount >= MAX_FOLDER_IMPORT_FILES) throw new Error(`folder contains more than ${MAX_FOLDER_IMPORT_FILES} files`);
+        if (bytes + stat.size > MAX_FOLDER_IMPORT_BYTES) {
+          throw new Error(`folder exceeds ${Math.round(MAX_FOLDER_IMPORT_BYTES / 1024 / 1024)}MB`);
+        }
+        fs.copyFileSync(fromEntry, toEntry);
+        fileCount += 1;
+        bytes += stat.size;
+      }
+    };
+
+    try {
+      fs.mkdirSync(staging, { recursive: true });
+      copy(source, staging);
+      fs.renameSync(staging, snapshot);
+      const record: FolderAttachmentRecord = {
+        id,
+        name: sourceName,
+        bytes,
+        fileCount,
+        mtime: Math.floor(Date.now() / 1000),
+      };
+      const records = readFolderIndex(attachmentDir);
+      records.push(record);
+      writeFolderIndex(attachmentDir, records);
+      notifyAttachmentDirtyIfSyncable(userId, safeConvId, folderReference(id, sourceName));
+      log.info(`folder import user=${userId} cid=${safeConvId} name=${sourceName} files=${fileCount} bytes=${bytes}`);
+      return { ok: true, info: folderInfo(record) };
+    } catch (err) {
+      cleanup();
+      try { fs.rmSync(snapshot, { recursive: true, force: true }); } catch { /* best-effort */ }
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+}
+
 export function listAttachments(userId: string, cid: string): AttachmentInfo[] {
   let safeConvId: string;
   try { safeConvId = safeCid(cid); }
@@ -544,6 +791,8 @@ export function listAttachments(userId: string, cid: string): AttachmentInfo[] {
       });
     } catch { /* skip unreadable */ }
   }
+  for (const record of readFolderIndex(dir)) out.push(folderInfo(record));
+  out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   return out;
 }
 
@@ -585,13 +834,31 @@ export function listPendingAttachments(userId: string, cid: string): AttachmentI
 }
 
 export function deleteAttachment(userId: string, cid: string, name: string): Result {
-  let safeName: string;
   let safeConvId: string;
   try {
-    safeName = safeAttachmentName(name);
     safeConvId = safeCid(cid);
   } catch (err) { return { ok: false, error: (err as Error).message }; }
   const dir = attachmentDirForCid(userId, safeConvId);
+  const folder = parseFolderReference(name);
+  if (folder) {
+    const records = readFolderIndex(dir);
+    const record = records.find((item) => item.id === folder.id);
+    if (!record) return { ok: false, error: 'not found' };
+    try { fs.rmSync(path.join(folderStorageDir(dir), record.id), { recursive: true, force: true }); }
+    catch (err) { return { ok: false, error: (err as Error).message }; }
+    const remaining = records.filter((item) => item.id !== record.id);
+    try {
+      if (remaining.length) writeFolderIndex(dir, remaining);
+      else fs.rmSync(folderStorageDir(dir), { recursive: true, force: true });
+      if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+    }
+    catch (err) { return { ok: false, error: (err as Error).message }; }
+    notifyAttachmentDeletedIfSyncable(userId, safeConvId, name);
+    return { ok: true };
+  }
+  let safeName: string;
+  try { safeName = safeAttachmentName(name); }
+  catch (err) { return { ok: false, error: (err as Error).message }; }
   const p = path.join(dir, safeName);
   if (!fs.existsSync(p)) return { ok: false, error: 'not found' };
   try { fs.unlinkSync(p); }
@@ -628,15 +895,23 @@ export function resolveAttachmentAbsPath(
   cid: string,
   name: string,
 ): Result<{ absPath: string; kind: AttachmentKind }> | { ok: false; code: 'bad_input' | 'forbidden' | 'not_found'; error: string } {
-  let safeName: string;
   let safeConvId: string;
   try {
-    safeName = safeAttachmentName(name);
     safeConvId = safeCid(cid);
   } catch (err) {
     return { ok: false, code: 'bad_input', error: (err as Error).message };
   }
   const root = path.resolve(attachmentDirForCid(userId, safeConvId));
+  const folder = parseFolderReference(name);
+  if (folder) {
+    const record = readFolderIndex(root).find((item) => item.id === folder.id);
+    if (!record) return { ok: false, code: 'not_found', error: 'not found' };
+    const absPath = path.resolve(folderStorageDir(root), record.id);
+    return { ok: true, absPath, kind: 'folder' };
+  }
+  let safeName: string;
+  try { safeName = safeAttachmentName(name); }
+  catch (err) { return { ok: false, code: 'bad_input', error: (err as Error).message }; }
   const abs = path.resolve(root, safeName);
   const rel = path.relative(root, abs);
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
@@ -866,7 +1141,7 @@ function imageMimeFromExt(ext: string): ImageMimeType {
 }
 
 /** Best-effort image extension from magic bytes. Channel image references
- * (e.g. feishu image_key, G-17 byte path) carry no extension; imported
+ * (e.g. a channel image key or a raw-byte path) carry no extension; imported
  * attachments need one for mime routing. Unknown signatures fall back to png. */
 export function imageExtForBytes(bytes: Buffer): string {
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png';
@@ -913,6 +1188,20 @@ export async function adoptDraftAttachments(
       for (const name of fs.readdirSync(src)) {
         const from = path.join(src, name);
         const to = path.join(dst, name);
+        if (name === FOLDER_STORAGE_DIR) {
+          const incoming = readFolderIndex(src);
+          const current = readFolderIndex(dst);
+          fs.mkdirSync(to, { recursive: true });
+          for (const record of incoming) {
+            const fromSnapshot = path.join(from, record.id);
+            const toSnapshot = path.join(to, record.id);
+            if (!fs.existsSync(toSnapshot)) _moveDirectoryBestEffort(fromSnapshot, toSnapshot);
+          }
+          const ids = new Set(current.map((record) => record.id));
+          writeFolderIndex(dst, current.concat(incoming.filter((record) => !ids.has(record.id))));
+          try { fs.rmSync(from, { recursive: true, force: true }); } catch { /* best-effort */ }
+          continue;
+        }
         try { fs.renameSync(from, to); }
         catch {
           // Cross-device or already-exists → fall back to copy+unlink.
@@ -957,10 +1246,8 @@ export async function purgeByCid(userId: string, cid: string): Promise<number> {
       if (fs.existsSync(dir)) {
         const entries = fs.readdirSync(dir);
         names = names.concat(entries.filter((n) => !n.startsWith('.')));
-        for (const n of entries) {
-          try { fs.unlinkSync(path.join(dir, n)); count++; } catch { /* best-effort */ }
-        }
-        try { fs.rmdirSync(dir); } catch { /* best-effort */ }
+        count += entries.length;
+        fs.rmSync(dir, { recursive: true, force: true });
       }
     } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
   }
@@ -1021,6 +1308,7 @@ export interface BuildConversationAttachmentIndexOpts {
  *                       for pi-ai vision.
  *   - video           → skipped entirely (display-only).
  *   - audio           → listed by path as non-inline media input.
+ *   - archive         → listed by path for local tools; never unpacked automatically.
  */
 export async function buildAttachmentManifest(
   userId: string,
@@ -1054,6 +1342,20 @@ export async function buildAttachmentManifest(
   const dir = attachmentDirForCid(userId, safeConvId);
 
   for (const rawName of names) {
+    const folder = parseFolderReference(rawName);
+    if (folder) {
+      const record = readFolderIndex(dir).find((item) => item.id === folder.id);
+      if (!record) {
+        skipped.push({ name: String(rawName), reason: t('attachments.skipped.missing') });
+        continue;
+      }
+      const abs = path.join(folderStorageDir(dir), record.id);
+      addAttachmentType('folder');
+      entries.push(
+        `<folder name="${escapeAttr(record.name)}" path="${escapeAttr(abs)}" file_count="${record.fileCount}" size="${record.bytes}" read_only="true"/>`,
+      );
+      continue;
+    }
     let nm: string;
     try { nm = safeAttachmentName(rawName); }
     catch (err) { skipped.push({ name: String(rawName), reason: (err as Error).message }); continue; }
@@ -1092,6 +1394,11 @@ export async function buildAttachmentManifest(
       continue;
     }
 
+    if (kind === 'archive') {
+      entries.push(`<file name="${escapeAttr(nm)}" path="${escapeAttr(abs)}" kind="archive" model_readable="false"/>`);
+      continue;
+    }
+
     // text / pdf / modern Office → manifest entry (path + kind + total_chars if known).
     let totalChars: number | undefined;
     if (kind === 'text') {
@@ -1120,9 +1427,14 @@ export async function buildAttachmentManifest(
   }
 
   const hasAudio = entries.some((e) => e.includes('kind="audio"'));
-  const mediaNote = hasAudio
-    ? '\n<!-- Audio is not inline model input; use an available audio tool with the path when needed. -->'
-    : '';
+  const hasArchive = entries.some((e) => e.includes('kind="archive"'));
+  const hasFolder = entries.some((e) => e.startsWith('<folder '));
+  const mediaNotes = [
+    ...(hasAudio ? ['<!-- Audio is not inline model input; use an available audio tool with the path when needed. -->'] : []),
+    ...(hasArchive ? ['<!-- ZIP archives are opaque input; use a local tool to inspect or extract them into the workspace when needed. -->'] : []),
+    ...(hasFolder ? ['<!-- Folder snapshots preserve their hierarchy. Use list_files, search_files, grep_files, or read_file inside the folder path; treat them as read-only source material. -->'] : []),
+  ];
+  const mediaNote = mediaNotes.length ? `\n${mediaNotes.join('\n')}` : '';
   const manifest = entries.length
     ? `<attachments>${mediaNote}\n${entries.join('\n')}\n</attachments>`
     : '';
@@ -1151,8 +1463,11 @@ export async function buildConversationAttachmentIndex(
 
   const excluded = new Set<string>();
   for (const rawName of opts.excludeNames || []) {
-    try { excluded.add(safeAttachmentName(rawName)); }
-    catch { /* ignore invalid caller input */ }
+    if (parseFolderReference(rawName)) excluded.add(String(rawName));
+    else {
+      try { excluded.add(safeAttachmentName(rawName)); }
+      catch { /* ignore invalid caller input */ }
+    }
   }
 
   const maxFiles = Math.max(1, Math.min(200, opts.maxFiles ?? MAX_CONVERSATION_ATTACHMENT_INDEX_FILES));
@@ -1160,7 +1475,9 @@ export async function buildConversationAttachmentIndex(
     .filter((d) => d.isFile() && !d.name.startsWith('.') && !excluded.has(d.name))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
-  if (!files.length) return '';
+  const folders = readFolderIndex(dir)
+    .filter((record) => !excluded.has(folderReference(record.id, record.name)));
+  if (!files.length && !folders.length) return '';
 
   const entries: string[] = [];
   for (const d of files.slice(0, maxFiles)) {
@@ -1194,17 +1511,23 @@ export async function buildConversationAttachmentIndex(
     }
 
     if (kind === 'image') attrs.push('inline="false"');
-    if (kind === 'audio') attrs.push('model_readable="false"');
+    if (kind === 'audio' || kind === 'archive') attrs.push('model_readable="false"');
     entries.push(`<file ${attrs.join(' ')}/>`);
   }
 
+  for (const record of folders.slice(0, Math.max(0, maxFiles - entries.length))) {
+    const abs = path.join(folderStorageDir(dir), record.id);
+    entries.push(`<folder name="${escapeAttr(record.name)}" path="${escapeAttr(abs)}" file_count="${record.fileCount}" size="${record.bytes}" read_only="true"/>`);
+  }
+
   if (!entries.length) return '';
-  const omitted = files.length > entries.length
-    ? `\n<omitted count="${files.length - entries.length}"/>`
+  const totalEntries = files.length + folders.length;
+  const omitted = totalEntries > entries.length
+    ? `\n<omitted count="${totalEntries - entries.length}"/>`
     : '';
   return (
     `<conversation-attachments cid="${escapeAttr(safeConvId)}">\n` +
-    '<!-- Files uploaded earlier in this conversation. Use read_file/stat_file with path for content; images are not inline. -->\n' +
+    '<!-- Files and folder snapshots uploaded earlier in this conversation. Use list_files inside a folder path, or read_file/stat_file with a file path; images are not inline. -->\n' +
     entries.join('\n') +
     omitted +
     '\n</conversation-attachments>'

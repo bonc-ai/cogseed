@@ -184,47 +184,59 @@ describe('prompts ↔ code contract', () => {
     expect(creatorSkill).toContain('Do not emit JSON here');
   });
 
-  it('cross-session memory scopes are routed explicitly and written in the UI language', () => {
+  it('cross-session memory reads retain scope, literal wording, and real prompt injection without write guidance', async () => {
     const agentPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_agent_in_group.md'), 'utf-8');
     const commanderPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_commander.md'), 'utf-8');
     const sharedPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_shared_rules.md'), 'utf-8');
     const memoryTool = readFile('src/core-agent/src/tools/memory-tool.ts');
-
-    // Tool description ships in two shapes: the legacy three-tier one and the
-    // space-session one that adds the `space` tier plus the belongs-where
-    // routing rule ("would this still hold in another space?").
-    expect(memoryTool).toContain("- agent (default): this agent's private lessons");
-    expect(memoryTool).toContain('- shared: stable facts that hold across spaces and matter to every agent');
-    expect(memoryTool).toContain('- user: stable user-wide profile/preferences every agent should know');
-    expect(memoryTool).toContain('- space: durable facts, decisions, outcomes, milestones, and conventions that belong to THIS space only');
-    expect(memoryTool).toContain('would this still hold in another space?');
-    // The space tier is schema-gated: offered only when the host marks the
-    // session as belonging to a space.
+    const runner = readFile('src/main/model/core-agent/runner.ts');
+    // The tool's LLM-facing description is the contract: it must stay read-only
+    // and keep the literal preservation wording. The wording moved from a
+    // header comment into `description` when the write actions were retired.
+    expect(memoryTool).toContain('Read-only existing cross-session memory');
+    expect(memoryTool).toContain("enum: ['list']");
     expect(memoryTool).toContain('includeProjectTier');
-    // Language rule: write in the user's current language, preserving literals.
-    expect(memoryTool).toContain("Write in the user's current language while preserving code, paths, commands, URLs");
-
-    expect(agentPrompt).toContain('`target: "agent"` = your own agent memory');
-    expect(agentPrompt).toContain('`target: "user"` = global user profile/preferences');
-    expect(agentPrompt).toContain('`target: "shared"` = global facts');
-    expect(agentPrompt).not.toContain('current response/UI language');
-
-    expect(commanderPrompt).toContain('`target: "agent"` = commander\'s own orchestration memory');
-    expect(commanderPrompt).toContain('commander-specific routing lessons');
-    expect(commanderPrompt).not.toContain('current response/UI language');
+    expect(memoryTool).toContain('caller');
+    expect(memoryTool).toContain('current response language');
+    expect(memoryTool).toContain('preserve proper nouns, commands, file paths, URLs and quoted wording');
+    for (const retired of ['handler.add', 'handler.replace', 'handler.remove']) expect(memoryTool).not.toContain(retired);
+    expect(runner).toContain('createCrossSessionMemoryTool(memoryHandler');
+    expect(runner).toContain('listCrossSessionMemoryAssets');
+    expect(runner).not.toContain('ingestImmediateKnowledge');
+    expect(runner).not.toContain('recordTeachingSignalAfterMemoryWrite');
+    for (const prompt of [agentPrompt, commanderPrompt]) {
+      expect(prompt).toContain('cross_session_memory');
+      expect(prompt).toMatch(/read-only/i);
+      for (const scope of ['agent', 'user', 'shared', 'space']) expect(prompt).toContain(`target: "${scope}"`);
+      expect(prompt).not.toContain('You and the user write space memory');
+      expect(prompt).not.toContain('Only the commander writes space memory');
+    }
     expect(sharedPrompt).toContain('current response/UI language');
     expect(sharedPrompt).toContain('Preserve proper nouns, commands, file paths, code identifiers, URLs');
-    expect(readFile('src/main/features/group_chat/bus.ts')).toMatch(/promptLoader\.load\(["']chat_shared_rules["']/);
+    expect(sharedPrompt).not.toContain('Before `add` / `replace`');
+    const bus = readFile('src/main/features/group_chat/bus.ts');
+    expect(bus).toMatch(/renderPromptWithSharedRules\(\s*prompts\s*,\s*["']chat_commander["']/);
+    expect(bus).toMatch(/renderPromptWithSharedRules\(\s*prompts\s*,\s*["']chat_agent_in_group["']/);
+    expect(bus).toMatch(/promptLoader\.load\(["']chat_shared_rules["']/);
+    const runtime = await import('../../../src/main/features/group_chat/bus');
+    for (const template of ['chat_commander', 'chat_agent_in_group'] as const) {
+      const rendered = await runtime._renderPromptWithSharedRulesForTest(template, {}, true);
+      expect(rendered).toContain('`cross_session_memory` is read-only for every actor');
+      expect(rendered).toContain('## Existing memory language');
+      expect(rendered).not.toContain('Before `add` / `replace`');
+    }
   });
 
-  it('group-chat system prompts inject the preferred Agent response language directive', () => {
+  it('group-chat system prompts follow the user request language with an interface-language fallback', () => {
     const bus = readFile('src/main/features/group_chat/bus.ts');
     const i18n = readFile('src/main/i18n.ts');
 
-    expect(i18n).toContain('Preferred response language: **${name}**');
-    expect(i18n).toContain('Write all human-readable prose in ${name}');
+    expect(i18n).toContain('reply in the language of the latest user request');
+    expect(i18n).toContain('current interface language as the fallback response language: **${name}**');
+    expect(i18n).not.toContain('Write all human-readable prose in ${name}');
     expect(bus).toContain('appendLanguageDirective');
-    expect(bus).toContain('buildLanguageDirective(getLanguage())');
+    expect(bus).toContain('buildLanguageDirective(getUiLanguage())');
+    expect(bus).not.toContain('buildLanguageDirective(getLanguage())');
     expect(bus).toContain('chat_commander');
     expect(bus).toContain('chat_agent_in_group');
   });
@@ -521,7 +533,9 @@ describe('prompts ↔ code contract', () => {
     expect(commanderPrompt).not.toMatch(/prior-chat recall only, after Library or when explicitly asked/i);
     // Worker agents receive dispatcher-selected excerpts through their
     // visibility slice; full cross-conversation browsing stays commander-only.
-    expect(runner).toMatch(/const chatHistoryTools = uid && isCommander \? createChatHistoryTools/);
+    // Reception turns are gated on the same line: a legacy inbound A2A handoff
+    // must not gain full cross-conversation browsing even when it runs natively.
+    expect(runner).toMatch(/const chatHistoryTools = uid && isCommander && !receptionMode \? createChatHistoryTools/);
     expect(runner).toMatch(/projectId: params\.projectId/);
   });
 
@@ -549,7 +563,14 @@ describe('prompts ↔ code contract', () => {
     // User-authored project instructions are low-churn configuration and sit
     // in the stable cache prefix: after the agents block, before the
     // runtime-injection region begins.
-    expect(runner).toMatch(/if \(agentsBlock\) parts\.push\(agentsBlock\);[\s\S]{0,1200}?if \(projectContextPolicyBlock\) parts\.push\(projectContextPolicyBlock\);[\s\S]{0,600}?if \(projectInstructionsBlock\) parts\.push\(projectInstructionsBlock\);\s+if \(runtimeInjectionBlock\) parts\.push\(runtimeInjectionBlock\);/);
+    // 任务认知只读边界也是稳定前缀；验证顺序，不要求配置块与 runtime 紧邻。
+    const stableOrder = ['if (agentsBlock) parts.push(agentsBlock);',
+      'if (projectContextPolicyBlock) parts.push(projectContextPolicyBlock);',
+      'if (projectInstructionsBlock) parts.push(projectInstructionsBlock);',
+      'Read existing ontology and confirmed transcript corrections',
+      'if (runtimeInjectionBlock) parts.push(runtimeInjectionBlock);'].map(block => runner.indexOf(block));
+    expect(stableOrder.every(index => index >= 0)).toBe(true);
+    expect(stableOrder).toEqual([...stableOrder].sort((a, b) => a - b));
     // memoryBlock is the LAST block pushed into the (cached) system prompt.
     expect(runner).toMatch(/if \(memoryBlock\) parts\.push\(memoryBlock\);/);
     // The volatile blocks feed turnEphemeral, NOT the system prompt parts.
@@ -559,8 +580,55 @@ describe('prompts ↔ code contract', () => {
     expect(runner).not.toMatch(/parts\.push\(volatileTail\)/);
     expect(agents).toMatch(/buildLanguageDirective\([^)]*\)[\s\S]+buildRuntimeDatetimeBlock\(\)/);
     expect(skills).toMatch(/buildLanguageDirective\([^)]*\)[\s\S]+buildRuntimeDatetimeBlock\(\)/);
-    expect(bus).toMatch(/language_block:\s*buildLanguageDirective\(getLanguage\(\)\)/);
+    expect(bus).toMatch(/language_block:\s*buildLanguageDirective\(getUiLanguage\(\)\)/);
+    expect(agents).toContain('buildLanguageDirective(getUiLanguage())');
+    expect(skills).toContain('buildLanguageDirective(getUiLanguage())');
     expect(cliPrompt).toContain('$language_block');
-    expect(cliPrompt).toMatch(/\$task_body\n\n\$runtime_datetime_block\s*$/);
+    // 该模板的易变尾部必须收尾。审计 2026-10-08 把静态的 `## Your task` 挪到了易变段之前，
+    // 所以这里不再断言"$task_body 紧跟 datetime"，改为断言 datetime 仍是最后一个块。
+    expect(cliPrompt).toContain('$task_body');
+    expect(cliPrompt).toMatch(/\$runtime_datetime_block\s*$/);
+  });
+});
+
+// 缓存前缀不变量（对齐 DSH 的 prefix-stability 教训，见 AGENTS.md「Prompt Files」）：
+// 易变内容必须垫在最后，否则它后面的一切都落在缓存前缀的分歧点之后、每回合被重算重计费。
+// 既有断言只覆盖"共享规则在 marker 之前 + marker 唯一"；这里补上"marker 之后不得再出现
+// 新的二级标题"——即易变段之后不能又冒出静态章节。
+describe('prompts › cache prefix stability', () => {
+  const render = async (template: 'chat_commander' | 'chat_agent_in_group' | 'chat_cli_agent', args: Record<string, string | number | boolean>, general: boolean) => {
+    const bus = await import('../../../src/main/features/group_chat/bus');
+    const hook = (bus as unknown as {
+      _renderPromptWithSharedRulesForTest?: (
+        t: typeof template, a: Record<string, string | number | boolean>, g: boolean,
+      ) => Promise<string>;
+    })._renderPromptWithSharedRulesForTest;
+    expect(typeof hook).toBe('function');
+    return hook!(template, args, general);
+  };
+
+  it.each(['chat_commander', 'chat_agent_in_group', 'chat_cli_agent'] as const)(
+    '%s keeps every level-2 section before the runtime-injection tail',
+    async (template) => {
+      // chat_cli_agent 是不带通用共享规则的那一个（见上方参数化用例）
+      const rendered = await render(template, {}, template !== 'chat_cli_agent');
+      const marker = rendered.indexOf('## Runtime injection');
+      expect(marker, 'marker must exist').toBeGreaterThan(-1);
+      const tail = rendered.slice(marker);
+      // marker 之后只允许是它自己的 ### 子节；出现新的 ## 章节即意味着静态内容排在了易变段之后
+      const level2AfterMarker = [...tail.matchAll(/^## (?!#).+$/gm)].map((m) => m[0]);
+      expect(level2AfterMarker.slice(1), `${template} sections after the runtime tail`).toEqual([]);
+    },
+  );
+
+  it('chat_cli_agent keeps the static task section ahead of the runtime tail', async () => {
+    // 2026-10-08 审计把该模板的 `## Your task` 挪到易变段之前（AGENTS.md：静态在前、
+    // 易变字段只放末尾的 `## Runtime injection`）。位置本身也要锁住，避免以后又被挪回去。
+    const rendered = await render('chat_cli_agent', {}, false);
+    const taskIdx = rendered.indexOf('## Your task');
+    const marker = rendered.indexOf('## Runtime injection');
+    expect(taskIdx).toBeGreaterThan(-1);
+    expect(marker).toBeGreaterThan(-1);
+    expect(taskIdx).toBeLessThan(marker);
   });
 });

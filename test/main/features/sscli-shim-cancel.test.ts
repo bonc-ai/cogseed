@@ -139,7 +139,10 @@ describe('sscli-shim cancel 精确命中（PR209 评审 M6 返工回归）', () 
       const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { finishTermination = resolve; }));
       let spawnOptions: Record<string, unknown> | undefined;
       const runCliOnce = loadRunCliOnce({
-        CLI_ARGS: '{message}', CLI: 'fake-cli', TIMEOUT_MS: 100,
+        // shim 的超时定时器用 AGENT_DEADLINE_MS（= TIMEOUT_MS，开启 promote 时 +5s），
+        // 只注入 TIMEOUT_MS 会让函数体在 setTimeout 处抛 ReferenceError、根本不进 kill 分支。
+        CLI_ARGS: '{message}', CLI: 'fake-cli', AGENT_DEADLINE_MS: 100,
+        PROMOTE_ON_DEADLINE: false,
         SLOW_START_HINT_MS: 8_000, MAX_REPLY_BYTES: 1024,
         STREAM_CAP_CHARS: 1024, PROGRESS_MAX_LINES: 10,
         ENVELOPE_CLIS: new Set(), activeTurn: null,

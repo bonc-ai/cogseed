@@ -247,7 +247,7 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     };
     const hub = hubFor([peer]);
     const result = await hub.replayOutbox();
-    expect(result).toEqual({ replayed: 1, failed: 0 });
+    expect(result).toEqual({ isolated: 0, replayed: 1, failed: 0 });
     expect(outboxListForReplay()).toMatchObject([{ message_id: 'msg-recover-1', status: 'sent' }]);
   });
 
@@ -255,7 +255,7 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     const pending = envelope({ message_id: 'msg-deferred-1', session_id: 'ses-deferred-1', task_id: 'tsk-deferred-1', idempotency_key: 'idem-deferred-1' });
     outboxRecordSubmitted(pending, 'hermes');
     const unavailable = hubFor([]);
-    await expect(unavailable.replayOutbox()).resolves.toEqual({ replayed: 0, failed: 1 });
+    await expect(unavailable.replayOutbox()).resolves.toEqual({ isolated: 0, replayed: 0, failed: 1 });
     expect(outboxListForReplay()).toMatchObject([{ message_id: 'msg-deferred-1', status: 'submitted' }]);
 
     const endpoint = await startPeer();
@@ -263,7 +263,7 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
       identity: { agent_id: 'hermes', display_name: 'Hermes' },
       aliases: [], manifest: MANIFEST as never, endpoints: [endpoint], updated_at: new Date().toISOString(),
     };
-    await expect(hubFor([peer]).replayOutbox()).resolves.toEqual({ replayed: 1, failed: 0 });
+    await expect(hubFor([peer]).replayOutbox()).resolves.toEqual({ isolated: 0, replayed: 1, failed: 0 });
     expect(outboxListForReplay()).toMatchObject([{ message_id: 'msg-deferred-1', status: 'sent' }]);
   });
 

@@ -320,8 +320,8 @@ describe('projection card surfaces a drifted confirmed version', () => {
     });
 
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
-    // 合并卡（拍板项 #8）：头部是投影状态摘要（带入 N 条），徽标区分谁做的决定。
-    expect(host.innerHTML).toContain('带入 1 条');
+    // 合并卡（拍板项 #8）：头部区分投影选中数与实际进入上下文数，徽标区分谁做的决定。
+    expect(host.innerHTML).toContain('投影已选中 1 条 · 已进入模型上下文 0 条');
     expect(host.innerHTML).toContain('Model-picked');
     expect(host.innerHTML).toContain('Revoke');
     // confirmed 态不发确认按钮（它已经生效了，只给撤销）。
@@ -363,9 +363,9 @@ describe('projection card surfaces a drifted confirmed version', () => {
 
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
 
-    // 合并卡：模型新挂数量并进头部摘要（带入总数 · 其中模型挑 N 条），资产行
+    // 合并卡：模型新挂数量并进头部摘要（选中总数 · 上下文数 · 其中模型挑 N 条），资产行
     // 平铺一张列表（不再分「模型自选/语义基线」两个明细小节）。
-    expect(host.innerHTML).toContain('带入 2 条 · 其中模型挑 1 条');
+    expect(host.innerHTML).toContain('投影已选中 2 条 · 已进入模型上下文 0 条 · 其中模型挑 1 条');
     expect(host.innerHTML).toContain('Model rule');
     expect(host.innerHTML).toContain('Semantic base');
     expect(host.innerHTML.match(/data-recall-projection-asset=/g)).toHaveLength(2);
@@ -394,8 +394,8 @@ describe('projection card surfaces a drifted confirmed version', () => {
 
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
 
-    // 没有点名历史时不编造模型新挂数量（摘要只报带入总数）。
-    expect(host.innerHTML).toContain('带入 2 条');
+    // 没有点名历史时不编造模型新挂数量（摘要只报选中总数与上下文数）。
+    expect(host.innerHTML).toContain('投影已选中 2 条 · 已进入模型上下文 0 条');
     expect(host.innerHTML).not.toContain('其中模型挑');
     expect(host.innerHTML).toContain('Old A');
   });
@@ -434,13 +434,15 @@ describe('projection card surfaces a drifted confirmed version', () => {
     // 合并退役——设计 7.4 列表＝每条资产一行），撤销留在尾部操作行。
     expect(prose.hidden).toBe(false);
     expect(host.className).toContain('chat-recall-citations');
-    expect(host.innerHTML).toContain('本次使用的记忆');
-    expect(host.innerHTML).toContain('带入 8 条');
+    expect(host.innerHTML).toContain('本轮资产检索与带入状态');
+    expect(host.innerHTML).toContain('投影已选中 8 条 · 已进入模型上下文 0 条');
     expect(host.innerHTML).toContain('Revoke');
     expect(host.innerHTML).not.toContain('<details class="chat-recall-projection-details"');
     expect(host.innerHTML.match(/data-recall-projection-asset=/g)).toHaveLength(8);
     // 反馈行与投影操作同在尾部（一条「带入 → 使用 → 反馈」线）。
-    expect(host.innerHTML).toContain('data-recall-feedback');
+    // 反馈移到已引用行内。纯带入（无引用）的消息不再
+    // 出现消息级反馈按钮——旧形态点了会被后端拒绝（无 citations），是死按钮。
+    expect(host.innerHTML).not.toContain('data-recall-feedback');
   });
 
   it('旧传输 sidecar 才隐藏 fallback 正文；最终回复挂卡不隐藏正文', async () => {
@@ -553,7 +555,7 @@ describe('projection card surfaces a drifted confirmed version', () => {
   });
 });
 
-describe('「本次使用的记忆」卡折叠热区与默认收起（2026-09-29 二轮）', () => {
+describe('「本轮资产检索与带入状态」卡折叠热区与默认收起（2026-09-29 二轮）', () => {
   const confirmedModelCard = {
     kind: 'recall_projection_card',
     projectionId: 'proj-fold',
@@ -580,7 +582,7 @@ describe('「本次使用的记忆」卡折叠热区与默认收起（2026-09-29
     expect(loaded.host.innerHTML).toContain('role="button" tabindex="0" aria-expanded="false"');
     // 计数上移：标题右侧内联（不再是标题下的块级 small）。
     expect(loaded.host.innerHTML).toContain('chat-recall-citations-count');
-    expect(loaded.host.innerHTML).toContain('带入 1 条');
+    expect(loaded.host.innerHTML).toContain('投影已选中 1 条 · 已进入模型上下文 0 条');
     expect(loaded.host.innerHTML).not.toContain('data-recall-projection-summary');
     // 提示句挪到尾行、撤销左侧。
     expect(loaded.host.innerHTML).toContain('chat-recall-citations-note');
@@ -598,7 +600,7 @@ describe('「本次使用的记忆」卡折叠热区与默认收起（2026-09-29
     });
     await plain.context.window.mountRecallProjectionCard(plain.host, { projectionId: 'proj-fold' }, { cid: 'c1', onlyModelSelected: true });
     expect(plain.host.innerHTML).not.toContain('chat-recall-toggle');
-    expect(plain.host.innerHTML).toContain('本次使用的记忆');
+    expect(plain.host.innerHTML).toContain('本轮资产检索与带入状态');
     expect(plain.host.innerHTML).toContain('data-recall-projection-revoke');
   });
 

@@ -203,6 +203,7 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
       recipientIdType: candidate.recipientIdType === 'open_id' ? 'open_id' : 'chat_id',
       ...(externalChatId ? { externalChatId } : {}),
       sourceMessageId: String(candidate.sourceMessageId || '').slice(0, 160),
+      ...(candidate.requiresOperationPreflight === true ? { requiresOperationPreflight: true } : {}),
       textHash: String(candidate.textHash || '').slice(0, 128),
       ...(text ? { text } : {}),
       ...(card ? { card } : {}),
@@ -218,6 +219,9 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
         ? { contextTokenRef: candidate.contextTokenRef.trim().slice(0, 512) }
         : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(typeof candidate.localPreparedAt === 'string' && candidate.localPreparedAt.trim()
+        ? { localPreparedAt: candidate.localPreparedAt.trim().slice(0, 80) }
+        : {}),
       status,
       ...(typeof candidate.externalDeliveryId === 'string' ? { externalDeliveryId: candidate.externalDeliveryId.slice(0, 512) } : {}),
       ...(typeof candidate.error === 'string'
@@ -379,6 +383,7 @@ export async function beginDelivery(
     }
     const next: DeliveryLedgerEntry = {
       ...(existing || entry),
+      ...(existing?.requiresOperationPreflight || entry.requiresOperationPreflight ? { requiresOperationPreflight: true } : {}),
       recipientId,
       recipientIdType,
       text: existing?.text || text,
@@ -432,6 +437,24 @@ export async function finishDelivery(
     await writeJson(userMessagingDeliveryLedgerFile(uid), data);
     clearPending(pendingDeliveries, uid, key);
     if (isTerminalDeliveryStatus(next.status)) notifyDeliveryWaiters(uid, key);
+    return next;
+  });
+}
+
+export async function markDeliveryLocalPrepared(
+  uid: string,
+  key: string,
+): Promise<DeliveryLedgerEntry> {
+  assertUserId(uid);
+  boundedKey(key, 'delivery key');
+  return getLock(deliveryLocks, uid).runExclusive(async () => {
+    const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
+    const current = data.entries[key];
+    if (!current) throw new Error('delivery ledger entry not found');
+    if (current.localPreparedAt) return current;
+    const next: DeliveryLedgerEntry = { ...current, localPreparedAt: nowIso(), updatedAt: nowIso() };
+    data.entries[key] = next;
+    await writeJson(userMessagingDeliveryLedgerFile(uid), data);
     return next;
   });
 }

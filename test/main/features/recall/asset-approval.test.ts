@@ -1,9 +1,10 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
- * 审批提议（specs/008 US-406 / T033–T040）。
+ * 资产修改审批提议。
  *
  * 守四条：
  *   ① 实质变化**零静默发布**：`pending`/`deferred` 期间资产内容与版本分毫不动；
- *   ② 确认时**版本重检**：资产已被改过 → 保持待处理、不静默覆盖；
+ *   ② 确认时**版本重检**：资产已被改过 → 提议作废，不覆盖现有内容；
  *   ③ `defer` 进待确认清单不丢；`reject` 留档且同变更不再重复提交；
  *   ④ 卡片是提议不是锁：有待处理卡片不阻塞资产正常使用。
  *
@@ -45,9 +46,9 @@ async function modules() {
 
 async function seedAsset(uid: string, judgment = '发布前必须核对回滚方案。') {
   const { candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate(uid, {
+  const candidate = await createNightlyCandidateFixture(uid, {
     judgment,
-    // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
+    // 标题闸门：无 summary 兜底＝正文首句，过不了闸门。
     summary: '审批基线样本',
     suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
     sourceRefs: [{ kind: 'execution', id: 'exec-approval' }],
@@ -68,7 +69,7 @@ async function proposeStatementChange(uid: string, assetId: string, baselineVers
   });
 }
 
-describe('提议实体与状态机（T033）', () => {
+describe('提议实体与状态机', () => {
   it('建提议不改资产：pending 期间内容与版本分毫不动，也不阻塞正常使用', async () => {
     const uid = 'user-propose';
     const { assets, approval } = await modules();
@@ -125,7 +126,7 @@ describe('提议实体与状态机（T033）', () => {
   });
 });
 
-describe('三态处置（T036）', () => {
+describe('三态处置', () => {
   it('确认更新：按确认内容生效 + 台账两行（AI 提出 / 用户确认）', async () => {
     const uid = 'user-confirm';
     const { assets, approval } = await modules();
@@ -149,7 +150,7 @@ describe('三态处置（T036）', () => {
     expect(rows.find((row) => row.action === 'approval_proposed')!.actor).toBe('ai');
   });
 
-  it('确认时版本重检不一致：保持待处理、不静默覆盖', async () => {
+  it('确认时版本重检不一致：冲突即作废——提议置 superseded，不静默覆盖', async () => {
     const uid = 'user-conflict';
     const { assets, approval } = await modules();
     const asset = await seedAsset(uid);
@@ -159,13 +160,117 @@ describe('三态处置（T036）', () => {
 
     const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
     expect(result.ok).toBe(false);
-    expect(result.state).toBe('pending');
+    expect(result.state).toBe('superseded');
     expect(result.versionConflict).toMatchObject({ baselineVersion: '1' });
     // 资产保持用户改后的内容，AI 的提议没有被套上去。
     expect((await assets.readAbilityAsset(uid, asset.id)).statement).toBe('用户自己改过的正文。');
-    expect((await approval.readAssetChangeProposal(uid, proposal.id))!.state).toBe('pending');
+    // 冲突即作废：baseline 永不刷新，confirm 对这条提议永久不可达——作废后
+    // AI 可基于最新版本重提（作废态不进去重拦截）。
+    expect((await approval.readAssetChangeProposal(uid, proposal.id))!.state).toBe('superseded');
     const rows = await assets.listAbilityAssetAudit(uid, asset.id);
-    expect(String(rows.find((row) => row.action === 'approval_confirmed' && String(row.reason).includes('未生效'))?.note)).toContain(proposal.id);
+    expect(String(rows.find((row) => row.action === 'approval_superseded')?.note)).toContain(proposal.id);
+    // 作废不挡重提：同一变更可以再提（新提议、新 baseline）。
+    const repropose = await proposeStatementChange(uid, asset.id, '2', 'AI 想改成的正文。');
+    expect(repropose.created).toBe(true);
+  });
+
+  // 标签更新不 bump 内容版本：expectedVersion 看不见期间的手动打标，
+  // 所以门禁必须按"提议时的标签集合"再做一次写锁内 CAS。
+  it('标签在提议后被改过：确认作废，不整组覆盖期间的新标签', async () => {
+    const uid = 'user-tag-conflict';
+    const { assets, approval } = await modules();
+    const asset = await seedAsset(uid);
+    expect(asset.tags || []).toEqual([]);
+    const { proposal } = await approval.createAssetChangeProposal(uid, {
+      assetId: asset.id,
+      baselineVersion: asset.version,
+      fields: ['tags'],
+      payload: { tags: ['模板'] },
+      beforeValues: { tags: [] },
+      before: 'tags=0', after: 'tags=1',
+      reason: '把这条资产归到模板组',
+    });
+    await assets.updateAbilityAsset(uid, asset.id, { tags: ['重要'], reason: 'user tag edit', actor: 'user' });
+    expect((await assets.readAbilityAsset(uid, asset.id)).version).toBe(asset.version);
+
+    const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
+    expect(result.ok).toBe(false);
+    expect(result.state).toBe('superseded');
+    expect(result.tagConflict).toMatchObject({ baselineTags: [], currentTags: ['重要'] });
+    expect((await assets.readAbilityAsset(uid, asset.id)).tags).toEqual(['重要']);
+    expect((await approval.readAssetChangeProposal(uid, proposal.id))!.state).toBe('superseded');
+    const rows = await assets.listAbilityAssetAudit(uid, asset.id);
+    expect(String(rows.find((row) => row.action === 'approval_superseded')?.note)).toContain(proposal.id);
+  });
+
+  it('标签未变时确认成功，且标签更新不 bump 内容版本', async () => {
+    const uid = 'user-tag-confirm';
+    const { assets, approval } = await modules();
+    const asset = await seedAsset(uid);
+    const { proposal } = await approval.createAssetChangeProposal(uid, {
+      assetId: asset.id,
+      baselineVersion: asset.version,
+      fields: ['tags'],
+      payload: { tags: ['模板'] },
+      beforeValues: { tags: [] },
+      before: 'tags=0', after: 'tags=1', reason: '打标',
+    });
+    const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
+    expect(result.ok).toBe(true);
+    const after = await assets.readAbilityAsset(uid, asset.id);
+    expect(after.tags).toEqual(['模板']);
+    expect(after.version).toBe(asset.version);
+  });
+
+  it('标签顺序/大小写不同但集合一致：不算冲突', async () => {
+    const uid = 'user-tag-order';
+    const { assets, approval } = await modules();
+    const asset = await seedAsset(uid);
+    await assets.updateAbilityAsset(uid, asset.id, { tags: ['Alpha', 'Beta'], reason: 'seed tags', actor: 'user' });
+    const tagged = await assets.readAbilityAsset(uid, asset.id);
+    const { proposal } = await approval.createAssetChangeProposal(uid, {
+      assetId: asset.id,
+      baselineVersion: tagged.version,
+      fields: ['tags'],
+      payload: { tags: ['Beta', 'Alpha', 'Gamma'] },
+      beforeValues: { tags: ['Alpha', 'Beta'] },
+      before: 'tags=2', after: 'tags=3', reason: '加一个标签',
+    });
+    await assets.updateAbilityAsset(uid, asset.id, { tags: ['beta', 'alpha'], reason: 'reorder', actor: 'user' });
+    const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
+    expect(result.ok).toBe(true);
+    expect((await assets.readAbilityAsset(uid, asset.id)).tags).toEqual(['Beta', 'Alpha', 'Gamma']);
+  });
+
+  /** decide 的 payload 此前整对象直达资产更新，治理键（actor/
+   *  reason/expectedVersion/id）混入即被写路径消费。修复：键集白名单过滤，
+   *  只放行内容字段；治理键由 decide 自己显式设置。 */
+  it('confirm 带毒键 payload——治理键被键集过滤丢弃，只生效内容字段', async () => {
+    const uid = 'user-payload-keys';
+    const { assets, approval } = await modules();
+    const asset = await seedAsset(uid);
+    const { proposal } = await proposeStatementChange(uid, asset.id, asset.version, '想生效的正文。');
+
+    const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm', {
+      payload: {
+        statement: '确认时用户编辑过的正文。',
+        actor: 'ai' as never,                       // 毒键：生效 actor 必须仍是 user
+        reason: '被 payload 覆盖的 reason' as never, // 毒键：reason 必须是 decide 的
+        expectedVersion: '99' as never,             // 毒键：不得借 payload 抢 CAS 位
+        id: 'aa-forged' as never,                   // 毒键：身份不可变
+        ownerId: 'someone-else' as never,           // 毒键
+        statementLengthHack: 1 as never,            // 未知键不落盘
+      },
+    });
+    expect(result.ok).toBe(true);
+    const after = await assets.readAbilityAsset(uid, asset.id);
+    expect(after.statement).toBe('确认时用户编辑过的正文。');
+    expect(after.id).toBe(asset.id);
+    expect(after.ownerId).toBe(uid);
+    // 生效 actor 是用户（decide 显式设置），不是 payload 塞进来的 ai。
+    const rows = await assets.listAbilityAssetAudit(uid, asset.id);
+    expect(rows.find((row) => row.action === 'updated')!.actor).toBe('user');
+    expect(String(rows.find((row) => row.action === 'updated')!.reason)).toContain(proposal.id);
   });
 
   it('稍后处理：进待确认清单，不丢', async () => {
@@ -236,7 +341,7 @@ describe('三态处置（T036）', () => {
   });
 });
 
-describe('版本语义对齐 specs/015 US-702（T040）', () => {
+describe('审批与资产版本语义一致', () => {
   it('确认前 v1 不变；确认后形成 v2，历史引用仍读 v1、新任务读 v2', async () => {
     const uid = 'user-version-semantics';
     const { assets, approval } = await modules();
@@ -284,7 +389,7 @@ describe('版本语义对齐 specs/015 US-702（T040）', () => {
   });
 });
 
-describe('卡片载荷与下发（T034 / T038）', () => {
+describe('卡片载荷与下发', () => {
   it('载荷形状与契约一致：kind/proposalId/diff/reason/三操作', async () => {
     const uid = 'user-card';
     const { approval, card } = await modules();
@@ -304,7 +409,7 @@ describe('卡片载荷与下发（T034 / T038）', () => {
     expect(payload.actions).toEqual(['confirm', 'defer', 'reject']);
   });
 
-  it('提议带上「当前值」：卡片要能让用户对比"当前 → 拟生效"（2026-09-25 真机抓出的缺口）', async () => {
+  it('提议带上「当前值」：卡片要能让用户对比"当前 → 拟生效"', async () => {
     const uid = 'user-card-current';
     const { approval, assets } = await modules();
     const asset = await seedAsset(uid, '当前的正文内容。');
@@ -365,14 +470,13 @@ describe('卡片载荷与下发（T034 / T038）', () => {
 });
 
 /**
- * 与 008 的口径一致性（specs/015 · US-702 · T027）：本 feature 只**复用** 008
- * 的产物（写通道 / 版本语义 / 审批卡三态），所以两条线必须长得一样——
+ * 审批与候选共用写通道、版本语义和处置状态：
  *   · 版本冲突结构字段名一致（候选侧只多一个本链路的 targetVersionUsed）；
  *   · 处置三态用同一套状态词（confirmed / deferred / rejected）；
  *   · 「拒绝 = 保持原版 + 留档」两侧一致；
- *   · 008 路径的重检行为不回退，且两条线共用**同一处**锁内比对。
+ *   · 两条线共用锁内版本比对。
  */
-describe('与 008 口径一致性（specs/015 T027）', () => {
+describe('审批与候选的写入约束一致', () => {
   it('版本冲突结构字段名一致：候选侧 = 008 侧 + targetVersionUsed', async () => {
     const uid = 'user-parity-conflict';
     const { assets, approval, candidates } = await modules();
@@ -386,7 +490,7 @@ describe('与 008 口径一致性（specs/015 T027）', () => {
     expect(eight.versionConflict).toEqual({ baselineVersion: '1', currentVersion: '2' });
 
     // 候选侧：更新型候选锚定 v2 → 资产再被改到 v3 → 确认 → 结构化冲突。
-    const candidate = await candidates.saveRecallCandidate(uid, {
+    const candidate = await createNightlyCandidateFixture(uid, {
       judgment: '候选想改成的新正文。', summary: '改文候选样本',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
@@ -415,13 +519,14 @@ describe('与 008 口径一致性（specs/015 T027）', () => {
       expect(typeof eightConflict[key], `008 ${key}`).toBe('string');
       expect(typeof candidateConflict!.versionConflict![key], `候选 ${key}`).toBe('string');
     }
-    // 两侧冲突后都还能再决定：008 提议保持待处理，候选保持待处理（非终态）。
-    expect((await approval.readAssetChangeProposal(uid, proposal.id))!.state).toBe('pending');
+    // 两侧冲突后各有去处：审批提议冲突即作废（baseline 永不刷新，
+    // 死路不如作废，AI 会重提），候选保持待处理（候选重检锚定最新版本，可再决定）。
+    expect((await approval.readAssetChangeProposal(uid, proposal.id))!.state).toBe('superseded');
     expect((await candidates.readRecallCandidate(uid, candidate.id)).status).toBe('pending_review');
     expect((await assets.readAbilityAsset(uid, asset.id)).statement).toBe('他处改过的正文二。');
   });
 
-  it('三态名一致：两条线都落在同一套状态词（confirmed / deferred / rejected）', async () => {
+  it('状态词一致：提议三态（confirmed/deferred/rejected），候选两态（confirmed/rejected，deferred 已成系统专用 2026-10-02）', async () => {
     const uid = 'user-parity-tri-state';
     const { approval, candidates } = await modules();
     const asset = await seedAsset(uid, '三态口径的基线正文。');
@@ -440,7 +545,7 @@ describe('与 008 口径一致性（specs/015 T027）', () => {
     }
 
     // 候选侧：同一条资产上的三条候选（一条确认、一条稍后、一条拒绝）。
-    const saveCandidate = (judgment: string, sourceId: string) => candidates.saveRecallCandidate(uid, {
+    const saveCandidate = (judgment: string, sourceId: string) => createNightlyCandidateFixture(uid, {
       judgment,
       summary: '三态对齐样本',
       suggestedType: 'rule',
@@ -451,17 +556,16 @@ describe('与 008 口径一致性（specs/015 T027）', () => {
       sourceRefs: [{ kind: 'execution_evaluation', id: sourceId }],
     });
     const confirmed = await saveCandidate('候选确认态正文。', 'run-parity-confirm');
-    const deferred = await saveCandidate('候选稍后态正文。', 'run-parity-defer');
     const rejected = await saveCandidate('候选拒绝态正文。', 'run-parity-reject');
     const candidateStates = [
       (await candidates.promoteRecallCandidate(uid, confirmed.id, { actor: 'user' })).candidate.status,
-      (await candidates.deferRecallCandidate(uid, deferred.id)).status,
       (await candidates.rejectRecallCandidate(uid, rejected.id)).status,
     ];
 
-    // 同一套状态词：不是"008 说 deferred、候选线说 scheduled"。
-    expect(candidateStates).toEqual(['confirmed', 'deferred', 'rejected']);
-    expect(candidateStates).toEqual(eightStates);
+    // 用户可达的状态词对齐：候选侧 confirmed/rejected 与提议侧同名；
+    // 提议侧多出的 deferred 是其独有的「稍后处理」（候选侧已删，2026-10-02）。
+    expect(candidateStates).toEqual(['confirmed', 'rejected']);
+    expect(eightStates.filter((state) => state !== 'deferred')).toEqual(candidateStates);
   });
 
   it('「拒绝 = 保持原版 + 留档」两侧一致', async () => {
@@ -479,7 +583,7 @@ describe('与 008 口径一致性（specs/015 T027）', () => {
     expect((await approval.readAssetChangeProposal(uid, proposal.id))!.state).toBe('rejected');
 
     // 候选侧：拒绝 → 同一个含义（保持原版）+ 留档（决定账本）。
-    const candidate = await candidates.saveRecallCandidate(uid, {
+    const candidate = await createNightlyCandidateFixture(uid, {
       judgment: '不该生效的正文（候选）。', summary: '保持原版用例',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
@@ -501,7 +605,7 @@ describe('与 008 口径一致性（specs/015 T027）', () => {
     const { assets, approval, candidates } = await modules();
     const asset = await seedAsset(uid, '并发口径的基线正文。');
     const { proposal } = await proposeStatementChange(uid, asset.id, asset.version, '008 并发想改成的正文。');
-    const candidate = await candidates.saveRecallCandidate(uid, {
+    const candidate = await createNightlyCandidateFixture(uid, {
       judgment: '候选并发想改成的正文。', summary: '并发改文用例',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
@@ -529,11 +633,142 @@ describe('与 008 口径一致性（specs/015 T027）', () => {
       ? (six as PromiseRejectedResult).reason.versionConflict
       : (eight as PromiseFulfilledResult<{ versionConflict?: unknown }>).value.versionConflict;
     expect(loserConflict).toMatchObject({ baselineVersion: '1', currentVersion: '2' });
-    // 输的那条留在可再决定的状态：不静默覆盖、不落终态。
+    // 候选保持待处理；审批提议冲突即作废
+    // （confirm 对旧 baseline 永久不可达，作废让位于 AI 的重提）。
     if (applied[0] === '008') {
       expect((await candidates.readRecallCandidate(uid, candidate.id)).status).toBe('pending_review');
     } else {
-      expect((await approval.readAssetChangeProposal(uid, proposal.id))!.state).toBe('pending');
+      expect((await approval.readAssetChangeProposal(uid, proposal.id))!.state).toBe('superseded');
     }
   });
+});
+
+describe('future use content round trip', () => {
+  it('preserves the candidate future use and confirms a value-only proposal as a new version', async () => {
+    const uid = 'synthetic-future-use';
+    const { candidates, assets, approval } = await modules();
+    const candidate = await createNightlyCandidateFixture(uid, {
+      summary: '来源核对规则', judgment: '评审前核对来源，演练除外。', value: '用于正式评审的来源核对。\n' + '保留来源和适用条件。\n'.repeat(160),
+      suggestedType: 'rule', suggestedScope: 'review', ...RULE_BOUNDARY,
+      sourceRefs: [{ kind: 'execution', id: 'synthetic-future-source' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' });
+    expect(asset.value).toBe(candidate.value);
+    expect(asset.statement).toBe(candidate.judgment);
+    const nextUse = '用于正式评审和交付检查的来源核对。';
+    const { proposal } = await approval.createAssetChangeProposal(uid, {
+      assetId: asset.id, baselineVersion: asset.version, fields: ['value'], payload: { value: nextUse },
+      beforeValues: { value: asset.value }, before: 'original future use', after: 'revised future use', reason: 'synthetic clarification',
+    });
+    expect((await assets.readAbilityAsset(uid, asset.id)).value).toBe(candidate.value);
+    const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
+    expect(result.ok).toBe(true);
+    const saved = await assets.readAbilityAsset(uid, asset.id);
+    expect(saved.value).toBe(nextUse);
+    expect(saved.statement).toBe(candidate.judgment);
+    expect(saved.scope).toBe(asset.scope);
+    expect(saved.version).not.toBe(asset.version);
+    expect((await assets.readAbilityAssetVersionSnapshot(uid, asset.id, asset.version))?.value).toBe(candidate.value);
+    expect((await assets.readAbilityAssetVersionSnapshot(uid, asset.id, saved.version))?.value).toBe(nextUse);
+  });
+});
+
+
+it('binds approval to the selected baseline as well as the latest counter', async () => {
+  const uid = 'synthetic-selected-approval';
+  const { assets, approval } = await modules();
+  const original = await seedAsset(uid);
+  const latest = await assets.updateAbilityAsset(uid, original.id, { value: '第二版用途', actor: 'user', reason: 'synthetic latest' });
+  const { proposal } = await approval.createAssetChangeProposal(uid, { assetId: original.id, baselineVersion: latest.version,
+    fields: ['value'], payload: { value: '拟保存用途' }, before: '', after: '', reason: 'synthetic proposal' });
+  await assets.selectAbilityAssetVersion(uid, original.id, original.version, { actor: 'user', reason: 'synthetic switch' });
+  const blocked = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
+  expect(blocked.state).toBe('superseded');
+  const selected = await assets.readAbilityAsset(uid, original.id);
+  const next = await approval.createAssetChangeProposal(uid, { assetId: selected.id, baselineVersion: selected.version, baselineActiveVersion: selected.activeVersion, before: '', after: '', fields: ['value'], payload: { value: '旧版补用途' }, reason: 'synthetic selected proposal' });
+  expect(next.proposal.baselineVersion).toBe(latest.version);
+  expect(next.proposal.baselineActiveVersion).toBe(original.version);
+  const result = await approval.decideAssetChangeProposal(uid, next.proposal.id, 'confirm');
+  expect(result.ok).toBe(true);
+  expect((await approval.readAssetChangeProposal(uid, next.proposal.id))?.appliedVersion).toBe(result.appliedVersion);
+  expect((await assets.readAbilityAsset(uid, original.id)).value).toBe('旧版补用途');
+});
+
+it('restores an absent future use when rejection wins during confirmation', async () => {
+  const uid = 'synthetic-future-race';
+  const { assets, approval } = await modules();
+  const original = await seedAsset(uid);
+  const baseline = await assets.updateAbilityAsset(uid, original.id, { value: '', actor: 'user', reason: 'synthetic absent baseline' });
+  const { proposal } = await approval.createAssetChangeProposal(uid, { assetId: baseline.id, baselineVersion: baseline.version,
+    fields: ['value'], payload: { value: 'proposed future use' }, before: '', after: '', reason: 'synthetic concurrent decision' });
+  const apply = assets.updateAbilityAsset;
+  const intercepted = vi.spyOn(assets, 'updateAbilityAsset').mockImplementationOnce(async (...args) => {
+    const saved = await apply(...args);
+    await approval.decideAssetChangeProposal(uid, proposal.id, 'reject');
+    return saved;
+  });
+  try {
+    const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
+    expect(result.state).toBe('rejected');
+    expect(result.rollback).toMatchObject({ status: 'full', failedFields: [] });
+    expect(result.message).toContain('已按提议前的值回滚');
+    const restored = await assets.readAbilityAsset(uid, baseline.id);
+    expect(restored.value).toBeUndefined();
+    expect(restored.statement).toBe(baseline.statement);
+    expect((await assets.readAbilityAssetVersionSnapshot(uid, restored.id, restored.version))?.value).toBeUndefined();
+  } finally { intercepted.mockRestore(); }
+});
+
+it('reports a partial rollback when a field has no pre-proposal baseline', async () => {
+  const uid = 'synthetic-partial-rollback';
+  const { assets, approval } = await modules();
+  const asset = await seedAsset(uid);
+  const { proposal } = await approval.createAssetChangeProposal(uid, {
+    assetId: asset.id,
+    baselineVersion: asset.version,
+    fields: ['statement', 'tags'],
+    payload: { statement: '部分回滚目标正文。', tags: ['alpha'] },
+    beforeValues: { statement: asset.statement },
+    before: 'statement', after: 'statement+tags', reason: 'synthetic partial rollback',
+  });
+  const apply = assets.updateAbilityAsset;
+  const intercepted = vi.spyOn(assets, 'updateAbilityAsset').mockImplementationOnce(async (...args) => {
+    const saved = await apply(...args);
+    await approval.decideAssetChangeProposal(uid, proposal.id, 'reject');
+    return saved;
+  });
+  try {
+    const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
+    expect(result.rollback).toMatchObject({ status: 'partial', failedFields: ['tags'] });
+    expect(result.message).toContain('未能回滚');
+    const restored = await assets.readAbilityAsset(uid, asset.id);
+    expect(restored.statement).toBe(asset.statement);
+    expect(restored.tags).toEqual(['alpha']);
+  } finally { intercepted.mockRestore(); }
+});
+
+it('reports a failed rollback and persists the recovery state', async () => {
+  const uid = 'synthetic-failed-rollback';
+  const { assets, approval } = await modules();
+  const asset = await seedAsset(uid);
+  const { proposal } = await proposeStatementChange(uid, asset.id, asset.version, '被拒绝但仍留在资产上的修改。');
+  const apply = assets.updateAbilityAsset;
+  let calls = 0;
+  const intercepted = vi.spyOn(assets, 'updateAbilityAsset').mockImplementation(async (...args) => {
+    calls += 1;
+    if (calls === 1) {
+      const saved = await apply(...args);
+      await approval.decideAssetChangeProposal(uid, proposal.id, 'reject');
+      return saved;
+    }
+    throw new Error('synthetic rollback failure');
+  });
+  try {
+    const result = await approval.decideAssetChangeProposal(uid, proposal.id, 'confirm');
+    expect(result.rollback).toMatchObject({ status: 'failed', failedFields: ['statement'] });
+    expect(result.message).toContain('回滚失败');
+    expect((await assets.readAbilityAsset(uid, asset.id)).statement).toBe('被拒绝但仍留在资产上的修改。');
+    const persisted = await approval.readAssetChangeProposal(uid, proposal.id);
+    expect(persisted?.rollback).toMatchObject({ status: 'failed', appliedVersion: expect.any(String) });
+  } finally { intercepted.mockRestore(); }
 });

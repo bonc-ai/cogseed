@@ -342,7 +342,9 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
   const evidenceRefs = normalizeCognitionSourceRefs([
     // 1. conversation — the session + every message
     { kind: 'conversation', id: input.conversationId, title: 'Group chat conversation' },
-    ...messages.slice(0, 100).map((message) => ({ kind: 'conversation' as const, id: message.id, excerpt: message.text })),
+    // 消息证据显式标 subtype:'message'（与 capture 线同口径）：不标会被
+    // source-service 默认补成 session，进而混入资产的 sourceSessionIds。
+    ...messages.slice(0, 100).map((message) => ({ kind: 'conversation' as const, subtype: 'message' as const, id: message.id, excerpt: message.text })),
     // 2. artifact_file — produced files + attached artifacts (PRD v2 kind)
     ...producedFiles.slice(0, 50).map((file) => ({ kind: 'artifact_file' as const, id: `artifact-${file}`, title: path.basename(file) })),
     ...messages.flatMap((message) => (message.artifacts || []).slice(0, 10).map((artifact) => ({ kind: 'artifact_file' as const, id: artifact.id, title: artifact.title }))),

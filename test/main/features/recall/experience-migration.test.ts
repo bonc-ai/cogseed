@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 /**
  * specs/016 T011：存量 KSTAR 经验类资产迁移（契约 E7/E8，data-model §7）。
  *
@@ -50,7 +51,7 @@ async function modules() {
 }
 
 /** KSTAR 经验类资产夹具：默认带 learningProvenance（判据正例的硬标记）。
- *  走 createSystemAbilityAsset 真实写入（主记录 + 版本流 v1 快照 + 审计）。 */
+ *  以测试 helper 预置历史记录（主记录 + 版本流 v1 快照 + 审计）。 */
 async function seedAsset(spec: {
   id: string;
   statement?: string;
@@ -64,7 +65,7 @@ async function seedAsset(spec: {
   const { assets } = await modules();
   const now = new Date().toISOString();
   const withProvenance = spec.withProvenance !== false;
-  return assets.createSystemAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 1,
     ownerId: UID,
     id: spec.id,
@@ -409,7 +410,7 @@ describe('ipc › recall.experiences.migration (E7/E8, T017)', () => {
     users.activateUser(UID);
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const now = new Date().toISOString();
-    await assets.createSystemAbilityAsset(UID, {
+    await seedStoredAbilityAsset(UID, {
       schemaVersion: 1, ownerId: UID, id: 'aa-ipc-mig-0001', candidateId: 'cand-aa-ipc-mig-0001',
       title: 'IPC 迁移资产', statement: 'IPC 通道迁移专用正文。', type: 'rule', scope: 'project',
       evidenceRefs: [{ kind: 'conversation', id: 'conv-ipc-mig-1' }], reviewDecisionId: 'legacy-untracked',

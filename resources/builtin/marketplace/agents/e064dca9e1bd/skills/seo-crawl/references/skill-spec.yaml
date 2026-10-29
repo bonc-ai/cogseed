@@ -1,0 +1,11 @@
+name: seo-crawl
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'Fetch a URL and extract on-page SEO/GEO fields as structured JSON (title/description/canonical/heading
+  hierarchy/structured data/hreflang/image alt/internal+external links/robots), SSRF-guarded
+  and system-proxy aware; For: ''grab this page''s SEO fields'', ''pull on-page data
+  for dia'
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

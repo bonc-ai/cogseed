@@ -10,6 +10,7 @@
   const STAGES = ['complete', 'check', 'preview', 'send'];
   const MINE_POLL_MS = 55_000;
   const MINE_FILTERS = ['all', 'pending', 'rejected', 'published', 'withdrawal'];
+  const MINE_TYPES = ['all', 'agent', 'skill'];
   const ORIGIN_TYPES = ['original', 'derived_from_hub', 'third_party'];
   const HUB_CONTENT_ID = /^[0-9a-f]{12}$/;
   const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -131,17 +132,29 @@
 
   // ── View plumbing ──
 
+  const SKILLS_MINE_HOST = 'skills-contributions-view';
+  const AGENTS_MINE_HOST = 'agents-contributions-view';
+
+  /** 「我的贡献」同一页面：由智能体页进入时挂在智能体页签的容器里（页签保持「智能体」），否则挂在技能页签里。 */
+  function mineHost() {
+    return document.getElementById(mine?.returnTo === 'agents' ? AGENTS_MINE_HOST : SKILLS_MINE_HOST);
+  }
+
   function hostOf(kind) {
-    return document.getElementById(kind === 'mine' ? 'skills-contributions-view' : 'skills-contribute-view');
+    return kind === 'mine' ? mineHost() : document.getElementById('skills-contribute-view');
   }
 
   function showView(kind) {
-    const grid = document.getElementById('skills-grid-view');
-    const detail = document.getElementById('skills-detail-view');
-    if (grid) grid.style.display = 'none';
-    if (detail) detail.style.display = 'none';
+    const fromAgents = kind === 'mine' && mine?.returnTo === 'agents';
+    for (const id of fromAgents ? ['agents-grid-view', 'agents-detail-view', 'agents-contribute-view'] : ['skills-grid-view', 'skills-detail-view']) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    }
     hostOf('contribute').style.display = kind === 'contribute' ? 'flex' : 'none';
-    hostOf('mine').style.display = kind === 'mine' ? 'flex' : 'none';
+    for (const id of [SKILLS_MINE_HOST, AGENTS_MINE_HOST]) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = kind === 'mine' && el === mineHost() ? 'flex' : 'none';
+    }
   }
 
   function viewVisible(kind) {
@@ -168,8 +181,8 @@
     stopMinePoll();
     mine = null;
     void endSession();
-    for (const kind of ['contribute', 'mine']) {
-      const host = hostOf(kind);
+    for (const id of ['skills-contribute-view', SKILLS_MINE_HOST, AGENTS_MINE_HOST]) {
+      const host = document.getElementById(id);
       if (host) {
         host.style.display = 'none';
         host.innerHTML = '';
@@ -186,9 +199,17 @@
     }
   }
 
-  function backline(label) {
+  /** 从「我的贡献」返回：由智能体页进入的回智能体页，其余回技能页。 */
+  function leaveFromMine() {
+    if (mine?.returnTo === 'agents' && typeof _showAgentsGridView === 'function') {
+      hideContributionViews();
+      _showAgentsGridView();
+    } else leaveToSkills();
+  }
+
+  function backline(label, backLabel) {
     return `<div class="hubc-backline">${button({
-      label: tr('skills.contribute_back', 'Back to Skills'), role: 'ghost', size: 'sm', icon: 'chevron-left',
+      label: backLabel || tr('skills.contribute_back', 'Back to Skills'), role: 'ghost', size: 'sm', icon: 'chevron-left',
       attrs: { 'data-hubc-action': 'back' },
     })}<span class="hubc-backline__sep" aria-hidden="true">/</span><span>${esc(label)}</span></div>`;
   }
@@ -511,9 +532,17 @@
         <ul class="hubc-check-list" aria-label="${esc(tr('skills.contribute_check_panel_title', 'Local checks'))}">${rows}</ul>
         ${details.issues.length ? `<ul class="hubc-issues" aria-label="${esc(tr('skills.contribute_check_issues', 'Findings'))}">${details.issues.map((issue) => `<li>${esc(issue)}</li>`).join('')}</ul>` : ''}`;
     }
+    // 报告 HUB-3：本机检查是**参考**，Hub 会用同一版扫描器复检上传的字节。两端版本
+    // 已对齐（skill-sentry 2.3.0 / 规则包 v1.2.0），但"以服务端为准"这句话仍然要说：
+    // 贡献者不该把本机绿灯当成最终结论。
+    const advisory = tr(
+      'skills.contribute_check_advisory',
+      'Local results are advisory: Hub rechecks the uploaded bytes with the same scanner before accepting.',
+    );
     return `<section class="hubc-panel" aria-labelledby="hubc-check-title" aria-busy="${running ? 'true' : 'false'}">
       <div class="hubc-section-head"><div><h2 id="hubc-check-title">${esc(title)}</h2><p>${esc(hint)}</p></div>${root.uiStatusPill(pill)}</div>
       ${body}
+      <p class="hubc-note" data-hubc-check-advisory>${esc(advisory)}</p>
       <div class="hubc-actions"><p>${esc(running ? tr('skills.contribute_check_footnote_running', 'Files stay on this device until checks finish.') : '')}</p>
         ${running
     ? button({ label: tr('skills.contribute_check_cancel', 'Cancel check'), attrs: { 'data-hubc-action': 'cancel-check' } })
@@ -918,6 +947,17 @@
     });
   }
 
+  // Agents and Skills share this page; the type switch narrows the list (meeting conclusion 4).
+  function mineTypeControl() {
+    return root.uiSegmentedControl({
+      ariaLabel: tr('skills.contribute_mine_types', 'Filter by type'),
+      value: mine.type,
+      items: MINE_TYPES.map((value) => ({
+        value, label: tr(`skills.contribute_mine_type.${value}`, value), attrs: { 'data-hubc-type': value },
+      })),
+    });
+  }
+
   function mineDetailMessage(entry) {
     if (entry.status === 'PENDING_REVIEW' || entry.status === 'PENDING') {
       return tr('skills.contribute_mine_msg.pending', 'Operations is reviewing this submission. You can withdraw it before review.');
@@ -980,11 +1020,21 @@
     const selected = entry.key === mine.selected;
     const withdrawal = entry.withdrawal
       ? ` · ${tr(`skills.contribute_withdrawal_state.${entry.withdrawal.status}`, entry.withdrawal.status)}` : '';
+    // 报告 HUB-8：运维拒绝撤回后，`withdrawal_request` 仍是最后一次申请（接口一直有值），
+    // 但列表里只有一个词，用户会以为"申请丢了"。被拒时给出显式角标，理由挂在 title 上，
+    // 详情面板里仍有完整的「撤回历史」。
+    const withdrawalBadge = entry.withdrawal && entry.withdrawal.status === 'REJECTED'
+      ? root.uiBadge({
+        label: tr('skills.contribute_withdrawal_rejected_badge', 'Withdrawal rejected'),
+        tone: 'critical',
+        attrs: { 'data-hubc-withdrawal': 'REJECTED', title: entry.withdrawal.rejectedReason || undefined },
+      })
+      : '';
     return `<li class="hubc-row${selected ? ' is-selected' : ''}" data-hubc-row="${esc(entry.key)}">
       <div class="hubc-row__name">${button({
     label: entry.title, role: 'ghost', size: 'sm',
     attrs: { 'data-hubc-action': 'select-row', 'data-hubc-key': entry.key, 'aria-pressed': selected ? 'true' : 'false' },
-  })}<small>${esc((entry.contentId || entry.submissionId || entry.key) + withdrawal)}</small></div>
+  })}${withdrawalBadge}<small>${esc(tr(`skills.contribute_mine_type.${entry.contentType}`, entry.contentType) + ' · ' + (entry.contentId || entry.submissionId || entry.key) + withdrawal)}</small></div>
       <div class="hubc-row__cell">${root.uiStatusPill(statusDescriptor(entry.status || tr('skills.contribute_status_unknown', 'Unknown')))}<small>${esc(formatTime(entry.submittedAt))}</small></div>
       <div class="hubc-row__cell">${esc(entry.publishedVersion ? `v${entry.publishedVersion}` : '—')}</div>
     </li>`;
@@ -992,7 +1042,7 @@
 
   function renderMineList() {
     const host = hostOf('mine');
-    const visible = model.filterHistory(mine.items, { filter: mine.filter, query: mine.query });
+    const visible = model.filterHistory(mine.items, { filter: mine.filter, query: mine.query, type: mine.type });
     if (!visible.some((entry) => entry.key === mine.selected)) mine.selected = visible[0]?.key || null;
     const list = host.querySelector('[data-hubc-list]');
     const detail = host.querySelector('[data-hubc-detail]');
@@ -1024,9 +1074,11 @@
     const synced = formatTime(mine.generatedAt);
     const searchFocused = document.activeElement?.id === 'hubc-mine-search';
     host.innerHTML = `<div class="hubc-page" data-hubc-page="mine">
-      ${backline(tr('skills.contribute_mine', 'My contributions'))}
+      ${backline(tr('skills.contribute_mine', 'My contributions'), mine.returnTo === 'agents' ? tr('agents.contribute_back', 'Back to agents') : undefined)}
       <header class="hubc-heading hubc-heading--center"><div><h1>${esc(tr('skills.contribute_mine', 'My contributions'))}</h1>
-        <p>${esc(tr('skills.contribute_mine_desc', 'See submissions and review status, and look after published Skills.'))}</p></div>
+        <p>${esc(mine.returnTo === 'agents'
+    ? tr('agents.contribute_mine_desc', 'See submissions and review status, and look after published Agents.')
+    : tr('skills.contribute_mine_desc', 'See submissions and review status, and look after published Skills.'))}</p></div>
         ${button({ label: tr('common.refresh', 'Refresh'), icon: 'refresh', loading: mine.loading, attrs: { 'data-hubc-action': 'mine-refresh' } })}</header>
       ${mine.stale ? `<p class="hubc-alert" role="status">${esc(tr('skills.contribute_mine_stale', 'Hub could not be refreshed; showing the last saved result.'))}</p>` : ''}
       <div class="hubc-summary">
@@ -1035,11 +1087,11 @@
         <span><strong>${esc(stats.published)}</strong>${esc(tr('skills.contribute_mine_published', 'published'))}</span>
         <small>${esc(synced ? fmt(tr('skills.contribute_mine_synced', 'Last synced {time}'), { time: synced }) : '')}</small>
       </div>
-      <div class="hubc-toolbar"><div data-hubc-filters>${mineFilterControl()}</div>
+      <div class="hubc-toolbar"><div data-hubc-types>${mineTypeControl()}</div><div data-hubc-filters>${mineFilterControl()}</div>
         <div class="hubc-search">${root.uiInput({ id: 'hubc-mine-search', type: 'search', value: mine.query, placeholder: tr('skills.contribute_mine_search', 'Search my contributions'), attrs: { 'aria-label': tr('skills.contribute_mine_search', 'Search my contributions') } })}</div></div>
       <div class="hubc-master">
         <section class="hubc-list" aria-label="${esc(tr('skills.contribute_mine_list', 'Contribution list'))}">
-          <div class="hubc-list__head"><span>${esc(tr('skills.contribute_mine_col_skill', 'Skill'))}</span><span>${esc(tr('skills.contribute_mine_col_latest', 'Latest submission'))}</span><span>${esc(tr('skills.contribute_published_version', 'Published version'))}</span></div>
+          <div class="hubc-list__head"><span>${esc(mine.type === 'agent' ? tr('skills.contribute_mine_col_agent', 'Agent') : mine.type === 'skill' ? tr('skills.contribute_mine_col_skill', 'Skill') : tr('skills.contribute_mine_col_content', 'Content'))}</span><span>${esc(tr('skills.contribute_mine_col_latest', 'Latest submission'))}</span><span>${esc(tr('skills.contribute_published_version', 'Published version'))}</span></div>
           <div data-hubc-list></div>
         </section>
         <aside class="hubc-detail" aria-label="${esc(tr('skills.contribute_mine_detail', 'Contribution details'))}" data-hubc-detail></aside>
@@ -1083,10 +1135,14 @@
     try {
       if (!options?.skipIdentity && !await ensureIdentity(tr('skills.contribute_mine', 'My contributions'))) return;
       await endSession();
-      mine = { items: [], filter: 'all', query: '', selected: null, stale: false, generatedAt: '', loading: true };
+      mine = {
+        items: [], filter: 'all', query: '', selected: null, stale: false, generatedAt: '', loading: true,
+        type: MINE_TYPES.includes(options?.type) ? options.type : 'all',
+        returnTo: options?.returnTo === 'agents' ? 'agents' : 'skills',
+      };
       renderMine();
       if (!await loadMine()) {
-        leaveToSkills();
+        leaveFromMine();
         return;
       }
       stopMinePoll();
@@ -1097,15 +1153,22 @@
       }, MINE_POLL_MS);
     } catch (error) {
       await root.uiAlert(tr('skills.contribute_start_failed', 'Could not load contributions.'));
-      if (mine) leaveToSkills();
+      if (mine) leaveFromMine();
     }
   }
 
   async function mineAction(action, key) {
     const entry = mine?.items.find((item) => item.key === key);
-    if (action === 'resubmit') return chooseLocalSkill();
+    if (action === 'resubmit') return typeof root.chooseLocalAgentContribution === 'function' && mine?.type === 'agent'
+      ? root.chooseLocalAgentContribution() : chooseLocalSkill();
     if (!entry) return undefined;
-    if (action === 'new-version') return chooseLocalSkill(entry.contentId, entry.origin || null);
+    if (action === 'new-version') {
+      // Agent entries are submitted through the Agent flow, never the Skill picker.
+      if (entry.contentType === 'agent' && typeof root.chooseLocalAgentContribution === 'function') {
+        return root.chooseLocalAgentContribution(entry.contentId);
+      }
+      return chooseLocalSkill(entry.contentId, entry.origin || null);
+    }
     if (action === 'withdraw-pending') {
       if (!await root.uiConfirmDanger({ message: tr('skills.contribute_withdraw_pending_confirm', 'Withdraw this pending submission?') })) return undefined;
       const result = await root.cogseed.invoke('contribution.withdrawPending', { submission_id: entry.submissionId });
@@ -1161,7 +1224,7 @@
     const action = target.dataset.hubcAction || 'select-row';
     const key = target.dataset.hubcKey || target.dataset.hubcRow || '';
     try {
-      if (action === 'back') leaveToSkills();
+      if (action === 'back') { if (viewVisible('mine')) leaveFromMine(); else leaveToSkills(); }
       else if (action === 'complete-save') await saveComplete();
       else if (action === 'cancel-check') session?.cancelCheck?.();
       else if (action === 'recheck') await runCheck();
@@ -1201,6 +1264,12 @@
   }
 
   function onFilterClick(event) {
+    const type = event.target.closest('[data-hubc-type]');
+    if (type && mine) {
+      mine.type = type.dataset.hubcType;
+      renderMine();
+      return;
+    }
     const filter = event.target.closest('[data-hubc-filter]');
     if (!filter || !mine) return;
     mine.filter = filter.dataset.hubcFilter;
@@ -1220,8 +1289,8 @@
   }
 
   function bindViews() {
-    for (const kind of ['contribute', 'mine']) {
-      const host = hostOf(kind);
+    for (const id of ['skills-contribute-view', SKILLS_MINE_HOST, AGENTS_MINE_HOST]) {
+      const host = document.getElementById(id);
       if (!host || host.dataset.hubcBound === 'true') continue;
       host.dataset.hubcBound = 'true';
       host.addEventListener('click', (event) => { void onClick(event); });
@@ -1242,6 +1311,9 @@
     if (mine && viewVisible('mine')) renderMine();
   }
 
+  // Shared with hub-agent-contributions.js so the Agent flow reuses the identity gate,
+  // error text and Mine page instead of re-implementing them.
+  root.hubContributionsShared = { ensureIdentity, errorText, tr, fmt, esc, openMyContributions };
   root.startSkillContribution = startSkillContribution;
   root.openMyContributions = openMyContributions;
   root.hideContributionViews = hideContributionViews;

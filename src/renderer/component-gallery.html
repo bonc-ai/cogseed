@@ -117,7 +117,7 @@
       <section class="gallery-section" id="window-chrome">
         <div class="gallery-section__head">
           <span class="gallery-section__id">CHR</span>
-          <div><h2>WindowChrome</h2><p>macOS 红绿灯由 Electron 原生绘制；Shell 只管理右侧搜索、运行状态与侧栏收起/展开。</p></div>
+          <div><h2>WindowChrome</h2><p>macOS 红绿灯由 Electron 原生绘制在 rail 顶部；rail 只放图标入口（悬停提示），侧栏按模块切换内容，Shell 工具管理搜索、运行状态与侧栏收起/展开。</p></div>
         </div>
         <div class="gallery-control-grid" id="sidebar-tools-specimens"></div>
         <div class="gallery-sidebar-grid" id="sidebar-appearance-specimens"></div>
@@ -315,14 +315,17 @@
     </div>
   </div>
 
+  <script src="./modules/logger.js"></script>
   <script src="./modules/icons.js"></script>
   <script src="./modules/ui-button.js"></script>
   <script src="./modules/ui-user-menu.js"></script>
   <script src="./modules/ui-sidebar-tools.js"></script>
+  <script src="./modules/ui-app-rail.js"></script>
   <script src="./modules/ui-segmented-control.js"></script>
   <script src="./modules/ui-tabs.js"></script>
   <script src="./modules/ui-status.js"></script>
   <script src="./modules/ui-card.js"></script>
+  <script src="./modules/context-menu.js"></script>
   <script src="./modules/ui-structure.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>

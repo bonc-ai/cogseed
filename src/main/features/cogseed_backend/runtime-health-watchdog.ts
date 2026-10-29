@@ -218,7 +218,7 @@ export function createCogSeedRuntimeHealthWatchdog(
         log.warn('CogSeed Runtime health task scan failed', { error: logErrorRef(error) });
         continue;
       }
-      const candidates = tasks.filter((task) => isCogSeedTaskActiveStatus(task.status));
+      const candidates = tasks.filter((task) => isCogSeedTaskActiveStatus(task.status) && task.status !== 'waiting_user');
       report.scannedCount += candidates.length;
       const candidateKeys = new Set(candidates.map((task) => observationKey(userId, task)));
       for (const key of missingSince.keys()) {

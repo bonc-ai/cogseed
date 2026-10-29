@@ -13,7 +13,7 @@ describe('shared resource grids in Chromium', () => {
     const result = spawnSync(require('electron'), [resolve(__dirname, 'fixtures/resource-grid-layout.cjs')], {
       env,
       encoding: 'utf8',
-      timeout: 30000,
+      timeout: 30000, killSignal: 'SIGKILL',
     });
     expect(result.status, result.stderr + result.stdout).toBe(0);
     expect(result.stdout).toContain('"passed":126');

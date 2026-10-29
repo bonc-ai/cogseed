@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -47,9 +48,9 @@ interface SeedOverrides {
 
 /** 建一条 v1、active 的资产（形状对齐 ability-tag.test.ts 先例，可指定排序相关字段）。 */
 async function seedAsset(userId: string, overrides: SeedOverrides): Promise<void> {
-  const { createAbilityAsset } = await import('../../../../src/main/features/recall/asset-service');
+
   const now = overrides.updatedAt ?? new Date().toISOString();
-  await createAbilityAsset(userId, {
+  await seedStoredAbilityAsset(userId, {
     schemaVersion: 2,
     ownerId: userId,
     id: overrides.id,

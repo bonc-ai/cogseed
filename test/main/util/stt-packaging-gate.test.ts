@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -6,6 +6,7 @@ import * as path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const configuredAfterPack = require('../../../scripts/after-pack.js').default as (context: any) => Promise<void>;
+const tmeetRuntime = require('../../../scripts/fetch-tmeet.cjs') as { verify: (...args: unknown[]) => string };
 const entrypointGate = require('../../../bin/packaged-entrypoint-gate.cjs') as {
   PACKAGED_BIN_ENTRYPOINTS: readonly string[];
   PACKAGED_BIN_HELPERS: readonly string[];
@@ -21,9 +22,12 @@ let tempRoot: string;
 
 beforeEach(() => {
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-stt-package-'));
+  // This fixture isolates speech packaging; Tencent's pinned native resource has its own suite.
+  vi.spyOn(tmeetRuntime, 'verify').mockReturnValue('verified-tmeet-fixture');
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 

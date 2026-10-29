@@ -1,0 +1,3 @@
+cases:
+- id: smoke-seo-content
+  kind: manual-smoke

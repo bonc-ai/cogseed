@@ -1,6 +1,6 @@
 [project]
 name = "skill-sentry"
-version = "2.2.0"
+version = "2.3.0"
 description = "Skill 安全静态扫描 + 信任网关引擎——AI Skill 安装/加载前的强制安全入口"
 readme = "README.md"
 requires-python = ">=3.10"

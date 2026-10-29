@@ -22,6 +22,30 @@ afterEach(() => {
 });
 
 describe('custom provider runtime', () => {
+  it('caps legacy output limits at the known model ceiling while preserving lower or unknown limits', async () => {
+    const providers = await import('../../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Legacy model limits', protocol: 'openai-responses', baseUrl: 'https://aihubmix.com/v1', apiKey: 'test-key',
+    });
+    if (!added.ok) throw new Error(added.error);
+    const record = providers.listCustomProviders(UID)[0];
+    record.models = [
+      { id: 'tencent-glm-5.3-flash', contextWindow: 1000000, maxTokens: 384000 },
+      { id: 'glm-5.3-flash', contextWindow: 1000000, maxTokens: 8192 },
+      { id: 'deepseek-flash', contextWindow: 1000000, maxTokens: 384000 },
+      { id: 'private-model', contextWindow: 1000000, maxTokens: 200000 },
+    ];
+    const runtime = await import('../../../../src/main/model/core-agent/custom_provider_runtime');
+    for (const [id, limit] of [
+      ['tencent-glm-5.3-flash', 131072], ['glm-5.3-flash', 8192],
+      ['deepseek-flash', 384000], ['private-model', 200000],
+    ] as const) {
+      expect(runtime.buildCustomProviderModel(record, id).maxTokens).toBe(limit);
+      expect(runtime.buildCustomProviderModelMeta(record, id).maxTokens).toBe(limit);
+    }
+    expect(runtime.buildCustomProviderModelMeta(record, 'vendor/glm-5.3-flash').maxTokens).toBe(131072);
+  });
+
   it.each([
     ['anthropic', 'anthropic-messages'],
     ['openai', 'openai-completions'],

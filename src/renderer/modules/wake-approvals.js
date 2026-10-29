@@ -132,6 +132,7 @@
             window.uiToast(t(decision === 'approve' ? 'dashboard.control_decided_approve' : 'dashboard.control_decided_reject'));
           }
           void refresh();
+          try { window.dispatchEvent(new CustomEvent('wake-approval-change')); } catch (_) { /* 老环境无 CustomEvent */ }
         })
         .catch(function (err) {
           if (typeof window.uiToast === 'function') {

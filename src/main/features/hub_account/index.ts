@@ -19,6 +19,7 @@ import {
   refreshSession,
   ensureFreshSession,
   getAccountMe,
+  updateProfile,
   listDevices,
   revokeDevice,
   listConsents,
@@ -93,6 +94,72 @@ export function parseAccountCallback(rawUrl: string): ParsedAccountCallback {
  * awaits this call, so the broadcast is the only way the account pane learns
  * that the login finished.
  */
+/**
+ * 「换个 CogSeed 账号登录」深链：`cogseed://account/switch`
+ *
+ * 为什么要这条深链（specs/004-oauth-account-rebind/contracts/account-switch-deeplink.md）：
+ *   插件授权页由**课程平台**渲染于系统浏览器，而登录入口是桌面端的 IPC
+ *   （`hub-account.start_login`）—— 浏览器里的页面调不到它。深链是唯一能把
+ *   "用户想换账号"这一意图交给客户端的通道。
+ *
+ * 🔴 与 `accountCallbackUrl` 同族但语义不同：那个是**登录完成**的回调（带 code/state），
+ *    这个是**换账号请求**（不带任何参数）。
+ */
+const ACCOUNT_SWITCH_PATH = '/switch';
+
+/** 识别换账号深链；不是该深链时返回 null。 */
+export function accountSwitchRequested(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'cogseed:') return null;
+    if (parsed.host.toLowerCase() !== ACCOUNT_CALLBACK_HOST) return null;
+    if ((parsed.pathname.replace(/\/+$/, '') || '/') !== ACCOUNT_SWITCH_PATH) return null;
+    // 🔴 契约要求**不得携带任何参数**：它只是"用户想换账号"的意图信号，
+    //    账号是谁由随后的 Hub 登录决定。带上参数会让它变成一个可被构造的入口。
+    if ([...parsed.searchParams.keys()].length > 0) return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 处理换账号深链：**先登出、再发起登录**（顺序不可颠倒）。
+ *
+ * 🔴 为什么必须先登出：Hub 的登录端点不接受"强制选择账号"参数，若本地仍持有
+ *    有效会话，Hub 极可能直接复用同一个账号 —— 用户会看到"我换了账号却还是原来那个"。
+ *
+ * 🔴 **绝不撤销任何教育身份接入关系**：换 CogSeed 账号不是解绑（FR-006）。
+ *    换完之后新账号在本平台本来就没有接入关系，授权流程会自然走到身份核对环节。
+ */
+export async function handleAccountSwitchRequested(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    assertHubAccountReleaseEnabled();
+  } catch (err) {
+    const failureCode = err instanceof HubApiError ? err.code : 'HUB_RELEASE_GATE_CLOSED';
+    log.warn('account switch deep link rejected by release gate', { code: failureCode });
+    return { ok: false, error: failureCode };
+  }
+
+  const userId = getActiveUserId();
+  try {
+    // ① 已登录则先登出（清本地会话；服务端登出在 logout 内部尽力而为）
+    const session = loadHubSession(userId);
+    if (session) await logout(userId);
+    // ② 再发起登录：登录在系统浏览器内完成，随后走既有的 account/callback 深链回来
+    const { authorize_url } = await startLogin(userId);
+    await openAuthorizeUrl(authorize_url);
+    log.info('account switch requested; login flow started');
+    return { ok: true };
+  } catch (err) {
+    // 🔴 失败不得破坏当前登录态：logout 内部已优先清本地、失败只记 warn，
+    //    这里只上报错误，不额外改动任何状态。
+    const message = (err as Error).message;
+    log.warn('account switch login failed to start', { error: message });
+    return { ok: false, error: message };
+  }
+}
+
 export async function handleAccountCallbackUrl(rawUrl: string): Promise<{ ok: boolean; error?: string; account_id?: string; is_new_account?: boolean }> {
   // The release Gate short-circuits before any authorization parameter is
   // consumed or any user-scoped state is touched.
@@ -117,6 +184,13 @@ export async function handleAccountCallbackUrl(rawUrl: string): Promise<{ ok: bo
   const userId = getActiveUserId();
   try {
     const { account_id, is_new_account } = await completeLogin(userId, callback.code, callback.state);
+    // T2.3：登录成功后按新身份恢复在线心跳（启动时可能还没登录）。
+    try {
+      const { onSignedIn } = await import('./session-lifecycle');
+      await onSignedIn(userId);
+    } catch {
+      // 心跳是尽力而为的展示信息，失败不能影响登录结果。
+    }
     broadcastHubLoginOutcome({ result: 'success', account_id, is_new_account });
     return { ok: true, account_id, is_new_account };
   } catch (err) {
@@ -135,6 +209,7 @@ export const hubAccount = {
   refreshSession,
   ensureFreshSession,
   getAccountMe,
+  updateProfile,
   listDevices,
   revokeDevice,
   listConsents,
@@ -159,6 +234,7 @@ export {
   refreshSession,
   ensureFreshSession,
   getAccountMe,
+  updateProfile,
   listDevices,
   revokeDevice,
   listConsents,
@@ -172,4 +248,4 @@ export {
   currentLoginState,
 };
 
-export const _test = { accountCallbackUrl, parseAccountCallback };
+export const _test = { accountCallbackUrl, parseAccountCallback, accountSwitchRequested };

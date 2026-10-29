@@ -1,0 +1,29 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.seo.content
+  name: seo-content
+  version: 1.0.0
+  description: 'Heuristic content-quality & GEO-readiness findings over seo-crawl
+    text: AI/filler tone, uncited statistical claims, answer-first placement, over-long
+    sentences, title↔body mismatch; emits content-dimension findings; For: ''check
+    this page''s content quality'', ''is the content AI-sou'
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: python
+    scripts:
+    - scripts/content.py
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

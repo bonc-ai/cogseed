@@ -31,6 +31,11 @@ const { spawn } = require('child_process');
 
 const PROTOCOL = 'p3394-sscli/1.0';
 const TIMEOUT_MS = Number(process.env.P3394_AGENT_TIMEOUT_MS || 10 * 60 * 1000);
+// Decision 2: when the gateway promotes a run at its agent deadline it sends a
+// `promote` frame. The shim must win that race (its own deadline is later) and
+// then drop the deadline entirely, so the CLI keeps running to completion.
+const PROMOTE_ON_DEADLINE = process.env.P3394_PROMOTE_ON_DEADLINE === '1';
+const AGENT_DEADLINE_MS = PROMOTE_ON_DEADLINE ? TIMEOUT_MS + 5000 : TIMEOUT_MS;
 const TRANSCRIPT_TURNS = 8;
 const TRANSCRIPT_BYTES = 16 * 1024;
 const MAX_REPLY_BYTES = 100 * 1024;
@@ -460,7 +465,7 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
     // taskId（deliver 帧 task_id，网关 handleCancel 的取消键）与 requestId
     // （网关内部 req-N，仅应答关联用）分属两个命名空间，都要记——cancel
     // 帧带 task_id，老调用方/无 task_id 场景回退 request_id 比对。
-    activeTurn = { child, requestId, taskId: taskId || null, streamedChars: 0 };
+    activeTurn = { child, requestId, taskId: taskId || null, streamedChars: 0, clearDeadline: null };
     let out = '';
     let errOut = '';
     let errLineBuf = '';
@@ -473,13 +478,18 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
         emitEvent({ event: 'progress', request_id: requestId, text: cliLabel() + ' 冷启动较慢，仍在等待首个输出…' });
       }
     }, SLOW_START_HINT_MS);
+    // Promotion (decision 2): a `promote` frame clears this timer, so the CLI is
+    // never killed for outliving the turn; the run finishes and reports normally.
+    if (activeTurn && activeTurn.requestId === requestId) {
+      activeTurn.clearDeadline = () => { terminationError = null; clearTimeout(timer); };
+    }
     const timer = setTimeout(() => {
       terminationError = new Error('p3394_agent_timeout');
       void killProcessTree(child, 'SIGTERM').then(() => {
         if (finished) return;
         finish(terminationError);
       });
-    }, TIMEOUT_MS);
+    }, AGENT_DEADLINE_MS);
     function finish(error) {
       if (finished) return;
       finished = true;
@@ -614,6 +624,18 @@ process.stdin.on('data', (chunk) => {
       void handleCancel(op).catch((error) => {
         emit({ ok: false, request_id: op.request_id, error: (error && error.message) || String(error) });
       });
+    } else if (op.op === 'promote') {
+      // Gateway promoted this run at its agent deadline: stop counting down and
+      // let the CLI finish. The reply is a plain ack; completion still arrives as
+      // a normal `completed` event for the same request_id.
+      const turn = activeTurn;
+      const hit = turn && (turn.requestId === op.request_id
+        || (op.task_id !== undefined && turn.taskId === String(op.task_id)));
+      if (hit && typeof turn.clearDeadline === 'function') {
+        try { turn.clearDeadline(); } catch { /* best effort */ }
+        turn.promoted = true;
+      }
+      emit({ ok: Boolean(hit), promoted: Boolean(hit), request_id: op.request_id });
     } else if (op.op === 'heartbeat') {
       emit({ ok: true, request_id: op.request_id });
     } else if (op.request_id !== undefined) {

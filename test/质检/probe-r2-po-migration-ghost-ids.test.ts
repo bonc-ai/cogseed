@@ -1,28 +1,8 @@
 /**
- * 红队探针 r2：v1→v2 迁移未结清窗口的「幽灵 id」与读路径写盘（迁移与
- * 读取交错的时序问题）。
- *
- * 推演链：
- * 1) loadPoDocSync（po/store.ts:64）在 JSON 不存在时每次都跑
- *    importFromV1Sync（po/migrate.ts:178）——字段/值/条目 id 全部当场
- *    genId12 重新生成（migrate.ts:55-70 toPoValue）。迁移的持久化只靠
- *    「第一次成功写」（editPoDoc firstPersist）或模板路径的 ensurePoDoc
- *    （personal_ontology_template_files.ts:1190，无全局启动钩子），纯读
- *    用户永远停在窗口里：两次读返回两套互不相通的 id，UI 拿第一次的
- *    valueId 去编辑，editPoDoc 锁内**再导入一次**（第三套 id）→ not found。
- *    这直接违背 v2「按 id 寻址」的根基（po/model.ts:29「稳定 id……新模
- *    型一律按 id」）。
- * 2) store.ts:61 注释承诺 loadPoDocSync「**本函数永不写盘**——读路径零
- *    副作用」，但 importFromV1Sync → convertHistoryDir（migrate.ts:149,
- *    153, 164）在无锁读路径里 mkdirSync + copyFileSync + writeFileSync
- *    写 po-history——且写入的是**第一次读**生成的 id 集，与后续每次导入
- *    的活文档 id 不同：同一份 v1 快照在磁盘历史与内存活文档里是两套 id，
- *    restoreGroupSnapshot 会把历史那套灌回活文档。
- *
- * 2026-09-30 r2 收尾（记账员）：对应待议 P-r2-3（幂等化导入 / 补启动钩子
- * 跑 ensurePoDoc / 读路径锁内结清，建议 B+A 组合待拍板）→ it.skip。断言
- * 锁定的是「现状幽灵 id + 读路径写盘」，拍板修复后按所选方案反转。
- * 见 round-2-甄别.md toPending。
+ * 迁移未结清窗口的身份稳定性与读路径零副作用：
+ * 值/字段/条目 id 由内容可复现派生——两次只读 load 同一套 id，UI 持 id
+ * 编辑可命中并结清迁移；旧 .history → po-history 的转换只在结清步落盘，
+ * 读路径不再写盘。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -31,7 +11,7 @@ import * as path from 'node:path';
 
 vi.mock('../../src/main/features/kb_indexer', () => ({
   enqueue: () => {},
-  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+  kbEvents: { on: () => {}, emit: () => {}, off: () => {} },
 }));
 vi.mock('../../src/main/features/search', () => ({
   upsertContext: () => {},
@@ -60,8 +40,8 @@ function v1Dir(): string {
 function poDocFile(): string {
   return path.join(tmpDir, UID, 'cloud', 'cognition', 'personal-ontology.json');
 }
-function poHistoryDir(): string {
-  return path.join(tmpDir, UID, 'cloud', 'cognition', 'po-history', 'grp001');
+function poHistoryDirOf(groupId: string): string {
+  return path.join(tmpDir, UID, 'cloud', 'cognition', 'po-history', groupId);
 }
 
 /** v1 现场：1 个组（1 字段 1 值）+ 一版历史快照。 */
@@ -97,6 +77,18 @@ function seedV1(): void {
   ].join('\n'));
 }
 
+/** 追加一个孤儿历史目录（台账无行 → v1 已删除分组）。 */
+function seedOrphanHistory(): void {
+  const dir = v1Dir();
+  fs.mkdirSync(path.join(dir, '.history', 'grp002'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.history', 'grp002', '2026-09-03T10-05-00-000Z-00.md'), [
+    '## 字段区', '',
+    '### 已删字段',
+    '- 旧值 [手动]',
+    '',
+  ].join('\n'));
+}
+
 async function loadStore() {
   return import('../../src/main/features/po/store');
 }
@@ -107,50 +99,51 @@ async function loadApi() {
 function valueIdsOf(doc: { groups: any[] }): string[] {
   return doc.groups[0].values.map((v: any) => v.id);
 }
-function snapshotValueIds(file: string): string[] {
-  const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-  return parsed.group.values.map((v: any) => v.id);
-}
 
-describe('probe r2 › 迁移未结清窗口的幽灵 id 与读路径写盘（待议 P-r2-3，拍板前 skip）', () => {
-  it.skip('两次只读 load 生成两套值 id；UI 持第一次 id 编辑必 not found；po-history 冻结的又是另一套', async () => {
+describe('迁移未结清窗口的身份稳定性与读路径零副作用', () => {
+  it('两次只读 load 同一套值 id；读路径不写 po-history；持 id 编辑命中并结清', async () => {
     seedV1();
     const store = await loadStore();
 
-    // 第一次读（对应 IPC po.snapshot 首次返回给 UI 的 id 集）
+    // 第一次读（对应 IPC po.snapshot 首次返回给 UI 的 id 集）。
     const doc1 = store.loadPoDocSync(UID);
     expect(doc1.groups.length).toBe(1);
     expect(doc1.groups[0].id).toBe('grp001'); // 组 id 稳定（台账保留）
     const ids1 = valueIdsOf(doc1);
 
-    // 断言 1：读路径真的写了盘（store.ts:61 注释承诺「永不写盘」被破）
-    expect(fs.existsSync(poHistoryDir())).toBe(true);
-    const historyJsons = fs.readdirSync(poHistoryDir()).filter((n) => n.endsWith('.json'));
-    expect(historyJsons.length).toBeGreaterThanOrEqual(1);
-    const frozenIds = snapshotValueIds(path.join(poHistoryDir(), historyJsons[0]));
+    // 读路径零副作用：po-history 不被读路径写出（转换挪到结清步）。
+    expect(fs.existsSync(poHistoryDirOf('grp001'))).toBe(false);
 
-    // 第二次读（页面刷新 / 下一个 IPC）：又一套全新 id
+    // 第二次读（页面刷新 / 下一个 IPC）：同一套 id（可复现派生，非随机）。
     const doc2 = store.loadPoDocSync(UID);
-    const ids2 = valueIdsOf(doc2);
-    expect(ids2[0]).not.toBe(ids1[0]);
+    expect(valueIdsOf(doc2)).toEqual(ids1);
 
-    // 断言 2（如实记录）：po-history 快照源自 .history/*.md 的独立解析，
-    // 与活文档 id 无关；文件第一次读后冻结（existsSync 跳过），此后活文档
-    // 每次导入换 id——磁盘历史与内存活文档 id 体系分离
-    expect(frozenIds[0]).not.toBe(ids1[0]);
-    expect(frozenIds[0]).not.toBe(ids2[0]);
-
-    // 断言 3：UI 拿第一次的 valueId 走编辑（editPoDoc 锁内第三次导入）→ not found
+    // UI 拿第一次的 valueId 走编辑（editPoDoc 锁内第三次导入同 id）→ 命中。
     const api = await loadApi();
-    const patched = await api.poUpdateValue(UID, 'grp001', ids1[0], { text: '改不动' });
-    expect(patched.ok).toBe(false);
-    expect(patched.error).toBe('field value not found');
-    // JSON 文档此时仍未落盘（编辑失败不落盘；迁移结清只靠成功写）
-    expect(fs.existsSync(poDocFile())).toBe(false);
+    const patched = await api.poUpdateValue(UID, 'grp001', ids1[0], { text: '改得动' });
+    expect(patched.ok).toBe(true);
 
-    // 对照：同一 valueId 第二次尝试仍失败（窗口不随尝试关闭）
-    const retry = await api.poUpdateValue(UID, 'grp001', ids2[0], { text: '也改不动' });
-    expect(retry.ok).toBe(false);
-    expect(retry.error).toBe('field value not found');
+    // 编辑成功即迁移结清：JSON 文档落盘；po-history 转换在写路径发生。
+    expect(fs.existsSync(poDocFile())).toBe(true);
+    const historyJsons = fs.readdirSync(poHistoryDirOf('grp001')).filter((n) => n.endsWith('.json'));
+    expect(historyJsons.length).toBeGreaterThanOrEqual(1);
+    const persisted = JSON.parse(fs.readFileSync(poDocFile(), 'utf8'));
+    expect(persisted.groups[0].values[0].text).toBe('改得动');
+    expect(persisted.groups[0].values[0].id).toBe(ids1[0]);
+
+    // 结清后再读：从 JSON 读，id 冻结不变（不再重放导入）。
+    expect(valueIdsOf(store.loadPoDocSync(UID))).toEqual(ids1);
+  });
+
+  it('孤儿历史复活进回收站：纯解析不落盘，trash 带回最新快照状态', async () => {
+    seedV1();
+    seedOrphanHistory();
+    const store = await loadStore();
+    const doc = store.loadPoDocSync(UID);
+    expect(doc.trash.length).toBe(1);
+    expect(doc.trash[0].group.id).toBe('grp002');
+    expect(doc.trash[0].group.values[0].text).toBe('旧值');
+    // 复活是读出来的状态，不是写出来的文件：po-history 仍不存在。
+    expect(fs.existsSync(poHistoryDirOf('grp002'))).toBe(false);
   });
 });

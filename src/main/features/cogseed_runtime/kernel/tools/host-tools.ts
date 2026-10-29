@@ -58,7 +58,7 @@ export function createRuntimeHostToolClient(write: (message: RuntimeHostToolCall
     resolve(result) {
       const item = settle(result.call_id);
       if (!item) return false;
-      item.resolve({ content: result.content, isError: result.is_error === true });
+      item.resolve({ content: result.content, isError: result.is_error === true, ...(result.correction ? { correction: result.correction } : {}) });
       return true;
     },
     rejectAll(error) {

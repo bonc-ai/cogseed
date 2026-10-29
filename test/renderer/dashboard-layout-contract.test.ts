@@ -21,19 +21,18 @@ const zh = JSON.parse(read('src/renderer/locales/zh.json'));
 const en = JSON.parse(read('src/renderer/locales/en.json'));
 
 describe('unified Agent Operations Center layout contract', () => {
-  it('moves the primary entry to the top toolbar while retaining a hidden compatibility target', () => {
-    expect(html).toMatch(/id="run-center-btn"[^>]*hidden[^>]*aria-hidden="true"/);
+  it('exposes Run Center in the rail with its resident status badge', () => {
+    const rail = read('src/renderer/modules/ui-app-rail.js');
+    expect(rail).toContain("module: 'run-center', id: 'run-center-btn'");
+    expect(html).not.toContain('id="run-center-btn"');
     expect(html).toContain('id="app-shell-tools"');
-    expect(sidebarTools).toContain('id="run-center-global-entry"');
-    expect(html).not.toMatch(/<button[^>]*id="run-center-global-btn"/);
-    expect(globalRunCenter).toContain("className: 'run-center-global-btn'");
-    expect(globalRunCenter).toContain("id: 'run-center-global-btn'");
-    expect(globalRunCenter).toContain("badge.id = 'run-center-global-badge'");
-    expect(globalRunCenter).toContain("root.uiEmptyState(options)");
+    expect(sidebarTools).not.toContain('run-center-global-entry');
+    expect(rail).toContain("badgeId: 'run-center-global-badge'");
+    expect(globalRunCenter).toContain("document.getElementById('run-center-global-badge')");
     expect(html).toContain('id="panel-run-center"');
     expect(html).not.toContain('id="dashboard-btn"');
     expect(html).not.toContain('id="panel-dashboard"');
-    expect(css).toMatch(/\.sidebar-btn#run-center-btn\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
+    expect(css).not.toContain('.sidebar-btn#run-center-btn[hidden]');
     expect(lazy).not.toContain('dashboard: [');
     expect(zh['run_center.title']).toBe(zh['run_center.global_title']);
     expect(en['run_center.title']).toBe(en['run_center.global_title']);
@@ -81,11 +80,12 @@ describe('unified Agent Operations Center layout contract', () => {
     expect(runCenter).toContain('rootWindow.openRunCenterView');
   });
 
-  it('uses one compact navigation and action row without a visible duplicate page title', () => {
-    expect(runCenter).toContain('<header class="run-center-header is-compact"><h1 class="ui-visually-hidden">');
-    expect(runCenter).toMatch(/<header class="run-center-header is-compact">[\s\S]*?<nav class="run-center-navigation">[\s\S]*?<div class="run-center-header-actions">/);
-    expect(css).toMatch(/#panel-run-center \.run-center-header\s*{[^}]*min-height:\s*44px;[^}]*border-bottom:\s*1px solid var\(--rc-line\);/);
-    expect(css).toMatch(/#panel-run-center \.run-center-header\.is-compact \.run-center-navigation\s*{[^}]*height:\s*44px;[^}]*overflow:\s*hidden;/);
+  it('uses the shared page header with a visible title and actions, and keeps the view tabs in the sidebar', () => {
+    expect(runCenter).toContain("<header class=\"run-center-header is-compact\">${typeof rootWindow.uiShellHeaderSlot === 'function' ? rootWindow.uiShellHeaderSlot() : ''}<h1 class=\"run-center-title\">");
+    expect(runCenter).toMatch(/<header class="run-center-header is-compact">[\s\S]*?\$\{taskScopeHtml\(\)\}<div class="run-center-header-actions">[\s\S]*?<\/header><div class="run-center-shell"/);
+    expect(runCenter).toContain("renderSidebarNav();");
+    expect(css).toMatch(/#panel-run-center \.run-center-header\s*{[^}]*min-height:\s*var\(--layout-titlebar-height\);[^}]*border-bottom:\s*1px solid var\(--line-hairline\);/);
+    expect(css).toMatch(/#panel-run-center\s*{[^}]*background:\s*var\(--surface-card\);/);
   });
 
   it('nests current and history under Tasks with their required default modes', () => {
@@ -146,9 +146,7 @@ describe('unified Agent Operations Center layout contract', () => {
     expect(runCenter).toContain("className: 'run-center-query-clear'");
     expect(runCenter).toContain("'data-run-center-stale-retry': true");
 
-    expect(globalRunCenter).toContain("target.setAttribute('aria-busy', String(state.loading || state.refreshing))");
-    expect(globalRunCenter).toContain("target.setAttribute('aria-labelledby', 'run-center-quick-title')");
-    expect(globalRunCenter).toContain('data-run-center-global-retry');
+    expect(globalRunCenter).toContain("trigger?.setAttribute('aria-busy', String(state.loading || state.refreshing))");
   });
 
   it('maps every legacy secondary route to the new Tasks scopes', () => {
@@ -254,17 +252,16 @@ describe('unified Agent Operations Center layout contract', () => {
     expect(css).toMatch(/@container run-center \(max-width:\s*720px\)[\s\S]*?#panel-run-center \.run-center-layout\.is-runs\.is-detail-open \.run-center-run-list-pane\s*{[\s\S]*?display:\s*none;/);
     expect(css).toMatch(/@container run-center \(max-width:\s*720px\)[\s\S]*?#panel-run-center \.run-center-shell:has\(\.run-center-layout\.is-runs\.is-detail-open\) > \.run-center-task-summary,[\s\S]*?> \.run-center-query-bar\s*{\s*display:\s*none;/);
     expect(css).toMatch(/@container run-center \(max-width:\s*420px\)[\s\S]*?\.run-center-mode-switch button span\s*{[\s\S]*?display:\s*none;/);
-    expect(css).toMatch(/@media \(max-width:\s*720px\)[\s\S]*?body:has\(:is\(#panel-run-center, #panel-workspace\)\.active\) \.sidebar\s*{[\s\S]*?width:\s*48px !important;/);
-    expect(css).toContain('.sidebar-actions .sidebar-btn > span:not([data-ui-icon]):not(.sidebar-btn-icon)');
+    // Run Center has no contextual sidebar (specs/008): no narrow-width mini-rail hack.
+    expect(css).not.toContain('width: 48px !important;');
   });
 
   it('keeps coarse-pointer targets and reduced-motion behavior safe at narrow widths', () => {
-    expect(css).toMatch(/@media \(pointer: coarse\)[\s\S]*?\.run-center-quick-item-action\.ui-icon-button \{ width: 44px; height: 44px; \}/);
     expect(css).toMatch(/@media \(pointer: coarse\)[\s\S]*?#panel-run-center \.run-center-attempt,[\s\S]*?min-height: 44px;/);
     expect(css).toMatch(/@media \(pointer: coarse\)[\s\S]*?#panel-run-center \.run-center-detail-back \{ width: 44px; height: 44px; \}/);
     expect(css).toMatch(/@container run-center \(max-width: 420px\)[\s\S]*?#panel-run-center \.run-center-detail-actions \.run-center-icon-btn \{ width: 44px; height: 44px; \}/);
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?scroll-behavior: auto !important;/);
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.ui-icon\.is-spinning,[\s\S]*?animation: none;/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?#panel-run-center \.ui-icon\.is-spinning \{ animation: none; \}/);
   });
 
   it('defines the unified control-plane copy in Simplified Chinese and English', () => {

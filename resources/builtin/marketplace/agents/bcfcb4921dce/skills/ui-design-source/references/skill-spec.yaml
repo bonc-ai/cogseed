@@ -1,0 +1,11 @@
+name: ui-design-source
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Handle Figma links/exports, design screenshots, PDFs, JSON, existing HTML,
+  or design notes by extracting a frame map, source-to-HTML checkpoints, components/variables/assets/interactions,
+  fidelity boundaries, and UIDesigner implementation handoff; never pretend a design
+  source wa
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

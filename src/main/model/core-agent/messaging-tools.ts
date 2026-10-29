@@ -16,6 +16,7 @@ import * as proactive from '../../features/messaging/proactive';
 import type { ProactiveSendResult } from '../../features/messaging/proactive';
 
 export interface MessagingToolsOpts {
+  beforeAction?: (toolName: string, input: Record<string, unknown>) => Promise<ToolResult | undefined>;
   userId: string;
   cid: string;
   turnId?: string;
@@ -106,7 +107,11 @@ function createSendTool(opts: MessagingToolsOpts): AgentTool {
           target: 'self',
           text: raw.text,
         },
-        { cid: opts.cid, sourceKey, signal: ctx.signal ?? null },
+        { cid: opts.cid, sourceKey, signal: ctx.signal ?? null, beforeDispatch: opts.beforeAction ? async () => {
+          const denied = await opts.beforeAction!('messaging_send', input);
+          if (denied) throw new Error(denied.content);
+          if (ctx.signal?.aborted) throw Object.assign(new Error('E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE: send cancelled'), { name: 'AbortError' });
+        } : undefined },
       );
       const content = JSON.stringify(result);
       if (result.status === 'error') return { content, isError: true };

@@ -1,7 +1,8 @@
-// ─── 知识库生态外壳（顶部横向工具栏 + 子视图容器）— classic script ───
-// 计划书 v1.3 §四.1：总入口 = 侧边栏「自动化」后「知识库」按钮 → 进入知识库生态。
-// v2（按产品评审建议）：移除 52px 图标竖栏 → 6 个入口迁移为**第二栏顶部的横向
-// 工具栏**（图标+文字，可切紧凑「仅图标」，localStorage 记忆），释放横向空间。
+// ─── 知识库生态外壳（侧栏分类导航 + 子视图容器）— classic script ───
+// 计划书 v1.3 §四.1：总入口 = rail「知识库」→ 进入知识库生态。
+// v3（specs/008-shell-rail-layout）：原第二栏顶部横向工具栏迁入外壳侧栏
+// （#sidebar-kb-nav），主区只留子视图；侧栏宽度/折叠由外壳统一管理，
+// 原「仅图标」紧凑开关随之退役。
 (function () {
   // 知识库/笔记已落地；发现模块当前为「待开发」占位（不展示内置示例市场数据，避免误导）。
   // label 是中文回退文案，labelKey 才是权威（键在 locales/*.json；缺键时退回 label）。
@@ -10,9 +11,6 @@
     { key: 'notes', icon: 'file-text', labelKey: 'kb.eco.nav_notes', label: '笔记', status: 'ok' },
     { key: 'discover', icon: 'globe', labelKey: 'kb.eco.nav_discover', label: '发现', status: 'soon' },
   ];
-  const COMPACT_KEY = 'cogseed.kb.eco.compact';
-  let _compact = false;
-  try { _compact = localStorage.getItem(COMPACT_KEY) === '1'; } catch (_) { /* ignore */ }
 
   function _kbIcon(name) {
     if (typeof window.uiIconHtml === 'function') {
@@ -40,39 +38,14 @@
     return _tr(item.labelKey, item.label);
   }
 
-  function _compactButton() {
-    const label = _compact
-      ? _tr('kb.eco.show_labels', '显示图标和文字')
-      : _tr('kb.eco.hide_labels', '仅显示图标');
-    return window.uiIconButton({
-      label,
-      icon: 'panel-list',
-      className: 'kb-eco-compact',
-      attrs: { id: 'kb-eco-compact', 'aria-pressed': String(_compact) },
-    });
-  }
-
   function _navBtn(item, active) {
     const label = _navLabel(item);
     const badge = item.status === 'soon'
       ? window.uiBadge({ label: _tr('kb.eco.coming_soon', '待开发'), className: 'kb-eco-tab-soon' })
       : '';
     return `<button type="button" class="kb-eco-tab is-${item.status}${active ? ' active' : ''}" data-kb-eco="${item.key}"
-      title="${label}" aria-label="${label}">
+      aria-label="${label}">
       <span class="kb-sdot"></span>${_kbIcon(item.icon)}<span class="kb-eco-tab-label">${_mainLabel(label)}</span>${badge}</button>`;
-  }
-
-  function _applyCompact() {
-    document.querySelectorAll('.kb-eco').forEach((el) => el.classList.toggle('kb-eco--compact', _compact));
-    const btn = document.getElementById('kb-eco-compact');
-    if (btn) {
-      const label = _compact
-        ? _tr('kb.eco.show_labels', '显示图标和文字')
-        : _tr('kb.eco.hide_labels', '仅显示图标');
-      btn.title = label;
-      btn.setAttribute('aria-label', label);
-      btn.setAttribute('aria-pressed', String(_compact));
-    }
   }
 
   /**
@@ -85,7 +58,6 @@
       const item = ECO_NAV.find((b) => b.key === btn.dataset.kbEco);
       if (!item) return;
       const label = _navLabel(item);
-      btn.title = label;
       btn.setAttribute('aria-label', label);
       const text = btn.querySelector('.kb-eco-tab-label');
       if (text) text.textContent = _mainLabel(label);
@@ -93,40 +65,55 @@
       const badge = btn.querySelector('.kb-eco-tab-soon');
       if (badge) badge.textContent = _tr('kb.eco.coming_soon', '待开发');
     });
-    _applyCompact();
+    const nav = document.getElementById('kb-eco-nav');
+    if (nav) nav.setAttribute('aria-label', _tr('sidebar.kb', '知识库'));
+    // The header holds no editor state, so re-rendering it is safe.
+    _syncPageHeader();
   }
   window.addEventListener('i18n-change', _relabelEco);
+
+  // Shared page header (specs/008 D12): the title follows the active section.
+  let _activeKey = ECO_NAV[0].key;
+  function _pageHeader(key) {
+    const item = ECO_NAV.find((b) => b.key === key) || ECO_NAV[0];
+    return typeof window.uiPageHeader === 'function'
+      ? window.uiPageHeader({ title: _mainLabel(_navLabel(item)) })
+      : '';
+  }
+  function _syncPageHeader() {
+    const header = document.getElementById('kb-page-header');
+    if (header) header.innerHTML = _pageHeader(_activeKey);
+  }
 
   function renderKbEco() {
     const host = document.getElementById('kb-view');
     if (!host || host.querySelector('.kb-eco')) return;
+    const navHost = document.getElementById('sidebar-kb-nav');
     const nav = ECO_NAV.map((b, i) => _navBtn(b, i === 0)).join('');
+    if (navHost) {
+      navHost.innerHTML = `<nav class="kb-eco-tabs sidebar-nav" id="kb-eco-nav" aria-label="${_tr('sidebar.kb', '知识库')}">${nav}</nav>`;
+    }
     host.innerHTML = `<div class="kb-eco">
-      <div class="kb-eco-topnav">
-        <div class="kb-eco-tabs">${nav}</div>
-        ${_compactButton()}
-      </div>
+      <div class="kb-eco-page-header" id="kb-page-header">${_pageHeader(_activeKey)}</div>
       <div class="kb-eco-body">
         <div class="kb-workbench" id="kb-workbench"></div>
         <div class="kb-eco-pane" id="kb-notes" hidden></div>
         <div class="kb-eco-pane" id="kb-discover" hidden></div>
       </div>
     </div>`;
-    host.querySelectorAll('[data-kb-eco]').forEach((btn) => {
+    (navHost || host).querySelectorAll('[data-kb-eco]').forEach((btn) => {
       btn.addEventListener('click', () => _activateEco(btn.dataset.kbEco));
     });
-    document.getElementById('kb-eco-compact')?.addEventListener('click', () => {
-      _compact = !_compact;
-      try { localStorage.setItem(COMPACT_KEY, _compact ? '1' : '0'); } catch (_) { /* ignore */ }
-      _applyCompact();
-    });
-    _applyCompact();
   }
 
   function _activateEco(key) {
     document.querySelectorAll('[data-kb-eco]').forEach((b) => {
       b.classList.toggle('active', b.dataset.kbEco === key);
     });
+    if (ECO_NAV.some((item) => item.key === key)) {
+      _activeKey = key;
+      _syncPageHeader();
+    }
     const wb = document.getElementById('kb-workbench');
     const notes = document.getElementById('kb-notes');
     const disc = document.getElementById('kb-discover');

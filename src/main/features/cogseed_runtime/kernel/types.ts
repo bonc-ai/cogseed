@@ -10,8 +10,8 @@ export type RuntimeKernelEventType =
   | 'cancelled';
 
 export interface RuntimeToolPolicy {
-  fileRead: 'none' | 'explicit_roots';
-  fileWrite: 'none' | 'explicit_writable_roots';
+  fileRead: 'none' | 'explicit_roots' | 'all';
+  fileWrite: 'none' | 'explicit_writable_roots' | 'all';
   shell: 'none' | 'low_risk_only' | 'allow_with_confirmation';
   skillRun: 'none' | 'allowlisted_skills';
   network: 'none';
@@ -22,6 +22,8 @@ export interface RuntimeKernelRequest {
   userId: string;
   requestId: string;
   runtimeSessionId: string;
+  /** Root task id of the delegation tree (observability only). */
+  traceId?: string;
   task: string;
   context: RuntimeContextItem[];
   attachments: RuntimeAttachment[];
@@ -36,6 +38,7 @@ export interface RuntimeKernelRequest {
   skillVersionPins: RuntimeSkillVersionPin[];
   modelProfile?: string;
   workingDir?: string;
+  workspaceRoot?: string;
 }
 
 export interface RuntimeKernelEvent {

@@ -1,13 +1,7 @@
 /**
- * 红队探针 r4：personal-ontology.json 无 schemaVersion 前向保护——旧版本
- * 二进制打开未来版本文档，一次常规写入就把 v3 字段静默抹除并把版本号降回 2。
- *
- * 推演链：normalizePoDocument（po/model.ts:226-246）从 emptyPoDocument()
- * （PO_SCHEMA_VERSION=2）出发，**不检查 raw.schemaVersion**，只挑 v2 认识的
- * 字段；editPoDoc（po/store.ts:235）把 normalize 结果原样 writeJson。于是
- * schemaVersion 高于当前版本的文档（回滚升级 / 双版本并存 / 云同步自新版
- * 设备）被 v2 规则"修复"：未知字段全部丢弃、schemaVersion 降级写回——
- * 新版应用写的任何扩展数据在旧版的一次写操作后单向丢失。
+ * personal-ontology.json schemaVersion 前向保护回归：未来版本写的
+ * 文档（schemaVersion 更高）在当前版本读写不降级——未知键透传保留，一次
+ * 常规写入不再单向抹除新版扩展数据。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -16,7 +10,7 @@ import * as path from 'node:path';
 
 vi.mock('../../src/main/features/kb_indexer', () => ({
   enqueue: () => {},
-  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+  kbEvents: { on: () => {}, emit: () => {}, off: () => {} },
 }));
 vi.mock('../../src/main/features/search', () => ({
   upsertContext: () => {},
@@ -47,8 +41,8 @@ async function loadApi() {
   return import('../../src/main/features/po/api');
 }
 
-describe('probe r4 › schemaVersion 无前向保护', () => {
-  it('v3 文档被 v2 打开：一次写操作抹除 v3 扩展字段并降级 schemaVersion', async () => {
+describe('回归 r4 › schemaVersion 前向保护', () => {
+  it('v3 文档被 v2 打开：读写透传保留 v3 扩展字段，schemaVersion 不降级', async () => {
     // 模拟新版应用写的 v3 文档：v2 兼容基线 + v3-only 扩展字段
     fs.mkdirSync(path.dirname(poDocFile()), { recursive: true });
     const v3Doc = {
@@ -76,26 +70,27 @@ describe('probe r4 › schemaVersion 无前向保护', () => {
     };
     fs.writeFileSync(poDocFile(), JSON.stringify(v3Doc, null, 2), 'utf8');
 
-    // 旧版本（当前 v2 代码）打开：读路径静默降级
+    // 当前版本（v2 代码）打开：读侧透传——组与 v3 扩展数据可见（快照视图的
+    // 值/流水是展开透传，字段级未知键在视图重建中剥除、以落盘保全为准）。
     const api = await loadApi();
     const snap1 = api.getPoSnapshot(UID);
-    expect(snap1.groups.length).toBe(1); // 组还在（v2 兼容基线）
-    expect(JSON.stringify(snap1)).not.toContain('vectorHint');
+    expect(snap1.groups.length).toBe(1);
+    expect(JSON.stringify(snap1)).toContain('embedding');
 
-    // 一次常规写（记一笔）
-    const added = await api.poAddEntry(UID, 'grpV3', '旧版写入的流水');
+    // 一次常规写（记一笔）。
+    const added = await api.poAddEntry(UID, 'grpV3', '当前版本写入的流水');
     expect(added.ok).toBe(true);
 
-    // 落盘后：schemaVersion 降回 2，v3 扩展字段全部消失
+    // 落盘后：schemaVersion 保持 3，v3 扩展字段全部保留。
     const persisted = JSON.parse(fs.readFileSync(poDocFile(), 'utf8'));
-    expect(persisted.schemaVersion).toBe(2);
-    expect(JSON.stringify(persisted)).not.toContain('vectorHint');
-    expect(JSON.stringify(persisted)).not.toContain('embedding');
-    expect(JSON.stringify(persisted)).not.toContain('v3Section');
-    expect(JSON.stringify(persisted)).not.toContain('v3GlobalIndex');
-    // v2 认识的基线数据还在（降级不是全删，是静默截断）
+    expect(persisted.schemaVersion).toBe(3);
+    expect(JSON.stringify(persisted)).toContain('vectorHint');
+    expect(JSON.stringify(persisted)).toContain('embedding');
+    expect(JSON.stringify(persisted)).toContain('v3Section');
+    expect(JSON.stringify(persisted)).toContain('v3GlobalIndex');
+    // v2 认识的基线数据也在，新写的流水也在。
     expect(persisted.groups[0].values[0].text).toBe('v2认识的值');
-    // f2 字段因 v3-only 属性只是被剥属性，字段本体保留（normalize 只丢未知键）
     expect(persisted.groups[0].fields.some((f: any) => f.id === 'f2')).toBe(true);
+    expect(persisted.groups[0].entries.some((e: any) => e.text === '当前版本写入的流水')).toBe(true);
   });
 });

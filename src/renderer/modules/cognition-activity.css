@@ -1,0 +1,134 @@
+/* 系统活动：列表与审核详情共享高度，窄窗口使用可关闭的详情抽屉。 */
+#ca-root .ca-app .ca-activity-page{display:flex;flex-direction:column;min-height:0;height:calc(100dvh - 84px);padding-bottom:0;gap:10px;color:var(--text-primary,#25332c)}
+#ca-root .ca-app .ca-activity-page>.ca-hero{margin-bottom:0;flex:none}
+#ca-root .ca-app .ca-activity-tabs{display:flex;gap:24px;border-bottom:1px solid var(--border-color,#e2e7e3);flex:none}
+#ca-root .ca-app .ca-activity-tabs>button{border:0;border-radius:0;background:transparent;display:flex;align-items:center;gap:8px;padding:10px 2px 13px;color:var(--text-secondary,#7b847e);cursor:pointer;border-bottom:2px solid transparent;font:inherit}
+#ca-root .ca-app .ca-activity-tabs>button.is-active{color:var(--accent,#286b43);border-bottom-color:var(--accent,#286b43);font-weight:600}
+#ca-root .ca-app .ca-activity-tabs>button>.ui-button__label{font-size:inherit;border-radius:0;background:transparent;padding:0}
+#ca-root .ca-app .ca-activity-toolbar{display:flex;gap:12px;align-items:center;flex:none}
+#ca-root .ca-app .ca-activity-toolbar>.ui-input,#ca-root .ca-app .ca-activity-toolbar>input{max-width:400px;flex:1}
+#ca-root .ca-app .ca-activity-sync{margin-left:auto;font-size:12px;color:var(--text-muted,#89918c)}
+#ca-root .ca-app .ca-activity-sync[role=alert]{color:var(--color-danger,#ad4639)}
+#ca-root .ca-app .ca-activity-layout{display:grid;grid-template-columns:minmax(0,1fr) 384px;gap:20px;min-height:0;flex:1}
+#ca-root .ca-app .ca-activity-layout:not(:has(.ca-activity-detail)){grid-template-columns:minmax(0,1fr)}
+#ca-root .ca-app .ca-activity-list,#ca-root .ca-app .ca-activity-detail{border:1px solid var(--border-color,#e2e7e3);border-radius:9px;background:var(--bg-primary,#fff);min-height:0;min-width:0;overflow:hidden}
+#ca-root .ca-app .ca-activity-list{display:flex;flex-direction:column}
+#ca-root .ca-app .ca-activity-table-wrap{overflow:auto;flex:1;min-height:0}
+#ca-root .ca-app .ca-activity-table{border-collapse:collapse;table-layout:fixed;width:100%;font-size:12px;text-align:left}
+#ca-root .ca-app .ca-activity-table th{font-size:11px;font-weight:500;color:var(--text-secondary,#7c857e);padding:12px 14px;background:var(--bg-secondary,#f8faf8);position:sticky;top:0;z-index:1;border-bottom:1px solid var(--border-color,#e2e7e3)}
+#ca-root .ca-app .ca-activity-table th:first-child{width:45%}
+#ca-root .ca-app .ca-activity-table th:nth-child(2){width:18%}
+#ca-root .ca-app .ca-activity-table th:nth-child(3){width:17%}
+#ca-root .ca-app .ca-activity-table th:last-child{width:20%}
+#ca-root .ca-app .ca-activity-table td{padding:7px 12px;border-bottom:1px solid var(--border-color,#edf0ed);vertical-align:middle;overflow-wrap:anywhere;color:var(--text-secondary,#7c857e)}
+#ca-root .ca-app .ca-activity-table td strong{font-size:13px;color:var(--text-primary,#2c3930);font-weight:500;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+#ca-root .ca-app .ca-activity-table td p{font-size:11px;line-height:1.5;margin:2px 0 0;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+#ca-root .ca-app .ca-activity-table tr[role=button]{cursor:pointer;outline-offset:-2px}
+#ca-root .ca-app .ca-activity-table tbody tr:hover{background:var(--bg-secondary,#f8faf8)}
+#ca-root .ca-app .ca-activity-table tr.is-selected{background:var(--accent-light,#edf5ee)}
+#ca-root .ca-app .ca-activity-table td:last-child{color:var(--accent,#286b43)}
+#ca-root .ca-app .ca-activity-table td:last-child>span{float:right}
+#ca-root .ca-app .ca-activity-pagination{border-top:1px solid var(--border-color,#e2e7e3);padding:10px 14px;display:flex;align-items:center;gap:10px;justify-content:space-between;font-size:10px;color:var(--text-muted,#89918c);flex-wrap:wrap}
+#ca-root .ca-app .ca-activity-pagination>div{display:flex;align-items:center;gap:10px}
+#ca-root .ca-app .ca-activity-pagination button:disabled{opacity:.4;cursor:default}
+#ca-root .ca-app .ca-activity-list-note{font-size:10px;color:var(--text-muted,#89918c);padding:0 14px 12px;margin:0;line-height:1.7}
+#ca-root .ca-app .ca-activity-list-note>span{display:block}
+#ca-root .ca-app .ca-activity-detail{display:flex;flex-direction:column}
+#ca-root .ca-app .ca-activity-detail-head{flex:none}
+#ca-root .ca-app .ca-activity-detail-body{padding:18px;overflow:auto;flex:1;min-height:0;overflow-wrap:anywhere}
+#ca-root .ca-app .ca-activity-detail .ca-candidate-detail{border:0;box-shadow:none;background:transparent;padding:0;margin:0;min-width:0}
+#ca-root .ca-app .ca-activity-detail .field{display:block;margin:16px 0;font-size:12px}
+#ca-root .ca-app .ca-activity-detail input,#ca-root .ca-app .ca-activity-detail textarea,#ca-root .ca-app .ca-activity-detail select{max-width:100%;box-sizing:border-box;width:100%;font-size:12px;line-height:1.65}
+#ca-root .ca-app .ca-activity-detail textarea{min-height:80px;resize:vertical}
+#ca-root .ca-app .ca-activity-detail .sect-block{padding:12px 0;margin:0;border:0;box-shadow:none}
+#ca-root .ca-app .ca-activity-detail .content-text{font-size:12px;line-height:1.8;white-space:pre-wrap}
+#ca-root .ca-app .ca-activity-detail .actions{display:flex;flex-wrap:wrap;gap:8px}
+#ca-root .ca-app .ca-activity-detail .ca-chain{font-size:12px}
+#ca-root .ca-app .ca-activity-detail .notice-row{flex-wrap:wrap;padding:12px 0}
+#ca-root .ca-app .ca-activity-detail .notice-copy{min-width:0;width:100%}
+#ca-root .ca-app .ca-activity-detail .chips{flex-wrap:wrap}
+#ca-root .ca-app .ca-activity-detail-body>.backlink,#ca-root .ca-app .ca-activity-detail-body>.ca-hero{display:none}
+#ca-root .ca-app .ca-activity-detail-footer{padding:12px 18px;border-top:1px solid var(--border-color,#e2e7e3);display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap}
+#ca-root .ca-app .ca-activity-processing{padding:12px;background:var(--accent-light,#edf5ee);border-radius:6px;font-size:12px;line-height:1.7;margin-bottom:16px}
+#ca-root .ca-app .ca-activity-processing p{margin:6px 0 0;font-size:11px}
+#ca-root .ca-app .ca-activity-scrim{display:none}
+
+#ca-root .ca-app .ca-detail-title-actions{display:flex;align-items:center;gap:2px;flex:none}
+
+@media(max-width:1100px),(max-height:500px){#ca-root .ca-app .ca-activity-layout{grid-template-columns:minmax(0,1fr)}
+#ca-root .ca-app .ca-activity-detail{display:none}
+#ca-root .ca-app .ca-activity-detail.is-drawer-open{display:flex;position:fixed;right:0;top:0;bottom:0;width:min(480px,94vw);z-index:var(--z-overlay);border-radius:0;box-shadow:-8px 0 40px #0002}
+#ca-root .ca-app .ca-activity-scrim{display:block;position:fixed;inset:0;background:var(--color-scrim);border:0;z-index:var(--z-popover)}
+#ca-root .ca-app .ca-activity-sync{max-width:200px}
+}
+
+@media(max-width:640px){#ca-root .ca-app .ca-activity-page{height:calc(100dvh - 128px);gap:10px}
+#ca-root .ca-app .ca-activity-toolbar{flex-wrap:wrap;gap:8px}
+#ca-root .ca-app .ca-activity-toolbar>.ui-input,#ca-root .ca-app .ca-activity-toolbar>input{max-width:none;min-width:65%}
+#ca-root .ca-app .ca-activity-sync{margin-left:0;flex:1;max-width:none}
+#ca-root .ca-app .ca-activity-table th,#ca-root .ca-app .ca-activity-table td{padding:11px 8px}
+#ca-root .ca-app .ca-activity-table th:nth-child(3),#ca-root .ca-app .ca-activity-table td:nth-child(3){display:none}
+#ca-root .ca-app .ca-activity-table th:first-child{width:50%}
+#ca-root .ca-app .ca-activity-table th:nth-child(2){width:22%}
+#ca-root .ca-app .ca-activity-table th:last-child{width:28%}
+}
+#ca-root .ca-app .ca-activity-page>.hero{padding:0;margin:0;background:transparent;border:0;box-shadow:none;min-height:0}
+#ca-root .ca-app .ca-activity-page>.hero h1{font-size:22px;line-height:1.3;margin:0 0 6px}
+#ca-root .ca-app .ca-activity-page>.hero .sub{font-size:12px;margin:0}
+#ca-root .ca-app .ca-activity-detail .ca-candidate-detail{border:0;padding:0;margin:0;box-shadow:none;background:transparent}
+#ca-root .ca-app .ca-activity-detail .field{margin:12px 0}
+#ca-root .ca-app .ca-activity-fields-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#ca-root .ca-app .ca-activity-detail .details{padding:0;margin:12px 0;background:transparent;border:0}
+#ca-root .ca-app .ca-activity-toolbar .ui-input{flex:0 1 540px;max-width:540px}
+#ca-root .ca-app .ca-activity-detail-body>.hero,#ca-root .ca-app .ca-activity-detail-body>.ca-activity-toggle{display:none}
+
+/* 审核顺序：内容、使用方式、来源核对；控件沿用共享表单外观。 */
+#ca-root .ca-app .ca-review-section { padding: 12px 0; border-bottom: 1px solid var(--border); }
+#ca-root .ca-app .ca-review-section:first-of-type { padding-top: 4px; }
+#ca-root .ca-app .ca-review-section h3 { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+#ca-root .ca-app .ca-review-section .field { margin: 0 0 14px; }
+#ca-root .ca-app .ca-review-section .field:last-child { margin-bottom: 0; }
+#ca-root .ca-app .ca-review-content textarea { min-height: 112px; line-height: 1.7; }
+#ca-root .ca-app .ca-review-section .ca-activity-fields-two { gap: 12px; }
+#ca-root .ca-app .ca-review-section .ca-activity-fields-two .field { margin-bottom: 0; min-width: 0; }
+#ca-root .ca-app .ca-review-select { min-height: var(--control-height); padding: 0 var(--space-3); cursor: pointer; }
+#ca-root .ca-app .ca-review-help { margin: 10px 0 0; color: var(--text-secondary); }
+#ca-root .ca-app .ca-review-notice { padding: 10px 12px; margin: 0 0 12px; border-radius: var(--radius-field); background: var(--color-warning-soft); color: var(--text-body); font-size: 12px; line-height: 1.65; }
+#ca-root .ca-app .ca-review-notice strong { font-weight: 600; }
+#ca-root .ca-app .ca-review-notice p { margin: 4px 0 0; }
+#ca-root .ca-app .ca-review-evidence .tt { font-size: 12px; }
+#ca-root .ca-app .ca-review-evidence .evgroup-title { font-size: 12px; font-weight: 500; }
+#ca-root .ca-app .ca-review-evidence .evgroup-title .note { display: block; font-weight: 400; }
+#ca-root .ca-app .ca-review-extra { margin: 16px 0 8px; }
+#ca-root .ca-app .ca-review-extra summary,#ca-root .ca-app .ca-review-checks summary,#ca-root .ca-app .ca-review-permissions summary { font-size: 12px; font-weight: 500; }
+
+
+/* 与 HTML 原型对齐：条目标题、版本目标、连续表单、证据、保存影响。 */
+#ca-root .ca-app .ca-activity-layout{grid-template-columns:minmax(0,1fr) clamp(384px,32vw,460px)}
+#ca-root .ca-app .ca-activity-detail-body{padding:var(--space-4)}
+#ca-root .ca-app .ca-activity-detail .field{margin:0 0 var(--space-4)}
+#ca-root .ca-app .ca-review-target .content-text{font-size:var(--font-size-2)}
+#ca-root .ca-app .ca-review-usage .field{margin:0;min-width:0}
+#ca-root .ca-app .ca-review-help{margin:var(--space-2) 0 var(--space-3)}
+#ca-root .ca-app .ca-review-value{margin:var(--space-3) 0 var(--space-4)}
+#ca-root .ca-app .ca-review-value[open] summary,#ca-root .ca-app .ca-review-boundaries[open] summary{margin-bottom:var(--space-3)}
+#ca-root .ca-app .ca-review-evidence,#ca-root .ca-app .ca-review-impact{margin:var(--space-4) 0}
+#ca-root .ca-app .ca-review-evidence h3,#ca-root .ca-app .ca-review-impact h3,#ca-root .ca-app .ca-review-boundaries h3{font-size:var(--font-size-2);font-weight:600;margin:0 0 var(--space-3)}
+#ca-root .ca-app .ca-review-source{margin:var(--space-3) 0}
+#ca-root .ca-app .ca-review-source-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);font-size:var(--font-size-2);color:var(--text-secondary)}
+#ca-root .ca-app .ca-review-source-head>span{min-width:0;overflow-wrap:anywhere}
+#ca-root .ca-app .ca-review-source-link{flex:none}
+#ca-root .ca-app .ca-review-quote{margin:var(--space-2) 0 0;padding:var(--space-3);border-left:3px solid var(--accent);border-radius:var(--radius-field);background:var(--bg-secondary);font-size:var(--font-size-2);line-height:1.8;white-space:pre-wrap}
+#ca-root .ca-app .ca-review-impact .note{margin:var(--space-2) 0}
+#ca-root .ca-app .ca-review-footnote{color:var(--text-muted)}
+#ca-root .ca-app .ca-review-notice.is-valid{background:var(--color-success-soft)}
+#ca-root .ca-app .ca-review-history-body ol{margin:var(--space-2) 0;padding-left:var(--space-4)}
+#ca-root .ca-app .ca-review-history-body li{font-size:var(--font-size-2);margin-bottom:var(--space-3)}
+#ca-root .ca-app .ca-review-history-body time{display:block;color:var(--text-muted);font-size:var(--font-size-1)}
+#ca-root .ca-app .ca-review-history-body p{margin:var(--space-1) 0;line-height:1.7}
+@media(max-width:1100px),(max-height:500px){#ca-root .ca-app .ca-activity-layout{grid-template-columns:minmax(0,1fr)}}
+/* 列表与详情在当前面板内滚动，避免点击底部记录时将整页标题卷走。 */
+#ca-root .ca-scroll.ca-layout-activity{overflow:hidden}
+#ca-root .ca-scroll.ca-layout-activity>.wrap{height:100%;box-sizing:border-box;padding-bottom:var(--space-4)}
+#ca-root .ca-scroll.ca-layout-activity .ca-activity-page{height:100%}
+#ca-root .ca-layout-activity:has(.ca-activity-detail.is-drawer-open){contain:none}

@@ -1,5 +1,5 @@
 /**
- * 个人本体 v2 存储层测试（2026-09-29 重构）。
+ * 个人本体 v2 存储层测试。
  *
  * 覆盖：v1 markdown → JSON 一次性迁移（组/值/元数据/历史快照/回收站）、
  * 新 CRUD（id 寻址）、规则分类一等列、资产投影只读、历史快照与恢复、
@@ -187,19 +187,20 @@ describe('po v2 store › v1 迁移', () => {
     expect(doc!.trash.length).toBe(1);
     expect(doc!.trash[0].group.id).toBe('grp999');
 
-    // 历史快照转换成 JSON 且 audit 保留
-    const store = await loadStore();
-    const hist = store.listPoGroupHistory(UID, 'grp001');
-    expect(hist.length).toBe(1);
-    expect(hist[0].audit?.action).toBe('value_add');
-
     // 备份 + 台账移除由 ensurePoDoc 完成
+    const store = await loadStore();
     await store.ensurePoDoc(UID);
     expect(fs.existsSync(poDocFile())).toBe(true);
     expect(fs.existsSync(path.join(v1Dir(), 'groups.md'))).toBe(false);
     const backups = fs.readdirSync(path.join(userRoot(), 'local')).filter((n) => n.startsWith('ontology-v1-backup-'));
     expect(backups.length).toBe(1);
     expect(fs.existsSync(path.join(userRoot(), 'local', backups[0], 'groups.md'))).toBe(true);
+
+    // 历史快照转换成 JSON 且 audit 保留（.history → po-history 的转换
+    // 挪到迁移结清步落盘，纯导入/读路径零副作用——断言随之挪到 ensurePoDoc 后）
+    const hist = store.listPoGroupHistory(UID, 'grp001');
+    expect(hist.length).toBe(1);
+    expect(hist[0].audit?.action).toBe('value_add');
   });
 
   it('无 v1 目录 = 新用户，返回空文档不落盘', async () => {
@@ -210,7 +211,7 @@ describe('po v2 store › v1 迁移', () => {
     expect(fs.existsSync(poDocFile())).toBe(false);
   });
 
-  it('F-r1-8：v1 目录存在但无可导入内容 → ensurePoDoc 落盘空 JSON 结清，不再重扫', async () => {
+  it('v1 目录存在但无可导入内容 → ensurePoDoc 落盘空 JSON 结清，不再重扫', async () => {
     // 空 v1 目录（无 groups.md、无组文件、无 .history）：importFromV1Sync
     // 返回空文档而非 null——修复前这一分支不落盘，下次读照旧全量重扫。
     fs.mkdirSync(v1Dir(), { recursive: true });
@@ -298,7 +299,7 @@ describe('po v2 store › CRUD 与规则分类', () => {
     const f = await api.poCreateField(UID, gid, '字段');
     expect(f.ok).toBe(true);
 
-    // F-r2-1：poAddValue 的 ruleKind 枚举门（与 poUpdateValue 同口径）。
+    // poAddValue 的 ruleKind 枚举门（与 poUpdateValue 同口径）。
     const bad = await api.poAddValue(UID, gid, f.field!.id, { text: 'v1', ruleKind: 'bogus' as never });
     expect(bad.ok).toBe(false);
     expect(bad.error).toBe('invalid rule kind');
@@ -308,7 +309,7 @@ describe('po v2 store › CRUD 与规则分类', () => {
     expect((await api.poAddValue(UID, gid, f.field!.id, { text: 'v2', ruleKind: 'operation' })).ok).toBe(true);
     expect(api.getPoSnapshot(UID).groups[0].values[0].ruleKind).toBe('operation');
 
-    // F-r2-2：poUpdateValue 的 verified 三态门（true/'independent'/false）。
+    // poUpdateValue 的 verified 三态门（true/'independent'/false）。
     const vid = api.getPoSnapshot(UID).groups[0].values[0].id;
     const badVerified = await api.poUpdateValue(UID, gid, vid, { verified: 'yes' as never });
     expect(badVerified.ok).toBe(false);
@@ -321,6 +322,30 @@ describe('po v2 store › CRUD 与规则分类', () => {
     expect(api.getPoSnapshot(UID).groups[0].values[0].verified).toBe('independent');
     expect((await api.poUpdateValue(UID, gid, vid, { verified: false })).ok).toBe(true);
     expect(api.getPoSnapshot(UID).groups[0].values[0].verified).toBeUndefined();
+  });
+
+  it('字段写入校验（r3）：poCreateField 拒绝普通组 section（无幽灵字段）', async () => {
+    const api = await loadApi();
+    const g = await api.poCreateGroup(UID, '分节组');
+    const gid = g.group!.group_id;
+
+    // 普通组无分节（model.ts 契约「普通组恒为 undefined」）——带
+    // section 写成功落盘后被渲染层跳过、原文保存整组替换时丢失，写侧直接拒。
+    const bad = await api.poCreateField(UID, gid, '字段', { section: '基本信息' });
+    expect(bad.ok).toBe(false);
+    expect(bad.error).toBe('section not allowed on user group');
+    // 拒绝后不落盘（ctx.fail 中止本次编辑）
+    expect(api.getPoSnapshot(UID).groups[0].fields.length).toBe(0);
+
+    // 判原始参数：空白串 section（sanitize 后为 ''）同样被拦，不漏网成幽灵空分节
+    const blank = await api.poCreateField(UID, gid, '字段', { section: '   ' });
+    expect(blank.ok).toBe(false);
+    expect(blank.error).toBe('section not allowed on user group');
+
+    // 对照：不带 section 照常创建，section 恒为 undefined
+    const ok = await api.poCreateField(UID, gid, '字段');
+    expect(ok.ok).toBe(true);
+    expect(ok.field!.section).toBeUndefined();
   });
 
   it('流水：记一笔 / 升格为字段值 / 删除', async () => {
@@ -407,7 +432,7 @@ describe('po v2 store › 历史与恢复', () => {
   });
 });
 
-describe('po v2 store › 快照写入口 safeId 门（F-r1-9）', () => {
+describe('po v2 store › 快照写入口 safeId 门', () => {
   it('writePoGroupSnapshot 拒绝非白名单 uid/groupId：不建目录不落盘；合法调用照常留档', async () => {
     const store = await loadStore();
     const before = {
@@ -509,7 +534,7 @@ describe('po v2 store › 导出导入', () => {
   it('导入 meta 与手写通道同口径：非法 asOf/ruleKind/verified 剥离，合法部分照常落盘', async () => {
     const api = await loadApi();
     // 模拟外部直接构造 items 调 poImportApply（绕过 preview 解析），
-    // 塞入红队探针同款非法结构：撕裂方言 md 副本、写读不对称的入口。
+    // 构造非法结构：撕裂方言 md 副本、写读不对称的入口。
     const items: Array<{ title: string; mergeIntoExisting: boolean; fields: Array<{ name: string; values: any[] }>; entries: string[] }> = [
       {
         title: '注入组',
@@ -556,7 +581,7 @@ describe('po v2 store › 导出导入', () => {
 
   it('超长文本截断不劈开代理对：末尾无孤立高代理，UTF-8 往返无损', async () => {
     const { sanitizePoText } = await loadModel();
-    // 红队探针同款输入：1997 个 ASCII + 10 个 emoji，截断点正好落在代理对中间
+    // 合成输入：1997 个 ASCII + 10 个 emoji，截断点正好落在代理对中间
     const long = 'x'.repeat(1997) + '😀'.repeat(10);
     const stored = sanitizePoText(long, 2000);
     // 1997 ASCII + 完整保留 1 个 emoji（2 码元）= 1999；被劈开的高代理已剔除

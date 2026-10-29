@@ -4,12 +4,12 @@ import { cogseedBrowserManager, type CogSeedBrowserManager } from './browser-man
 
 export function createCogSeedBrowserAdapter(manager: CogSeedBrowserManager = cogseedBrowserManager) {
   return {
-    async run(name: Extract<RuntimeHostToolName, `browser_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts: { signal?: AbortSignal | null } = {}): Promise<CogSeedHostToolResult> {
+    async run(name: Extract<RuntimeHostToolName, `browser_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts: { signal?: AbortSignal | null; beforeAction?: () => Promise<void> } = {}): Promise<CogSeedHostToolResult> {
       if (name === 'browser_open') return manager.open(scope, typeof input.url === 'string' ? input.url : '', opts);
       if (name === 'browser_snapshot') return manager.snapshot(scope, typeof input.maxChars === 'number' ? input.maxChars : undefined);
-      if (name === 'browser_click') return manager.click(scope, Number(input.ref));
-      if (name === 'browser_type') return manager.type(scope, Number(input.ref), typeof input.text === 'string' ? input.text : '', input.submit === true);
-      return manager.screenshot(scope, typeof input.path === 'string' ? input.path : undefined);
+      if (name === 'browser_click') return manager.click(scope, Number(input.ref), opts.beforeAction);
+      if (name === 'browser_type') return manager.type(scope, Number(input.ref), typeof input.text === 'string' ? input.text : '', input.submit === true, opts.beforeAction);
+      return manager.screenshot(scope, typeof input.path === 'string' ? input.path : undefined, opts.beforeAction);
     },
   };
 }

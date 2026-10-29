@@ -14,6 +14,7 @@
  * 以后换存储只需要改这个文件。
  */
 
+import { buildFormalAssetPayload, resolveFormalAssetPayload } from './payload';
 import { createLogger } from '../../../logger';
 import { listAbilityAssets, listAbilityAssetsForSpace, readAbilityAsset } from '../asset-service';
 import { listAbilityAssetTimeline, listRecallTimeline, type RecallAssetTimelineItem } from '../timeline-service';
@@ -26,21 +27,6 @@ import {
 } from './types';
 
 const log = createLogger('recall.formal-assets');
-
-function payloadFor(record: RecallAbilityAssetRecord): FormalAssetPayload {
-  switch (record.type) {
-    case 'skill_method':
-      return { kind: 'skill_method' };
-    case 'personal':
-      return { kind: 'personal' };
-    case 'template':
-      return { kind: 'template' };
-    case 'fact':
-      return { kind: 'fact' };
-    default:
-      return { kind: 'rule' };
-  }
-}
 
 /** 底层记录 → 规范信封。只做形状转换，不做过滤判断（过滤在 list 里统一做）。 */
 export function toFormalAsset(record: RecallAbilityAssetRecord): FormalAbilityAsset {
@@ -64,7 +50,7 @@ export function toFormalAsset(record: RecallAbilityAssetRecord): FormalAbilityAs
     evidenceRefs: record.evidenceRefs,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
-    payload: payloadFor(record),
+    payload: buildFormalAssetPayload(record),
     record,
   };
 }
@@ -114,7 +100,9 @@ export async function getFormalAsset(
     log.warn('non-formal record requested through the formal asset boundary', { assetId });
     return undefined;
   }
-  return toFormalAsset(record);
+  const asset = toFormalAsset(record);
+  asset.payload = await resolveFormalAssetPayload(userId, record);
+  return asset;
 }
 
 /** 事实链。传 assetId 取单条资产的链，不传取全局最近的。 */

@@ -38,7 +38,7 @@ function appendSecure(file: string, text: string): void {
   try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
 }
 
-export type P3394OutboxStatus = 'submitted' | 'sent' | 'completed' | 'failed';
+export type P3394OutboxStatus = 'submitted' | 'sent' | 'completed' | 'failed' | 'isolated';
 
 export interface P3394OutboxRecord {
   message_id: string;
@@ -81,20 +81,29 @@ export function compactOutboxFile(file: string): { before: number; after: number
   const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
   const envelopes = new Map<string, { peer: string; envelope: P3394Envelope }>();
   const statuses = new Map<string, P3394OutboxEvent>();
+  // Background-result rows are a parallel, job_id-keyed ledger. They have no
+  // envelope snapshot and no terminal compaction state we can fold to, so they
+  // must be carried over verbatim — dropping them would re-deliver a finished
+  // background job after the next compaction.
+  const backgroundResults: string[] = [];
   for (const line of lines) {
     try {
       const event = JSON.parse(line) as P3394OutboxEvent & { kind?: string; peer?: string; envelope?: P3394Envelope };
-      if (event.kind === 'envelope' && event.message_id && event.envelope) {
+      if (event.kind === 'background_result') {
+        backgroundResults.push(line);
+      } else if (event.kind === 'envelope' && event.message_id && event.envelope) {
         envelopes.set(event.message_id, { peer: event.peer || '', envelope: event.envelope });
       } else if (event.message_id && event.status) {
         statuses.set(event.message_id, { at: event.at, message_id: event.message_id, status: event.status, ...(event.error ? { error: event.error } : {}) });
       }
     } catch { /* skip malformed */ }
   }
-  const keep: string[] = [];
+  const keep: string[] = [...backgroundResults];
   for (const [messageId, snapshot] of envelopes) {
     const status = statuses.get(messageId)?.status;
-    if (!status || status === 'submitted' || status === 'sent') {
+    // `isolated` keeps its envelope on purpose: it is out of the replay set but
+    // must stay recoverable (never drop a record because delivery failed).
+    if (!status || status === 'submitted' || status === 'sent' || status === 'isolated') {
       keep.push(JSON.stringify({ at: statuses.get(messageId)?.at ?? new Date().toISOString(), message_id: messageId, kind: 'envelope', peer: snapshot.peer, envelope: snapshot.envelope }));
       if (status) keep.push(JSON.stringify(statuses.get(messageId)));
     }
@@ -154,6 +163,174 @@ export function outboxMarkCompleted(messageId: string): void {
 export function outboxMarkFailed(messageId: string, error: string): void {
   // 错误串可能携带 Bearer/key=value 等位置化 secret，落盘前统一脱敏。
   appendEvent({ at: new Date().toISOString(), message_id: messageId, status: 'failed', error: sanitizeLogTextForUpload(String(error)).slice(0, 300) });
+}
+
+/** 隔离：信封永久留在文件里（压缩保留），但移出重放集。用于**配置级**
+ *  不可达（peer 未注册 / 无 endpoint）——重放再多次也不会成功，隔离后仍可
+ *  人工/后续重新入队，不做删除。 */
+export function outboxMarkIsolated(messageId: string, error: string): void {
+  appendEvent({ at: new Date().toISOString(), message_id: messageId, status: 'isolated', error: sanitizeLogTextForUpload(String(error)).slice(0, 300) });
+}
+
+/** 记录一次配置级重放失败并返回累计次数（追加式，不改写历史事件）。 */
+export function outboxRecordReplayFailure(messageId: string, error: string): number {
+  const file = outboxFilePath();
+  appendSecure(file, redactP3394Secrets(JSON.stringify({
+    at: new Date().toISOString(), message_id: messageId, kind: 'replay_failure',
+    error: sanitizeLogTextForUpload(String(error)).slice(0, 300),
+  })) + '\n');
+  let count = 0;
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as { message_id?: string; kind?: string };
+      if (event.message_id !== messageId) continue;
+      // A requeue is a fresh start: failures before it must not count again,
+      // otherwise an operator-requeued record would re-isolate on the next boot.
+      if (event.kind === 'requeued') count = 0;
+      else if (event.kind === 'replay_failure') count += 1;
+    }
+  } catch { /* unreadable file → keep the conservative retry behavior */ }
+  return count;
+}
+
+/** 解除隔离：把记录放回重放集，并**重置失败计数**（requeue 之后重新计时）。
+ *  隔离是可逆的运维动作，不需要手改 JSONL；信封本身一直在文件里。 */
+export function outboxRequeueIsolated(messageId: string): boolean {
+  const current = outboxListForReplay();
+  if (current.some((record) => record.message_id === messageId)) return false; // 已在重放集
+  const file = outboxFilePath();
+  if (!fs.existsSync(file)) return false;
+  let isolated = false;
+  let hasEnvelope = false;
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as { message_id?: string; status?: string; kind?: string };
+      if (event.message_id !== messageId) continue;
+      if (event.kind === 'envelope') hasEnvelope = true;
+      if (event.status === 'isolated') isolated = true;
+    }
+  } catch { return false; }
+  // 只对真正被隔离、且信封还在的记录生效。
+  if (!isolated || !hasEnvelope) return false;
+  const at = new Date().toISOString();
+  appendSecure(file, JSON.stringify({ at, message_id: messageId, kind: 'requeued' }) + '\n');
+  appendEvent({ at, message_id: messageId, status: 'submitted' });
+  log.info('P3394 outbox record requeued', { message_id: messageId });
+  return true;
+}
+
+/** 重放失败后的动作。只有**配置级**不可达才可能隔离；阈值 1 = 首次即隔离，
+ *  更大的阈值让"网关晚启动"这类情况有缓冲。瞬时错误永远重试。 */
+export function outboxReplayDecision(error: string, attempts: number, isolateAfterAttempts: number): 'retry' | 'isolate' {
+  const configLevel = error === 'p3394_peer_not_registered' || error === 'p3394_peer_has_no_endpoint';
+  return configLevel && attempts >= Math.max(1, Math.floor(isolateAfterAttempts)) ? 'isolate' : 'retry';
+}
+
+// ── background_result（决策 2 · 两段式第二段）─────────────────────────────
+//
+// Phase 2 is not a request/response envelope: it is a terminal notification
+// keyed by `job_id`, delivered to the initiator's conversation. It needs the
+// same durability as an outbound envelope (a crash before delivery must not
+// lose the result) but not the reply-waiter/replay-by-message_id machinery.
+// These records share the immutable outbox JSONL and the same 0600/redaction
+// discipline; `job_id` is the idempotency key.
+
+export type P3394BackgroundResultStatus = 'submitted' | 'delivered' | 'failed' | 'isolated';
+
+export interface P3394BackgroundResultEvent {
+  at: string;
+  kind: 'background_result';
+  job_id: string;
+  peer?: string;
+  status: P3394BackgroundResultStatus;
+  error?: string;
+  /** A requeue resets the failure budget (operator-requeued isolated result). */
+  requeued?: boolean;
+}
+
+/** Latest recorded status for a background result, or null when never seen. */
+export function outboxBackgroundResultStatus(jobId: string): P3394BackgroundResultStatus | null {
+  const file = outboxFilePath();
+  if (!fs.existsSync(file)) return null;
+  let latest: P3394BackgroundResultStatus | null = null;
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as Partial<P3394BackgroundResultEvent>;
+      if (event.kind !== 'background_result' || event.job_id !== jobId || !event.status) continue;
+      latest = event.status;
+    }
+  } catch { return latest; }
+  return latest;
+}
+
+export function outboxBackgroundResultDelivered(jobId: string): boolean {
+  return outboxBackgroundResultStatus(jobId) === 'delivered';
+}
+
+/** Mark a delivery attempt before the side effect. Returns false when the
+ *  result is already terminal (delivered/isolated): the caller must not
+ *  deliver it a second time. */
+export function outboxRecordBackgroundResult(jobId: string, peer: string): boolean {
+  const current = outboxBackgroundResultStatus(jobId);
+  if (current === 'delivered' || current === 'isolated') return false;
+  appendSecure(outboxFilePath(), redactP3394Secrets(JSON.stringify({
+    at: new Date().toISOString(), kind: 'background_result', job_id: jobId, peer, status: 'submitted',
+  })) + '\n');
+  maybeCompactOutbox();
+  return true;
+}
+
+export function outboxMarkBackgroundResultDelivered(jobId: string): void {
+  appendSecure(outboxFilePath(), redactP3394Secrets(JSON.stringify({
+    at: new Date().toISOString(), kind: 'background_result', job_id: jobId, status: 'delivered',
+  })) + '\n');
+  maybeCompactOutbox();
+}
+
+/** Record one failed delivery and return the attempts since the last requeue
+ *  (same reset semantics as `outboxRecordReplayFailure`). */
+export function outboxRecordBackgroundResultFailure(jobId: string, error: string): number {
+  const file = outboxFilePath();
+  appendSecure(file, redactP3394Secrets(JSON.stringify({
+    at: new Date().toISOString(), kind: 'background_result', job_id: jobId, status: 'failed',
+    error: sanitizeLogTextForUpload(String(error)).slice(0, 300),
+  })) + '\n');
+  maybeCompactOutbox();
+  let attempts = 0;
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as { kind?: string; job_id?: string; status?: string; requeued?: boolean };
+      if (event.kind !== 'background_result' || event.job_id !== jobId) continue;
+      // A requeue starts a fresh budget (mirrors outboxRecordReplayFailure);
+      // ordinary `submitted` attempt markers must NOT reset it, otherwise a
+      // result that fails on every boot would never reach isolation.
+      if (event.requeued === true) attempts = 0;
+      else if (event.status === 'failed') attempts += 1;
+    }
+  } catch { /* unreadable file → keep the conservative behavior */ }
+  return attempts;
+}
+
+export function outboxMarkBackgroundResultIsolated(jobId: string, error: string): void {
+  appendSecure(outboxFilePath(), redactP3394Secrets(JSON.stringify({
+    at: new Date().toISOString(), kind: 'background_result', job_id: jobId, status: 'isolated',
+    error: sanitizeLogTextForUpload(String(error)).slice(0, 300),
+  })) + '\n');
+  maybeCompactOutbox();
+}
+
+/** Put an isolated background result back into the deliverable set. */
+export function outboxRequeueBackgroundResult(jobId: string): boolean {
+  if (outboxBackgroundResultStatus(jobId) !== 'isolated') return false;
+  appendSecure(outboxFilePath(), redactP3394Secrets(JSON.stringify({
+    at: new Date().toISOString(), kind: 'background_result', job_id: jobId, status: 'submitted', requeued: true,
+  })) + '\n');
+  maybeCompactOutbox();
+  return true;
 }
 
 /** 重放集：submitted / sent 状态的记录（按 message_id 折叠最新状态），

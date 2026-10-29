@@ -27,7 +27,8 @@ export interface CogSeedRecoveryOptions {
 const inFlightRecoveries = new Map<string, Promise<CogSeedRecoveryReport>>();
 
 function isRecoveryCandidate(task: CogSeedTaskRecord): boolean {
-  return isCogSeedTaskActiveStatus(task.status);
+  // Waiting for a decision is a durable interaction, not an orphaned worker.
+  return task.status !== 'waiting_user' && isCogSeedTaskActiveStatus(task.status);
 }
 
 export interface RecoverCogSeedTaskOptions {

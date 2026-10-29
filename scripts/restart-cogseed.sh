@@ -1,19 +1,17 @@
 #!/bin/bash
 # Restart the CogSeed runtime bound to this worktree.
 #
-# This worktree is locked to COGSEED_RUNTIME_VARIANT=cogseed and is
+# This worktree is locked to its package's source variant and is
 # launched with `./run.sh` (macOS: `open -W -n` on the variant app bundle).
-# This script stops only processes of THIS worktree's cogseed runtime; another
+# This script stops only processes of THIS worktree's owned runtime; another
 # checkout must never count as this worktree being ready.
 #
 # Usage: scripts/restart-cogseed.sh [stop|start|restart]   (default: restart)
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VARIANT="cogseed"
-RUN_LOG="/tmp/cogseed-${VARIANT}-run.log"
+source "$APP_DIR/scripts/lib/source-launch.sh"
 DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"
-ELECTRON_APP="$APP_DIR/node_modules/electron/dist/CogSeed.app/Contents/MacOS/Electron"
 # shellcheck source=lib/runtime-pids.sh
 source "$APP_DIR/scripts/lib/runtime-pids.sh"
 
@@ -37,11 +35,15 @@ ps_snapshot() {
 }
 
 worktree_pids() {
-  ps_snapshot | worktree_runtime_pids "$APP_DIR" "$VARIANT"
+  ps_snapshot | worktree_runtime_pids "$APP_DIR" "$VARIANT" "$APP_NAME"
+}
+
+worktree_main_pids() {
+  ps_snapshot | worktree_runtime_pids "$APP_DIR" "$VARIANT" "$APP_NAME" main
 }
 
 other_worktree_pids() {
-  ps_snapshot | other_worktree_runtime_pids "$APP_DIR" "$VARIANT"
+  ps_snapshot | other_worktree_runtime_pids "$APP_DIR" "$VARIANT" "$APP_NAME"
 }
 
 stop() {
@@ -77,7 +79,7 @@ stop() {
 }
 
 start() {
-  if [ -n "$(worktree_pids)" ]; then
+  if [ -n "$(worktree_main_pids)" ]; then
     echo "[restart-cogseed] ${VARIANT} runtime already running for this worktree"
     return 0
   fi
@@ -100,7 +102,7 @@ wait_ready() {
   # （间隔 1s）都看到本 worktree 的进程才算稳定就绪。
   local streak=0 others
   for _ in $(seq 1 60); do
-    if [ -n "$(worktree_pids)" ]; then
+    if [ -n "$(worktree_main_pids)" ]; then
       streak=$((streak + 1))
       if [ "$streak" -ge 2 ]; then
         echo "[restart-cogseed] ${VARIANT} runtime is up for this worktree"

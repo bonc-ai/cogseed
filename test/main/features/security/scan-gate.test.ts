@@ -38,6 +38,7 @@ interface Detail {
   coverage: {
     rule_count: number; rule_groups: string[]; ruleset_resolved: boolean;
     invalid_rules: unknown[]; external_tools: Record<string, string>;
+    vulnerability_db?: { status: string; entries: number; as_of: string };
   };
   framework_summary: { owasp_llm: Array<{ id: string; count: number }> };
   limitations: string[];
@@ -275,6 +276,25 @@ describe('guardrail › scan_gate › --detail payload', () => {
     expect(v.coverage?.invalid_rules).toEqual([]);
     expect(v.schema_version).toBeTruthy();
     expect(v.limitations?.length).toBeGreaterThan(0);
+  }, 200_000);
+
+  // 2.3.0 made dependency vulnerability scanning native. The count is what the
+  // renderer shows; it used to read a field the engine never emitted, so it was
+  // always 0 even when `dependency_vuln` findings were listed right beside it.
+  itWithPython('counts dependency vulnerabilities from the built-in snapshot', () => {
+    const v = evaluate(mkSkill({
+      'SKILL.md': CLEAN_MD,
+      'package-lock.json': JSON.stringify({
+        lockfileVersion: 3,
+        packages: { 'node_modules/lodash': { version: '4.17.20' } },
+      }),
+    }), true);
+
+    expect(v.vulnerability_count).toBeGreaterThan(0);
+    const dep = (v.findings || []).filter((f) => f.category === 'dependency_vuln');
+    expect(dep.length).toBeGreaterThan(0);
+    expect(dep[0].rule_id).toMatch(/^(GHSA|CVE|MAL|PYSEC|OSV)-/);
+    expect(v.coverage?.vulnerability_db?.status).toBe('OK');
   }, 200_000);
 
   // The whole point of the whitelist in scan_gate.py: the matched text may be

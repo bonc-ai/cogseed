@@ -4,12 +4,33 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 const modelCalls = vi.hoisted(() => [] as Array<{ sessionId: string; message: string; toolNames: string[] }>);
+const routingModel = vi.hoisted(() => ({
+  mode: 'verdict' as 'verdict' | 'stall' | 'timeout',
+  options: null as any,
+}));
 
 vi.mock('../../../../src/main/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../../../src/main/model/client', () => ({
   async *streamChatWithModel(opts: any) {
+    if (opts.sessionId.startsWith('kstar-routing-')) {
+      routingModel.options = opts;
+      if (routingModel.mode === 'stall') {
+        await new Promise<void>((resolve) => {
+          if (opts.abortSignal?.aborted) resolve();
+          else opts.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        // A buffered positive verdict after Stop must never open a task.
+      }
+      if (routingModel.mode === 'timeout') {
+        yield { type: 'error', text: 'no first content', failureCode: 'provider_no_first_event' };
+      } else {
+        yield { type: 'final', text: '<kstar-judge>{"is_task":true,"continuation":false}</kstar-judge>' };
+      }
+      yield { type: 'done' };
+      return;
+    }
     const toolNames = (opts.extraTools || []).map((tool: any) => tool.name);
     modelCalls.push({ sessionId: opts.sessionId, message: opts.message, toolNames });
     opts.onResolvedRuntime?.({
@@ -36,6 +57,8 @@ const cids: string[] = [];
 beforeEach(async () => {
   vi.resetModules();
   modelCalls.length = 0;
+  routingModel.mode = 'verdict';
+  routingModel.options = null;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-kstar-commander-centric-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   previousFlag = process.env.COGSEED_COMMANDER_CENTRIC_KSTAR;
@@ -70,6 +93,7 @@ afterEach(async () => {
   if (previousHostRouting === undefined) delete process.env.COGSEED_KSTAR_HOST_ROUTING;
   else process.env.COGSEED_KSTAR_HOST_ROUTING = previousHostRouting;
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  vi.restoreAllMocks();
   vi.resetModules();
 });
 
@@ -104,6 +128,74 @@ function projectionFiles(): string[] {
 }
 
 describe('World-model-centric KStar (Commander tool surface removed)', () => {
+  it('uses a successful shared-client routing verdict to open the task before Commander replies', async () => {
+    const cid = newCid();
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const auth = await import('../../../../src/main/features/auth');
+    vi.spyOn(auth, 'hasConfiguredModelForUser').mockReturnValue({ configured: true } as any);
+    bus._setHostRoutingJudgeForTest(null);
+    bus.subscribe('user-a', cid, () => undefined);
+
+    await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '帮我整理会议待办' });
+    await vi.waitFor(() => expect(bus.isQuiescent('user-a', cid)).toBe(true), { timeout: 20_000 });
+
+    expect(routingModel.options.sessionId).toBe(`kstar-routing-${cid}`);
+    expect(recordFiles('tasks')).toHaveLength(1);
+    expect(projectionFiles()).toHaveLength(1);
+    expect(modelCalls).toHaveLength(1);
+  });
+
+  it('stops a pending routing judgement without starting Commander or opening task state', async () => {
+    const cid = newCid();
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const auth = await import('../../../../src/main/features/auth');
+    vi.spyOn(auth, 'hasConfiguredModelForUser').mockReturnValue({ configured: true } as any);
+    bus._setHostRoutingJudgeForTest(null);
+    routingModel.mode = 'stall';
+    const events: Array<{ type: string }> = [];
+    bus.subscribe('user-a', cid, (event) => { events.push(event); });
+
+    await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '帮我看最近会议形成的待办' });
+    await vi.waitFor(() => expect(routingModel.options).not.toBeNull());
+    expect(routingModel.options).toMatchObject({ disableTools: true, ephemeralSession: true, thinkingLevel: 'off' });
+    expect(routingModel.options.abortSignal.aborted).toBe(false);
+    await bus.abort('user-a', cid);
+
+    expect(routingModel.options.abortSignal.aborted).toBe(true);
+    expect(bus.isQuiescent('user-a', cid)).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'turn_silent' }));
+    expect(modelCalls).toEqual([]);
+    expect(recordFiles('tasks')).toEqual([]);
+    expect(recordFiles('requirements')).toEqual([]);
+    expect(projectionFiles()).toEqual([]);
+
+    // The same conversation can accept another message after cancelling.
+    await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '你好' });
+    // This is its first full Commander turn, so module loading is still cold.
+    await vi.waitFor(() => expect(bus.isQuiescent('user-a', cid)).toBe(true), { timeout: 20_000 });
+    expect(modelCalls).toHaveLength(1);
+  });
+
+  it('records routing no-content failure and lets Commander answer without creating a task', async () => {
+    const cid = newCid();
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const auth = await import('../../../../src/main/features/auth');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    vi.spyOn(auth, 'hasConfiguredModelForUser').mockReturnValue({ configured: true } as any);
+    bus._setHostRoutingJudgeForTest(null);
+    routingModel.mode = 'timeout';
+    bus.subscribe('user-a', cid, () => undefined);
+
+    await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '帮我整理会议待办' });
+    await waitForQuiescent(bus, cid);
+
+    expect(modelCalls).toHaveLength(1);
+    expect(recordFiles('tasks')).toEqual([]);
+    expect(await store.readConversationTaskState('user-a', cid)).toMatchObject({
+      routingDecisions: expect.arrayContaining([expect.objectContaining({ kind: 'routing_failed', reason: 'routing judge unavailable (timeout)' })]),
+    });
+  });
+
   it.each(['你好', '谢谢', '好的', '？！', '👍'])(
     '%s reaches Commander and writes no KStar records',
     async (text) => {
@@ -142,7 +234,7 @@ describe('World-model-centric KStar (Commander tool surface removed)', () => {
     expect(modelCalls[0].toolNames).not.toContain('kstar_control');
   });
 
-  it('host routing opens task + projection + auto-forecast for a task-shaped message', async () => {
+  it('ordinary task execution completes without a shared-cognition KSTAR forecast', async () => {
     const cid = newCid();
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const store = await import('../../../../src/main/features/kstar/requirement-store');
@@ -150,7 +242,7 @@ describe('World-model-centric KStar (Commander tool surface removed)', () => {
 
     await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '帮我修复登录问题' });
     await waitForQuiescent(bus, cid);
-    await vi.waitFor(() => expect(forecastFiles()).toHaveLength(1), { timeout: 4_000 });
+    await vi.waitFor(() => expect(forecastFiles()).toHaveLength(0), { timeout: 4_000 });
 
     expect(modelCalls).toHaveLength(1);
     // The Commander sees NO KStar tool — governance is host-side.
@@ -161,21 +253,13 @@ describe('World-model-centric KStar (Commander tool surface removed)', () => {
     const requirement = await store.readKstarRequirement('user-a', taskState!.currentRequirementId!);
     // Projection + world-model forecast are generated automatically.
     expect(requirement?.projectionId).toBeTruthy();
-    expect(requirement?.forecastId).toBeTruthy();
+    expect(requirement?.forecastId).toBeUndefined();
+    expect(requirement?.forecastStatus).toBe('skipped');
     expect(recordFiles('tasks')).toHaveLength(1);
     expect(recordFiles('requirements')).toHaveLength(1);
     expect(projectionFiles()).toHaveLength(1);
-    const forecast = JSON.parse(fs.readFileSync(path.join(
-      tmpDir,
-      'user-a',
-      'cloud',
-      'recall',
-      'records',
-      'world-model-forecasts',
-      forecastFiles()[0],
-    ), 'utf8'));
-    expect(forecast.input.s.execution.availableTools).toContain('read_file');
-    expect(forecast.input.s.environment.fileSystemAvailable).toBe(true);
+    expect(forecastFiles()).toHaveLength(0);
+    expect(modelCalls[0].toolNames.length).toBeGreaterThan(0);
   });
 
   it('does not mutate an existing Task when Commander makes no control call', async () => {

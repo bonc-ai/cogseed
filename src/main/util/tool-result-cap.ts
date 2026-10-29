@@ -33,6 +33,17 @@ const log = createLogger('util/tool-result-cap');
  * retrieval tools retain their own stricter 2K/4K limits. */
 export const DEFAULT_INLINE_RESULT_TOKENS = 8_000;
 
+/** These readers must recheck current domain permissions for every further
+ * read. A session Result Store ref is not a lasting source-read capability. */
+export function isGovernedCognitionResult(toolName: string): boolean {
+  return toolName === 'cognition_ontology_query' || toolName === 'read_ability_asset';
+}
+function sourceReadDeferred(toolName: string): ToolResult {
+  return { isError: true, content: JSON.stringify({ code: 'E_SOURCE_READ_OUTPUT_BUDGET', tool: toolName,
+    contentDelivered: false, retrySameCursor: true,
+    message: 'This response was not delivered or persisted. Retry the same domain read with a smaller inventory limit, or contentCursor=0 for its complete version-bound contract. Preserve the original task mode and query parameters; manage still requires current user authorization. If this round budget is exhausted, retry in the next model step. Do not advance the original cursor.' }) };
+}
+
 /** `AgentRunner` creates one of these ledgers for every model tool-use step.
  * The result transformer consumes it synchronously after each tool completes,
  * so even parallel tool calls cannot inline more than the round allowance. */
@@ -77,6 +88,7 @@ export function capToolResult(
   opts: WrapOpts,
 ): ToolResult {
   if (result.streamedOutput) {
+    if (isGovernedCognitionResult(toolName)) return sourceReadDeferred(toolName);
     const { streamedOutput, ...resultWithoutStreamPath } = result;
     const sid = path.basename(opts.toolResultsDir);
     try {
@@ -137,6 +149,7 @@ export function capToolResult(
   const exceedsPerResultBudget = estimatedTokens > opts.maxInlineTokens;
   const exceedsRoundBudget = !exceedsPerResultBudget && !claimRoundInlineBudget(ctx, estimatedTokens);
   if (!exceedsPerResultBudget && !exceedsRoundBudget) return result;
+  if (isGovernedCognitionResult(toolName)) return sourceReadDeferred(toolName);
 
   const sid = path.basename(opts.toolResultsDir);
   try {
@@ -185,7 +198,7 @@ export function wrapToolWithCap(tool: AgentTool, opts: WrapOpts): AgentTool {
     description: tool.description,
     inputSchema: tool.inputSchema,
     // Preserve the concurrency flag — without this the wrapper silently makes
-    // EVERY capped tool sequential (the runner's G4 partitioner keys on
+    // EVERY capped tool sequential (the runner's partitioner keys on
     // `executionMode === 'parallel'`), defeating parallel reads/search AND
     // concurrent dispatch (run_worker / dispatch_to). This now also matters for
     // read_file / kb_read: they used to be returned unwrapped (Infinity) and

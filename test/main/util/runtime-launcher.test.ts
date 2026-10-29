@@ -5,9 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 const root = path.join(__dirname, '../../..');
 const read = (name: string) => fs.readFileSync(path.join(root, name), 'utf8').replace(/\r\n/g, '\n');
+const sourceVariant = JSON.parse(read('package.json')).cogseedSourceRuntimeVariant;
 
 describe('source runtime launchers', () => {
-  it('locks this worktree to cogseed and passes that identity to Electron', () => {
+  it('locks this worktree to its package and passes that identity to Electron', () => {
     const shell = read('run.sh');
     const windows = read('run.cmd');
     const bootstrap = read('bootstrap.cjs');
@@ -15,49 +16,51 @@ describe('source runtime launchers', () => {
     const runtimePids = read('scripts/lib/runtime-pids.sh');
     const packageMeta = JSON.parse(read('package.json')) as { cogseedSourceRuntimeVariant?: string };
 
-    expect(shell).toContain('VARIANT="cogseed"');
+    expect(shell).toContain('source "$APP_DIR/scripts/lib/source-launch.sh"');
     expect(windows).toContain('set "VARIANT=cogseed"');
     expect(shell).toContain('--cogseed-runtime-variant=$VARIANT');
     expect(windows).toContain('--cogseed-runtime-variant=!VARIANT!');
     expect(shell).toContain('prepare-source-runtime.cjs" --variant="$VARIANT"');
     expect(windows).toContain('prepare-source-runtime.cjs" --variant=!VARIANT!');
-    expect(shell).toContain('locked to the cogseed runtime');
+    expect(shell).toContain('locked by this checkout\'s package.json');
     expect(windows).toContain('locked to the cogseed runtime');
-    expect(shell).toContain('CogSeed.app');
+    expect(shell).toContain('"$APP_BUNDLE"');
     expect(shell).not.toContain('Usage: ./run.sh [--variant');
     expect(windows).not.toContain('Usage: run.cmd [--variant');
-    expect(packageMeta.cogseedSourceRuntimeVariant).toBe('cogseed');
+    expect(['cognition', 'expense', 'cogseed', 'messaging', 'optimization']).toContain(packageMeta.cogseedSourceRuntimeVariant);
     expect(restart).toContain('DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"');
-    expect(restart).toContain('ELECTRON_APP="$APP_DIR/node_modules/electron/dist/CogSeed.app/Contents/MacOS/Electron"');
+    expect(restart).toContain('source "$APP_DIR/scripts/lib/source-launch.sh"');
     expect(restart).toContain('worktree_pids()');
     // 进程匹配集中在共享库（本 worktree 前缀锚定，嵌套 worktree 不计入）。
     expect(restart).toContain('source "$APP_DIR/scripts/lib/runtime-pids.sh"');
     expect(restart).toContain('ps_snapshot | worktree_runtime_pids "$APP_DIR" "$VARIANT"');
     expect(restart).toContain('ps_snapshot | other_worktree_runtime_pids "$APP_DIR" "$VARIANT"');
     expect(runtimePids).toContain('_RUNTIME_EXE_SUFFIX');
-    expect(runtimePids).toContain('$app_dir/node_modules/.bin/electron .');
-    expect(runtimePids).toContain('"$own_exe"|"$own_exe "*)');
+    expect(runtimePids).toContain('local npm_exe="$app_dir/node_modules/.bin/electron"');
+    // 具体进程归属与 Vitest 排除由 restart-cogseed-runtime-pids 的行为回归验证。
+    expect(runtimePids).toContain('worktree_runtime_pids()');
     expect(runtimePids).toContain('$app_dir/p3394-gateway/gateway.cjs');
-    expect(restart).toContain('if [ -n "$(worktree_pids)" ]; then');
+    expect(restart).toContain('if [ -n "$(worktree_main_pids)" ]; then');
+    expect(restart).toContain('ps_snapshot | worktree_runtime_pids "$APP_DIR" "$VARIANT" "$APP_NAME" main');
     expect(restart).toContain('if [ -z "$(worktree_pids)" ]; then');
     expect(bootstrap).toContain('sourceVariant: packageMeta.cogseedSourceRuntimeVariant');
     expect(bootstrap).toContain('allowWorkspaceOverride: isPackagedDev');
   });
 
-  it.skipIf(process.platform === 'win32')('rejects every shell argument or environment attempt to override cogseed', () => {
+  it.skipIf(process.platform === 'win32')('rejects every shell argument or environment attempt to override the package lock', () => {
     for (const variant of ['main', 'cognition', 'expense', 'cogseed', 'optimization']) {
       const result = spawnSync('bash', [path.join(root, 'run.sh'), `--variant=${variant}`], {
         encoding: 'utf8',
-        env: { ...process.env, COGSEED_RUNTIME_VARIANT: '' },
+        env: { ...process.env, NODE_OPTIONS: '', COGSEED_RUNTIME_VARIANT: '' },
       });
       expect(result.status).toBe(2);
       expect(result.stderr).toContain(`Unknown argument: --variant=${variant}`);
     }
 
-    for (const variant of ['main', 'cognition', 'expense', 'optimization']) {
+    for (const variant of ['main', 'cognition', 'expense', 'cogseed', 'messaging', 'optimization'].filter(value => value !== sourceVariant)) {
       const result = spawnSync('bash', [path.join(root, 'run.sh')], {
         encoding: 'utf8',
-        env: { ...process.env, COGSEED_RUNTIME_VARIANT: variant },
+        env: { ...process.env, NODE_OPTIONS: '', COGSEED_RUNTIME_VARIANT: variant },
       });
       expect(result.status).toBe(2);
       expect(result.stderr).toContain(`COGSEED_RUNTIME_VARIANT=${variant} is not allowed`);
@@ -67,6 +70,7 @@ describe('source runtime launchers', () => {
       encoding: 'utf8',
       env: {
         ...process.env,
+        NODE_OPTIONS: '',
         COGSEED_RUNTIME_VARIANT: '',
         COGSEED_WORKSPACE_ROOT: path.join(root, 'shared-data-that-must-not-be-used'),
       },

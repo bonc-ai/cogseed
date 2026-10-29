@@ -1,0 +1,22 @@
+identity:
+  skill_id: meeting-minutes
+  display_name: 会议纪要
+  category: office
+  artifact_state: draft
+capability:
+  level: L5
+  rationale: 处理用户私有会议材料并形成供人工决策的候选内容
+  execution: interpreted
+route:
+  invoked_by: agent_layer
+  side_effects: none
+# 前置条件（agent 层职责，不是本 Skill 的动作）：输入转写须先经词表纠错。
+# 腾讯会议转写有同音近音错字与人名错认，未纠错即出纪要会把错误传导到任务分配。
+# 纠错工具在 agent 层：transcript_glossary_{scan,apply,upsert,list}。
+input_precondition:
+  corrected_transcript_required: true
+  correction_owner: agent_layer
+  high_risk_requires_user_confirmation: true
+  does_not_apply_to: platform_generated_minutes
+promotion_ceiling: staged
+production_release_allowed: false

@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 候选写路径的失败必须带**稳定错误码**。
  *
@@ -74,21 +75,21 @@ describe('recall candidate error codes', () => {
 
   it('codes the high-risk gate when the user has not acknowledged the risk', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('user-a', { ...BASE, risk: 'high' });
+    const saved = await createNightlyCandidateFixture('user-a', { ...BASE, risk: 'high' });
     expect(await codeOf(() => candidates.promoteRecallCandidate('user-a', saved.id, { actor: 'user' })))
       .toBe('recall_candidate_risk_gate');
   });
 
   it('codes a non-asset verdict routed into promotion', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('user-a', { ...BASE, suggestedAction: 'keep_current' });
+    const saved = await createNightlyCandidateFixture('user-a', { ...BASE, suggestedAction: 'keep_current' });
     expect(await codeOf(() => candidates.promoteRecallCandidate('user-a', saved.id, { actor: 'user' })))
       .toBe('recall_candidate_non_asset_decision');
   });
 
   it('codes an edit that lands on a terminal candidate', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('user-a', BASE);
+    const saved = await createNightlyCandidateFixture('user-a', BASE);
     await candidates.rejectRecallCandidate('user-a', saved.id, 'not reusable');
     expect(await codeOf(() => candidates.updateRecallCandidate('user-a', saved.id, BASE)))
       .toBe('recall_candidate_terminal');
@@ -96,7 +97,7 @@ describe('recall candidate error codes', () => {
 
   it('skips one malformed record instead of failing the whole candidate list', async () => {
     const candidates = await service();
-    const healthy = await candidates.saveRecallCandidate('user-a', BASE);
+    const healthy = await createNightlyCandidateFixture('user-a', BASE);
 
     // 手工写一条违反 asCandidate 不变量的记录（pending_review 却没有证据）。
     // 旧行为：`.map(asCandidate)` 一抛，recall.candidates.list 整体失败，
@@ -124,7 +125,7 @@ describe('recall candidate error codes', () => {
 
   it('still rejects the whole list on a real IO fault (errno code) — disk trouble is not "fewer candidates"', async () => {
     const candidates = await service();
-    const healthy = await candidates.saveRecallCandidate('user-a', BASE);
+    const healthy = await createNightlyCandidateFixture('user-a', BASE);
 
     // 同目录造一条「同名目录顶掉 .json」的 IO 故障：readRecallJsonRecord 读它
     // 会抛 EISDIR（带 errno code）——这是**磁盘问题**，不是记录形状问题。
@@ -143,8 +144,8 @@ describe('recall candidate error codes', () => {
 
   it('codes an edit that collides with an existing candidate', async () => {
     const candidates = await service();
-    const first = await candidates.saveRecallCandidate('user-a', BASE);
-    const second = await candidates.saveRecallCandidate('user-a', {
+    const first = await createNightlyCandidateFixture('user-a', BASE);
+    const second = await createNightlyCandidateFixture('user-a', {
       ...BASE,
       judgment: 'Keep the staging database seeded before a demo run.',
     });
@@ -167,7 +168,7 @@ describe('recall candidate error codes', () => {
 describe('更新候选时的证据来源校验', () => {
   it('新增一条来源目录里查不到的引用 → 保存失败，带稳定错误码', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('user-a', {
+    const saved = await createNightlyCandidateFixture('user-a', {
       judgment: '发布前先跑冒烟',
       value: '减少回滚',
       summary: '发布前冒烟',
@@ -196,7 +197,7 @@ describe('更新候选时的证据来源校验', () => {
 
   it('原样提交已有引用不受影响——旧记录可能指向已删除的来源，不该由一次编辑触发迁移', async () => {
     const candidates = await service();
-    const saved = await candidates.saveRecallCandidate('user-a', {
+    const saved = await createNightlyCandidateFixture('user-a', {
       judgment: '评审要留结论',
       value: '避免重复讨论',
       summary: '评审留结论',
@@ -272,7 +273,7 @@ describe('来源数量超过展示窗口时的存在性判定', () => {
 
   async function baseCandidate() {
     const candidates = await service();
-    return candidates.saveRecallCandidate('user-a', {
+    return createNightlyCandidateFixture('user-a', {
       ...BASE,
       applicableWhen: ['评审时'],
       forbiddenWhen: ['头脑风暴'],
@@ -335,7 +336,7 @@ describe('来源数量超过展示窗口时的存在性判定', () => {
   it('候选自带一条目录解析不出来的历史引用，原样提交不受阻', async () => {
     const candidates = await service();
     // BASE.sourceRefs 是 memory:mem-scope —— 目录里查不到它。
-    const saved = await candidates.saveRecallCandidate('user-a', {
+    const saved = await createNightlyCandidateFixture('user-a', {
       ...BASE,
       applicableWhen: ['评审时'],
       forbiddenWhen: ['头脑风暴'],

@@ -35,6 +35,23 @@ export interface NormalizedTranscript {
   /** Original working directory / project path, when the source recorded it. */
   projectPath: string;
   turns: TranscriptTurn[];
+  /** Drop accounting for this parse; populated by both parsers. */
+  skipped?: TranscriptSkipStats;
+}
+
+/** Why lines were dropped while normalizing a foreign transcript.
+ *
+ *  Normalization stays best-effort and lossy on purpose (tool noise, reminders
+ *  and thinking blocks are not conversation), but the loss must be visible: a
+ *  transcript that lost hundreds of `malformed` rows is a partial conversation,
+ *  and silently summarising it produces a confident summary of half a session. */
+export interface TranscriptSkipStats {
+  /** Lines that were not valid JSON at all. */
+  malformed: number;
+  /** Valid JSON, but not a user/assistant message row (queue ops, titles, snapshots). */
+  internal: number;
+  /** Message rows whose text was empty after cleanup (tool-only, reminder-only). */
+  empty: number;
 }
 
 /** One parsed jsonl object from Claude Code's transcript format. */
@@ -77,6 +94,7 @@ export function parseClaudeTranscript(
 ): NormalizedTranscript {
   const turns: TranscriptTurn[] = [];
   let projectPath = '';
+  const skipped: TranscriptSkipStats = { malformed: 0, internal: 0, empty: 0 };
 
   const lines = body.split('\n');
   for (const raw of lines) {
@@ -87,22 +105,23 @@ export function parseClaudeTranscript(
     try {
       obj = JSON.parse(line) as ClaudeJsonlLine;
     } catch {
+      skipped.malformed += 1;
       continue; // malformed line — skip, best-effort
     }
 
     if (obj.cwd && !projectPath) projectPath = obj.cwd;
 
     const role = obj.type === 'user' ? 'user' : obj.type === 'assistant' ? 'assistant' : null;
-    if (!role) continue; // queue-operation / summary / internal — skip
-    if (obj.message?.role && obj.message.role !== role) continue;
+    if (!role) { skipped.internal += 1; continue; } // queue-operation / summary / internal — skip
+    if (obj.message?.role && obj.message.role !== role) { skipped.internal += 1; continue; }
 
     const text = textFromContent(obj.message?.content);
-    if (!text) continue; // tool-only / empty turn — skip
+    if (!text) { skipped.empty += 1; continue; } // tool-only / empty turn — skip
 
     turns.push({ role, text, ts: typeof obj.timestamp === 'string' ? obj.timestamp : '' });
   }
 
-  return { source: 'claude', sourceId, projectPath, turns };
+  return { source: 'claude', sourceId, projectPath, turns, skipped };
 }
 
 /** One parsed jsonl object from WorkBuddy's transcript format. Unlike
@@ -152,6 +171,7 @@ export function parseWorkbuddyTranscript(
   sourceId: string,
 ): NormalizedTranscript {
   const turns: TranscriptTurn[] = [];
+  const skipped: TranscriptSkipStats = { malformed: 0, internal: 0, empty: 0 };
 
   const lines = body.split('\n');
   for (const raw of lines) {
@@ -162,16 +182,17 @@ export function parseWorkbuddyTranscript(
     try {
       obj = JSON.parse(line) as WorkbuddyJsonlLine;
     } catch {
+      skipped.malformed += 1;
       continue; // malformed line — skip, best-effort
     }
 
-    if (obj.type !== 'message') continue; // status/snapshot/ai-title — skip
+    if (obj.type !== 'message') { skipped.internal += 1; continue; } // status/snapshot/ai-title — skip
     const role: TranscriptRole | null =
       obj.role === 'user' ? 'user' : obj.role === 'assistant' ? 'assistant' : null;
-    if (!role) continue;
+    if (!role) { skipped.internal += 1; continue; }
 
     const text = workbuddyTextFromContent(role, obj.content);
-    if (!text) continue; // reminder-only / tool-only / empty turn — skip
+    if (!text) { skipped.empty += 1; continue; } // reminder-only / tool-only / empty turn — skip
 
     let ts = '';
     if (typeof obj.timestamp === 'number' && Number.isFinite(obj.timestamp)) {
@@ -186,7 +207,7 @@ export function parseWorkbuddyTranscript(
 
   // WorkBuddy encodes the workdir in the parent dir name, not per-line; the
   // caller supplies projectPath via the summary, so we leave it '' here.
-  return { source: 'workbuddy', sourceId, projectPath: '', turns };
+  return { source: 'workbuddy', sourceId, projectPath: '', turns, skipped };
 }
 
 /** Rough token estimate (chars/4) for the extractor's chunking budget. Kept

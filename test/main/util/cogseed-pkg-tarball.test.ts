@@ -148,9 +148,13 @@ describe.skipIf(!process.env.COGSEED_PKG_NET_TEST)('install over the network wit
 
     // octocat/Hello-World is tiny and stable but has no SKILL.md / CLI entry,
     // so a successful download+extract reaches the scan stage and exits 65.
+    // 这里真的会走网络下载：CI 上无网/慢网时没有上限就会挂住整个分片
+    // （本仓分片是 --maxWorkers=1 串行跑），所以给它一个硬性上限。
     const r = spawnSync(TEST_NODE, [PKG_PATH, 'install', 'https://github.com/octocat/Hello-World'], {
       encoding: 'utf8',
       env: { PATH: onlyTarBin, COGSEED_WORKSPACE_ROOT: wsRoot, COGSEED_UID: 'u1', COGSEED_PC_DIR: process.cwd() },
+      timeout: 120_000,
+      killSignal: 'SIGKILL',
     });
     // Proves the no-git tarball branch ran (not git clone).
     expect(r.stderr).toContain('downloading octocat/Hello-World tarball');

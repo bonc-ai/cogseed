@@ -1,3 +1,4 @@
+// 身份、发言与文件名均为合成测试样例；时间仅用于解析和顺序断言。
 /**
  * 扫描 × 模型复核（合并后）：`transcript.correct.scan { includeReview: true }`
  *
@@ -24,7 +25,7 @@ vi.mock('electron', () => ({
 let tmpDir: string;
 let prevWs: string | undefined;
 const TEST_UID = 'uScanReview';
-const TEXT = '用 coxy 上课，另外付平老师说要改排期。';
+const TEXT = '用 coxy 上课，另外例加老师说要改排期。';
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-scan-review-'));
@@ -46,7 +47,7 @@ function ctx() {
   return { userId: TEST_UID, user: { user_id: TEST_UID, created_at: new Date(0).toISOString() }, sender: {} };
 }
 
-/** 注入模型：记录被调用次数，返回一条"付平 → 傅平"的建议。 */
+/** 注入模型：记录被调用次数，返回一条"例加 → 例甲"的建议。 */
 function mockReview() {
   const calls: Array<{ systemPrompt: string; message: string }> = [];
   vi.doMock('../../../src/main/features/transcript_llm_candidates', async () => {
@@ -54,12 +55,12 @@ function mockReview() {
     return {
       ...actual,
       generateReviewCandidates: async (_uid: string, text: string, opts: any) => {
-        const at = text.indexOf('付平');
+        const at = text.indexOf('例加');
         return {
           candidates: at >= 0
             ? [{
-              wrong: '付平', correct: '傅平', confidence: 0.95, reason: '姓氏同音',
-              start: at, pending: false, inAllowlist: (opts?.knownTargets ?? []).includes('傅平'),
+              wrong: '例加', correct: '例甲', confidence: 0.95, reason: '合成名称同音',
+              start: at, pending: false, inAllowlist: (opts?.knownTargets ?? []).includes('例甲'),
             }]
             : [],
           rejected: [], outsideAllowlist: 0,
@@ -96,11 +97,11 @@ describe('扫描并入模型复核', () => {
     expect(scan.candidates[0].fromModel).not.toBe(true); // 词表命中不带模型来源标记
     const model = scan.candidates[1];
     expect(model).toMatchObject({
-      entryRef: 'model_0', wrong: '付平', correct: '傅平',
+      entryRef: 'model_0', wrong: '例加', correct: '例甲',
       riskLevel: 'medium', fromModel: true, action: 'replace',
     });
     // span 指向原文，位置正确
-    expect(TEXT.slice(model.span.start, model.span.end)).toBe('付平');
+    expect(TEXT.slice(model.span.start, model.span.end)).toBe('例加');
     // 统计口径合并后的总数
     expect(scan.stats.candidates).toBe(2);
     // 复核元信息如实回传（面板据此说明"读到哪了"）
@@ -124,29 +125,28 @@ describe('扫描并入模型复核', () => {
     expect(scan.review).toMatchObject({ modelCandidates: 0, failedChunks: 2, skipped: 'model_failed' });
   });
 
-  it('合并后的清单能被 apply 直接使用：勾 model_0 才替换，且记入词表', async () => {
+  it('合并后的清单能被 apply 直接使用：勾 model_0 才替换，长期词表保持不变', async () => {
     mockReview();
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const scan = await (invokeHandlers['transcript.correct.scan'] as any)({ text: TEXT, docId: 'd1', includeReview: true }, ctx());
     const model = scan.candidates.find((c: any) => c.entryRef === 'model_0');
     const applied = await (invokeHandlers['transcript.correct.apply'] as any)({
       text: TEXT, docId: 'd1',
-      models: [{ start: model.span.start, wrong: '付平', correct: '傅平', confidence: 0.95, reason: '姓氏同音' }],
+      models: [{ start: model.span.start, wrong: '例加', correct: '例甲', confidence: 0.95, reason: '合成名称同音' }],
       acceptedIds: ['model_0'],
     }, ctx());
-    expect(applied.result.text).toContain('傅平');
-    expect(applied.glossaryWrites).toMatchObject({ created: 1 });
+    expect(applied.result.text).toContain('例甲');
+    expect(applied.glossaryWrites).toMatchObject({ created: 0, updated: 0 });
     const glossary = await import('../../../src/main/features/transcript_glossary');
-    // 复核建议落成了词表规则（本文档作用域），词表命中那条不受影响
+    // 模型建议只更正当前材料，已有词条不受影响
     const entries = glossary.listEntries(TEST_UID, { status: 'active' });
     expect(entries.map((e: any) => [e.wrong, e.correct, e.source])).toEqual([
       ['coxy', 'Cogseed', 'manual'],
-      ['付平', '傅平', 'meeting_accept'],
     ]);
   });
 });
 
-// ── 召回通道并入扫描（specs/013 T015/T016/T017，FR-012 前半）──────────────────
+// ── 召回通道并入扫描──────────────────
 describe('扫描并入召回通道', () => {
   /** spy 转发 transcript_recall.recallCandidates，记录调用次数。 */
   function spyRecall() {
@@ -164,7 +164,7 @@ describe('扫描并入召回通道', () => {
     return state;
   }
 
-  it('T015①：不传 includeRecall 时一次召回都不调（含 includeReview 组合；不点不花钱）', async () => {
+  it('不传 includeRecall 时一次召回都不调（含 includeReview 组合；不点不花钱）', async () => {
     const spy = spyRecall();
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const scan = await (invokeHandlers['transcript.correct.scan'] as any)({ text: TEXT, docId: 'd1' }, ctx());
@@ -175,7 +175,7 @@ describe('扫描并入召回通道', () => {
     expect(spy.calls).toBe(0);
   });
 
-  it('T015②/T016：includeRecall 时候选含 channel:"recall" 且全部 confidence < 1；同 span 并入字面行', async () => {
+  it('includeRecall 时候选含 channel:"recall" 且全部 confidence < 1；同 span 并入字面行', async () => {
     const glossary = await import('../../../src/main/features/transcript_glossary');
     // K star（词条）vs K-STAR（转写形态）：字面通道匹配不到（折叠后空格≠连字符），
     // 只有召回的归一化通道能兜住（recall.test.ts 既有先例的同款形态）
@@ -195,7 +195,7 @@ describe('扫描并入召回通道', () => {
     expect(kstar.refs[0]).toMatchObject({ source: 'glossary', entryId: kstar.entryRef });
     expect(kstar.disposition).toBe('review');
 
-    // T016 集成：coxy 的 span 被字面与召回同时命中 → 只有一行、channel exact，
+    // 集成：coxy 的 span 被字面与召回同时命中 → 只有一行、channel exact，
     // 召回结果并入该行（同词条幂等），统计里 merged 如实透出
     const atCoxy = text.indexOf('coxy');
     const coxyRows = scan.candidates.filter((c: any) => c.span.start === atCoxy);
@@ -207,7 +207,7 @@ describe('扫描并入召回通道', () => {
     expect(scan.stats.candidates).toBe(2);
   });
 
-  it('T017：recall 段四键齐全、abandoned 与 recallCandidates 的 residual 对应、truncated 沿用', async () => {
+  it('recall 段四键齐全、abandoned 与 recallCandidates 的 residual 对应、truncated 沿用', async () => {
     const text = '用 coxy 上课，roadmap 的排期也要过一下';
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const scan = await (invokeHandlers['transcript.correct.scan'] as any)({ text, docId: 'd1', includeRecall: true }, ctx());
@@ -223,13 +223,13 @@ describe('扫描并入召回通道', () => {
   });
 });
 
-// ── 引例闸端到端 + apply 侧（specs/013 T018/T019/T022，FR-011）────────────────
+// ── 引例闸端到端 + apply 侧────────────────
 describe('引例闸：scan 只读提示行与 apply 默认最安全', () => {
-  const ACCIDENT = '一会儿叫 coxy，一会儿叫别的';
+  const QUOTED_SAMPLE = '一会儿叫 coxy，一会儿叫样例';
 
-  it('T018/T019：事故句扫描 ⇒ 零可勾选候选，candidates 出 disposition:"quoted_example" 只读行（可读出命中词）', async () => {
+  it('合成引例扫描 ⇒ 零可勾选候选，candidates 出 disposition:"quoted_example" 只读行（可读出命中词）', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
-    const scan = await (invokeHandlers['transcript.correct.scan'] as any)({ text: ACCIDENT, docId: 'd1' }, ctx());
+    const scan = await (invokeHandlers['transcript.correct.scan'] as any)({ text: QUOTED_SAMPLE, docId: 'd1' }, ctx());
     const checkable = scan.candidates.filter((c: any) => c.disposition !== 'quoted_example');
     expect(checkable).toHaveLength(0);
     const row = scan.candidates.find((c: any) => c.disposition === 'quoted_example');
@@ -243,27 +243,27 @@ describe('引例闸：scan 只读提示行与 apply 默认最安全', () => {
     expect(scan.denied[0]).toMatchObject({ reason: 'quoted_example', deniedBy: '一会儿叫' });
   });
 
-  it('T022：apply 缺省（不传 excludeQuoted）时引例位不被替换；显式 false 才允许', async () => {
+  it('apply 缺省（不传 excludeQuoted）时引例位不被替换；显式 false 才允许', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
-    const at = ACCIDENT.indexOf('coxy');
+    const at = QUOTED_SAMPLE.indexOf('coxy');
     const models = [{ start: at, wrong: 'coxy', correct: 'Cogseed', confidence: 0.9, reason: '模型建议' }];
     // 缺省：模型建议落在引例位 → 一律不接受（即使被勾选）
     const blocked = await (invokeHandlers['transcript.correct.apply'] as any)({
-      text: ACCIDENT, docId: 'd1', models, acceptedIds: ['model_0'],
+      text: QUOTED_SAMPLE, docId: 'd1', models, acceptedIds: ['model_0'],
     }, ctx());
-    expect(blocked.result.text).toBe(ACCIDENT);
+    expect(blocked.result.text).toBe(QUOTED_SAMPLE);
     expect(blocked.droppedModels).toBe(1); // 被引例闸挡掉，如实计数
     expect(blocked.glossaryWrites.created).toBe(0); // 被挡的不算确认，不进词表
     // 显式 excludeQuoted:false → 才允许（并且是显式的）
     const allowed = await (invokeHandlers['transcript.correct.apply'] as any)({
-      text: ACCIDENT, docId: 'd1', models, acceptedIds: ['model_0'], excludeQuoted: false,
+      text: QUOTED_SAMPLE, docId: 'd1', models, acceptedIds: ['model_0'], excludeQuoted: false,
     }, ctx());
     expect(allowed.result.text).toContain('一会儿叫 Cogseed');
     expect(allowed.droppedModels).toBe(0);
   });
 });
 
-// ── 情景信号与降级标注（specs/013 T020/T021，FR-012 后半）────────────────────
+// ── 情景信号与降级标注────────────────────
 describe('情景信号进扫描与降级如实标注', () => {
   /** spy 转发 scanText，记录每次调用的 options。 */
   function spyScanOptions() {
@@ -281,19 +281,19 @@ describe('情景信号进扫描与降级如实标注', () => {
     return log;
   }
 
-  it('T020：有块头的稿子 options.speakers 非空（主进程现算）；topic 透传；不参与作用域', async () => {
+  it('有块头的稿子 options.speakers 非空（主进程现算）；topic 透传；不参与作用域', async () => {
     const log = spyScanOptions();
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
-    const text = '张磊 00:01:00\n用 coxy 上课';
+    const text = '例乙 00:01:00\n用 coxy 上课';
     const scan = await (invokeHandlers['transcript.correct.scan'] as any)({ text, docId: 'd1', topic: '季度对齐' }, ctx());
     expect(log.length).toBeGreaterThanOrEqual(1);
-    expect(log[0].speakers).toEqual(['张磊']);
+    expect(log[0].speakers).toEqual(['例乙']);
     expect(log[0].topic).toBe('季度对齐');
     // 扫描本身照常返回（speakers 只是展示信号，不改命中行为）
     expect(scan.candidates).toHaveLength(1);
   });
 
-  it('T020：无块头的稿子 speakers 缺省且不报错（不编造说话人）', async () => {
+  it('无块头的稿子 speakers 缺省且不报错（不编造说话人）', async () => {
     const log = spyScanOptions();
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const scan = await (invokeHandlers['transcript.correct.scan'] as any)({ text: TEXT, docId: 'd1' }, ctx());
@@ -301,7 +301,7 @@ describe('情景信号进扫描与降级如实标注', () => {
     expect(scan.candidates).toHaveLength(1);
   });
 
-  it('T021：三种缺失在返回体 degraded 各自出现；补齐后消失', async () => {
+  it('三种缺失在返回体 degraded 各自出现；补齐后消失', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     // 无块头 + 无场景标签 + 该文档没跑过纠错 run ⇒ 三条齐
     const bare = await (invokeHandlers['transcript.correct.scan'] as any)({ text: TEXT, docId: 'd1' }, ctx());
@@ -309,14 +309,14 @@ describe('情景信号进扫描与降级如实标注', () => {
     // 跑一次 apply（落 run）+ 传场景标签 + 带块头文本 ⇒ 降级消失
     await (invokeHandlers['transcript.correct.apply'] as any)({ text: TEXT, docId: 'd1' }, ctx());
     const healed = await (invokeHandlers['transcript.correct.scan'] as any)({
-      text: '张磊 00:01:00\n用 coxy 上课', docId: 'd1', scenarioTags: ['组会'],
+      text: '例乙 00:01:00\n用 coxy 上课', docId: 'd1', scenarioTags: ['组会'],
     }, ctx());
     expect(healed.degraded).toEqual([]);
   });
 });
 
-// ── 资产规范名进纠错依据（specs/013 T027，FR-001）──────────────────────────────
-describe('资产规范名进纠错依据（T027 端到端）', () => {
+// ── 资产规范名进纠错依据──────────────────────────────
+describe('资产规范名进纠错依据', () => {
   /** mock 资产库（meeting_refs 与 scan 组装处都经 readAbilityAsset 读它）。 */
   function mockAssetStore() {
     const assets = new Map<string, Record<string, unknown>>();
@@ -380,8 +380,8 @@ describe('资产规范名进纠错依据（T027 端到端）', () => {
   });
 });
 
-// ── 拒绝回执 / 不再重复建议 / 可撤销（specs/013 T028/T029/T032，FR-001）────────
-describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () => {
+// ── 拒绝回执 / 不再重复建议 / 可撤销────────
+describe('拒绝回执与不再重复建议', () => {
   /** 被测词条（beforeEach 建的 coxy→Cogseed）的 entryRef。 */
   async function coxyEntryId(): Promise<string> {
     const glossary = await import('../../../src/main/features/transcript_glossary');
@@ -395,7 +395,7 @@ describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () =
     return listReviewDecisions(TEST_UID, targetRef);
   }
 
-  it('T028：拒绝后账本恰一条 reject（idempotencyKey 含 runId）；被拒形态不被替换；不存在的 id 不写账', async () => {
+  it('拒绝后账本恰一条 reject（idempotencyKey 含 runId）；被拒形态不被替换；不存在的 id 不写账', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const entryId = await coxyEntryId();
     const applied = await (invokeHandlers['transcript.correct.apply'] as any)({
@@ -409,7 +409,7 @@ describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () =
     expect(decisions).toHaveLength(1);
     expect(decisions[0]).toMatchObject({ decision_type: 'reject', target_ref: targetRef, actor: 'user' });
     expect(decisions[0].idempotency_key).toContain(applied.run.runId);   // 幂等键含 runId
-    // 账本文件真实落盘（验收原文口径：账本文件出现一条）
+    // 账本文件落盘后可读，且只包含一条决定。
     const { reviewDecisionLogPath } = await import('../../../src/main/features/cognition/review-decision');
     const { readJsonl } = await import('../../../src/main/storage');
     const onDisk = await readJsonl<any>(reviewDecisionLogPath(TEST_UID, targetRef), 100);
@@ -417,7 +417,7 @@ describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () =
     expect(onDisk[0].decision_type).toBe('reject');
   });
 
-  it('T028：重试同动作（receiptRunId 复用原 run）不产生第二条；不同 run 的再次拒绝是新的一条', async () => {
+  it('重试同动作（receiptRunId 复用原 run）不产生第二条；不同 run 重发同批 rejectedIds 也幂等跳过（账本不膨胀）', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const entryId = await coxyEntryId();
     const first = await (invokeHandlers['transcript.correct.apply'] as any)({
@@ -430,14 +430,16 @@ describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () =
     }, ctx());
     expect(retry.receipts[0].decisionId).toBe(first.receipts[0].decisionId);
     expect(await decisionsOf(targetRef)).toHaveLength(1);            // 仍只有一条
-    // 不同 run（不同文本）的再次拒绝 = 新动作 ⇒ 追加一条（T032④ 的前提）
-    await (invokeHandlers['transcript.correct.apply'] as any)({
+    // rejectedIds 可跨轮重复发送；末条决定已是抑制态时，复用其回执 id，
+    // 不因新的 run 重复追加拒绝记录。不同文本重发同批被拒 id 同样幂等。
+    const repeat = await (invokeHandlers['transcript.correct.apply'] as any)({
       text: `${TEXT} `, docId: 'kb/r.md', acceptedIds: [], rejectedIds: [entryId],
     }, ctx());
-    expect(await decisionsOf(targetRef)).toHaveLength(2);
+    expect(repeat.receipts[0].decisionId).toBe(first.receipts[0].decisionId);
+    expect(await decisionsOf(targetRef)).toHaveLength(1);            // 幂等跳过：不产生第二条
   });
 
-  it('T029：拒绝后重扫同一文本该形态不再出现（stats.suppressed 如实）；跨进程重启仍生效（账本落盘）；其他文档不受影响', async () => {
+  it('拒绝后重扫同一文本该形态不再出现（stats.suppressed 如实）；跨进程重启仍生效（账本落盘）；其他文档不受影响', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const entryId = await coxyEntryId();
     await (invokeHandlers['transcript.correct.apply'] as any)({
@@ -458,7 +460,7 @@ describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () =
     expect(otherDoc.candidates.filter((c: any) => c.wrong === 'coxy')).toHaveLength(1);
   });
 
-  it('T029：新决定覆盖（既有末条判定口径）⇒ 重新出现——不新写第二套判据', async () => {
+  it('新决定覆盖（既有末条判定口径）⇒ 重新出现——不新写第二套判据', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const { writeReviewDecision } = await import('../../../src/main/features/cognition/review-decision');
     const entryId = await coxyEntryId();
@@ -473,18 +475,18 @@ describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () =
     expect(scan.candidates.filter((c: any) => c.wrong === 'coxy')).toHaveLength(1);
   });
 
-  it('T032：撤销 ⇒ 重扫重新出现；撤销追加一条回执（append-only、不新增决定类型）；重复撤销幂等；撤销后再次拒绝仍生效', async () => {
+  it('撤销 ⇒ 重扫重新出现；撤销追加一条回执（append-only、不新增决定类型）；重复撤销幂等；撤销后再次拒绝仍生效', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/transcript');
     const entryId = await coxyEntryId();
     const targetRef = `meeting:kb/r.md:${entryId}`;
     await (invokeHandlers['transcript.correct.apply'] as any)({
       text: TEXT, docId: 'kb/r.md', acceptedIds: [], rejectedIds: [entryId],
     }, ctx());
-    // 拒绝 ⇒ 重扫不出（T032①）
+    // 拒绝 ⇒ 重扫不出
     const suppressedScan = await (invokeHandlers['transcript.correct.scan'] as any)({ text: TEXT, docId: 'kb/r.md' }, ctx());
     expect(suppressedScan.candidates.filter((c: any) => c.wrong === 'coxy')).toHaveLength(0);
 
-    // 撤销（对齐词表侧 setIgnored 的可逆口径）⇒ 追加一条 accept 回执（T032②③）
+    // 撤销（对齐词表侧 setIgnored 的可逆口径）⇒ 追加一条 accept 回执
     const before = await decisionsOf(targetRef);
     const undone = await (invokeHandlers['transcript.correct.unreject'] as any)({
       docId: 'kb/r.md', ids: [entryId],
@@ -496,7 +498,7 @@ describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () =
     expect(undoDecision.decision_type).toBe('accept');   // 既有 7 值之一，不新增决定类型
     expect(undoDecision.decision).toBe('unreject');
     expect(undoDecision.supersedes_ref).toBe(before[before.length - 1].decision_id);
-    // 撤销 ⇒ 重扫重新出现（T032②）
+    // 撤销 ⇒ 重扫重新出现
     const recoveredScan = await (invokeHandlers['transcript.correct.scan'] as any)({ text: TEXT, docId: 'kb/r.md' }, ctx());
     expect(recoveredScan.candidates.filter((c: any) => c.wrong === 'coxy')).toHaveLength(1);
 
@@ -507,7 +509,7 @@ describe('拒绝回执与不再重复建议（T028/T029/T032 端到端）', () =
     expect(again.undone).toEqual([]);
     expect(await decisionsOf(targetRef)).toHaveLength(after.length);
 
-    // 撤销后再次拒绝仍生效（T032④）：新 run 的新拒绝 ⇒ 末条回到 reject ⇒ 又被抑制
+    // 撤销后再次拒绝仍生效：新 run 的新拒绝 ⇒ 末条回到 reject ⇒ 又被抑制
     await (invokeHandlers['transcript.correct.apply'] as any)({
       text: `${TEXT} `, docId: 'kb/r.md', acceptedIds: [], rejectedIds: [entryId],
     }, ctx());

@@ -72,9 +72,9 @@ describe('UI icon registry contract', () => {
 
   it('gives the Run Center sidebar entry its own glyph rather than the fallback', () => {
     const uiIconHtml = loadIcons();
-    const html = read('src/renderer/index.html');
+    const rail = read('src/renderer/modules/ui-app-rail.js');
 
-    expect(html).toMatch(/id="run-center-btn"[^>]*>\s*<span data-ui-icon="activity"/);
+    expect(rail).toMatch(/module: 'run-center', id: 'run-center-btn', icon: 'activity'/);
     expect(innerMarkup(uiIconHtml('activity'))).not.toBe(innerMarkup(uiIconHtml('info')));
   });
 

@@ -33,7 +33,12 @@ function detectPackagedRuntime() {
 try {
   const isPackaged = detectPackagedRuntime();
   const isPackagedDev = isPackaged && packageMeta.cogseedBuildChannel === 'packaged-dev';
-  const normalizedEnv = normalizeEnv(process.env);
+  // Direct `npm start` / dev-watch bypass run.sh's environment cleanup.
+  // Validate their source identity via the allowlist + owning package lock;
+  // packaged launches retain the strict identity.json environment contract.
+  const identityEnv = { ...process.env };
+  if (!isPackaged) delete identityEnv.COGSEED_RUNTIME_VARIANT;
+  const normalizedEnv = normalizeEnv(identityEnv);
   Object.assign(process.env, normalizedEnv);
   if (isPackagedDev && !process.env.COGSEED_WORKSPACE_ROOT && !process.env.COGSEED_WORKSPACE_ROOT) {
     process.env.COGSEED_WORKSPACE_ROOT = path.join(os.homedir(), '.cogseed-dev', 'data');
@@ -44,6 +49,13 @@ try {
     isPackaged,
     sourceVariant: packageMeta.cogseedSourceRuntimeVariant,
   });
+  if (!isPackaged && process.env.COGSEED_SOURCE_RUNTIME_VARIANT) {
+    // Do not let a matching runtime env hide a conflicting source env.
+    selectRuntimeVariant({
+      envVariant: process.env.COGSEED_SOURCE_RUNTIME_VARIANT,
+      sourceVariant: packageMeta.cogseedSourceRuntimeVariant,
+    });
+  }
   process.env.COGSEED_SOURCE_RUNTIME_VARIANT = runtimeVariant;
   process.env.COGSEED_RUNTIME_VARIANT = runtimeVariant;
   initializeInstallDataRoot(process.env.COGSEED_SOURCE_RUNTIME_VARIANT, {

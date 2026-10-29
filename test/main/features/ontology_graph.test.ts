@@ -182,6 +182,56 @@ describe('ontology_graph', () => {
     expect(fs.readFileSync(graphFile(), 'utf8')).toBe(foreign);
   });
 
+  it('P-r1-82: 单条坏记录（悬空 categoryId）被降级剔除，不再锁死读写通道', async () => {
+    const graph = await loadGraph();
+    // 先经正常通道建一条好实体（走 writeJson 落盘格式）。
+    const good = await graph.createOntologyEntity(UID, {
+      categoryId: 'builtin_resource_tool', name: '好实体',
+    });
+    // 直接改盘：再塞一条悬空 categoryId 的坏实体 + 一条端点指向坏实体的关系。
+    const raw = JSON.parse(fs.readFileSync(graphFile(), 'utf8')) as {
+      entities: Array<Record<string, unknown>>;
+      relations: Array<Record<string, unknown>>;
+    };
+    const badEntity = {
+      ...good,
+      id: 'bad_entity_dangling',
+      categoryId: 'missing_category',
+      name: '坏实体',
+    };
+    raw.entities.push(badEntity);
+    raw.relations.push({
+      id: 'bad_relation_endpoint',
+      subject: { kind: 'entity', id: 'bad_entity_dangling' },
+      predicate: '依赖',
+      object: { kind: 'self' },
+      note: '', sourceRefs: [],
+      createdAt: good.createdAt, updatedAt: good.updatedAt,
+    });
+    fs.writeFileSync(graphFile(), JSON.stringify(raw), 'utf8');
+
+    // 修复前：read/category.create/entity.create/relation.delete 全部抛同一个
+    // `ontology entity category is unavailable`（10 通道锁死、盘上不清除）。
+    const snapshot = await graph.readOntologyGraph(UID);
+    expect(snapshot.entities.map((entity) => entity.id)).toEqual([good.id]);
+    expect(snapshot.relations.map((relation) => relation.id)).toEqual([]);
+
+    // 写通道同样可用；且写盘自愈——坏记录被清出文件。
+    const created = await graph.createOntologyCategory(UID, { domain: 'concepts', name: '降级后的新分类' });
+    expect(created.builtIn).toBe(false);
+    const healed = JSON.parse(fs.readFileSync(graphFile(), 'utf8')) as { entities: unknown[] };
+    expect(healed.entities.some((entity) => (entity as { id?: string }).id === 'bad_entity_dangling')).toBe(false);
+  });
+
+  it('P-r1-82: 文件级损伤（ownerId 不符）仍然拒绝且不覆盖', async () => {
+    const graph = await loadGraph();
+    fs.mkdirSync(path.dirname(graphFile()), { recursive: true });
+    const foreign = JSON.stringify({ schemaVersion: 1, ownerId: 'other-user', categories: [], entities: [], relations: [] });
+    fs.writeFileSync(graphFile(), foreign, 'utf8');
+    await expect(graph.readOntologyGraph(UID)).rejects.toThrow('ontology graph owner mismatch');
+    expect(fs.readFileSync(graphFile(), 'utf8')).toBe(foreign);
+  });
+
   it('serializes concurrent category writes without losing updates', async () => {
     const graph = await loadGraph();
     await Promise.all(Array.from({ length: 12 }, (_, index) => graph.createOntologyCategory(UID, {

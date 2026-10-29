@@ -45,10 +45,21 @@ import type { ConnectorInstance, ToolSchema } from '../../features/connectors/ty
 const log = createLogger('connector-meta-tools');
 
 export interface ConnectorMetaToolsOpts {
+  beforeConnectorDispatch?: (input: Record<string, unknown>) => Promise<ToolResult | undefined>;
   /** Active uid. Required — without it the meta-tools have no scope. */
   userId: string;
   /** Optional actor filter. Empty / undefined = full task-session scope. */
   agentId?: string;
+  /**
+   * 显式连接器实例 id 白名单，来自 `agent.enabled_connectors`（由 runner 解析后传入）。
+   *
+   * 三态，与 `resolveVisibleConnectors` 的 `instanceIds` 一致：
+   *   - `undefined` → 继承 agentId / commander 的可见性；
+   *   - `[]`        → 零连接器；
+   *   - 非空数组     → 收窄到这些实例。
+   * agent-edit 会话不传本字段（编辑期要看到全部）。
+   */
+  instanceIds?: string[];
   /** Conversation id — required for the task-session `add_custom_connector`
    *  tool so its confirmation dialog routes to the right conversation.
    *  Omitted for discover-mode (agent-edit) where add is not exposed. */
@@ -98,9 +109,13 @@ function _renderConnectorLine(instance: ConnectorInstance, lang: 'zh' | 'en'): s
  *  per-role chat prompts (`chat_commander.md` / `chat_agent_in_group.md`); the agent-edit
  *  prompt teaches the "reference connectors by id in the workflow" usage. Keeping the
  *  protocol out of the block lets each role frame its own use without duplication. */
-export async function getConnectorPromptBlock(uid: string, agentId: string | undefined): Promise<string> {
+export async function getConnectorPromptBlock(
+  uid: string,
+  agentId: string | undefined,
+  instanceIds?: string[],
+): Promise<string> {
   if (!uid) return '';
-  const visible = await resolveVisibleConnectors(uid, agentId);
+  const visible = await resolveVisibleConnectors(uid, agentId, instanceIds);
   if (!visible.length) return '';
   const lang = _descriptionLangForUser(uid);
   const lines: string[] = ['## Connectors', ''];
@@ -137,7 +152,7 @@ function createListConnectorToolsTool(opts: ConnectorMetaToolsOpts): AgentTool {
         : '';
       if (!cid) return errResult('E_BAD_INPUT', '`connector_id` is required (a non-empty string)');
 
-      const visible = await resolveVisibleConnectors(opts.userId, opts.agentId);
+      const visible = await resolveVisibleConnectors(opts.userId, opts.agentId, opts.instanceIds);
       const match = visible.find((v) => v.instance.id === cid);
       if (!match) {
         // resolveVisibleConnectors already filters to `status.kind === 'connected'`, so a miss
@@ -206,7 +221,7 @@ function createCallConnectorToolTool(opts: ConnectorMetaToolsOpts): AgentTool {
       },
       required: ['connector_id', 'tool_name', 'args'],
     },
-    async execute(input) {
+    async execute(input, ctx) {
       const i = input as { connector_id?: unknown; tool_name?: unknown; args?: unknown };
       const cid = typeof i.connector_id === 'string' ? i.connector_id.trim() : '';
       const toolName = typeof i.tool_name === 'string' ? i.tool_name.trim() : '';
@@ -238,7 +253,7 @@ function createCallConnectorToolTool(opts: ConnectorMetaToolsOpts): AgentTool {
         return errResult('E_BAD_INPUT', '`args` is required and must be a JSON object (use {} for no-arg actions)');
       }
 
-      const visible = await resolveVisibleConnectors(opts.userId, opts.agentId);
+      const visible = await resolveVisibleConnectors(opts.userId, opts.agentId, opts.instanceIds);
       const match = visible.find((v) => v.instance.id === cid);
       if (!match) {
         return errResult(
@@ -256,8 +271,19 @@ function createCallConnectorToolTool(opts: ConnectorMetaToolsOpts): AgentTool {
       }
 
       try {
-        const raw = await manager.callTool(opts.userId, cid, toolName, args);
-        return { content: stringifyMcpResult(raw) };
+        const raw = await manager.callTool(opts.userId, cid, toolName, args, { signal: ctx.signal, beforeDispatch: async () => {
+          const denied = await opts.beforeConnectorDispatch?.(input);
+          if (denied) throw new Error(denied.content);
+        } });
+        const content = stringifyMcpResult(raw);
+        // Meeting transcripts arrive twice (paragraphs + flat text) and quickly
+        // exceed the inline cap. Persist the flat text in the task workspace and
+        // return transcript_path so correction tools read it by path instead of
+        // the model re-reading spilled chunks and exhausting the read budget.
+        const workingDir = typeof ctx.workingDir === 'string' ? ctx.workingDir : '';
+        if (!workingDir) return { content };
+        const { spillConnectorTranscript } = await import('../../features/cogseed_backend/connector-transcript-spill');
+        return spillConnectorTranscript({ content }, { workingDir, writableRoots: [workingDir] });
       } catch (err) {
         const msg = (err as Error).message;
         log.warn(`call_connector_tool failed connector=${cid} tool=${toolName}: ${msg}`);
@@ -361,7 +387,7 @@ export async function createConnectorMetaTools(
     ? [createAddCustomConnectorTool({ ...opts, cid: opts.cid })]
     : [];
 
-  const visible = await resolveVisibleConnectors(opts.userId, opts.agentId);
+  const visible = await resolveVisibleConnectors(opts.userId, opts.agentId, opts.instanceIds);
   if (!visible.length) return addTool;
   if (mode === 'discover') return [createListConnectorToolsTool(opts)];
   return [

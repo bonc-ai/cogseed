@@ -96,6 +96,7 @@ export const codexBackend: LocalBackend = {
       timeoutMs: opts.timeoutMs,
       idleKillMs: opts.idleKillMs,
       lastEventAt: opts.lastEventAt,
+      ...(opts.onDeadline ? { onDeadline: opts.onDeadline } : {}),
     });
 
     // ─── JSON-RPC client state ────────────────────────────────────────

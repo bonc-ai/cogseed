@@ -5,9 +5,10 @@
  * 机器可判四项（按此顺序判定，返回首个命中）：
  *   1. 非空；
  *   2. 中文 ≤16 字、其他语言 ≤60 字符（含任一汉字即按中文口径）；
- *   3. 不与正文开头重复（与 statement 公共前缀 ≥1 字即不合规）；
+ *   3. 不整句照抄正文首句（完整标题相同，且正文紧接明确句末）；
  *   4. 不以标点结尾。
  *
+ * 相同首字、项目名、人名或术语不证明照抄，不能作为拒绝依据。
  * 「名词性短语、独立可读」机器不可判，由生成端提示词保证＋人工抽样核验
  * （设计 3.1），不在此处伪造判定。历史版本快照里冻结的不合规标题物理不动
  * （版本流只追加）；在用版的合规由回滚/选版闸门保证（设计 3.2 拍板项 #2）。
@@ -55,7 +56,11 @@ export function recallTitleIssue(title: string, statement?: string): AbilityAsse
   if (!normalized) return 'empty';
   if (normalized.length > abilityAssetTitleLimit(normalized)) return 'too_long';
   const body = normalizeForPolicy(String(statement ?? ''));
-  if (body && normalized[0] === body[0]) return 'prefix_overlap';
+  // Match the entire title and a sentence boundary, rather than an incidental
+  // leading character/name. A noun phrase shared with the body is a useful
+  // retrieval label; we cannot infer "sentence truncation" from that overlap.
+  if (body === normalized
+    || (body.startsWith(normalized) && /^[。！？.!?](?:\s|$|[\p{Script=Han}])/u.test(body.slice(normalized.length)))) return 'prefix_overlap';
   if (TRAILING_PUNCTUATION.test(normalized)) return 'punctuation_suffix';
   return undefined;
 }
@@ -63,7 +68,7 @@ export function recallTitleIssue(title: string, statement?: string): AbilityAsse
 const ISSUE_REASONS: Record<AbilityAssetTitleIssue, string> = {
   empty: '标题不能为空',
   too_long: '标题超长（含汉字时不超过 16 字，其他语言不超过 60 字符）',
-  prefix_overlap: '标题不能与正文开头重复',
+  prefix_overlap: '标题不能整句照抄正文首句',
   punctuation_suffix: '标题不能以标点结尾',
 };
 
@@ -74,4 +79,15 @@ const ISSUE_REASONS: Record<AbilityAssetTitleIssue, string> = {
 export function assertCompliantAbilityAssetTitle(title: string, statement?: string): void {
   const issue = recallTitleIssue(title, statement);
   if (issue) throw new Error(`invalid ability asset title: ${ISSUE_REASONS[issue]}`);
+}
+
+/** Human-reviewed names follow the HTML editor's 80-character contract. The
+ * stricter generated-title policy above still governs model suggestions. */
+export function isReviewedAbilityAssetTitle(title: string): boolean {
+  const value = String(title ?? '').trim();
+  return value.length > 0 && value.length <= 80 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+export function assertReviewedAbilityAssetTitle(title: string): void {
+  if (!isReviewedAbilityAssetTitle(title)) throw new Error('invalid ability asset title: reviewed title must contain 1 to 80 characters');
 }

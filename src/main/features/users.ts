@@ -46,6 +46,7 @@ import { migrateKbToLocalContexts } from '../util/migrate-kb-to-local';
 import { migrateProjectLayoutV4 } from '../util/migrate-project-layout-v4';
 import { migrateProjectLayoutV5 } from '../util/migrate-project-layout-v5';
 import { migrateSpaceDirNames } from '../util/migrate-space-dir';
+import { finishBootMigrationRun, runBootMigration } from '../util/migration-report';
 import { rekeyUserLocalSecretsAfterLocalIdChange } from '../util/rekey-user-local-secrets';
 import { maskId } from '../util/log-redact';
 
@@ -306,27 +307,23 @@ export function activateUser(uid: string): void {
   // Strip legacy session_id prefixes (aiteam- / cogseed-) once.
   // Idempotent: after the stamp lands, subsequent startups are no-ops.
   // See util/migrate-session-ids.ts for details.
-  try { migrateLegacySessionIds(uid); }
-  catch (err) { log.warn('migrateLegacySessionIds failed', { uid: maskId(uid), error: (err as Error).message }); }
+  runBootMigration(uid, 'session-ids', () => migrateLegacySessionIds(uid));
 
   // Agent layout migration: `agents/<aid>.json` →
   // `agents/<aid>/agent.json`, and `meta/<aid>/*` →
   // `agents/<aid>/meta/*`. Likewise idempotent + stamped. See
   // util/migrate-agent-layout.ts + docs/plans/agent-as-directory.md.
-  try { migrateAgentLayout(uid); }
-  catch (err) { log.warn('migrateAgentLayout failed', { uid: maskId(uid), error: (err as Error).message }); }
+  runBootMigration(uid, 'agent-layout', () => migrateAgentLayout(uid));
 
   // KB vector store moved from cloud/contexts/.kb → local/contexts/.kb
   // (multi-device-sync batch 2 — index is machine-private, never crosses
   // devices). Idempotent + stamped. See util/migrate-kb-to-local.ts.
-  try { migrateKbToLocalContexts(uid); }
-  catch (err) { log.warn('migrateKbToLocalContexts failed', { uid: maskId(uid), error: (err as Error).message }); }
+  runBootMigration(uid, 'kb-to-local', () => migrateKbToLocalContexts(uid));
 
   // v4 project-contained layout: move project-scoped conversations,
   // automation tasks, sessions, attachments/artifacts, and project Library
   // files under projects/<pid>/... before feature modules start using paths.
-  try { migrateProjectLayoutV4(uid); }
-  catch (err) { log.warn('migrateProjectLayoutV4 failed', { uid: maskId(uid), error: (err as Error).message }); }
+  runBootMigration(uid, 'project-layout-v4', () => migrateProjectLayoutV4(uid));
 
   // v5 space-scoped layout (删项目层，空间化重构阶段 0)：把有 space_id 的项目的
   // 会话/会话状态/附件/产物搬到 cloud/spaces/<sid>/... 并把会话索引 space_id 落地。
@@ -334,21 +331,21 @@ export function activateUser(uid: string): void {
   // resolveProjectScope）仍在读 projects/，需阶段 4（T4.1）改空间根后才能对外——
   // 中间态（阶段 0~3）若对真实数据启动，已绑定空间的会话会暂时不可见。开发期勿对
   // 真实数据跑完整 app，或用全新 uid 验证。
-  try { migrateProjectLayoutV5(uid); }
-  catch (err) { log.warn('migrateProjectLayoutV5 failed', { uid: maskId(uid), error: (err as Error).message }); }
+  runBootMigration(uid, 'project-layout-v5', () => migrateProjectLayoutV5(uid));
 
   // 空间内容目录命名迁移：`spaces/<sid>/` → `spaces/<空间名>/`（`.space-id` 标记
   // 绑定归属，访达/资源管理器目录名与空间名一致）。幂等：有标记的目录直接跳过。
   // 放在 v5 之后——v5 搬移可能新建 `<sid>` 目录，随后统一改名。
-  try { migrateSpaceDirNames(uid); }
-  catch (err) { log.warn('migrateSpaceDirNames failed', { uid: maskId(uid), error: (err as Error).message }); }
+  runBootMigration(uid, 'space-dir-names', () => migrateSpaceDirNames(uid));
 
   // Convert old sync ghosts (index row exists, jsonl already gone) into
   // record-level tombstones so the new merge logic can propagate the delete.
   // Runs after project-layout migration so project-scoped rows are checked
   // in their new `projects/<pid>/chats/` home.
-  try { migrateChatsGhostCleanup(uid); }
-  catch (err) { log.warn('migrateChatsGhostCleanup failed', { uid: maskId(uid), error: (err as Error).message }); }
+  runBootMigration(uid, 'chats-ghost-cleanup', () => migrateChatsGhostCleanup(uid));
+
+  // 统一上报：一条摘要 + <uid>/local/migrations-report.json
+  finishBootMigrationRun(uid);
 
   // Pin core-agent's auth/state dir to this uid's local/config/.
   // `resolveAuthDir()` re-reads this env var on every call (see

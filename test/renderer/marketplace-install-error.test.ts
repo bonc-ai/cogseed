@@ -171,3 +171,70 @@ describe('marketplace install error display', () => {
     expect(ctx._monitorErrors).toEqual([]);
   });
 });
+
+describe('S4 智能体 / 技能页安装（quiet）：失败可重试、成功不跳转', () => {
+  function setup(invoke: (channel: string, payload: any) => Promise<any>) {
+    const ctx = loadMarketplaceRenderer();
+    const alerts: string[] = [];
+    const toasts: Array<{ text: string; variant?: string }> = [];
+    const modals: unknown[] = [];
+    ctx.window.cogseed.invoke = invoke;
+    ctx.HubContentStatus = { isHubContentDisabled: () => false };
+    ctx.uiAlert = async (m: string) => { alerts.push(m); };
+    ctx.uiToast = (text: string, opts: any) => { toasts.push({ text, variant: opts && opts.variant }); };
+    ctx.uiModal = async (opts: unknown) => { modals.push(opts); return { value: 'install' }; };
+    vm.runInContext('_mpState = _mpNewState("agent")', ctx);
+    return { ctx, alerts, toasts, modals };
+  }
+  const row = { id: 'abcdef123456', name: '报销助手', version: '1.0.0', published_at: 1, updated_at: 2 };
+
+  it('失败：返回 false、记下原因供卡片显示「重试」，用提示条而不是弹窗', async () => {
+    const { ctx, alerts, toasts } = setup(async (channel) => {
+      if (channel === 'marketplace.agentInstallPlan') return { items: [] };
+      return { ok: false, error: 'network down' };
+    });
+    expect(await ctx._mpInstall('agent', row.id, row, { quiet: true })).toBe(false);
+    expect(vm.runInContext('_mpState.installFailed.get("agent:abcdef123456")', ctx)).toContain('报销助手');
+    expect(vm.runInContext('_mpState.installing.size', ctx)).toBe(0);
+    expect(alerts).toEqual([]);
+    expect(toasts[0].variant).toBe('error');
+  });
+
+  it('重试成功：返回 true、清掉失败记录、标为已安装', async () => {
+    let fail = true;
+    const { ctx } = setup(async (channel) => {
+      if (channel === 'marketplace.agentInstallPlan') return { items: [] };
+      return fail ? { ok: false, error: 'x' } : { ok: true };
+    });
+    await ctx._mpInstall('agent', row.id, row, { quiet: true });
+    fail = false;
+    expect(await ctx._mpInstall('agent', row.id, row, { quiet: true })).toBe(true);
+    expect(vm.runInContext('_mpState.installFailed.has("agent:abcdef123456")', ctx)).toBe(false);
+    expect(vm.runInContext('_mpState.installedAgentIds.has("abcdef123456")', ctx)).toBe(true);
+  });
+
+  it('带依赖的智能体：不弹「将同时安装」确认', async () => {
+    const { ctx, modals } = setup(async (channel) => {
+      if (channel === 'marketplace.agentInstallPlan') {
+        return { items: [{ id: 's1', name: '发票字段抽取', kind: 'hub', action: 'install' }], appUpdateRequired: false };
+      }
+      return { ok: true };
+    });
+    expect(await ctx._mpInstall('agent', row.id, row, { quiet: true })).toBe(true);
+    expect(modals).toEqual([]);
+  });
+
+  it('非 quiet（市场页）：失败仍然弹窗说明', async () => {
+    const { ctx, alerts, toasts } = setup(async () => ({ ok: false, error: 'x' }));
+    expect(await ctx._mpInstall('skill', row.id, row)).toBe(false);
+    expect(alerts).toHaveLength(1);
+    expect(toasts).toEqual([]);
+  });
+
+  it('有新版本时判为「有更新」', () => {
+    const { ctx } = setup(async () => ({}));
+    vm.runInContext('_mpState.installedSkillIds = new Set(["s1"]); _mpState.installedSkillMeta = new Map([["s1", { id: "s1", version: "1.0.0" }]])', ctx);
+    expect(ctx._mpInstallStatus('skill', { id: 's1', version: '1.1.0' }).updateAvailable).toBe(true);
+    expect(ctx._mpInstallStatus('skill', { id: 's1', version: '1.0.0' }).updateAvailable).toBe(false);
+  });
+});

@@ -142,7 +142,6 @@ export async function readWorldModelForecast(
     && record.projectionConfirmedAt
     && record.assetVersions
     && record.ruleRefs
-    && record.snapshotId
   );
   return { ...record, provenanceComplete };
 }
@@ -184,7 +183,6 @@ export function buildWorldModelForecastRecord(
     && input.projectionConfirmedAt
     && input.assetVersions
     && input.ruleRefs
-    && input.snapshotId
   );
   return {
     schemaVersion: 1,

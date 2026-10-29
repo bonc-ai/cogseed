@@ -90,6 +90,40 @@ describe('格式校验：坏包直接拒绝', () => {
     expect(pack.entries.map((e) => e.wrong)).toEqual(['嗯', 'coxy']);
     expect(pack.entries[0].action).toBe('delete');
   });
+
+  it('非法 kind 归一成 term（与读侧 normalizeKind 同口径），不再原样透传落盘', () => {
+    const pack = parseContributionPack({
+      format: CONTRIBUTION_PACK_FORMAT,
+      entries: [
+        { wrong: 'coxy', correct: 'Cogseed', kind: 'hyperdimensional' },
+        { wrong: 'venue-x', correct: 'VenueX', kind: 'venue' },
+      ],
+    })!;
+    expect(pack.entries.map((e) => e.kind)).toEqual(['term', 'venue']);
+    // 写进去的必须读得回来：落盘后 kind 与回执一致，不再被读侧静默剥成 term
+    const result = applyContributionPack(uid, pack);
+    expect(result.added).toBe(2);
+    expect(listEntries(uid).map((e) => e.kind)).toEqual(['term', 'venue']);
+  });
+
+  it('wrong>80 或 correct>200 的词条整条跳过（不截断），恰在限内的保留', () => {
+    const pack = parseContributionPack({
+      format: CONTRIBUTION_PACK_FORMAT,
+      entries: [
+        { wrong: 'X'.repeat(81), correct: 'Y' },
+        { wrong: 'ok', correct: 'Z'.repeat(201) },
+        { wrong: 'X'.repeat(80), correct: 'Z'.repeat(200) },
+        { wrong: '嗯嗯', action: 'delete' },
+      ],
+    })!;
+    // 超长两条被剔除；80/200 恰在限内保留；delete 无 correct 不受 correct 上限影响
+    expect(pack.entries.map((e) => e.wrong)).toEqual(['X'.repeat(80), '嗯嗯']);
+    // 预览=导入后会发生什么：被跳过的条目不进回执统计
+    expect(reviewContributionPack(uid, pack)).toMatchObject({ total: 2, added: 2 });
+    const result = applyContributionPack(uid, pack);
+    expect(result.added).toBe(2);
+    expect(listEntries(uid).every((e) => e.wrong.length <= 80)).toBe(true);
+  });
 });
 
 describe('治理：优先级 组织 > 团队 > 个人', () => {

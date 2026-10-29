@@ -1,0 +1,3 @@
+cases:
+- id: smoke-ui-controls-accessibility
+  kind: manual-smoke

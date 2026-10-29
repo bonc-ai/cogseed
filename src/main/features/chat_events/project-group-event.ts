@@ -77,7 +77,7 @@ export class GroupEventChatProjector {
       // 必须定格为「失败」而不是伪装"已工作"——msg.failure_kind 是主进程
       // 侧权威失败信号（enqueue 透传 outcome.failureKind）。
       const msg = ev.msg as { failure_kind?: unknown };
-      const status: ChatTurnCompleted['status'] = msg?.failure_kind ? 'failed' : 'completed';
+      const status: ChatTurnCompleted['status'] = msg?.failure_kind ? 'failed' : ev.msg.terminal_status === 'waiting_input' ? 'waiting_input' : 'completed';
       const out: ChatTurnCompleted[] = completeChatTurn(state, status);
       return out;
     }

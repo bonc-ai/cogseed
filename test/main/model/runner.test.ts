@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { seedConfirmedCognition, seedPendingCognition } from '../../helpers/cognition-store-fixture';
 
-// 标题闸门（设计 3.2）后晋升链对不合规 summary 走 LLM 起标题；本文件走的是
+// 标题闸门后晋升链对不合规 summary 走 LLM 起标题；本文件走的是
 // 内生写入路径（summary＝正文首句/模板拼接），单测无模型，mock 出确定性
 // 合规标题（与 asset-title-suggestion.test.ts 同一边界口径）。
 vi.mock('../../../src/main/features/recall/asset-title-suggestion', () => ({
@@ -43,21 +43,6 @@ async function loadRunner() {
   return import('../../../src/main/model/core-agent/runner');
 }
 
-function mockImmediateKnowledgeIngest() {
-  const ingestImmediateKnowledge = vi.fn(async (_uid: string, input: { requireUserReview?: boolean }) => ({
-    mode: input.requireUserReview ? 'pending-review' as const : 'created' as const,
-    ...(input.requireUserReview ? {} : { assetId: 'asset-test' }),
-    candidateId: 'cand-test',
-  }));
-  vi.doMock('../../../src/main/features/recall/candidate-service', async () => {
-    const actual = await vi.importActual<typeof import('../../../src/main/features/recall/candidate-service')>(
-      '../../../src/main/features/recall/candidate-service',
-    );
-    return { ...actual, ingestImmediateKnowledge };
-  });
-  return ingestImmediateKnowledge;
-}
-
 async function addCrossSessionMemory(input: {
   userId: string;
   sessionId: string;
@@ -81,71 +66,18 @@ async function addCrossSessionMemory(input: {
 }
 
 describe('runner › buildRunner auth gate', () => {
-  it('activates cross-session memory only for a direct, verbatim user save request', async () => {
+  it('removes chat-time writes even when the user explicitly requests saving', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
-    const ingest = mockImmediateKnowledgeIngest();
     const receipts: unknown[] = [];
-    const result = await addCrossSessionMemory({
-      userId: 'runner-memory-direct',
-      sessionId: 'gconv-memory-direct',
-      userMessage: '请记住：以后所有结论都附来源。',
-      content: '以后所有结论都附来源。',
-      onCognitionSaveReceipt: (receipt) => { receipts.push(receipt); },
-    });
-
-    expect(ingest).toHaveBeenCalledWith('runner-memory-direct', expect.objectContaining({
-      text: '以后所有结论都附来源。',
-      requireUserReview: false,
-    }));
-    expect(JSON.parse(result.content)).toMatchObject({
-      ok: true,
-      entries: [expect.stringContaining('Saved as active cognition asset')],
-    });
-    expect(receipts).toEqual([{
-      target: 'asset',
-      id: 'asset-test',
-      summary: '以后所有结论都附来源。',
-      outcome: 'created',
-    }]);
-  });
-
-  it('routes paraphrases and standalone confirmations to review', async () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
-    const paraphraseIngest = mockImmediateKnowledgeIngest();
-    const receipts: unknown[] = [];
-    const paraphrase = await addCrossSessionMemory({
-      userId: 'runner-memory-paraphrase',
-      sessionId: 'gconv-memory-paraphrase',
-      userMessage: 'Please remember: I prefer concise answers with one example.',
-      content: 'The user prefers concise answers and one example.',
-      onCognitionSaveReceipt: (receipt) => { receipts.push(receipt); },
-    });
-    expect(paraphraseIngest).toHaveBeenCalledWith('runner-memory-paraphrase', expect.objectContaining({ requireUserReview: true }));
-    expect(JSON.parse(paraphrase.content)).toMatchObject({
-      ok: true,
-      entries: [expect.stringContaining('awaiting review')],
-    });
-    expect(receipts).toEqual([{
-      target: 'candidate',
-      id: 'cand-test',
-      summary: 'The user prefers concise answers and one example.',
-      outcome: 'pending-review',
-    }]);
-
-    vi.doUnmock('../../../src/main/features/recall/candidate-service');
-    vi.resetModules();
-    const confirmationIngest = mockImmediateKnowledgeIngest();
-    const confirmation = await addCrossSessionMemory({
-      userId: 'runner-memory-confirmation',
-      sessionId: 'gconv-memory-confirmation',
-      userMessage: '好的。',
-      content: 'I prefer concise answers.',
-    });
-    expect(confirmationIngest).toHaveBeenCalledWith('runner-memory-confirmation', expect.objectContaining({ requireUserReview: true }));
-    expect(JSON.parse(confirmation.content)).toMatchObject({
-      ok: true,
-      entries: [expect.stringContaining('awaiting review')],
-    });
+    const result = await addCrossSessionMemory({ userId: 'runner-memory-direct', sessionId: 'gconv-memory-direct',
+      userMessage: '请记住：以后所有结论都附来源。', content: '以后所有结论都附来源。',
+      onCognitionSaveReceipt: receipt => { receipts.push(receipt); } });
+    expect(JSON.parse(result.content)).toMatchObject({ ok: false, error: expect.stringContaining('read-only') });
+    expect(receipts).toEqual([]);
+    const candidates = await import('../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../src/main/features/recall/asset-service');
+    expect(await candidates.listRecallCandidates('runner-memory-direct')).toEqual([]);
+    expect(await assets.listAbilityAssets('runner-memory-direct')).toEqual([]);
   });
 
   it.each([
@@ -153,7 +85,6 @@ describe('runner › buildRunner auth gate', () => {
     ['a negative request', '请不要记住：我偏好简洁回答。'],
   ])('does not persist cross-session memory from %s', async (_label, userMessage) => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
-    const ingest = mockImmediateKnowledgeIngest();
     const result = await addCrossSessionMemory({
       userId: `runner-memory-reject-${_label.replace(/\W+/g, '-')}`,
       sessionId: `gconv-memory-reject-${_label.replace(/\W+/g, '-')}`,
@@ -161,10 +92,9 @@ describe('runner › buildRunner auth gate', () => {
       content: 'I prefer concise answers.',
     });
 
-    expect(ingest).not.toHaveBeenCalled();
     expect(JSON.parse(result.content)).toMatchObject({
       ok: false,
-      error: expect.stringContaining('Nothing was persisted'),
+      error: expect.stringContaining('read-only'),
     });
   });
 
@@ -279,6 +209,46 @@ describe('runner › buildRunner auth gate', () => {
     // toolDefs is authoritative; AgentRunner internals may differ
   });
 
+  it('narrows a host task to its actual relayed tool without exposing local or evolution tools', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('runner-relayed-helper');
+    const { buildRunner } = await loadRunner();
+    const relay = { name: 'edit_cognition', description: 'Isolated host relay',
+      inputSchema: { type: 'object', properties: {} }, execute: vi.fn(async () => ({ content: 'relay result' })) };
+    const built = await buildRunner({ sessionId: 'anon-relayed-helper', userId: 'runner-relayed-helper',
+      skillList: [], ephemeralSession: true, extraTools: [relay], toolAllowlist: ['edit_cognition'] });
+    expect(built.toolDefs.map(tool => tool.name)).toEqual(['edit_cognition']);
+    const runtimeTools = (built.runner as any).tools;
+    expect([...runtimeTools.keys()]).toEqual(['edit_cognition']);
+    await runtimeTools.get('edit_cognition').execute({}, { state: {} });
+    expect(relay.execute).toHaveBeenCalledTimes(1);
+    const noTools = await buildRunner({ sessionId: 'anon-relayed-none', userId: 'runner-relayed-helper',
+      skillList: [], ephemeralSession: true, extraTools: [relay], toolAllowlist: [] });
+    expect(noTools.toolDefs).toEqual([]);
+    expect((noTools.runner as any).tools.size).toBe(0);
+    const readOnly = await buildRunner({ sessionId: 'anon-relayed-readonly', userId: 'runner-relayed-helper',
+      skillList: [], ephemeralSession: true, extraTools: [relay], toolAccess: 'read-only',
+      toolAllowlist: ['edit_cognition', 'read_file'] });
+    expect(readOnly.toolDefs.map(tool => tool.name)).toEqual(['read_file']);
+  });
+
+  it('keeps provider-native search inside the host subset before touching global account state', async () => {
+    const { buildNativeSearchOnPayload } = await loadRunner();
+    const payload = { tools: [{ type: 'function', function: { name: 'edit_cognition' } }], messages: [] };
+    const denied = buildNativeSearchOnPayload('openai', 'test-model', undefined, ['edit_cognition']);
+    expect(denied(payload, { api: 'openai-responses' })).toBe(payload);
+    expect(buildNativeSearchOnPayload('openai', 'test-model', undefined, [])(payload, { api: 'openai-responses' })).toBe(payload);
+    // Unsupported APIs must not ask for a global active profile either.
+    expect(buildNativeSearchOnPayload('zai', 'glm-5.2')(payload, { api: 'openai-completions' })).toBe(payload);
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('runner-native-search');
+    const permitted = buildNativeSearchOnPayload('openai', 'test-model', undefined, ['web_search']);
+    expect(permitted(payload, { api: 'openai-responses' })).toEqual({ ...payload,
+      tools: [...payload.tools, { type: 'web_search' }] });
+    expect(payload.tools).toHaveLength(1);
+  });
+
   it('throws the "no model configured" error when auth-profiles.json has empty entries', async () => {
     // Simulate a user who opened settings, saved nothing, ended up with an
     // empty profiles file — pickChatEntry still returns null.
@@ -292,54 +262,6 @@ describe('runner › buildRunner auth gate', () => {
     await expect(buildRunner({ sessionId: 'u1-gconv-x' })).rejects.toThrow(
       /No model configured/,
     );
-  });
-
-  it('returns the cognition save receipt for an exact user-authorized commander memory write', async () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
-    const users = await import('../../../src/main/features/users');
-    users.activateUser('runner-teaching');
-    const receipts: any[] = [];
-    const { buildRunner } = await loadRunner();
-    const built = await buildRunner({
-      sessionId: 'gconv-teaching-success',
-      userId: 'runner-teaching',
-      cid: 'conv-teaching',
-      spaceId: 'space-a',
-      sourceMessageId: 'message-a',
-      sourceMessageFromUser: true,
-      userMessage: '请记住：以后所有结论都附来源。',
-      skillList: [],
-      onCognitionSaveReceipt: (receipt) => { receipts.push(receipt); },
-    });
-    const memoryTool = (built.runner as any).tools.get('cross_session_memory');
-    expect(memoryTool).toBeTruthy();
-
-    const result = await memoryTool.execute({
-      action: 'add',
-      target: 'space',
-      content: '以后所有结论都附来源。',
-    }, { state: {} });
-
-    expect(JSON.parse(result.content)).toMatchObject({ ok: true });
-    expect(receipts).toEqual([expect.objectContaining({
-      id: expect.stringMatching(/^aa-/),
-      target: 'asset',
-      summary: '以后所有结论都附来源。',
-      outcome: 'created',
-    })]);
-    const teaching = await import('../../../src/main/features/recall/teaching-service');
-    const candidates = await import('../../../src/main/features/recall/candidate-service');
-    await expect(teaching.listUserTeachingSignals('runner-teaching')).resolves.toEqual([]);
-    // 教学回执并入保存回执（2026-09-28 四病整改 7.0 修7）：直接保存成功的
-    // 走 created 资产回执，不再有独立教学回执回调。
-    await expect(candidates.listRecallCandidates('runner-teaching')).resolves.toEqual([
-      expect.objectContaining({ status: 'confirmed', captureKey: expect.stringMatching(/^immediate-/) }),
-    ]);
-    const assets = await import('../../../src/main/features/recall/asset-service');
-    await expect(assets.readAbilityAsset('runner-teaching', receipts[0].id)).resolves.toMatchObject({
-      statement: '以后所有结论都附来源。',
-      status: 'active',
-    });
   });
 
   it('does not create teaching state when the memory write is rejected', async () => {
@@ -410,6 +332,31 @@ describe('runner › buildRunner auth gate', () => {
     expect(message).not.toMatch(/configured model is temporarily unavailable/i);
 
     cooldown._clearAll();
+  });
+
+  it('keeps cognition-kernel tools alongside meeting-ontology tools on an ordinary turn', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('runner-kernel-wiring');
+    const { buildRunner } = await loadRunner();
+
+    const built = await buildRunner({
+      sessionId: 'gconv-kernel-wiring',
+      userId: 'runner-kernel-wiring',
+      systemPrompt: 'Inspect the workspace.',
+      skillList: [],
+      ephemeralSession: true,
+    });
+
+    const names = built.toolDefs.map((tool) => tool.name);
+    // 合并 develop 时曾把 `...cognitionKernelTools` 的展开顶成
+    // `...meetingOntologyTools`（两套工具本应并存）：普通回合同时需要字段/本体
+    // 读取（cognition kernel）和会议记录投影（meeting ontology）。reception 回合
+    // 的负向断言在 a2a/reception-tool-* 里，这里只钉普通回合的正向接线。
+    expect(names).toEqual(expect.arrayContaining([
+      'personal_fields_check', 'cognition_ontology_query',
+      'ontology_graph_read', 'ontology_projection_apply',
+    ]));
   });
 
 });
@@ -488,5 +435,65 @@ describe('splitCommanderOrchestrationBlock (cache-prefix hygiene)', () => {
     const { stable, orchestrationBlock } = _splitCommanderOrchestrationBlock(prompt);
     expect(orchestrationBlock).toBe('');
     expect(stable).toBe(prompt);
+  });
+});
+
+// ── connectorAllowlistForAgent：per-agent 连接器权限解析 ──────────────────
+//
+// 这是"配置两个 MCP 的访问权限"（腾讯会议 + MeshSeed）的运行时入口。
+// 三态语义必须精确：`undefined` 表示**继承 commander**（存量行为不变），
+// `[]` 表示**零连接器**。把两者混为一谈，会让所有未声明的 agent 突然失去全部
+// 连接器（回归事故），或让想收权的 agent 白拿全部权限（fail-open）。
+describe('connectorAllowlistForAgent', () => {
+  const UID = 'u-allowlist';
+
+  function mockAgents(getAgent: unknown) {
+    vi.doMock('../../../src/main/features/agents', () => ({
+      appendAgentSkill: vi.fn(),
+      listAgentSummaries: vi.fn(async () => []),
+      getAgentForChatDispatch: getAgent,
+    }));
+  }
+
+  afterEach(() => {
+    vi.doUnmock('../../../src/main/features/agents');
+  });
+
+  it('returns undefined when the agent declares nothing (inherit commander)', async () => {
+    mockAgents(vi.fn(async () => ({ agent_id: 'a1', name: 'A' })));
+    const { connectorAllowlistForAgent } = await loadRunner();
+    expect(await connectorAllowlistForAgent(UID, 'a1')).toBeUndefined();
+  });
+
+  it('returns [] when the agent explicitly declares zero connectors', async () => {
+    mockAgents(vi.fn(async () => ({ agent_id: 'a1', name: 'A', enabled_connectors: [] })));
+    const { connectorAllowlistForAgent } = await loadRunner();
+    expect(await connectorAllowlistForAgent(UID, 'a1')).toEqual([]);
+  });
+
+  it('returns the declared allowlist verbatim (会议 Agent 只允许腾讯会议 + MeshSeed)', async () => {
+    mockAgents(vi.fn(async () => ({
+      agent_id: 'a1', name: 'A', enabled_connectors: ['tencent-meeting', 'meshseed'],
+    })));
+    const { connectorAllowlistForAgent } = await loadRunner();
+    expect(await connectorAllowlistForAgent(UID, 'a1')).toEqual(['tencent-meeting', 'meshseed']);
+  });
+
+  it('returns undefined for an empty agentId (commander scope)', async () => {
+    const { connectorAllowlistForAgent } = await loadRunner();
+    expect(await connectorAllowlistForAgent(UID, '')).toBeUndefined();
+  });
+
+  it('falls back to inherit (and does not throw) when the agent spec cannot be read', async () => {
+    mockAgents(vi.fn(async () => { throw new Error('spec unreadable'); }));
+    const { connectorAllowlistForAgent } = await loadRunner();
+    // 一次规格读取失败不该让用户在某个 agent 里失去全部连接器。
+    expect(await connectorAllowlistForAgent(UID, 'a1')).toBeUndefined();
+  });
+
+  it('returns undefined when the agent does not exist', async () => {
+    mockAgents(vi.fn(async () => null));
+    const { connectorAllowlistForAgent } = await loadRunner();
+    expect(await connectorAllowlistForAgent(UID, 'missing')).toBeUndefined();
   });
 });

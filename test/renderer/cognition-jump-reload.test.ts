@@ -68,7 +68,7 @@ describe('对话跳转认知面板时重取数据（B11 假空态）', () => {
 
   it('候选「确认或修改」跳转同样重取，刚保存的候选不再显示成已不在列表', () => {
     const jump = jumpBlock('window.openCognitionCandidateById');
-    expect(jump).toContain("router.go({ name: 'review'");
+    expect(jump).toContain("router.go({ name: 'activity', candidateId");
     expect(jump).toContain('void NS.reload()');
     expect(jump).not.toContain('await NS.reload()');
     expect(jump).toContain('return true');

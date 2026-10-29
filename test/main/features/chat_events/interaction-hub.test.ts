@@ -1,6 +1,6 @@
 // ─── interaction-hub 单元测试 ───────────────────────────────────────────────
 //
-// 契约语义（spec.md「事件契约」Interaction 部分）：
+// 交互生命周期契约：
 // 1. approval 三决策 + 超时拒绝；
 // 2. question 文本回复 + 超时放弃（无 answer）；
 // 3. 晚到回复幂等（未知/已关闭 id 返回 false，不误答新交互）；
@@ -37,6 +37,32 @@ afterEach(() => {
 });
 
 describe('interaction hub', () => {
+  it('limits a trusted turn cancellation to the matching account and conversation', async () => {
+    const events: any[] = [];
+    _setBroadcastForTest((_uid, event) => events.push(event));
+    const cancelled = requestInteraction(baseInput());
+    const otherAccount = requestInteraction(baseInput({ uid: 'synthetic-other-user' }));
+    const otherChat = requestInteraction(baseInput({ cid: 'synthetic-other-chat' }));
+    expect(cancelInteractionsForTurn('T1', { uid: 'u1', cid: 'c1' })).toBe(1);
+    expect(respondInteraction(events[0].interactionId, { decision: 'allow' })).toBe(false);
+    await expect(cancelled).resolves.toMatchObject({ reason: 'turnCancelled', decision: 'deny' });
+    const open = events.filter(event => event.type === 'chat.interaction.requested').slice(1);
+    for (const event of open) expect(respondInteraction(event.interactionId, { decision: 'allow' })).toBe(true);
+    await expect(otherAccount).resolves.toMatchObject({ reason: 'answered', decision: 'allow' });
+    await expect(otherChat).resolves.toMatchObject({ reason: 'answered', decision: 'allow' });
+  });
+
+  it('one-contract approval excludes persistent permission and rejects a forged always response', async () => {
+    const events: any[] = [];
+    _setBroadcastForTest((_uid, ev) => events.push(ev));
+    const pending = requestInteraction(baseInput({ allowAlways: false }));
+    expect(events[0].allowAlways).toBe(false);
+    respondInteraction(events[0].interactionId, { decision: 'allowAlways' });
+    await expect(pending).resolves.toMatchObject({ decision: 'deny' });
+    const next = requestInteraction(baseInput({ allowAlways: false }));
+    respondInteraction(events.at(-1).interactionId, { decision: 'allow' });
+    await expect(next).resolves.toMatchObject({ decision: 'allow' });
+  });
   it('approval：allow / allowAlways / deny 三决策', async () => {
     const events: unknown[] = [];
     _setBroadcastForTest((_uid, ev) => events.push(ev));

@@ -34,6 +34,9 @@ const log = createLogger('marketplace/source-fetch');
 /** A-02 的路径。**全仓只有本模块可以取它的字节**（FR-008，T017 的扫描判据）。 */
 const SOURCE_PATH = '/marketplace/skills/bundle';
 
+/** B-02（Agent 发布物，`agent-package-v1`）的路径。与 A-02 同一约束：只有本模块取它的字节。 */
+const AGENT_SOURCE_PATH = '/marketplace/agents/bundle';
+
 /** F4 收口后 A-02 只回不可变字节，Content-Type 必须是这个（FR-010）。 */
 const REQUIRED_CONTENT_TYPE = 'application/octet-stream';
 
@@ -69,7 +72,21 @@ function mimeOf(headerValue: string | null): string {
  *
  * 校验不过：**不返回字节、不留盘**（FR-011）。
  */
-export async function fetchImmutableSource(
+export function fetchImmutableSource(
+  req: FetchImmutableSourceRequest,
+): Promise<FetchImmutableSourceResult> {
+  return fetchImmutableFrom(SOURCE_PATH, req);
+}
+
+/** B-02：Agent 发布物字节。同 A-02 的全部规则（版本必填、流式落盘、sha256 与大小校验、不信任内容类型）。 */
+export function fetchImmutableAgentSource(
+  req: FetchImmutableSourceRequest,
+): Promise<FetchImmutableSourceResult> {
+  return fetchImmutableFrom(AGENT_SOURCE_PATH, req);
+}
+
+async function fetchImmutableFrom(
+  sourcePath: string,
   req: FetchImmutableSourceRequest,
 ): Promise<FetchImmutableSourceResult> {
   // FR-008：请求体**必含** content_id 与 version。版本缺席即拒，不退化为「取最新」。
@@ -83,7 +100,7 @@ export async function fetchImmutableSource(
   try {
     const { body } = await fetchAndReadWithRetry(
       label,
-      `${requireCogSeedApiBase()}${SOURCE_PATH}`,
+      `${requireCogSeedApiBase()}${sourcePath}`,
       {
         method: 'POST',
         headers: withCommonHeaders({

@@ -33,7 +33,9 @@ export const MEETING_DOC_SCHEMA_VERSION = 1;
 export const MAX_DOC_ID_CHARS = 1000;
 /** `title` 上限（对齐 `source-service.ts` 的标题上限）。 */
 export const MAX_TITLE_CHARS = 120;
-/** `sourceVersion` 上限（mtime 字符串化，留足余量）。 */
+
+/** 纪要正文上限（meeting.minutes.save 入参长度；超出拒绝，不截断——截断会静默丢内容）。 */
+export const MAX_MINUTES_CHARS = 20000;/** `sourceVersion` 上限（mtime 字符串化，留足余量）。 */
 const MAX_SOURCE_VERSION_CHARS = 128;
 /** 说话人名单上限（data-model §1.1）。 */
 export const MAX_SPEAKERS = 50;
@@ -44,7 +46,7 @@ export const MAX_SCENARIO_TAGS = 20;
 
 /** 会议侧 schema 类错误（归因 schema：渲染层按码翻四语，不上屏英文原文）。 */
 export class MeetingDocError extends Error {
-  constructor(message: string, readonly code: 'invalid_doc_id' | 'invalid_input') {
+  constructor(message: string, readonly code: 'invalid_doc_id' | 'invalid_input' | 'invalid_minutes') {
     super(message);
     this.name = 'MeetingDocError';
   }
@@ -75,6 +77,8 @@ export interface MeetingDocRef {
   scenarioTags?: string[];
   /** 降级原因（specs/013 T021 填写；本模块只建字段位）。 */
   degraded?: Array<'no_speakers' | 'no_scenario_tags' | 'no_transcript_run'>;
+  /** 会议纪要正文（markdown 纯文本，meeting.minutes.save 维护；缺省 = 未撰写）。 */
+  minutes?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -117,6 +121,39 @@ export function docKeyForDocId(docId: string): string {
 
 export function meetingDocFile(uid: string, docKey: string): string {
   return path.join(userMeetingDocsDir(uid), `${docKey}.json`);
+}
+
+/**
+ * 读纪要正文：只读探测，**不惰性创建文档**（缺失 → 空串，与 doc.get 的
+ * create:false 同语义——浏览会议不应顺手建档）。
+ */
+export function readMeetingMinutes(uid: string, docId: string): string {
+  const id = typeof docId === 'string' ? docId.trim() : '';
+  if (!id || id.length > MAX_DOC_ID_CHARS) {
+    throw new MeetingDocError('invalid meeting docId', 'invalid_doc_id');
+  }
+  const doc = readDoc(uid, id);
+  return typeof doc?.minutes === 'string' ? doc.minutes : '';
+}
+
+/**
+ * 保存纪要正文：在既有文档上覆写 `minutes`（空串 → 字段缺省，不留空壳），
+ * 复用 writeDoc 的 tmp/rename 原子写。长度与类型在 IPC 层校验，这里再兜一次。
+ */
+export function saveMeetingMinutes(uid: string, docId: string, minutes: string): MeetingDocRef {
+  const id = typeof docId === 'string' ? docId.trim() : '';
+  if (!id || id.length > MAX_DOC_ID_CHARS) {
+    throw new MeetingDocError('invalid meeting docId', 'invalid_doc_id');
+  }
+  if (typeof minutes !== 'string' || minutes.length > MAX_MINUTES_CHARS) {
+    throw new MeetingDocError('invalid meeting minutes', 'invalid_minutes');
+  }
+  const existing = getMeetingDoc(uid, id, { create: true });
+  const next: MeetingDocRef = { ...existing, updatedAt: nowIso() };
+  if (minutes) next.minutes = minutes;
+  else delete next.minutes;
+  writeDoc(uid, next);
+  return next;
 }
 
 function nowIso(): string {

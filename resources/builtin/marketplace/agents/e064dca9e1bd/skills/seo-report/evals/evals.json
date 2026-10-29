@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "id": "smoke-seo-report",
+      "kind": "smoke",
+      "input": "A synthetic task that exercises seo-report.",
+      "expected": "Follows SKILL.md; deterministic output; no network or filesystem side effects."
+    }
+  ]
+}

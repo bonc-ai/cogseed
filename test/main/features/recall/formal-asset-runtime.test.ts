@@ -9,8 +9,7 @@ describe('asset runtime gate', () => {
   // 选择时使用；Transfer Verified 起才可默认注入。
   it('maps maturity to the PRD default-use contract', () => {
     const seed = evaluateAssetRuntimeEligibility({ ...active, maturity: 'seed' });
-    expect(seed).toMatchObject({ eligible: false, mode: 'blocked' });
-    expect(seed.reasons).toContain('maturity_below_default_use');
+    expect(seed).toMatchObject({ eligible: true, mode: 'manual_only', usePolicy: 'prompt', defaultUsePolicy: 'never' });
 
     expect(evaluateAssetRuntimeEligibility({ ...active, maturity: 'bud' }))
       .toMatchObject({ eligible: true, mode: 'manual_only' });
@@ -20,29 +19,29 @@ describe('asset runtime gate', () => {
       .toMatchObject({ eligible: true, mode: 'preferred' });
   });
 
-  // 静默默认注入以「适合度」为准（产品决策）：seed/未验证资产只要
-  // status/scope/forbidden/applicable 都适合即可注入（未验证由注入标注
-  // 承担，不阻断使用——否则自进化闭环断裂、沉淀永远用不上）。
-  it('allows silent default injection by fitness regardless of maturity', () => {
+  // 默认带入必须同时满足共同默认策略和适用性，查阅与明确选用另判。
+  it('requires the default-use contract as well as task fitness', () => {
     const bud = evaluateAssetRuntimeEligibility(
       { ...active, maturity: 'bud' },
       { silentDefaultInjection: true },
     );
-    expect(bud.eligible).toBe(true);
-    expect(bud.mode).toBe('default_allowed');
+    expect(bud.eligible).toBe(false);
+    expect(bud.mode).toBe('blocked');
+    expect(bud.reasons).toContain('maturity_below_default_use');
 
     expect(evaluateAssetRuntimeEligibility(
       { ...active, maturity: 'transfer_validated' },
       { silentDefaultInjection: true },
     ).eligible).toBe(true);
 
-    // 适合度否决仍然生效：applicableWhen 声明却对不上任务 → 不注入。
+    // 未命中自由文本不等于证明不适用；成熟度门禁仍独立执行。
     const notApplicable = evaluateAssetRuntimeEligibility(
       { ...active, maturity: 'seed', applicableWhen: ['写代码'] },
       { silentDefaultInjection: true, taskText: '写一份城市资料' },
     );
     expect(notApplicable.eligible).toBe(false);
-    expect(notApplicable.reasons).toContain('not_applicable_context');
+    expect(notApplicable.relevance).toBe('unknown');
+    expect(notApplicable.reasons).toContain('maturity_below_default_use');
   });
 
   it('lets governance status veto any maturity', () => {
@@ -71,12 +70,13 @@ describe('asset runtime gate', () => {
     expect(result.reasons).toContain('forbidden_context');
   });
 
-  it('requires a declared applicable range to match before silent injection', () => {
+  it('six-node closure: leaves unmatched natural-language conditions unknown for semantic selection without inventing a match', () => {
     const asset = { ...active, maturity: 'transfer_validated' as const, applicableWhen: ['架构评审'] };
     expect(evaluateAssetRuntimeEligibility(asset, { silentDefaultInjection: true, taskText: '做一次架构评审' }).eligible).toBe(true);
     const offTopic = evaluateAssetRuntimeEligibility(asset, { silentDefaultInjection: true, taskText: '写周报' });
-    expect(offTopic.eligible).toBe(false);
-    expect(offTopic.reasons).toContain('not_applicable_context');
+    expect(offTopic.eligible).toBe(true);
+    expect(offTopic.relevance).toBe('unknown');
+    expect(offTopic.reasons).not.toContain('not_applicable_context');
     // 人工挑选不受适用范围自动匹配的限制。
     expect(evaluateAssetRuntimeEligibility(asset, { taskText: '写周报' }).eligible).toBe(true);
   });
@@ -124,10 +124,14 @@ describe('asset runtime gate', () => {
     expect(evaluateAssetRuntimeEligibility(asset, { scope: 'review' }).mode).toBe('default_allowed');
     // 跨作用域仍需用户确认（crossScopeConfirmedAt）→ 不静默注入（适合度含作用域维度）。
     expect(evaluateAssetRuntimeEligibility(asset, { scope: 'other', silentDefaultInjection: true }).eligible).toBe(false);
-    // 声明过跨作用域确认 → 可注入。
+    // 跨作用域确认允许明确使用，不能把 prompt 偷升成自动带入。
     expect(evaluateAssetRuntimeEligibility(
       { ...asset, crossScopeConfirmedAt: '2026-08-16T00:00:00.000Z' },
       { scope: 'other', silentDefaultInjection: true },
+    ).eligible).toBe(false);
+    expect(evaluateAssetRuntimeEligibility(
+      { ...asset, crossScopeConfirmedAt: '2026-08-16T00:00:00.000Z' },
+      { scope: 'other', operation: 'explicit_use' },
     ).eligible).toBe(true);
   });
 });

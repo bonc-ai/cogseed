@@ -35,13 +35,20 @@ import { evictSession, deleteSessionFileForUser } from '../model/core-agent/sess
 import {
   nowIso, genConversationId, genId12, safeId,
   readJson, writeJson, invalidateLineCount, readJsonl, readJsonlPage, readJsonlWindow, appendJsonlAtomic,
+  appendJsonlByIdIdempotent,
 } from '../storage';
 import { createLogger } from '../logger';
+import {
+  parseA2AConversationMarker,
+  type A2AConversationMarker,
+  type A2AConversationState,
+} from './a2a/conversation-marker';
 import { t } from '../i18n';
 import {
   ZH_FILLER_RE, EN_FILLER_RE, TITLE_MAX, findTitleClauseBoundary,
 } from '../util/auto-title';
 import { isExpiredIsoTombstone, pruneExpiredDeletedRecords } from '../util/tombstone_retention';
+import { isSubstantiveTaskText, normalizeTaskRequest, parseSeedModelText } from './session_import/task-context';
 import {
   RECORD_SYNC_DEVICE_FIELD,
   RECORD_SYNC_REV_FIELD,
@@ -49,6 +56,7 @@ import {
   recordSyncRev,
 } from '../util/record_sync_fields';
 import { limitNameDisplayText } from '../util/name-limit';
+import { deviceIdFile, getOrCreateDeviceId } from '../util/device_identity';
 
 const log = createLogger('chats');
 // A boot-time stale-state sweep may run twice: once before the first window
@@ -103,7 +111,7 @@ export interface Conversation {
    *  `--permission-mode` (Claude Code / Codex). `full` = bypass permissions
    *  (current default); `auto_approve` / `ask` require the interactive
    *  approval UI (phase 2) before they are enforced. */
-  permission_mode?: 'full' | 'auto_approve' | 'ask';
+  permission_mode?: 'full' | 'auto_approve' | 'ask' | 'danger_full_access';
   /** Commander session id (`<uid>-gconv-<cid>`). Stored for cleanup;
    * agents in the group have their own per-(conv,agent) session ids derived
    * via state.buildGmemberSessionId. */
@@ -113,6 +121,11 @@ export interface Conversation {
    *  default sidebar group). The project itself is just metadata —
    *  `<cid>.jsonl`, `groupChatDir`, `chat_attachments`, and `session_id`
    *  paths stay verbatim, so cid uniqueness + §5 isolation are unaffected. */
+  /** A2A 会话标识（MVP）：本方角色、对方、接待范围与状态；关系权威仍在 Hub。 */
+  a2a?: A2AConversationMarker;
+  /** Main-owned inbound payload while an A2A reception awaits confirmation.
+   * It is claimed and removed atomically with waiting -> active. */
+  a2a_pending_reception?: A2APendingReceptionBinding;
   project_id?: string;
   /** 空间化重构（删项目层）：会话直接挂空间。缺失/空 = orphan 会话，不算任何
    *  空间（任务/产物列表不纳入）。阶段 0 与 project_id 双字段兼容并存。 */
@@ -184,6 +197,20 @@ export interface Conversation {
   /** 任务级引用（空间任务 = 空间会话）：开新任务/已有任务时引用的空间产物与资产。
    *  产物 → 发送时并入消息 references（LLM 可读文件）；资产 → 发送时并入模型上下文块。 */
   task_references?: TaskReference[];
+}
+
+export interface A2APendingReceptionBinding {
+  messageId: string;
+  conversationId: string;
+  peerUserId: string;
+  peerName?: string;
+  /** 等待确认的正文；过期清理后为 ''（只保留脱敏原因）。 */
+  text: string;
+  /** 原消息时间：暂存 TTL 的唯一锚点，重启/重试不改变。 */
+  receivedAt: string;
+  state?: 'pending' | 'claimed' | 'running';
+  /** 暂存过期的脱敏原因（不含正文）。 */
+  expired_reason?: 'stale';
 }
 
 /** 空间任务引用项（持久化在会话记录上，任务级作用域）。 */
@@ -309,10 +336,36 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
     created_at: createdAt,
     updated_at: updatedAt,
   };
-  if (typeof raw.permission_mode === 'string' && ['full', 'auto_approve', 'ask'].includes(raw.permission_mode)) {
+  if (typeof raw.permission_mode === 'string' && ['full', 'auto_approve', 'ask', 'danger_full_access'].includes(raw.permission_mode)) {
     out.permission_mode = raw.permission_mode as Conversation['permission_mode'];
   }
   if (typeof raw.project_id === 'string' && raw.project_id) out.project_id = raw.project_id;
+  {
+    const marker = parseA2AConversationMarker(raw.a2a);
+    if (marker) out.a2a = marker;
+  }
+  if (raw.a2a_pending_reception && typeof raw.a2a_pending_reception === 'object') {
+    const pending = raw.a2a_pending_reception as Record<string, unknown>;
+    const messageId = typeof pending.messageId === 'string' ? pending.messageId.trim().slice(0, 160) : '';
+    const conversationId = typeof pending.conversationId === 'string' ? pending.conversationId.trim() : '';
+    const peerUserId = typeof pending.peerUserId === 'string' ? pending.peerUserId.trim().slice(0, 128) : '';
+    const text = typeof pending.text === 'string' ? pending.text.slice(0, 4_000) : '';
+    const receivedAt = typeof pending.receivedAt === 'string' ? pending.receivedAt.trim().slice(0, 80) : '';
+    if (messageId && conversationId === cid && peerUserId && receivedAt) {
+      out.a2a_pending_reception = {
+        messageId,
+        conversationId,
+        peerUserId,
+        ...(typeof pending.peerName === 'string' && pending.peerName.trim()
+          ? { peerName: pending.peerName.trim().slice(0, 200) }
+          : {}),
+        text,
+        receivedAt,
+        state: pending.state === 'claimed' || pending.state === 'running' ? pending.state : 'pending',
+        ...(pending.expired_reason === 'stale' ? { expired_reason: 'stale' as const } : {}),
+      };
+    }
+  }
   if (typeof raw.space_id === 'string' && raw.space_id) out.space_id = raw.space_id;
   if (typeof raw.origin_auto_task_id === 'string' && raw.origin_auto_task_id) out.origin_auto_task_id = raw.origin_auto_task_id;
   if (typeof raw.channel_platform === 'string' && raw.channel_platform) out.channel_platform = raw.channel_platform;
@@ -474,25 +527,13 @@ function _lastActionMs(c: Conversation | null | undefined): number {
 }
 
 function _recordDeviceFile(userId: string): string {
-  return path.join(userLocalConfigDir(userId), 'record-sync-device.json');
+  // 单一来源：见 util/device_identity.ts —— 模块 A 的设备绑定用同一个文件，
+  // 避免出现"两份设备身份"（安全审计 2026-09-21）。
+  return deviceIdFile(userId);
 }
 
 function _recordDeviceId(userId: string): string {
-  const file = _recordDeviceFile(userId);
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const id = typeof raw?.device_id === 'string' ? raw.device_id : '';
-    if (id) return id;
-  } catch { /* create below */ }
-  const id = randomUUID();
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, device_id: id }), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, file);
-    try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
-  } catch { /* a missing device id only weakens conflict detection */ }
-  return id;
+  return getOrCreateDeviceId(userId);
 }
 
 function _stampConversationSync(userId: string, c: Conversation): Conversation {
@@ -665,6 +706,45 @@ export async function listConversationDisplayRows(userId: string): Promise<Conve
       project_id: typeof row.project_id === 'string' ? row.project_id : '',
       space_id: typeof row.space_id === 'string' ? row.space_id : '',
     }));
+}
+
+export interface A2AConversationDirectoryRow {
+  conversation_id: string;
+  title: string;
+  project_id?: string;
+  updated_at: string;
+  a2a?: Readonly<{
+    inbound?: true;
+    outgoing?: true;
+    peer_user_id: string;
+    state: A2AConversationState;
+  }>;
+}
+
+/** Compact A2A directory source. Reads only aggregate indexes and leaves
+ * runtime, participant, metadata, and message enrichment to bounded callers. */
+export async function listA2AConversationDirectoryRows(
+  userId: string,
+): Promise<A2AConversationDirectoryRow[]> {
+  const { items } = _mergeNormalizedConversationRows(await _readIndexConversations(userId));
+  return items
+    .filter((row) => !isDeletedConversation(row) && !!row.a2a)
+    .map((row) => {
+      const activityMs = _conversationActivityMs(row);
+      const marker = row.a2a!;
+      return {
+        conversation_id: row.conversation_id,
+        title: row.title || '',
+        ...(row.project_id ? { project_id: row.project_id } : {}),
+        updated_at: activityMs ? new Date(activityMs).toISOString() : row.updated_at,
+        a2a: {
+          ...(marker.inbound === true ? { inbound: true as const } : {}),
+          ...(marker.outgoing === true ? { outgoing: true as const } : {}),
+          peer_user_id: marker.peer_user_id,
+          state: marker.state,
+        },
+      };
+    });
 }
 
 async function _readConversationMetas(
@@ -869,13 +949,13 @@ async function _readTargetRawConversation(
   return [];
 }
 
-async function _writeJsonIfChanged(file: string, data: unknown): Promise<void> {
+async function _writeJsonIfChanged(file: string, data: unknown, isCurrent?: () => boolean): Promise<void> {
   const next = JSON.stringify(data, null, 2);
   try {
     const cur = await fsp.readFile(file, 'utf8');
     if (cur === next) return;
   } catch { /* missing or unreadable => write */ }
-  await writeJson(file, data);
+  await writeJson(file, data, isCurrent);
 }
 
 async function _saveConversationMetas(
@@ -1830,7 +1910,26 @@ class ConversationIndexStore {
     return this.targetInRoot(winnerRoot, cid);
   }
 
-  async persistTarget(target: ConversationIndexTarget, next: Conversation): Promise<void> {
+  /** A2A lifecycle mutations must also see retained tombstones, but callers
+   * never receive the underlying deleted conversation records. */
+  async listA2ATargets(): Promise<ConversationIndexTarget[]> {
+    const rootKeys = ['', ...listProjectIds(this.userId)];
+    await _runBounded(rootKeys, 8, async (rootKey) => { await this.readRoot(rootKey); });
+    const cids = new Set<string>();
+    for (const rows of this.roots.values()) {
+      for (const row of rows) {
+        if (row.a2a && safeId(row.conversation_id)) cids.add(row.conversation_id);
+      }
+    }
+    const targets: ConversationIndexTarget[] = [];
+    for (const cid of cids) {
+      const target = await this.findTarget(cid);
+      if (target && parseA2AConversationMarker(target.conversation.a2a)) targets.push(target);
+    }
+    return targets;
+  }
+
+  async persistTarget(target: ConversationIndexTarget, next: Conversation, isCurrent?: () => boolean): Promise<void> {
     const oldRoot = target.rootKey;
     const newRoot = _conversationRootKey(next.project_id);
     const changedRoots = new Set<string>([oldRoot, newRoot]);
@@ -1849,7 +1948,8 @@ class ConversationIndexStore {
       }
       newRows.unshift(next);
     }
-    await this.commitRoots(changedRoots);
+    await this.commitRoots(changedRoots, isCurrent);
+    if (isCurrent && !isCurrent()) return;
     if (isDeletedConversation(next)) {
       try { await fsp.unlink(_conversationMetaFileForRoot(this.userId, next.conversation_id, newRoot)); }
       catch { /* missing is fine */ }
@@ -1857,34 +1957,37 @@ class ConversationIndexStore {
       await _writeJsonIfChanged(
         _conversationMetaFileForRoot(this.userId, next.conversation_id, newRoot),
         _cleanConversationMeta(next),
+        isCurrent,
       );
     }
     if (oldRoot !== newRoot) {
+      if (isCurrent && !isCurrent()) return;
       try { await fsp.unlink(_conversationMetaFileForRoot(this.userId, next.conversation_id, oldRoot)); }
       catch { /* missing is fine */ }
     }
   }
 
-  async insert(rootKey: string, conversation: Conversation): Promise<void> {
+  async insert(rootKey: string, conversation: Conversation, isCurrent?: () => boolean): Promise<void> {
     const key = _conversationRootKey(rootKey);
     const rows = await this.readRoot(key);
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       if (rows[i].conversation_id === conversation.conversation_id) rows.splice(i, 1);
     }
     rows.unshift(conversation);
-    await this.commitRoots(new Set([key]));
+    await this.commitRoots(new Set([key]), isCurrent);
     await _writeJsonIfChanged(
       _conversationMetaFileForRoot(this.userId, conversation.conversation_id, key),
       _cleanConversationMeta(conversation),
+      isCurrent,
     );
   }
 
-  private async commitRoots(rootKeys: ReadonlySet<string>): Promise<void> {
+  private async commitRoots(rootKeys: ReadonlySet<string>, isCurrent?: () => boolean): Promise<void> {
     await Promise.all(Array.from(rootKeys, async (rootKey) => {
       const rows = await this.readRoot(rootKey);
       const cleaned = pruneExpiredDeletedRecords(rows.map(_cleanConversation)) as Conversation[];
-      await writeJson(conversationIndexFile(this.userId, rootKey || null), cleaned);
-      _notifyChatIndexDirty(rootKey || undefined);
+      await writeJson(conversationIndexFile(this.userId, rootKey || null), cleaned, isCurrent);
+      if (!isCurrent || isCurrent()) _notifyChatIndexDirty(rootKey || undefined);
     }));
   }
 }
@@ -1984,10 +2087,12 @@ export async function bumpConversationActivity(
   tsIso: string,
   participantActivity?: ConversationParticipantActivity,
   projectIdHint?: string | null,
+  isCurrent?: () => boolean,
 ): Promise<void> {
   if (!cid || !tsIso) return;
   await _withConversationIndexStore(userId, async (store) => {
     const target = await store.findTarget(cid, projectIdHint);
+    if (isCurrent && !isCurrent()) return;
     if (!target || isDeletedConversation(target.conversation)) return;
     const c = { ...target.conversation };
     let changed = false;
@@ -2020,7 +2125,7 @@ export async function bumpConversationActivity(
     }
     if (!changed) return;
     _stampConversationSync(userId, c);
-    await store.persistTarget(target, c);
+    await store.persistTarget(target, c, isCurrent);
   });
 }
 
@@ -2117,6 +2222,277 @@ export async function readCogSeedConversationDeliveryBinding(
   });
 }
 
+export type A2AConversationIdReservation =
+  | { state: 'missing' }
+  | { state: 'live' | 'deleted'; marker: A2AConversationMarker | null };
+
+/** Inspect one exact A2A id inside the canonical write queue, including a
+ * retained tombstone, without exposing deleted conversation data generally. */
+export async function reserveA2AConversationId(
+  userId: string,
+  cid: string,
+): Promise<A2AConversationIdReservation> {
+  if (!safeId(cid)) return { state: 'missing' };
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid);
+    if (!target) return { state: 'missing' } as const;
+    return {
+      state: isDeletedConversation(target.conversation) ? 'deleted' as const : 'live' as const,
+      marker: parseA2AConversationMarker(target.conversation.a2a),
+    };
+  });
+}
+
+export type InboundA2AAdmission =
+  | { accepted: false }
+  | {
+    accepted: true;
+    conversationId: string;
+    marker: A2AConversationMarker;
+    pending?: A2APendingReceptionBinding;
+  };
+
+/** Create/revive/update one inbound A2A row in the canonical chat queue.
+ * Ordinary collisions, peer mismatches, and terminal tombstones are rejected
+ * before any row is changed. The pending payload is committed with the marker. */
+export async function admitInboundA2AConversationAtomic(
+  userId: string,
+  input: {
+    conversationId: string;
+    peerUserId: string;
+    title: string;
+    /** Journal reconciliation may create a missing row, but never revive or
+     * replace a different conversation generation. */
+    recoveryGeneration?: string;
+    isCurrent?: () => boolean;
+    decide: (
+      current: A2AConversationMarker | null,
+      pending: A2APendingReceptionBinding | null,
+      generation: string,
+    ) => Promise<{ marker: A2AConversationMarker; pending?: A2APendingReceptionBinding | null } | null>,
+  },
+): Promise<InboundA2AAdmission> {
+  const cid = String(input.conversationId || '').trim();
+  if (!safeId(cid)) return { accepted: false };
+  let touchedMessages = false;
+  const result = await _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid);
+    const current = target?.conversation;
+    const marker = parseA2AConversationMarker(current?.a2a);
+    if (input.recoveryGeneration && current && (isDeletedConversation(current)
+      || current._cogseed_result_generation !== input.recoveryGeneration)) return { accepted: false } as const;
+    if (current && (!marker
+      || marker.peer_user_id !== input.peerUserId
+      || marker.exchange_id !== cid
+      || marker.state === 'ended')) return { accepted: false } as const;
+    const pending = current?.a2a_pending_reception || null;
+    const generation = input.recoveryGeneration || (current && !isDeletedConversation(current)
+      ? current._cogseed_result_generation : undefined) || `cogseed-generation-${genId12()}`;
+    const decision = await input.decide(marker, pending, generation);
+    if (input.isCurrent && !input.isCurrent()) return { accepted: false } as const;
+    if (!decision) return { accepted: false } as const;
+    if (decision.marker.peer_user_id !== input.peerUserId
+      || decision.marker.exchange_id !== cid
+      || decision.marker.state === 'ended') return { accepted: false } as const;
+    const now = nowIso();
+    if (target) {
+      const wasDeleted = isDeletedConversation(target.conversation);
+      const next = _stampConversationSync(userId, {
+        ...target.conversation,
+        _cogseed_result_generation: generation,
+        title: wasDeleted && input.title ? normaliseConversationTitle(input.title) : target.conversation.title,
+        a2a: decision.marker,
+        updated_at: now,
+      });
+      if (decision.pending === null) delete next.a2a_pending_reception;
+      else if (decision.pending) next.a2a_pending_reception = decision.pending;
+      delete next.deleted_at;
+      await store.persistTarget(target, next, input.isCurrent);
+      touchedMessages = wasDeleted;
+      return {
+        accepted: true,
+        conversationId: cid,
+        marker: decision.marker,
+        ...(next.a2a_pending_reception ? { pending: next.a2a_pending_reception } : {}),
+      } as const;
+    }
+    const created: Conversation = _stampConversationSync(userId, {
+      conversation_id: cid,
+      _cogseed_result_generation: generation,
+      title: normaliseConversationTitle(input.title),
+      kind: 'normal',
+      agent_id: '',
+      skill_id: '',
+      session_id: buildConversationSessionId(cid),
+      created_at: now,
+      updated_at: now,
+      agent_ids: [],
+      commander_in_chat: false,
+      participant_summary_updated_at: now,
+      a2a: decision.marker,
+      ...(decision.pending ? { a2a_pending_reception: decision.pending } : {}),
+    });
+    await store.insert('', created, input.isCurrent);
+    touchedMessages = true;
+    return {
+      accepted: true,
+      conversationId: cid,
+      marker: decision.marker,
+      ...(decision.pending ? { pending: decision.pending } : {}),
+    } as const;
+  });
+  if (result.accepted && touchedMessages) {
+    const msgFile = conversationMessageFile(userId, cid, null);
+    await fsp.mkdir(path.dirname(msgFile), { recursive: true });
+    await fsp.writeFile(msgFile, '', { flag: 'a' });
+  }
+  return result;
+}
+
+export type OutboundA2AAdmission =
+  | { accepted: false }
+  | { accepted: true; marker: A2AConversationMarker };
+
+/** Reserve/create the sender row and marker in one canonical index write. */
+export async function admitOutboundA2AConversationAtomic(
+  userId: string,
+  input: {
+    conversationId: string;
+    peerUserId: string;
+    title: string;
+    decide: (current: A2AConversationMarker | null) => Promise<A2AConversationMarker | null>;
+  },
+): Promise<OutboundA2AAdmission> {
+  const cid = String(input.conversationId || '').trim();
+  if (!safeId(cid)) return { accepted: false };
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid);
+    const current = target?.conversation;
+    const marker = parseA2AConversationMarker(current?.a2a);
+    if (current && (!marker || marker.peer_user_id !== input.peerUserId
+      || marker.exchange_id !== cid)) return { accepted: false } as const;
+    // Admission callers need the terminal marker to classify a deletion race
+    // as contact loss. Returning it does not revive a tombstone or invoke the
+    // mutator; the caller can only cancel the pending send.
+    if (marker?.state === 'ended') return { accepted: true, marker } as const;
+    const nextMarker = await input.decide(marker);
+    if (!nextMarker || nextMarker.peer_user_id !== input.peerUserId
+      || nextMarker.exchange_id !== cid) return { accepted: false } as const;
+    const now = nowIso();
+    if (target) {
+      const wasDeleted = isDeletedConversation(target.conversation);
+      const next = _stampConversationSync(userId, {
+        ...target.conversation,
+        ...(wasDeleted ? { _cogseed_result_generation: `cogseed-generation-${genId12()}` } : {}),
+        title: wasDeleted ? normaliseConversationTitle(input.title) : target.conversation.title,
+        a2a: nextMarker,
+        updated_at: now,
+      });
+      delete next.deleted_at;
+      await store.persistTarget(target, next);
+      return { accepted: true, marker: nextMarker } as const;
+    }
+    const created: Conversation = _stampConversationSync(userId, {
+      conversation_id: cid,
+      _cogseed_result_generation: `cogseed-generation-${genId12()}`,
+      title: normaliseConversationTitle(input.title),
+      kind: 'normal',
+      agent_id: '',
+      skill_id: '',
+      session_id: buildConversationSessionId(cid),
+      created_at: now,
+      updated_at: now,
+      agent_ids: [],
+      commander_in_chat: false,
+      participant_summary_updated_at: now,
+      a2a: nextMarker,
+    });
+    await store.insert('', created);
+    return { accepted: true, marker: nextMarker } as const;
+  });
+}
+
+/** Persist one A2A fact bubble once while marker authority is held. */
+export async function appendA2AConversationMessageAtomic(
+  userId: string,
+  input: {
+    conversationId: string;
+    peerUserId: string;
+    /** Display name captured at send time (presentation only). */
+    peerName?: string;
+    messageId: string;
+    actorId: string;
+    text: string;
+    /** Route fact for this message; defaults to a cross ask for the peer. */
+    visibility?: 'local' | 'cross';
+  },
+): Promise<{ accepted: boolean; inserted: boolean }> {
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(input.conversationId);
+    const marker = parseA2AConversationMarker(target?.conversation.a2a);
+    if (!target || isDeletedConversation(target.conversation) || !marker
+      || marker.peer_user_id !== input.peerUserId || marker.state === 'ended') {
+      return { accepted: false, inserted: false };
+    }
+    const visibility = input.visibility === 'local' ? 'local' : 'cross';
+    const peerName = String(input.peerName || '').trim();
+    const result = await appendJsonlByIdIdempotent<GroupMessage>(
+      conversationMessageFile(userId, input.conversationId, target.conversation.project_id ?? null),
+      {
+        id: input.messageId,
+        ts: nowIso(),
+        from: input.actorId,
+        to: ['user'],
+        text: input.text,
+        // T1.3: keep the routing fact on the message itself. A local message
+        // never carries a peer recipient; a cross one keeps a stable account id
+        // plus the name shown at send time (never used for routing).
+        a2a: visibility === 'cross'
+          ? {
+            visibility,
+            recipient_user: input.peerUserId,
+            ...(peerName ? { recipient_name: peerName } : {}),
+          }
+          : { visibility },
+      },
+    );
+    return { accepted: true, inserted: result.inserted };
+  });
+}
+
+/** Mutate only valid A2A markers under the canonical per-user write queue.
+ * Unlike ordinary conversation APIs this includes tombstones, while retaining
+ * their deletion metadata and exposing no deleted record fields to callers. */
+export async function updateA2AMarkersIncludingDeletedAtomic(
+  userId: string,
+  mutate: (
+    marker: Readonly<A2AConversationMarker>,
+  ) => A2AConversationMarker | null | Promise<A2AConversationMarker | null>,
+  isCurrent?: () => boolean,
+): Promise<number> {
+  return _withConversationIndexStore(userId, async (store) => {
+    const targets = await store.listA2ATargets();
+    let updated = 0;
+    for (const target of targets) {
+      if (isCurrent && !isCurrent()) return updated;
+      const marker = parseA2AConversationMarker(target.conversation.a2a);
+      if (!marker) continue;
+      const nextMarker = await mutate(marker);
+      if (isCurrent && !isCurrent()) return updated;
+      if (!nextMarker) continue;
+      const next = _stampConversationSync(userId, {
+        ...target.conversation,
+        a2a: nextMarker,
+        updated_at: nowIso(),
+      });
+      if (nextMarker.state === 'ended') delete next.a2a_pending_reception;
+      await store.persistTarget(target, next, isCurrent);
+      updated += 1;
+    }
+    return updated;
+  });
+}
+
 /** Lazily fence legacy active conversations when the first v2 result is
  * retained. A deleted row is never revived by this migration. */
 export async function ensureCogSeedConversationDeliveryGeneration(
@@ -2159,6 +2535,9 @@ export interface CreateConversationOptions {
   /** Internal import-only escape hatch. Explicit ids do not normally revive a
    * user-deleted Conversation. */
   reviveDeleted?: boolean;
+  /** A2A-only revival rule, checked against the tombstone inside the same
+   * write transaction. Terminal or peer-mismatched exchanges stay deleted. */
+  reviveDeletedA2AForPeer?: string;
   /** Set by `features/auto_tasks.ts::_fireTask` so the conversation carries
    *  a back-link to the task that spawned it. Used by the renderer for the
    *  clock-icon prefix and the auto-tab expand-panel grouping. */
@@ -2187,6 +2566,7 @@ function normaliseConversationTitle(raw: unknown): string {
 export async function createConversation(userId: string, {
   kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', spaceId = '', conversationId = '', originAutoTaskId = '',
   channelPlatform = '', imported = false, needs_welcome = false, reviveDeleted = false,
+  reviveDeletedA2AForPeer = '',
 }: CreateConversationOptions = {}): Promise<Conversation> {
   const explicitCid = conversationId && safeId(conversationId) ? conversationId : '';
   const conversationGuard = explicitCid
@@ -2202,7 +2582,13 @@ export async function createConversation(userId: string, {
         return { conversation: existing.conversation, action: 'existing' as const };
       }
       if (existing) {
-        if (!reviveDeleted) throw new conversationGuard!.CogSeedConversationUnavailableError();
+        const deletedMarker = parseA2AConversationMarker(existing.conversation.a2a);
+        const mayReviveA2A = !!reviveDeletedA2AForPeer
+          && deletedMarker?.peer_user_id === reviveDeletedA2AForPeer
+          && deletedMarker.state !== 'ended';
+        if (!reviveDeleted && !mayReviveA2A) {
+          throw new conversationGuard!.CogSeedConversationUnavailableError();
+        }
         const current = existing.conversation;
         const previousProjectId = current.project_id;
         const now = nowIso();
@@ -2291,7 +2677,7 @@ export async function createConversation(userId: string, {
   return conversationGuard!.withCogSeedConversationCreation(
     userId,
     explicitCid,
-    { reviveDeleted },
+    { reviveDeleted: reviveDeleted || !!reviveDeletedA2AForPeer },
     create,
   );
 }
@@ -2302,10 +2688,24 @@ export async function updateConversation(
   updates: Partial<Conversation>,
   projectIdHint?: string | null,
 ): Promise<Conversation | null> {
+  return updateConversationAtomic(userId, cid, () => updates, projectIdHint);
+}
+
+/** Read, validate and update one conversation within the canonical write queue. */
+export async function updateConversationAtomic(
+  userId: string,
+  cid: string,
+  mutate: (current: Readonly<Conversation>) => Partial<Conversation> | null | Promise<Partial<Conversation> | null>,
+  projectIdHint?: string | null,
+  isCurrent?: () => boolean,
+): Promise<Conversation | null> {
   return _withConversationIndexStore(userId, async (store) => {
     const target = await store.findTarget(cid, projectIdHint);
     if (!target || isDeletedConversation(target.conversation)) return null;
     const previous = target.conversation;
+    const updates = await mutate(previous);
+    if (isCurrent && !isCurrent()) return null;
+    if (!updates) return null;
     const updatedAt = nowIso();
     const summaryWasFresh = _hasFreshParticipantSummary(previous);
     const next = _stampConversationSync(userId, {
@@ -2315,7 +2715,7 @@ export async function updateConversation(
       ...(summaryWasFresh ? { participant_summary_updated_at: updatedAt } : {}),
     });
     delete next.deleted_at;
-    await store.persistTarget(target, next);
+    await store.persistTarget(target, next, isCurrent);
     return next;
   });
 }
@@ -2609,6 +3009,7 @@ export async function getMessagesPage(
   limit = 10,
   before?: number | null,
   projectIdHint?: string | null,
+  options?: { strict?: boolean },
 ): Promise<{ history: MessageRecord[]; nextCursor: number | null }> {
   const file = conversationMessageReadFile(userId, cid, projectIdHint);
   const wanted = Math.max(1, Math.floor(Number(limit) || 1));
@@ -2616,7 +3017,7 @@ export async function getMessagesPage(
   let nextCursor: number | null = before ?? null;
   let history: MessageRecord[] = [];
   while (history.length < wanted) {
-    const page = await readJsonlPage<MessageRecord>(file, wanted - history.length, cursor);
+    const page = await readJsonlPage<MessageRecord>(file, wanted - history.length, cursor, options);
     const visible = page.records.filter((message) => !message.deleted_at);
     history = visible.concat(history);
     nextCursor = page.nextCursor;
@@ -2848,6 +3249,8 @@ export async function sweepStaleProcessing(activeUserId?: string): Promise<{ swe
         // live in-memory work always wins over disk maintenance.
         return;
       }
+      const { recoverAbandonedCommanderRuns } = await import('./group_chat/run_store');
+      await recoverAbandonedCommanderRuns(uid, cid, PROCESS_BOOT_CUTOFF_MS);
       await setStatus(uid, cid, 'idle');
       const interruptedActors = Array.isArray(raw.in_flight)
         ? raw.in_flight.filter((actorId: unknown): actorId is string => safeId(actorId))
@@ -2887,6 +3290,29 @@ export async function sweepStaleProcessing(activeUserId?: string): Promise<{ swe
   return { swept };
 }
 
+/** Recover the seed brief + current request from the first commander message.
+ *  Uses the shared seed parser, so readers (welcome panel, snapshot) cannot
+ *  drift from the writer (`materialize` / background extraction). */
+async function readSeedContext(
+  userId: string,
+  conversationId: string,
+  projectId: string | null | undefined,
+): Promise<{ summary: string; currentRequest: string }> {
+  try {
+    const layout = conversationLayout(userId, conversationId, projectId);
+    const content = await fsp.readFile(layout.messageFile, 'utf8');
+    const lines = content.trim().split('\n').filter(Boolean);
+    if (!lines.length) return { summary: '', currentRequest: '' };
+    const firstMsg = JSON.parse(lines[0]) as GroupMessage;
+    if (firstMsg.from === 'commander' && firstMsg.model_text) {
+      return parseSeedModelText(firstMsg.model_text);
+    }
+  } catch (err) {
+    log.warn('failed to read seed message for welcome', { conversationId, error: String(err) });
+  }
+  return { summary: '', currentRequest: '' };
+}
+
 /**
  * Insert a welcome message into an imported conversation and clear the
  * needs_welcome flag. Called when the user opens an imported conversation
@@ -2901,27 +3327,9 @@ export async function insertWelcomeMessage(
     if (!conv) return { ok: false, error: 'conversation_not_found' };
     if (!conv.needs_welcome) return { ok: false, error: 'already_welcomed' };
 
-    // Read existing messages to extract the session summary from the seed message
     const layout = conversationLayout(userId, conversationId, conv.project_id);
-    let sessionSummary: string | undefined;
-    try {
-      const fs = await import('node:fs/promises');
-      const content = await fs.readFile(layout.messageFile, 'utf8');
-      const lines = content.trim().split('\n').filter(Boolean);
-      // The seed message should be the first message from commander
-      if (lines.length > 0) {
-        const firstMsg = JSON.parse(lines[0]) as GroupMessage;
-        if (firstMsg.from === 'commander' && firstMsg.model_text) {
-          // Extract the summary from model_text (it follows the preamble)
-          const match = firstMsg.model_text.match(/请把它当作已发生的上下文.*?：\n\n(.+)/s);
-          if (match) {
-            sessionSummary = match[1].trim();
-          }
-        }
-      }
-    } catch (err) {
-      log.warn('failed to read seed message for welcome', { conversationId, error: String(err) });
-    }
+    const seed = await readSeedContext(userId, conversationId, conv.project_id);
+    const sessionSummary = seed.summary || undefined;
 
     // Generate welcome message
     const { generateWelcomeMessage } = await import('./session_import/welcome-message');
@@ -2930,6 +3338,7 @@ export async function insertWelcomeMessage(
       conversationId,
       spaceId: (conv as any)?.space_id ?? null,
       sessionSummary,
+      currentRequest: seed.currentRequest || undefined,
     });
 
     // Build and append the message
@@ -2962,11 +3371,16 @@ export async function insertWelcomeMessage(
 /**
  * Build the resume welcome panel for an imported conversation (v1.6 three-part
  * template): 复述 / 准备携带 / Action Plan + boundary. Does NOT append any
- * message and does NOT clear `needs_welcome` — the renderer shows this as a
- * pre-send panel and only sends the guide sentence when the user confirms.
- */export async function getWelcomePanel(
+ * message and does NOT clear `needs_welcome`.
+ *
+ * `options.currentRequest` lets the handoff path make a request stated in THIS
+ * turn the execution target without regenerating the whole welcome a second
+ * time. `modelText` is returned for that same single-generation handoff.
+ */
+export async function getWelcomePanel(
   userId: string,
   conversationId: string,
+  options: { currentRequest?: string } = {},
 ): Promise<{
   ok: boolean;
   error?: string;
@@ -2976,6 +3390,8 @@ export async function insertWelcomeMessage(
   plan?: string[];
   boundary?: string;
   summary?: string;
+  currentRequest?: string;
+  modelText?: string;
   text?: string;
   sessionSummary?: string;
 }> {
@@ -2983,23 +3399,11 @@ export async function insertWelcomeMessage(
     const conv = await getConversation(userId, conversationId);
     if (!conv) return { ok: false, error: 'conversation_not_found' };
 
-    // Recover the session summary from the seed message (same as insertWelcomeMessage).
-    const layout = conversationLayout(userId, conversationId, conv.project_id);
-    let sessionSummary: string | undefined;
-    try {
-      const fs = await import('node:fs/promises');
-      const content = await fs.readFile(layout.messageFile, 'utf8');
-      const lines = content.trim().split('\n').filter(Boolean);
-      if (lines.length > 0) {
-        const firstMsg = JSON.parse(lines[0]) as GroupMessage;
-        if (firstMsg.from === 'commander' && firstMsg.model_text) {
-          const match = firstMsg.model_text.match(/请把它当作已发生的上下文.*?：\n\n(.+)/s);
-          if (match) sessionSummary = match[1].trim();
-        }
-      }
-    } catch (err) {
-      log.warn('failed to read seed message for welcome panel', { conversationId, error: String(err) });
-    }
+    const seed = await readSeedContext(userId, conversationId, conv.project_id);
+    const sessionSummary = seed.summary || undefined;
+    const currentRequest = String(options.currentRequest ?? '').trim()
+      || seed.currentRequest
+      || undefined;
 
     const { generateWelcomeMessage } = await import('./session_import/welcome-message');
     const data = await generateWelcomeMessage({
@@ -3007,6 +3411,7 @@ export async function insertWelcomeMessage(
       conversationId,
       spaceId: (conv as any)?.space_id ?? null,
       sessionSummary,
+      currentRequest,
     });
 
     return {
@@ -3017,6 +3422,8 @@ export async function insertWelcomeMessage(
       plan: data.plan,
       boundary: data.boundary,
       summary: data.summary,
+      currentRequest: data.currentRequest,
+      modelText: data.modelText,
       text: data.text,
       sessionSummary,
     };
@@ -3048,11 +3455,15 @@ export async function markWelcomeSeen(
 /**
  * Template-based handoff reply for an imported conversation. When the user
  * sends a handoff/continue prompt ("继续这项工作", "现在做到哪里…"), we answer
- * directly from REAL CogSeed data — no CLI turn, no LLM — so the reply is
- * instant. The three-part template (项目介绍 / 工作空间能力 / Action Plan) is
- * assembled by `generateWelcomeMessage` from the TaskContinuationSnapshot,
- * confirmed assets and space template bundle. The commander reply is appended
- * to the conversation (visible to user + commander) and returned.
+ * from REAL CogSeed data. The user's CURRENT REQUEST (this turn's text when it
+ * states a task, otherwise the request imported from the source session) is
+ * the execution target; the imported summary / snapshot are material. The
+ * user message (when provided) and the commander reply are appended to the
+ * conversation.
+ *
+ * Imported conversations only: a normal conversation must never have its
+ * turn replaced by this template (the renderer would otherwise swallow the
+ * user's task when it happens to contain a handoff phrase).
  */
 export async function handoffWelcomeReply(
   userId: string,
@@ -3067,13 +3478,12 @@ export async function handoffWelcomeReply(
   try {
     const conv = await getConversation(userId, conversationId);
     if (!conv) return { ok: false, error: 'conversation_not_found' };
-
-    const panel = await getWelcomePanel(userId, conversationId);
-    if (!panel.ok || !panel.text) return { ok: false, error: panel.error || 'no welcome template' };
+    if (conv.imported !== true) return { ok: false, error: 'not_imported' };
 
     // First handoff: if the imported summary's goal is unusable boilerplate,
     // distill a real 1-2 line project brief via a local CLI (one-time cost,
-    // cached into the snapshot). Subsequent handoffs are instant.
+    // cached into the snapshot). Run it BEFORE building the panel so the
+    // restatement uses the distilled goal.
     try {
       const { ensureProjectBrief } = await import('./task_continuation');
       await ensureProjectBrief(userId, conversationId, conv.project_id ?? null);
@@ -3081,13 +3491,19 @@ export async function handoffWelcomeReply(
       log.warn('project brief ensure failed', { conversationId, error: String(err) });
     }
 
-    const { generateWelcomeMessage } = await import('./session_import/welcome-message');
-    const data = await generateWelcomeMessage({
-      userId,
-      conversationId,
-      spaceId: (conv as any)?.space_id ?? null,
-      sessionSummary: panel.sessionSummary,
+    // A request stated in this turn is the strongest target; a bare handoff
+    // phrase ("继续这项工作") is not a task, so fall back to the imported one.
+    // Pass it into the ONE panel generation below instead of generating the
+    // welcome twice (the old path ran the plan model twice per handoff).
+    const typedRequest = typeof userText === 'string' && isSubstantiveTaskText(userText)
+      ? normalizeTaskRequest(userText)
+      : '';
+    const panel = await getWelcomePanel(userId, conversationId, {
+      currentRequest: typedRequest || undefined,
     });
+    if (!panel.ok || !panel.text || !panel.modelText) {
+      return { ok: false, error: panel.error || 'no welcome template' };
+    }
 
     const layout = conversationLayout(userId, conversationId, conv.project_id ?? null);
 
@@ -3116,22 +3532,26 @@ export async function handoffWelcomeReply(
       pendingExtraction = false;
     }
 
+    const carry = panel.carry ?? [];
     const reply: GroupMessage = {
       id: genId12(),
       ts: nowIso(),
       from: 'commander',
       to: ['user'],
-      text: data.text,
-      model_text: data.modelText,
+      text: panel.text,
+      model_text: panel.modelText,
       ...(pendingExtraction ? { welcome_pending: true } : {}),
-      ...(data.carry.length ? { welcome_carry: JSON.stringify(data.carry) } : {}),
-      // Full resume bundle for「查看依据」右栏 + 「带着这些继续」Action Plan。
+      ...(carry.length ? { welcome_carry: JSON.stringify(carry) } : {}),
+      // Full resume bundle for「查看依据」右栏 + 「带着这些继续」Action Plan.
+      // `currentRequest` is the execution target the continue action must
+      // carry; an empty value means the renderer must ask, not invent one.
       welcome_resume: JSON.stringify({
-        restatement: data.restatement,
-        carry: data.carry,
-        boundary: data.boundary,
-        plan: data.plan,
-        summary: data.summary,
+        restatement: panel.restatement,
+        carry,
+        boundary: panel.boundary,
+        plan: panel.plan,
+        summary: panel.summary,
+        currentRequest: panel.currentRequest,
       }),
     };
 
@@ -3140,7 +3560,7 @@ export async function handoffWelcomeReply(
     await updateConversation(userId, conversationId, { needs_welcome: false }, conv.project_id ?? null);
 
     log.info(`handoff welcome reply cid=${conversationId}`);
-    return { ok: true, text: data.text, modelText: data.modelText };
+    return { ok: true, text: panel.text, modelText: panel.modelText };
   } catch (err) {
     log.error('handoff welcome reply failed', { conversationId, error: String(err) });
     return { ok: false, error: String(err) };
@@ -3148,10 +3568,17 @@ export async function handoffWelcomeReply(
 }
 
 /**
- * 打开导入会话时立即发送第一条（真实消息流）：系统替用户插入
- * 「继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。」
- * 只做这一步（无 LLM、无模板生成），保证用户刚进入会话就有内容、不空白。
- * commander 的三段式回复由 renderer 随后异步调 `handoffWelcomeReply` 动态生成。
+ * Validate (and thus "begin") the welcome flow for an imported conversation.
+ *
+ * It deliberately writes NOTHING. The previous implementation inserted a
+ * fixed "继续这项工作。先告诉我现在做到哪里…" sentence as a USER turn on open —
+ * the user never said it, and the model then treated it as the request. The
+ * visible first message is the commander welcome appended by
+ * `handoffWelcomeReply`, which also clears `needs_welcome`. That append +
+ * clear is the commit point: if it never happens (crash / navigation away),
+ * the flag stays set and the next open retries instead of leaving an empty
+ * conversation. Callers must therefore call `handoffWelcomeReply` after this
+ * returns ok.
  */
 export async function beginWelcome(
   userId: string,
@@ -3160,22 +3587,8 @@ export async function beginWelcome(
   try {
     const conv = await getConversation(userId, conversationId);
     if (!conv) return { ok: false, error: 'conversation_not_found' };
+    if (conv.imported !== true) return { ok: false, error: 'not_imported' };
     if (conv.needs_welcome !== true) return { ok: false, error: 'already_welcomed' };
-    const { WELCOME_GUIDE_SENTENCE } = await import('./session_import/welcome-message');
-    const layout = conversationLayout(userId, conversationId, conv.project_id ?? null);
-
-    const userMsg: GroupMessage = {
-      id: genId12(),
-      ts: nowIso(),
-      from: 'user',
-      to: ['commander'],
-      text: WELCOME_GUIDE_SENTENCE,
-    };
-    await appendJsonlAtomic(layout.messageFile, userMsg);
-    await appendVisible(userId, conversationId, userMsg, ['user', 'commander']);
-    await updateConversation(userId, conversationId, { needs_welcome: false }, conv.project_id ?? null);
-
-    log.info(`begin welcome cid=${conversationId} (user guide inserted)`);
     return { ok: true };
   } catch (err) {
     log.error('begin welcome failed', { conversationId, error: String(err) });

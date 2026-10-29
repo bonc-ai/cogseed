@@ -1,0 +1,28 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.craft.checks
+  name: ui-craft-checks
+  version: 1.0.0
+  description: UIDesigner's comprehensive HTML quality gate for formal review, QA,
+    launch handoff, exact fidelity, or high-risk complex UI across accessibility,
+    states, forms, typography, responsive behavior, anti-template quality, and runtime;
+    ordinary single-page work uses the fast validator.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

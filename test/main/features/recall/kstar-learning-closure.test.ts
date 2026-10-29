@@ -1,10 +1,12 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
 // 标题闸门（设计 3.2）后晋升链对不合规 summary 走 LLM 起标题；本文件的候选
-// 由 KStar 抽取/即时直投内生生成（summary＝模板拼接或正文首句），单测无模型，
+// 测试通过真实夜间候选形成；部分fixture不设置summary，单测无模型，
 // mock 出确定性合规标题（与 asset-title-suggestion.test.ts 同一边界口径）。
 vi.mock('../../../../src/main/features/recall/asset-title-suggestion', () => ({
   suggestAbilityAssetTitle: async () => ({ title: '模型重起的样本标题' }),
@@ -31,7 +33,7 @@ describe('KSTAR learning evidence', () => {
   it('keeps injection receipts separate from validation and maturity changes', async () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const receipts = await import('../../../../src/main/features/recall/injection-receipt');
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Use a verified review checklist.',
       suggestedType: 'rule',
       suggestedScope: 'review',
@@ -52,7 +54,7 @@ describe('KSTAR learning evidence', () => {
   it('writes independent validation records and updates candidate counters', async () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const validation = await import('../../../../src/main/features/recall/validation-service');
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Keep validation evidence independent from injection.',
       suggestedType: 'rule',
       suggestedScope: 'review',
@@ -79,19 +81,19 @@ describe('KSTAR learning evidence', () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const validation = await import('../../../../src/main/features/recall/validation-service');
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Recover a partially applied validation.',
       suggestedType: 'rule', suggestedScope: 'review',
       sourceRefs: [{ kind: 'execution', id: 'episode-replay' }],
     });
 
     await validation.recordValidation('user-a', {
-      assetId: 'asset-created-later', candidateId: candidate.id, taskRunId: 'run-replay', outcome: 'success',
+      assetId: 'asset-created-later', candidateId: candidate.id, assetVersion: '1', taskRunId: 'run-replay', outcome: 'success',
       evidenceRefs: [{ kind: 'execution_evaluation', id: 'evaluation-replay' }],
     });
     await expect(candidates.readRecallCandidate('user-a', candidate.id)).resolves.toMatchObject({ validationCount: 1 });
 
-    await assets.createSystemAbilityAsset('user-a', {
+    await seedStoredAbilityAsset('user-a', {
       schemaVersion: 1, ownerId: 'user-a', id: 'asset-created-later', candidateId: candidate.id,
       title: 'Recoverable validation asset', statement: candidate.judgment, type: 'rule', scope: 'review',
       evidenceRefs: [{ kind: 'execution', id: 'episode-replay' }], reviewDecisionId: 'legacy-replay',
@@ -119,7 +121,7 @@ describe('KSTAR learning evidence', () => {
   it('stops automatic promotion after three consecutive validation failures', async () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const validation = await import('../../../../src/main/features/recall/validation-service');
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Pause a candidate after repeated independent failures.',
       suggestedType: 'rule',
       suggestedScope: 'review',
@@ -131,19 +133,24 @@ describe('KSTAR learning evidence', () => {
         evidenceRefs: [{ kind: 'execution_evaluation', id: `evaluation-${taskRunId}` }],
       });
     }
-    await expect(candidates.autoApplyRecallCandidate('user-a', candidate.id, { semanticDedup: false })).rejects.toMatchObject({ code: 'promotion_paused' });
+    const result = await candidates.autoApplyRecallCandidate('user-a', candidate.id, { semanticDedup: false });
+    expect(result.candidate).toMatchObject({ consecutiveFailures: 3 });
+    expect(result.candidate.status).not.toBe('confirmed');
+    expect(result.asset).toBeUndefined();
+    const policy = await import('../../../../src/main/features/recall/promotion-policy');
+    expect(policy.evaluatePromotionPolicy(result.candidate)).toMatchObject({ action: 'pause' });
   });
 
   it('counts independent asset outcomes, advances a seed after two successes, and pauses after repeated failures', async () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const validation = await import('../../../../src/main/features/recall/validation-service');
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Repeat the independently validated review method.',
       suggestedType: 'rule', suggestedScope: 'review',
       sourceRefs: [{ kind: 'execution', id: 'episode-repeatability' }],
     });
-    const asset = await assets.createSystemAbilityAsset('user-a', {
+    const asset = await seedStoredAbilityAsset('user-a', {
       schemaVersion: 1, ownerId: 'user-a', id: 'asset-repeatability', candidateId: candidate.id,
       title: 'Repeatable review method', statement: candidate.judgment, type: 'rule', scope: 'review',
       evidenceRefs: [{ kind: 'execution', id: 'episode-repeatability' }], reviewDecisionId: 'legacy-untracked',

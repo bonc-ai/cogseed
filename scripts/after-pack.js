@@ -46,6 +46,10 @@ exports.default = async function(context) {
     { projectRoot: path.resolve(__dirname, '..') },
   );
   verifySherpaOnnxRoot(path.join(resourcesPath, 'sherpa-onnx'));
+  const tmeetArch = ({ 1: 'x64', 3: 'arm64', 4: 'universal' })[context.arch] || context.arch || process.arch;
+  for (const arch of tmeetArch === 'universal' ? ['x64', 'arm64'] : [tmeetArch]) {
+    require('./fetch-tmeet.cjs').verify(path.join(resourcesPath, 'tencent-meeting'), `${platform}-${arch}`);
+  }
 
   if (platform === 'win32') {
     verifySherpaOnnxWindowsNativeRoot(path.join(

@@ -64,23 +64,85 @@ export function isClosingIntent(text: string | undefined): boolean {
  *  politeness, pure confirmation, status query, punctuation/emoji)? Only
  *  these are filtered without a model call — everything else goes to the
  *  model judgement so boundary task-shaped requests are never missed.
- *  Zero KStar writes either way (a trivial message simply never routes). */
+ *  The predicate itself writes nothing; the caller records the decision (and
+ *  only once the conversation already has KStar state). */
 export function isObviouslyTrivial(text: string | undefined): boolean {
   const trimmed = String(text || '').replace(/\s+/g, ' ').trim();
   if (!trimmed) return true;
-  return TRIVIAL_PATTERNS.some((pattern) => pattern.test(trimmed));
+  if (!TRIVIAL_PATTERNS.some((pattern) => pattern.test(trimmed))) return false;
+  // The status-query pattern is unanchored, so "进度" / "还差" / "多久" match
+  // ANYWHERE — including inside a real request ("整理一下这个季度的进度报告",
+  // "分析一下竞品的进度报告怎么写"). A message carrying a goal verb or a
+  // deliverable noun is never OBVIOUSLY trivial: one extra judge round trip
+  // is cheap, silently dropping the task's governance is not.
+  return !TASK_SIGNALS.some((pattern) => pattern.test(trimmed));
+}
+
+/** Closed set of yes/no acknowledgements. Trailing particles (了/吧/呀) and
+ *  punctuation are stripped before lookup, so "不用了" and "都要吧" match. */
+const ANSWER_CONFIRMATIONS = new Set([
+  '是', '是的', '是了', '对', '对的', '好', '好的', '行', '行的', '可以', '没问题', '没错',
+  '要', '需要', '不用', '不要', '不需要', '都要', '都可以', '都行', '全要', '全都要',
+  '同意', '赞成', '支持',
+  'ok', 'okay', '嗯',
+]);
+
+/** Pure ordinal/number selection: "1", "1234", "第一"、"第三个"、
+ *  "第一个和第三个"、"前两个"、"1234都需要"、"第一个就行".
+ *  Grammar-only on purpose: any real word ("把这个整成 PDF") breaks it. */
+const ANSWER_SELECTION =
+  /^(前|后|第)?[0-9一二三四五六七八九十两]+(个)?([和及与、,，+\/](前|后|第)?[0-9一二三四五六七八九十两]+(个)?)*([都全](要|需要)?)?(就行|可以|吧|了)?$/;
+
+/** Selection by label: "方案一"、"选项2". Narrow on purpose — the label must
+ *  be the whole message, so "方案一有问题" is not matched. */
+const ANSWER_SELECTION_BY_LABEL = /^(方案|选项)[0-9一二三四五六七八九十两]+$/;
+
+/**
+ * Answer-like confirmations: short selections ("1"、"第一个和第三个") and
+ * yes/no acknowledgements ("是的"、"需要"、"不用") that answer a question the
+ * assistant just asked.
+ *
+ * Why this is its own gate rather than part of TRIVIAL_PATTERNS: these are
+ * not small talk, they are substantive answers inside an ongoing
+ * interaction. But they are equally not tasks, and they carry no signal that
+ * could start or switch one — so routing them through the model costs a full
+ * round trip (660–820ms measured) to reach the conclusion the message shape
+ * already implies: no task write.
+ *
+ * Measured on 242 real user messages: the two earlier gates cover 21 of them
+ * (closing intent 2, obviously trivial 19), this gate newly covers 16 (6.6%),
+ * and 205 (84.7%) still reach the model. The two `TRIVIAL_PATTERNS` entries
+ * above match the *bare* forms ("是"、"对"、"好的"), so the particle-bearing
+ * forms users actually type ("是的"、"不用了"、"都要吧") fall through — that gap
+ * is what this gate closes. All 16 matches on the corpus were real
+ * confirmations; none was a task.
+ *
+ * SAFETY: this gate only ever SUPPRESSES work — the caller writes no KStar
+ * task/requirement state, so an open task stays open and still gets its
+ * projection injected (that path reads the lifecycle independently). A wrongly
+ * matched message is therefore answered normally, it is just not routed. That
+ * is the cheap failure direction.
+ */
+export function isAnswerLikeConfirmation(text: string | undefined): boolean {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return false;
+  const trimmed = raw.replace(/[。！!？?,.，、;；:：~～]+$/u, '').replace(/[了吧呀呢]$/u, '').trim();
+  if (!trimmed || trimmed.length > 12) return false;
+  if (ANSWER_CONFIRMATIONS.has(trimmed.toLowerCase())) return true;
+  return ANSWER_SELECTION.test(trimmed) || ANSWER_SELECTION_BY_LABEL.test(trimmed);
 }
 
 /** Detect whether a user message is a task-shaped request. Kept for
  *  compatibility: the host routing line now uses isObviouslyTrivial +
  *  the model judgement; this keyword-based detector remains as a fast
- *  pre-check helper (and for tests / non-model contexts). */
+ *  pre-check helper (and for tests / non-model contexts).
+ *
+ *  It shares `isObviouslyTrivial` rather than re-testing TRIVIAL_PATTERNS:
+ *  the two must agree on what counts as trivia, or the hint line would call a
+ *  message task-shaped while the gate filtered it as a greeting. */
 export function detectTaskIntent(text: string | undefined): TaskIntentResult {
   const trimmed = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!trimmed) return { isTask: false };
-  if (TRIVIAL_PATTERNS.some((pattern) => pattern.test(trimmed))) {
-    return { isTask: false };
-  }
+  if (isObviouslyTrivial(trimmed)) return { isTask: false };
   const signal = TASK_SIGNALS.find((pattern) => pattern.test(trimmed));
   if (!signal) return { isTask: false };
   if (trimmed.length < MIN_TASK_TEXT) return { isTask: false };

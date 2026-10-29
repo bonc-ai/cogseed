@@ -9,11 +9,14 @@
  */
 
 import { detectOne } from '../local_agents/registry.js';
-import { getP3394OutboundHub } from './app-wiring';
+import { gatewayDispatchBlock } from './gateway-dispatch-gate.js';
+import { getP3394BridgeHandle, getP3394OutboundHub } from './app-wiring';
 import { buildP3394OutboundEnvelope } from '../cogseed_backend/p3394-host-adapter';
 import type { P3394OutboundReference } from '../cogseed_backend/p3394-host-adapter';
 import { p3394ExternalGatewayIdFor, startExternalGateway } from './external-gateways';
 import { createLogger } from '../../logger';
+import { t } from '../../i18n';
+import type { P3394BackgroundAccepted } from './background-jobs';
 
 const log = createLogger('p3394-bridge:gateway-turn');
 
@@ -45,6 +48,10 @@ export interface P3394GatewayTurnResult {
   failureKind?: string;
   failureCode?: string;
   infrastructureFailure?: boolean;
+  /** Set when the peer accepted the task as a background job instead of holding
+   *  the turn open. `text` then carries the acceptance notice; the result is
+   *  delivered later through the hub's phase-2 channel. */
+  background?: P3394BackgroundAccepted;
   /** Settled-reply metrics from the reply envelope's CLI-reported usage
    *  (payload.metadata.usage — claude gateway runtime) plus local timing.
    *  Absent when the gateway/cli reported no usage (older gateways, CLIs
@@ -111,9 +118,20 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   if (!nodeId) {
     return { text: '', error: 'p3394_unsupported_cli: ' + input.cli, failureKind: 'runtime', failureCode: 'p3394_unsupported_cli' };
   }
+  // The gateway spawns the CLI itself, so the runner's dispatch gate never runs
+  // on this path — a retired/disabled agent would otherwise stay reachable.
+  const blocked = await gatewayDispatchBlock(input.uid, input.agent.agent_id || nodeId);
+  if (blocked) return { text: '', ...blocked };
   const hub = getP3394OutboundHub();
   if (!hub) {
-    return { text: '', error: 'p3394_bridge_unavailable', failureKind: 'runtime', failureCode: 'p3394_bridge_unavailable' };
+    return {
+      text: '',
+      error: 'p3394_bridge_unavailable',
+      failureKind: 'runtime',
+      failureCode: 'p3394_bridge_unavailable',
+      // The bridge is not wired at all — nothing this turn can fix.
+      infrastructureFailure: true,
+    };
   }
   const prompt = String(input.prompt || '').trim();
   if (!prompt) {
@@ -126,7 +144,9 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       return {
         text: '',
         error: '节点未接入：' + nodeId + ' 不在线且不是 CogSeed 可自动托管的 CLI。请让对方启动网关（p3394-gateway）后重试。',
-        failureKind: 'runtime',
+        // Needs the peer or the user to act and nothing was executed: report a
+        // pre-execution config failure instead of a runtime crash.
+        failureKind: 'config',
         failureCode: 'p3394_node_offline',
       };
     }
@@ -139,7 +159,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       return {
         text: '',
         error: '节点未接入：未在本机检测到 ' + input.cli + ' 命令。请先安装/配置该 CLI 后再试。',
-        failureKind: 'runtime',
+        failureKind: 'config',
         failureCode: 'p3394_cli_not_found',
       };
     }
@@ -147,12 +167,13 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       cli: input.cli,
       binPath: detected.path,
       ...(input.agent.name ? { alias: input.agent.name } : {}),
+      ...(input.workingDir ? { workspaceRoot: input.workingDir } : {}),
     });
     if (started.ok === false) {
       return {
         text: '',
         error: '节点未接入：' + started.error + '。请在 AI 团队 → 新建智能体 → 外接 里重新接入该智能体。',
-        failureKind: 'runtime',
+        failureKind: 'config',
         failureCode: 'p3394_gateway_start_failed',
       };
     }
@@ -195,7 +216,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   // hub 同一时刻只允许该会话一条在途信封。若上一条 turn 还没收到回复，本条
   // sendAndWait 会抛 p3394_session_conflict —— 不能立刻判死（用户看到的就是
   // "第二条消息不回复/失败"），应等待上一轮排空后再发。等待上限独立封顶
-  // （hub 回复超时是 5 分钟，排队不该让用户空等这么久），且与用户的 abort
+  // （hub 回复超时是 12 分钟，排队不该让用户空等这么久），且与用户的 abort
   // 联动：取消立即返回，不拖满等待窗口。
   const SESSION_CONFLICT_WAIT_CAP_MS = 60_000;
   // 回合计时/用量：startedAt 在首轮发送前打点；firstTokenAt 以首个 delta 帧
@@ -224,7 +245,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       ...(model ? { model } : {}),
     };
   };
-  const send = async (): Promise<{ text: string; replyEnvelope?: unknown }> => {
+  const send = async (): Promise<{ text: string; replyEnvelope?: unknown; background?: P3394BackgroundAccepted }> => {
     let waited = false;
     for (;;) {
       if (input.signal?.aborted) {
@@ -233,6 +254,10 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
         throw abortError;
       }
       try {
+        // The background phase-2 sink must land in this turn's conversation,
+        // not a second P3394-derived one. Bind before sending; the hub also
+        // persists the mapping with the job so replay survives a restart.
+        try { getP3394BridgeHandle()?.bindSessionCid?.(envelope.session_id, input.cid); } catch { /* best-effort */ }
         const reply = await hub.sendAndWait(nodeId, envelope, (event) => {
           if (input.signal?.aborted) return;
           // progress 帧（openclaw 的 [skills]/[tools] 过程日志、claude 的
@@ -252,7 +277,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
           streamed = true;
           input.onProcess?.({ type: 'delta', text: event.text });
         });
-        return { text: reply.text.trim(), replyEnvelope: reply.envelope };
+        return { text: reply.text.trim(), replyEnvelope: reply.envelope, ...(reply.background ? { background: reply.background } : {}) };
       } catch (firstError) {
         const message = firstError instanceof Error ? firstError.message : String(firstError);
         if (message === 'p3394_session_conflict' && !waited) {
@@ -274,7 +299,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     }
   };
   try {
-    let result: { text: string; replyEnvelope?: unknown };
+    let result: { text: string; replyEnvelope?: unknown; background?: P3394BackgroundAccepted };
     try {
       result = await send();
     } catch (firstError) {
@@ -285,6 +310,17 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       if (recoveryError) return recoveryError;
       envelope = buildEnvelope(); // 网关重启后重发：换新信封，避免旧幂等键
       result = await send();
+    }
+    // 决策 2 两段式：第一段 accepted 不是任务结果，回合以「已转后台」收尾；
+    // 第二段由 hub 的独立通道回填到同一会话，不占用本条 waiter 的 12 分钟。
+    if (result.background) {
+      const note = result.text || t('p3394.background.accepted', { job_id: result.background.job_id });
+      input.onProcess?.({ type: 'final', text: note });
+      return {
+        text: note,
+        background: result.background,
+        metrics: extractReplyMetrics(Date.now(), result.replyEnvelope),
+      };
     }
     // 网关错误信不是成果：先转失败，再谈 delta/final 与用量。
     const gatewayError = gatewayErrorDetail(result.text);

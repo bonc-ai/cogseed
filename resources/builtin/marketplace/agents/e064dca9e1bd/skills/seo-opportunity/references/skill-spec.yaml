@@ -1,0 +1,11 @@
+name: seo-opportunity
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'Turn GSC/Bing query data, crawl facts and GEO probe results into a one-shot
+  keyword opportunity pool (quick wins, CTR gaps, content gaps, GEO gaps, cannibalization),
+  with priority, evidence and next action; For: ''find SEO growth opportunities'',
+  ''rank keyword opportunities''; Trigg'
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

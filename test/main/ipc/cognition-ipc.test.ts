@@ -7,6 +7,8 @@ type InvokeFn = (event: unknown, req: { channel: string; payload?: unknown }) =>
 
 let invokeHandler: InvokeFn | null = null;
 const TEST_UID = 'uCognitionIpc';
+const dialogMock = vi.hoisted(() => vi.fn(async () => ({ canceled: true, filePaths: [] as string[] })));
+const saveDialogMock = vi.hoisted(() => vi.fn(async () => ({ canceled: true, filePath: undefined as string | undefined })));
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -17,7 +19,7 @@ vi.mock('electron', () => ({
   },
   shell: { openExternal: vi.fn(async () => undefined), showItemInFolder: vi.fn() },
   BrowserWindow: { getFocusedWindow: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
-  dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
+  dialog: { showOpenDialog: dialogMock, showSaveDialog: saveDialogMock },
   app: { getPath: vi.fn(() => os.tmpdir()), isPackaged: false },
 }));
 
@@ -41,7 +43,6 @@ vi.mock('../../../src/main/features/cognition', () => ({
     skillId,
     version: '2',
     baselineStatus: 'available',
-    pendingCandidateCount: 1,
     recentReceipts: [],
     versions: [{ version: '2', canRollback: true, rollbackScope: 'full_tree' }],
   })),
@@ -64,24 +65,11 @@ vi.mock('../../../src/main/features/cognition', () => ({
   })),
 }));
 
-vi.mock('../../../src/main/features/cognition/capture-draft', () => ({
-  generateCognitionDraft: vi.fn(async (_uid: string, request: { conversationId: string; messageId: string }) => ({
-    status: 'ready',
-    draft: {
-      title: '模型草稿',
-      summary: '可复用方法',
-      evidenceSummary: '本次证据',
-      sourceLabel: '当前会话',
-      conversationId: request.conversationId,
-      messageId: request.messageId,
-    },
-    context: { messageCount: 3, characterCount: 100 },
-  })),
-}));
-
 beforeEach(async () => {
   // Keep the isolated workspace assigned by test/setup-env.ts.
   invokeHandler = null;
+  dialogMock.mockReset().mockResolvedValue({ canceled: true, filePaths: [] });
+  saveDialogMock.mockReset().mockResolvedValue({ canceled: true, filePath: undefined });
   vi.resetModules();
   vi.clearAllMocks();
   vi.doMock('../../../src/main/ipc/local_agents', () => ({ invokeHandlers: {} }));
@@ -101,15 +89,11 @@ function call(channel: string, payload: unknown = {}): Promise<InvokeResult> {
 }
 
 describe('ipc cognition channels', () => {
-  it('只接受会话和消息 ID，并把生成请求交给主进程 feature', async () => {
-    expect((await call('cognition.capture.draft', { conversationId: 'conv_1' })).ok).toBe(false);
-    const result = await call('cognition.capture.draft', {
-      conversationId: 'conv_1',
-      messageId: 'msg_2',
-      text: 'renderer 不应提交对话正文',
-    });
-    expect(result.ok).toBe(true);
-    expect(result.draft).toEqual(expect.objectContaining({ conversationId: 'conv_1', messageId: 'msg_2' }));
+  it('手动认知草稿与保存通道退休，完整参数也无法重新触发形成', async () => {
+    for (const channel of ['cognition.capture.draft', 'cognition.capture.save', 'recall.candidates.save', 'cognition.ontology.import.submit']) {
+      const result = await call(channel, { conversationId: 'conv_1', messageId: 'msg_2', text: '旧手动草稿请求', judgment: '可复用方法', summary: '方法', suggestedType: 'personal', suggestedScope: 'general' });
+      expect(result.ok).toBe(false);
+    }
   });
 
   it('能力资产列表返回当前用户数据', async () => {
@@ -130,13 +114,46 @@ describe('ipc cognition channels', () => {
     }
   });
 
-  it('分页摘要校验边界并保留资产列表 channel', async () => {
-    const result = await call('cognition.assets.page', { page: '2', pageSize: '20' });
-    expect(result.ok).toBe(true);
-    expect(result.page).toEqual(expect.objectContaining({ page: 2, pageSize: 20 }));
-    expect((await call('cognition.assets.page', { page: 0, pageSize: 20 })).ok).toBe(false);
-    expect((await call('cognition.assets.page', { page: 1, pageSize: 101 })).ok).toBe(false);
+  it('保留资产列表 channel；旧版分页读入口已随死路由下线', async () => {
+    expect((await call('cognition.assets.page', { page: '2', pageSize: '20' })).ok).toBe(false);
     expect((await call('cognition.assets.list')).ok).toBe(true);
+  });
+
+  it('本体历史归档接受零边界并拒绝负数、小数与超限', async () => {
+    expect(await call('cognition.ontology.history.archive', { keepHistory: 0, keepReceipts: 0 }))
+      .toMatchObject({ ok: true, archivedHistory: 0, archivedReceipts: 0 });
+    for (const payload of [
+      { keepHistory: -1 }, { keepHistory: 1.5 }, { keepHistory: 100001 },
+      { keepReceipts: -1 }, { keepReceipts: 1.5 }, { keepReceipts: 20001 },
+    ]) {
+      const result = await call('cognition.ontology.history.archive', payload);
+      expect(result.ok, JSON.stringify(payload)).toBe(false);
+      expect(result.code).toBe('invalid_input');
+    }
+  });
+
+  it('本体错误详情只转发固定计数与已知 remedy，不带路径或消息', async () => {
+    const { ontologyErrorDetails } = await import('../../../src/main/ipc/cognition');
+    const details = {
+      limit: 100000, current: 3, receipts: 2, history: 4, entries: 1, submitted: 0,
+      remedy: 'archive_history', path: '/private/store.json', message: 'secret', recordIds: ['rec-1'],
+    };
+    expect(ontologyErrorDetails('recall.assets.list', { details })).toBeUndefined();
+    expect(ontologyErrorDetails('cognition.ontology.history.archive', { details })).toEqual({
+      limit: 100000, current: 3, receipts: 2, history: 4, entries: 1, submitted: 0, remedy: 'archive_history',
+    });
+    expect(ontologyErrorDetails('cognition.ontology.history.archive', { details: {
+      current: -1, limit: 1.5, remedy: 'delete_everything', path: '/x',
+    } })).toBeUndefined();
+  });
+
+  it('导出对话框标题走当前界面语言的本地化表', async () => {
+    const i18n = await import('../../../src/main/i18n');
+    const expected = i18n.getRendererTables()[i18n.getCurrentUiLang()]['ontologyWorkspace.exportDialogTitle'];
+    expect(typeof expected).toBe('string');
+    expect(await call('cognition.ontology.export', {})).toMatchObject({ ok: true, canceled: true });
+    expect(saveDialogMock).toHaveBeenCalledTimes(1);
+    expect(saveDialogMock.mock.calls[0][0]).toMatchObject({ title: expected });
   });
 
   it('旧版 CognitionAsset 写通道已全部下线', async () => {

@@ -46,6 +46,7 @@ import {
   readGroups,
 } from './personal_ontology_template_files';
 import { listGroups } from './personal_ontology_groups';
+import { loadPoDocSync } from './po/store';
 import {
   findFieldIdentityAnywhere,
   findRetiredFieldIdentityAnywhere,
@@ -289,7 +290,7 @@ export function resolveRoleTemplateId(raw: string): string | undefined {
   return rows.find((t) => norm(t.name) === target)?.template_id;
 }
 
-/** 场景目录（纯 UX 概念，不落盘）。归属未裁决，本轮先统一从 contract 出。 */
+/** 场景目录（纯 UX 概念，不落盘）。统一从 contract 出。 */
 export interface RoleScenarioSummary {
   scenarioId: string;
   name: string;
@@ -368,21 +369,31 @@ export async function getRoleProfileForRuntime(
     for (const tid of templateIds) {
       if (!tid || seen.has(tid)) continue;
       seen.add(tid);
-      const text = readTemplateFileText(uid, tid);
-      if (!text) continue; // 未安装 / 文件缺失 → 静默跳过
-      const content = parseTemplateContent(text);
+      const group = loadPoDocSync(uid).groups.find((item) => item.kind === 'template' && item.templateId === tid);
+      if (!group) continue; // 未安装 / 文件缺失 → 静默跳过
       const tplName = getRoleTemplate(tid)?.name || tid;
       const lines: string[] = [];
-      for (const sec of content.sections) {
-        for (const [fieldName, values] of Object.entries(sec.fields)) {
-          if (!values.length) continue; // 空坑不注入
-          // 只取值本身：来源和关联标记是 PO 内部账务，不进上下文。
-          const visibleValues = values.flatMap((value) => {
-            if (!value.recallAssetId) return [value.value];
-            const current = projectedAssets.get(value.recallAssetId);
+      // 按分节首次出现顺序收集字段，再按字段名合并，保持原渲染文本的
+      // “同名后写覆盖”语义。受限值在进入 prompt 前直接丢弃；资产投影
+      // 仍走 task-time eligibility，不能靠 live statement 绕过受限标记。
+      const sections = new Map<string, Map<string, string[]>>();
+      for (const field of group.fields) {
+        const section = field.section || '';
+        if (!sections.has(section)) sections.set(section, new Map());
+        const visibleValues = group.values
+          .filter((value) => value.fieldId === field.id)
+          .flatMap((value) => {
+            if (value.restricted) return [];
+            if (!value.assetId) return [value.text];
+            const current = projectedAssets.get(value.assetId);
             return current ? [current] : [];
           });
-          if (visibleValues.length) lines.push(`- ${sec.title} · ${fieldName}: ${visibleValues.join('、')}`);
+        sections.get(section)!.set(field.name, visibleValues);
+      }
+      for (const [section, fields] of sections) {
+        for (const [fieldName, visibleValues] of fields) {
+          if (!visibleValues.length) continue; // 空坑不注入
+          lines.push(`- ${section} · ${fieldName}: ${visibleValues.join('、')}`);
         }
       }
       if (lines.length) allLines.push(`### 角色「${tplName}」`, ...lines);
@@ -735,6 +746,7 @@ export async function appendRoleTemplateFieldValue(
   source: string,
   project?: string,
   recallAssetId?: string,
+  verifyAsset?: () => Promise<boolean>,
 ): Promise<AppendFieldValueResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const decoded = decodeOntologyRef(fieldRef);
@@ -760,6 +772,7 @@ export async function appendRoleTemplateFieldValue(
     source,
     project,
     recallAssetId,
+    verifyAsset,
   );
   return res.ok
     ? { ok: true, templateId: decoded.t, section: slot.section, fieldName: slot.fieldName }

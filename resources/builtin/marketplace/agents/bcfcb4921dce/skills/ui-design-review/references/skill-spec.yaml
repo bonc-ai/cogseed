@@ -1,0 +1,9 @@
+name: ui-design-review
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Review HTML pages, screenshots, or implemented UI with prioritized fixable
+  findings, evidence, fixes, and validation guidance.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

@@ -1,14 +1,12 @@
 /**
- * 后台巡检（specs/008 US-405）。
+ * 后台巡检：发现资产重复、过时与冲突，生成待处理建议。
  *
- * **只报不改**——这是本 Story 的立身之本：巡检定期扫一遍资产库，发现重复 /
+ * **只报不改**：巡检定期扫一遍资产库，发现重复 /
  * 过时 / 冲突，**只产出待办与建议（Change Candidate）**，不修改任何资产：不改
  * 状态、不改正文、不合并、不打标。用户看到的是一条条可以自己去处理的待办。
  *
- * 三条口径：
- *   ① 「重复 / 过时」的**呈现分组待 specs/010 落地**：这里只给发现类别
- *      （duplicate / outdated / conflict，取自 US-405 原文），不臆造一套分组名，
- *      也不建平行机制——呈现仍走既有 inbox 通道。
+ * 结果约束：
+ *   ① 发现类别为 duplicate / outdated / conflict，呈现走既有 inbox 通道。
  *   ② **跨轮不重复报**：发现带稳定去重键（同一条问题在两轮里是同一个 key），
  *      待办 id 由 key 派生；用户处置过（"不管它"）的 key 持久记在设置里，
  *      以后各轮不再报。
@@ -23,30 +21,38 @@ import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { recallJsonRecordPath } from './paths';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
+import { clearedReportRow, type ReportContentOwnership } from './report-content-lifecycle';
 import type { RecallJsonRecord } from './types';
+import { loadCaptureExistingAssetPool } from './capture-existing-assets';
 import { listAbilityAssets } from './asset-service';
+import { fileEditLock } from '../../util/locks';
+import { withCognitionTransition } from '../cognition_bridge';
 import { nearDuplicateScore } from './cleanup-report-service';
 import type { RecallAbilityAssetRecord } from './candidate-service';
-import { scheduleBootBackground, type ScheduledBootBackgroundTask } from '../../util/boot_init';
-import { logErrorRef, maskId } from '../../util/log-redact';
+import { maskId } from '../../util/log-redact';
 
 const log = createLogger('recall.asset-inspection');
 
 const SETTINGS_COLLECTION = 'inspection-settings';
 const SETTINGS_ID = 'settings';
 const RUNS_COLLECTION = 'inspection-runs';
+const PROGRESS_COLLECTION = 'inspection-progress';
+const PROGRESS_ID = 'coverage';
 
-export type InspectionTrigger = 'scheduled' | 'manual';
-/** 发现类别取自 US-405 原文（重复 / 过时 / 冲突）；呈现分组待 specs/010 落地。 */
+export type InspectionTrigger = 'scheduled' | 'manual' | 'nightly';
+/** 巡检发现类别：重复、过时、冲突。 */
 export type InspectionFindingCategory = 'duplicate' | 'outdated' | 'conflict';
 
-export interface InspectionFinding {
+export interface InspectionFinding extends ReportContentOwnership {
   /** 稳定去重键：同一条问题在两轮巡检里是同一个 key（待办 id 由它派生）。 */
   key: string;
   category: InspectionFindingCategory;
   assetIds: string[];
   title: string;
   detail: string;
+  /** Semantic findings remain review items until a person resolves them. */
+  method?: 'semantic';
+  assetVersions?: Record<string, string>;
 }
 
 export interface InspectionRun extends RecallJsonRecord {
@@ -55,6 +61,19 @@ export interface InspectionRun extends RecallJsonRecord {
   scope: { statuses: string[] };
   findings: InspectionFinding[];
   scanned: number;
+  /** Coverage of all active heads; unavailable content is counted without its body. */
+  coverage?: { total: number; evaluated: number; remaining: number; unavailable?: number };
+  /** Keys observed in this batch; findings also retain earlier unresolved results. */
+  currentFindingKeys?: string[];
+  /** Readable assets checked in this pass, including prior batches. */
+  coveredAssetIds?: string[];
+  /** Identity-only coverage for work that remains or cannot be read. */
+  pendingAssetIds?: string[];
+  unavailableAssetIds?: string[];
+  /** Assets actually inspected this run. Missing on legacy runs. */
+  evaluatedAssetIds?: string[];
+  /** Assets skipped because the nightly discovery already changed them. */
+  skippedAssetIds?: string[];
   startedAt: string;
   finishedAt?: string;
   /** 本轮是被中止的（关闭开关 / 应用退出）；自然跑完为空。 */
@@ -71,20 +90,15 @@ export interface InspectionSettings extends RecallJsonRecord {
   updatedAt: string;
 }
 
-// 默认关（2026-09-28 四病整改 G2 / 拍板项 #5）：巡检是低频增值能力，不该
-// 未经用户开启就后台自跑——真机 125 轮 findings 全零也说明默认开没有产出。
-// 用户在「资产设置 → 高级设置」里打开后才会写入 settings 记录（此后以记录为准）。
+// 默认关闭；用户开启后以保存的 settings 记录为准。
 const DEFAULT_SETTINGS = Object.freeze({ enabled: false });
 
-/** 巡检周期：一天两轮足够——重复/过时/冲突都不是分钟级变化的事，
- *  频率高只会多刷待办、不增加发现。 */
-export const INSPECTION_INTERVAL_MS = 12 * 60 * 60 * 1000;
 /** 「过时」判据：在用资产多久没被碰过算过时。 */
 export const INSPECTION_OUTDATED_DAYS = 180;
 /** 疑似重复阈值（与整理报告同一套字面重叠判据）。 */
 const DUPLICATE_SCORE_THRESHOLD = 0.8;
-/** 单轮两两比对上限：超过就只做逐条检查，不硬算（宁可少报）。 */
-const DUPLICATE_SCAN_LIMIT = 200;
+/** One batch compares each selected target with the whole readable pool. */
+const INSPECTION_BATCH_SIZE = 100;
 
 function runsDirectory(userId: string): string {
   return path.dirname(recallJsonRecordPath(userId, RUNS_COLLECTION, 'placeholder'));
@@ -116,20 +130,25 @@ export async function readInspectionSettings(userId: string): Promise<Inspection
     : []);
   return {
     ...raw,
-    // 容错方向与默认关一致（拍板项 #5）：缺 enabled 字段视为关——历史记录
-    // 若真缺过该字段，宁可不跑也不要"没说过要开却自己跑了"。
+    // 缺少 enabled 字段视为关闭，避免缺省配置触发后台巡检。
     enabled: raw.enabled === true,
     dismissedFindingKeys: keysOf(raw.dismissedFindingKeys),
     deferredFindingKeys: keysOf(raw.deferredFindingKeys),
   } as InspectionSettings;
 }
 
-/** 开关（T049）：关掉之后不再自动运行；手动触发仍可用（那是用户自己要的）。 */
+/** 开关：关掉之后不再自动运行；手动触发仍可用（那是用户自己要的）。 */
 export async function setInspectionEnabled(userId: string, enabled: boolean): Promise<InspectionSettings> {
-  const current = await readInspectionSettings(userId);
-  const next: InspectionSettings = { ...current, enabled: Boolean(enabled), updatedAt: new Date().toISOString() };
-  await writeRecallJsonRecord(userId, SETTINGS_COLLECTION, SETTINGS_ID, next);
-  return next;
+  // 原子 patch：只改 enabled/updatedAt 两键，其余（含处置数组）从锁内最新 raw
+  // 保留。先前「预读快照 + writeRecallJsonRecord 整写」会在开关切换与待办处置
+  // 并发时把 dismissed/deferred 整组覆盖掉，下轮巡检重复打扰。
+  const fallback = await readInspectionSettings(userId);
+  const updated = await updateRecallJsonRecord(userId, SETTINGS_COLLECTION, SETTINGS_ID, (raw) => ({
+    ...(raw || fallback),
+    enabled: Boolean(enabled),
+    updatedAt: new Date().toISOString(),
+  }));
+  return updated as InspectionSettings;
 }
 
 /**
@@ -142,24 +161,44 @@ export async function decideInspectionFinding(
   findingKey: string,
   decision: 'dismissed' | 'deferred',
 ): Promise<InspectionSettings> {
-  const current = await readInspectionSettings(userId);
-  const dismissed = decision === 'dismissed'
-    ? [...new Set([...current.dismissedFindingKeys, findingKey])].slice(-500)
-    : current.dismissedFindingKeys.filter((key) => key !== findingKey);
-  const deferred = decision === 'deferred'
-    ? [...new Set([...current.deferredFindingKeys, findingKey])].slice(-500)
-    : current.deferredFindingKeys.filter((key) => key !== findingKey);
-  const updated = await updateRecallJsonRecord(userId, SETTINGS_COLLECTION, SETTINGS_ID, (raw) => ({
-    ...(raw || current),
-    dismissedFindingKeys: dismissed,
-    deferredFindingKeys: deferred,
-    updatedAt: new Date().toISOString(),
-  }));
-  return {
-    ...(updated as InspectionSettings),
-    dismissedFindingKeys: dismissed,
-    deferredFindingKeys: deferred,
-  };
+  // 入口 throw 与 readInspectionRun 同款：非法入参宁可炸出来。否则拼错的
+  // decision（如 'dismiss'）会让下面双三元双双走反向 filter——已处置的 key
+  // 从两数组同时移除、待办静默复活；超长 key 则原样落盘。
+  if (decision !== 'dismissed' && decision !== 'deferred') {
+    throw new Error(`invalid inspection decision: ${decision}`);
+  }
+  // 宽松长度门而非形状正则：真实 key 是 `${category}:${assetId}+…`（含 : 与
+  // +，safeId 不可用），几十字符；1024 远超真实长度、远低于已实证的 10,000
+  // 字符滥用面。
+  if (typeof findingKey !== 'string' || !findingKey.length || findingKey.length > 1024) {
+    throw new Error('invalid inspection finding key');
+  }
+  // 读-算-写整段留在 updateRecallJsonRecord 的锁内（fileEditLock 按 recordPath
+  // 串行）：处置数组从锁内最新 raw 增量而来。先前锁外预读再整组覆盖会让两个
+  // 并发处置互相抹掉——已「不管它」的待办复活回清单。
+  const updated = await updateRecallJsonRecord(userId, SETTINGS_COLLECTION, SETTINGS_ID, (raw) => {
+    const base: RecallJsonRecord = raw || {
+      schemaVersion: 1,
+      ownerId: userId,
+      id: SETTINGS_ID,
+      enabled: DEFAULT_SETTINGS.enabled,
+    };
+    // 与 readInspectionSettings 同款容错归一：磁盘上的数组可能缺字段/混入非字符串。
+    const keysOf = (value: unknown): string[] => (Array.isArray(value)
+      ? (value as string[]).filter((key) => typeof key === 'string')
+      : []);
+    return {
+      ...base,
+      dismissedFindingKeys: decision === 'dismissed'
+        ? [...new Set([...keysOf(base.dismissedFindingKeys), findingKey])].slice(-500)
+        : keysOf(base.dismissedFindingKeys).filter((key) => key !== findingKey),
+      deferredFindingKeys: decision === 'deferred'
+        ? [...new Set([...keysOf(base.deferredFindingKeys), findingKey])].slice(-500)
+        : keysOf(base.deferredFindingKeys).filter((key) => key !== findingKey),
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  return updated as InspectionSettings;
 }
 
 export async function readInspectionRun(userId: string, runId: string): Promise<InspectionRun | undefined> {
@@ -168,7 +207,7 @@ export async function readInspectionRun(userId: string, runId: string): Promise<
   return raw ? asRun(raw) : undefined;
 }
 
-export async function listInspectionRuns(userId: string, limit = 20): Promise<InspectionRun[]> {
+async function readAllInspectionRuns(userId: string): Promise<InspectionRun[]> {
   let names: string[];
   try {
     names = await fs.readdir(runsDirectory(userId));
@@ -184,8 +223,11 @@ export async function listInspectionRuns(userId: string, limit = 20): Promise<In
     .flatMap((raw) => {
       try { return [asRun(raw)]; } catch { return []; }
     })
-    .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
-    .slice(0, Math.max(1, Math.min(100, limit)));
+    .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+
+export async function listInspectionRuns(userId: string, limit = 20): Promise<InspectionRun[]> {
+  return (await readAllInspectionRuns(userId)).slice(0, Math.max(1, Math.min(100, limit)));
 }
 
 function findingKey(category: InspectionFindingCategory, assetIds: readonly string[]): string {
@@ -196,6 +238,7 @@ function findingKey(category: InspectionFindingCategory, assetIds: readonly stri
 export function collectInspectionFindings(
   assets: readonly RecallAbilityAssetRecord[],
   now: Date = new Date(),
+  targetIds?: ReadonlySet<string>,
 ): InspectionFinding[] {
   const findings: InspectionFinding[] = [];
   const active = assets.filter((asset) => asset.status === 'active');
@@ -203,14 +246,16 @@ export function collectInspectionFindings(
   // 过时：在用但很久没被碰过（内容没变过、也没被用过）。
   const staleBefore = now.getTime() - INSPECTION_OUTDATED_DAYS * 86_400_000;
   for (const asset of active) {
+    if (targetIds && !targetIds.has(asset.id)) continue;
     const touched = Date.parse(String(asset.updatedAt || ''));
     if (Number.isNaN(touched) || touched >= staleBefore) continue;
     findings.push({
       key: findingKey('outdated', [asset.id]),
       category: 'outdated',
       assetIds: [asset.id],
-      title: String(asset.title || asset.id),
-      detail: `超过 ${INSPECTION_OUTDATED_DAYS} 天没有更新过（最后更新 ${String(asset.updatedAt).slice(0, 10)}），可能已经过时。`,
+      // 巡检记录是持久台账，只落 id 引用，不落资产标题。
+      title: asset.id,
+      detail: `超过 ${INSPECTION_OUTDATED_DAYS} 天没有更新过（最后更新 ${String(asset.updatedAt).slice(0, 10)}），建议复核是否仍适用。`,
     });
   }
 
@@ -225,31 +270,32 @@ export function collectInspectionFindings(
   }
   for (const group of byStatement.values()) {
     const types = new Set(group.map((asset) => String(asset.type)));
-    if (types.size < 2) continue;
+    if (types.size < 2 || (targetIds && !group.some(asset => targetIds.has(asset.id)))) continue;
     findings.push({
       key: findingKey('conflict', group.map((asset) => asset.id)),
       category: 'conflict',
       assetIds: group.map((asset) => asset.id),
-      title: String(group[0].title || group[0].id),
-      detail: `同一句正文被归成了 ${[...types].sort().join(' / ')} 两种类型，需要你裁定它到底是哪一种。`,
+      // 同上，只落 id 引用。
+      title: group.map((asset) => asset.id).join('+'),
+      detail: `同一句正文被归成了 ${[...types].sort().join(' / ')} 不同类型；请结合时间、适用场景和例外核对，不能据此认定内容矛盾。`,
     });
   }
 
   // 疑似重复：同类型、正文不同但字面高度重叠。**只报不并**。
-  const candidates = active.slice(0, DUPLICATE_SCAN_LIMIT);
-  for (let i = 0; i < candidates.length; i += 1) {
-    for (let j = i + 1; j < candidates.length; j += 1) {
-      const left = candidates[i];
-      const right = candidates[j];
-      if (left.type !== right.type) continue;
+  const targets = targetIds ? active.filter(asset => targetIds.has(asset.id)) : active;
+  const seenPairs = new Set<string>();
+  for (const left of targets) {
+    for (const right of active) {
+      if (left.id === right.id || left.type !== right.type) continue;
+      const key = findingKey('duplicate', [left.id, right.id]);
+      if (seenPairs.has(key)) continue;
+      seenPairs.add(key);
       const score = nearDuplicateScore(left.statement, right.statement);
       if (score < DUPLICATE_SCORE_THRESHOLD) continue;
       findings.push({
-        key: findingKey('duplicate', [left.id, right.id]),
-        category: 'duplicate',
-        assetIds: [left.id, right.id],
-        title: String(left.title || left.id),
-        detail: `这两条看字面很像（${Math.round(score * 100)}%）：要不要合并？系统不替你判断。`,
+        key, category: 'duplicate', assetIds: [left.id, right.id],
+        title: `${left.id}+${right.id}`,
+        detail: `这两条看字面很像（${Math.round(score * 100)}%）；请结合时间、适用场景和例外核对，是否合并由你决定。`,
       });
     }
   }
@@ -261,6 +307,11 @@ export interface RunInspectionOptions {
   trigger?: InspectionTrigger;
   now?: Date;
   signal?: AbortSignal;
+  /** Targets already changed by this nightly run. They are not re-inspected,
+   * so a related duplicate/conflict is left to the next run. */
+  excludeAssetIds?: ReadonlySet<string>;
+  /** Bound one run to this many targets; each target sees the full pool. */
+  batchSize?: number;
 }
 
 /**
@@ -271,106 +322,261 @@ export async function runAssetInspection(
   userId: string,
   options: RunInspectionOptions = {},
 ): Promise<InspectionRun> {
-  const startedAt = new Date().toISOString();
-  const settings = await readInspectionSettings(userId);
-  const dismissed = new Set(settings.dismissedFindingKeys);
-  const assets = await listAbilityAssets(userId);
-  const findings = collectInspectionFindings(assets, options.now)
-    .filter((finding) => !dismissed.has(finding.key));
-  const runId = `ir-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const run: InspectionRun = {
-    schemaVersion: 1,
-    ownerId: userId,
-    id: runId,
-    trigger: options.trigger || 'manual',
-    scope: { statuses: ['active'] },
-    findings,
-    scanned: assets.length,
-    startedAt,
-    finishedAt: new Date().toISOString(),
-    ...(options.signal?.aborted ? { stoppedBy: 'abort' } : {}),
-  };
-  await writeRecallJsonRecord(userId, RUNS_COLLECTION, runId, run);
-  if (findings.length) {
-    log.info('asset inspection found issues', {
-      userId: maskId(userId),
-      runId,
-      duplicate: findings.filter((f) => f.category === 'duplicate').length,
-      outdated: findings.filter((f) => f.category === 'outdated').length,
-      conflict: findings.filter((f) => f.category === 'conflict').length,
-    });
+  const batchSize = options.batchSize ?? INSPECTION_BATCH_SIZE;
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > INSPECTION_BATCH_SIZE) {
+    throw new Error('invalid inspection batch size');
   }
-  return run;
-}
-
-/**
- * 定时那一轮要不要跑（T049 的开关语义）：关掉之后**不再自动运行**；
- * 手动触发仍可用（那是用户自己要的，与开关无关）。
- *
- * 抽成导出函数是为了让"关掉就不再自动跑"这条能被行为测试钉住——只读代码
- * 断言不了"它真的没跑"。
- */
-export async function runScheduledInspectionIfEnabled(
-  userId: string,
-  options: { signal?: AbortSignal } = {},
-): Promise<InspectionRun | undefined> {
-  const settings = await readInspectionSettings(userId);
-  if (!settings.enabled) return undefined;
-  const run = await runAssetInspection(userId, { trigger: 'scheduled', ...(options.signal ? { signal: options.signal } : {}) });
-  // 集成维护（2026-09-29 子安拍板「完全合并」）：自动维护开启时，检查轮之后
-  // 同天追加一轮完整清理（规范标题/合并重复/补标签/重写啰嗦正文，trigger
-  // =inspection，写前备份照旧）。当天已跑过则跳过（按最近一条清理报告的
-  // trigger+日期判重）；失败只记日志，不拖垮检查结果，也不影响返回值。
-  try {
-    const { listCleanupReports, runAssetCleanup } = await import('./cleanup-report-service');
-    const reports = await listCleanupReports(userId, 1);
-    const latest = reports[0];
-    const today = new Date().toISOString().slice(0, 10);
-    const alreadyToday = Boolean(
-      latest
-      && String(latest.trigger || '') === 'inspection'
-      && String(latest.createdAt || '').slice(0, 10) === today,
-    );
-    if (!alreadyToday) await runAssetCleanup(userId, { trigger: 'inspection' });
-  } catch (error) {
-    log.warn('scheduled maintenance cleanup failed', { userId, error: (error as Error).message });
-  }
-  return run;
-}
-
-export interface InspectionLoopHandle {
-  stop(): void;
-}
-
-/** 低频自续期循环（与到期清理同款：经 boot_init 的准入与空闲等待，不用裸定时器）。 */
-export function startAssetInspectionLoop(
-  userId: string,
-  intervalMs: number = INSPECTION_INTERVAL_MS,
-): InspectionLoopHandle {
-  let scheduled: ScheduledBootBackgroundTask | null = null;
-  let stopped = false;
-  const scheduleNext = (delayMs: number): void => {
-    scheduled = scheduleBootBackground('recall:asset-inspection', async (signal) => {
-      if (stopped || signal?.aborted) return;
-      try {
-        await runScheduledInspectionIfEnabled(userId, { ...(signal ? { signal } : {}) });
-      } catch (err) {
-        log.error('asset inspection threw', { userId: maskId(userId), error: logErrorRef(err as Error) });
+  // The progress lock is separate from the record's write lock. It serializes
+  // manual and scheduled inspections without holding the cognition write lock
+  // while the pool is loaded or compared.
+  return fileEditLock(`${recallJsonRecordPath(userId, PROGRESS_COLLECTION, PROGRESS_ID)}.run`)
+    .runExclusive(async () => {
+      const startedAt = new Date().toISOString();
+      const settings = await readInspectionSettings(userId);
+      const dismissed = new Set(settings.dismissedFindingKeys);
+      const activeHeads = (await listAbilityAssets(userId)).filter(asset => asset.ownerId === userId && asset.status === 'active');
+      const headsBaseline = (heads: readonly RecallAbilityAssetRecord[]) => JSON.stringify(heads
+        .map(asset => [asset.id, asset.version, asset.activeVersion || asset.version, asset.updatedAt])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+      const initialHeads = headsBaseline(activeHeads);
+      const pool = await loadCaptureExistingAssetPool(userId);
+      const allAssets = pool.entries.map(({ record, snapshot }) => ({
+        ...record, ...snapshot, version: record.version, activeVersion: snapshot.version,
+      } as RecallAbilityAssetRecord)).sort((left, right) => left.id.localeCompare(right.id));
+      const excluded = options.excludeAssetIds ? new Set(options.excludeAssetIds) : new Set<string>();
+      const assets = allAssets.filter(asset => !excluded.has(asset.id));
+      const readable = new Set(allAssets.map(asset => asset.id));
+      const available = new Set(assets.map(asset => asset.id));
+      const marker = (asset: RecallAbilityAssetRecord) => JSON.stringify([
+        asset.version, asset.activeVersion || asset.version, asset.updatedAt,
+      ]);
+      const previous = await readRecallJsonRecord(userId, PROGRESS_COLLECTION, PROGRESS_ID);
+      const saved = previous?.covered && typeof previous.covered === 'object' && !Array.isArray(previous.covered)
+        ? previous.covered as Record<string, string> : {};
+      let covered: Record<string, string> = Object.fromEntries(allAssets.flatMap(asset =>
+        !excluded.has(asset.id) && saved[asset.id] === marker(asset) ? [[asset.id, saved[asset.id]]] : []));
+      // A completed pass starts a new one on the next run, so aging assets are
+      // revisited. A changed asset in an unfinished pass is naturally requeued.
+      if (previous?.complete === true && allAssets.every(asset => covered[asset.id] === marker(asset))) covered = {};
+      const pending = assets.filter(asset => covered[asset.id] !== marker(asset));
+      const selected = pending.slice(0, batchSize);
+      const evaluated: RecallAbilityAssetRecord[] = [];
+      const current = new Map<string, InspectionFinding>();
+      for (const asset of selected) {
+        if (options.signal?.aborted) break;
+        // Yield so a stop request can interrupt a long batch between targets.
+        if (evaluated.length && evaluated.length % 10 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+        if (options.signal?.aborted) break;
+        for (const finding of collectInspectionFindings(assets, options.now, new Set([asset.id]))) {
+          if (!dismissed.has(finding.key)) current.set(finding.key, finding);
+        }
+        evaluated.push(asset);
+        covered[asset.id] = marker(asset);
       }
-    }, delayMs, { resourceClass: 'disk', preferIdle: true, maxSliceMs: 20_000 });
-    void scheduled.promise.finally(() => {
-      scheduled = null;
-      if (!stopped) scheduleNext(intervalMs);
+      const evaluatedIds = new Set(evaluated.map(asset => asset.id));
+      // Bootstrap older installations once. The progress record subsequently
+      // owns the complete unresolved set, independent of run-history limits.
+      const earlier: InspectionFinding[] = Array.isArray(previous?.findings)
+        ? previous.findings as InspectionFinding[]
+        : pendingInspectionFindings(await readAllInspectionRuns(userId), settings.dismissedFindingKeys)
+          .map(({ runId: _runId, deferred: _deferred, ...finding }) => finding);
+      const retained = new Map<string, InspectionFinding>();
+      for (const finding of earlier) {
+        if (dismissed.has(finding.key)) continue;
+        // A lexical comparison cannot settle a model's semantic review finding.
+        if (finding.method === 'semantic') { retained.set(finding.key, finding); continue; }
+        // A pair was actually compared when at least one member was a target
+        // and every member was in the comparison pool. Skipped members are not
+        // evidence that an older finding has disappeared.
+        const reviewed = finding.assetIds.some(id => evaluatedIds.has(id))
+          && finding.assetIds.every(id => available.has(id));
+        if (!reviewed) retained.set(finding.key, finding);
+      }
+      for (const [key, finding] of current) retained.set(key, finding);
+      // Keep findings that temporarily cannot be read, but do not expose them
+      // until every referenced asset is readable again.
+      const storedFindings = [...retained.values()];
+      const findings = storedFindings.filter(finding => finding.assetIds.every(id => readable.has(id)))
+        .map(finding => finding.method === 'semantic' && finding.assetVersions && finding.assetIds.some(id => {
+          const asset = allAssets.find(row => row.id === id);
+          return !asset || String(asset.activeVersion || asset.version) !== finding.assetVersions![id];
+        }) ? { ...finding, detail: `${finding.detail} 相关内容已变化，请重新核对。` } : finding);
+      const coveredAssetIds = allAssets.filter(asset => covered[asset.id] === marker(asset)).map(asset => asset.id);
+      const evaluatedCount = coveredAssetIds.length;
+      // Count restricted and unavailable heads without retaining their bodies.
+      const allIds = [...new Set([...activeHeads.map(asset => asset.id), ...allAssets.map(asset => asset.id)])].sort();
+      const unavailableAssetIds = allIds.filter(id => !readable.has(id));
+      const pendingAssetIds = allIds.filter(id => {
+        const asset = allAssets.find(row => row.id === id);
+        return !asset || covered[id] !== marker(asset);
+      });
+      const total = allIds.length;
+      const unavailable = unavailableAssetIds.length;
+      const coverage = { total, evaluated: evaluatedCount, remaining: total - evaluatedCount,
+        ...(unavailable ? { unavailable } : {}) };
+
+      const runId = `ir-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const run: InspectionRun = {
+        schemaVersion: 1, ownerId: userId, id: runId, trigger: options.trigger || 'manual',
+        scope: { statuses: ['active'] }, findings, scanned: evaluated.length,
+        evaluatedAssetIds: evaluated.map(asset => asset.id), coveredAssetIds, pendingAssetIds, unavailableAssetIds, coverage,
+        currentFindingKeys: [...new Set([...current.keys(), ...((previous?.unreportedSemanticKeys || []) as string[])])].filter(key => findings.some(finding => finding.key === key)),
+        ...(excluded.size ? { skippedAssetIds: [...excluded] } : {}),
+        startedAt, finishedAt: new Date().toISOString(),
+        ...(options.signal?.aborted ? { stoppedBy: 'abort' } : {}),
+      };
+      // Save the run before advancing progress: a crash can repeat a batch but
+      // cannot mark an unwritten result as inspected.
+      await withCognitionTransition(userId, async () => {
+        // Re-read only the comparison baseline under the write transition. It
+        // performs no ranking, embeddings or model calls. A changed pool must
+        // be retried; neither its findings nor coverage can be settled.
+        const latestHeads = (await listAbilityAssets(userId)).filter(asset => asset.ownerId === userId && asset.status === 'active');
+        const latestPool = await loadCaptureExistingAssetPool(userId);
+        if (headsBaseline(latestHeads) !== initialHeads || latestPool.baselineDigest !== pool.baselineDigest)
+          throw Object.assign(new Error('inspection assets changed; retry the inspection'), { code: 'inspection_baseline_stale' });
+        await writeRecallJsonRecord(userId, RUNS_COLLECTION, runId, run);
+        const ids = [...new Set(storedFindings.flatMap(finding => finding.assetIds))];
+        const purged = new Set((await Promise.all(ids.map(async id => {
+          const asset = await readRecallJsonRecord(userId, 'ability-assets', id);
+          return asset?.status === 'purged' ? id : undefined;
+        }))).filter((id): id is string => Boolean(id)));
+        const safeFindings = storedFindings.filter(finding => !finding.assetIds.some(id => purged.has(id)));
+        await writeRecallJsonRecord(userId, PROGRESS_COLLECTION, PROGRESS_ID, {
+          schemaVersion: 1, ownerId: userId, id: PROGRESS_ID, covered, findings: safeFindings, unreportedSemanticKeys: [],
+          complete: allAssets.every(asset => covered[asset.id] === marker(asset)) && !options.signal?.aborted,
+        });
+      });
+      if (current.size) log.info('asset inspection found issues', {
+        userId: maskId(userId), runId, duplicate: [...current.values()].filter(f => f.category === 'duplicate').length,
+        outdated: [...current.values()].filter(f => f.category === 'outdated').length,
+        conflict: [...current.values()].filter(f => f.category === 'conflict').length,
+      });
+      return run;
     });
-  };
-  scheduleNext(0);
-  return {
-    stop() {
-      stopped = true;
-      scheduled?.cancel();
-      scheduled = null;
-    },
-  };
+}
+
+/** Record source-checked model observations as review-only findings. The caller
+ * supplies a read-only baseline check; no model executes under either lock. */
+export async function recordSemanticInspectionFindings(
+  userId: string,
+  primaryId: string,
+  comparisonIds: readonly string[],
+  observations: ReadonlyArray<{ assetVersions: Record<string, string> }>,
+  assertBaseline: () => Promise<void>,
+): Promise<void> {
+  await fileEditLock(`${recallJsonRecordPath(userId, PROGRESS_COLLECTION, PROGRESS_ID)}.run`).runExclusive(async () => {
+    await withCognitionTransition(userId, async () => {
+      const settings = await readInspectionSettings(userId);
+      const dismissed = new Set(settings.dismissedFindingKeys);
+      const previous = await readRecallJsonRecord(userId, PROGRESS_COLLECTION, PROGRESS_ID);
+      if (!previous && !observations.length) return;
+      const earlier: InspectionFinding[] = Array.isArray(previous?.findings) ? previous.findings as InspectionFinding[]
+        : pendingInspectionFindings(await readAllInspectionRuns(userId), settings.dismissedFindingKeys)
+          .map(({ runId: _runId, deferred: _deferred, ...finding }) => finding);
+      const findings = new Map<string, InspectionFinding>(earlier.map(finding => [finding.key, finding]));
+      const current = new Set((previous?.unreportedSemanticKeys || []) as string[]);
+      const compared = new Set(comparisonIds);
+      const reported = new Set(observations.map(observation => `conflict:semantic:${Object.keys(observation.assetVersions).sort().join('+')}`));
+      let changed = false;
+      for (const [key, finding] of findings) {
+        // A completed comparison can resolve an earlier issue only if both
+        // assets were supplied. Conflicting observations in this sweep stay
+        // pending until they can be reviewed together on a later pass.
+        if (finding.method === 'semantic' && finding.assetIds.includes(primaryId)
+          && finding.assetIds.every(id => compared.has(id)) && !current.has(key) && !reported.has(key)) { findings.delete(key); changed = true; }
+      }
+      for (const observation of observations) {
+        const assetIds = Object.keys(observation.assetVersions).sort();
+        if (assetIds.length !== 2 || assetIds.some(id => !safeId(id)))
+          throw new Error('invalid semantic inspection observation');
+        const key = `conflict:semantic:${assetIds.join('+')}`;
+        if (dismissed.has(key)) continue;
+        findings.set(key, { key, category: 'conflict', assetIds, title: assetIds.join('+'),
+          detail: '相关内容的结论或适用范围可能不同，请结合时间、场景和例外核对。',
+          method: 'semantic', assetVersions: { ...observation.assetVersions } });
+        current.add(key); changed = true;
+      }
+      if (!changed) return;
+      await assertBaseline();
+      await writeRecallJsonRecord(userId, PROGRESS_COLLECTION, PROGRESS_ID, {
+        ...(previous || { schemaVersion: 1, ownerId: userId, id: PROGRESS_ID, covered: {}, complete: false }),
+        findings: [...findings.values()], unreportedSemanticKeys: [...current],
+      });
+    });
+  });
+}
+
+/** Findings the user explicitly dismissed. Kept for the "processed" history
+ * without re-opening them in the attention list. */
+export function dismissedInspectionFindings(
+  runs: readonly InspectionRun[],
+  dismissedKeys: readonly string[],
+): Array<{ key: string; category: InspectionFindingCategory; assetIds: string[]; title: string; detail: string; at: string }> {
+  const dismissed = new Set(dismissedKeys);
+  const seen = new Set<string>();
+  const items: Array<{ key: string; category: InspectionFindingCategory; assetIds: string[]; title: string; detail: string; at: string }> = [];
+  for (const run of runs) {
+    for (const finding of run.findings) {
+      if (!dismissed.has(finding.key) || seen.has(finding.key)) continue;
+      seen.add(finding.key);
+      items.push({
+        key: finding.key,
+        category: finding.category,
+        assetIds: [...finding.assetIds],
+        title: finding.title,
+        detail: finding.detail,
+        at: run.finishedAt || run.startedAt,
+      });
+    }
+  }
+  return items;
+}
+
+/** purge 级联清理段：存量巡检运行记录里引用被清除资产的发现，
+ *  标题清成不可识别形式（新发现只落 id，本函数收存量尾巴）。无命中不写盘
+ *  （幂等，可随级联重入重试）。 */
+export async function sweepPurgedAssetFromInspectionRuns(userId: string, assetId: string): Promise<number> {
+  const progress = await readRecallJsonRecord(userId, PROGRESS_COLLECTION, PROGRESS_ID);
+  if (progress && (Array.isArray(progress.findings) || progress.covered)) {
+    await updateRecallJsonRecord(userId, PROGRESS_COLLECTION, PROGRESS_ID, locked => {
+      if (!locked) throw new Error('inspection progress not found');
+      const covered = { ...((locked.covered || {}) as Record<string, string>) };
+      delete covered[assetId];
+      const findings = ((locked.findings || []) as InspectionFinding[]).filter(finding => !finding.assetIds.includes(assetId));
+      const unreportedSemanticKeys = ((locked.unreportedSemanticKeys || []) as string[])
+        .filter(key => findings.some(finding => finding.key === key));
+      return { ...locked, covered, findings, unreportedSemanticKeys };
+    });
+  }
+  const needsSweep = (findings: InspectionFinding[]): boolean => findings
+    .some((finding) => finding.assetIds.includes(assetId) && !finding.contentPurgedAt);
+  let names: string[];
+  try {
+    names = await fs.readdir(runsDirectory(userId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+  let swept = 0;
+  for (const name of names) {
+    if (!name.endsWith('.json') || !safeId(name.slice(0, -5))) continue;
+    const runId = name.slice(0, -5);
+    // 预读只为「无命中不写盘」；改写以锁内最新 raw 为准。
+    const raw = await readRecallJsonRecord(userId, RUNS_COLLECTION, runId);
+    if (!raw || !needsSweep(asRun(raw).findings)) continue;
+    await updateRecallJsonRecord(userId, RUNS_COLLECTION, runId, (locked) => {
+      if (!locked) throw new Error('asset inspection run not found');
+      const run = asRun(locked);
+      if (!needsSweep(run.findings)) return locked;
+      const findings = run.findings.map((finding) => finding.assetIds.includes(assetId)
+        ? clearedReportRow('findings', finding, finding.contentPurgedAt || new Date().toISOString()) as InspectionFinding
+        : finding);
+      return { ...run, findings } as unknown as RecallJsonRecord;
+    });
+    swept += 1;
+  }
+  return swept;
 }
 
 /** 最新一轮的发现（未处置的）→ 待确认清单条目（`id` 前缀 `inspection:`）。 */
@@ -383,15 +589,33 @@ export function pendingInspectionFindings(
   if (!latest) return [];
   const dismissed = new Set(dismissedKeys);
   const deferred = new Set(deferredKeys);
-  return latest.findings
-    .filter((finding) => !dismissed.has(finding.key))
-    .map((finding) => ({
-      runId: latest.id,
+  const seen = new Set<string>();
+  const items: Array<{ runId: string; key: string; category: InspectionFindingCategory; assetIds: string[]; title: string; detail: string; deferred?: boolean }> = [];
+  const push = (run: InspectionRun, finding: InspectionFinding): void => {
+    if (dismissed.has(finding.key) || seen.has(finding.key)) return;
+    seen.add(finding.key);
+    items.push({
+      runId: run.id,
       key: finding.key,
       category: finding.category,
       assetIds: [...finding.assetIds],
       title: finding.title,
       detail: finding.detail,
       ...(deferred.has(finding.key) ? { deferred: true } : {}),
-    }));
+    });
+  };
+  for (const finding of latest.findings) push(latest, finding);
+  // New runs already carry the complete unresolved set across batches.
+  if (latest.coverage) return items;
+  // Keep an older finding until its assets are actually re-inspected. A nightly
+  // run that skipped a claimed asset has not proved the duplicate/conflict gone.
+  const evaluated = Array.isArray(latest.evaluatedAssetIds) ? new Set(latest.evaluatedAssetIds) : undefined;
+  if (!evaluated) return items;
+  for (const run of runs.slice(1)) {
+    for (const finding of run.findings) {
+      if (finding.assetIds.every(id => evaluated.has(id))) continue;
+      push(run, finding);
+    }
+  }
+  return items;
 }

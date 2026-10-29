@@ -45,8 +45,10 @@ function _connectionsHandleTabKey(event, buttons, current, activate) {
   if (currentIndex < 0 || !enabled.length) return false;
 
   let nextIndex = -1;
-  if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % enabled.length;
-  else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + enabled.length) % enabled.length;
+  // The category tablist is vertical in the shell sidebar (specs/008);
+  // Up/Down roam it, Left/Right keep working for horizontal tablists.
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % enabled.length;
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + enabled.length) % enabled.length;
   else if (event.key === 'Home') nextIndex = 0;
   else if (event.key === 'End') nextIndex = enabled.length - 1;
   else return false;

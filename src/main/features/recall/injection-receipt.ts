@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { appendRecallJsonlRecord, listRecallJsonlRecords } from './store';
 import type { RecallJsonRecord } from './types';
 import { safeId } from '../../storage';
+import { validDispatchBinding, type DispatchBinding } from './execution-result-content';
 
 export interface InjectionReceipt extends RecallJsonRecord {
   schemaVersion: 1;
@@ -12,24 +13,21 @@ export interface InjectionReceipt extends RecallJsonRecord {
   assetVersion: string;
   boundary: 'real' | 'degraded' | 'test-double';
   status: 'injected' | 'dispatched' | 'omitted' | 'failed';
-  /** 注入通道（2026-09-13 通道显式化）：projection=投影授权的正式资产；
-   *  profile_memory=USER.md/MEMORY.md 派生的背景记忆（无投影授权）；
-   *  agent_read=模型通过 search_ability_assets 目录/正文模式自己取用的资产
-   *  catalog_hint=目录标了★提示相关但本回合未被使用（漏取审计，2026-09-19）
-   *  （2026-09-18：模型主动读进上下文也算一次真实带入，否则自选资产
-   *  永远进不了使用统计与升档链）。
-   *  experience=经验目录（specs/016，2026-09-25）：经验清单构建时对「已挂载
-   *  但本轮被准入拦下」的经验记 omitted 留痕（与资产隔离，只借回执载体：
-   *  assetId 字段存 exp-… 条目 id，reason 存准入理由码）。
-   *  缺省视为 projection（存量收据与新正式资产收据一致）。 */
-  channel?: 'projection' | 'profile_memory' | 'agent_read' | 'catalog_hint' | 'experience';
+  /** 注入通道：projection 为投影授权资产；profile_memory 为个人背景记忆，
+   * 不表达投影授权；agent_read 为模型主动读取资产；catalog_hint 为目录相关提示
+   * 但本轮未取用；experience 为经验目录准入遗漏（assetId 存 exp-* id，reason 存规则码）。
+   * 模型主动读入上下文计为真实带入。旧回执未指定通道时按 projection 读取。 */
+  /** runtime binds a supplied body to its host task/result anchor, not a UI message. */
+  channel?: 'projection' | 'profile_memory' | 'agent_read' | 'catalog_hint' | 'experience' | 'runtime';
   messageId?: string;
-  /** 被拦原因（2026-09-25 验收修复 US-604 AC4/AC7）：status='omitted' 时带上
+  /** Host coordinates for a supplied delegated turn; never a source grant. */
+  dispatchBinding?: DispatchBinding;
+  /** 被拦原因：status='omitted' 时带上
    *  `formal-assets/runtime.ts::assetRuntimeBlockRule` 的稳定规则标识，界面据此
    *  说明"本轮未带入 + 哪条规则"。只存标识——不存原因码原文、不存资产正文。
    *  旧回执没有该字段，读取侧按「原因未知」呈现，不编造。 */
   reason?: string;
-  /** 「为什么排前」因子拆解（specs/012 T019，contracts/ipc.md §3.3）：
+  /** 「为什么排前」因子拆解：
    *  只存因子名 + 数值 + 总分与权重来源，**不含**资产正文/任务文本/路径。
    *  幂等键不变（不进 recordInjectionReceipt 的 key）；旧回执没有该字段 →
    *  读取侧（IPC `recall.catalog.ranking`）回 explainable:false，如实说
@@ -47,7 +45,7 @@ export interface InjectionReceipt extends RecallJsonRecord {
 
 const INJECTION_BOUNDARIES = new Set<InjectionReceipt['boundary']>(['real', 'degraded', 'test-double']);
 const INJECTION_STATUSES = new Set<InjectionReceipt['status']>(['injected', 'dispatched', 'omitted', 'failed']);
-const INJECTION_CHANNELS = new Set<InjectionReceipt['channel']>(['projection', 'profile_memory', 'agent_read', 'catalog_hint', 'experience']);
+const INJECTION_CHANNELS = new Set<InjectionReceipt['channel']>(['projection', 'profile_memory', 'agent_read', 'catalog_hint', 'experience', 'runtime']);
 const RANKING_FACTORS: ReadonlySet<NonNullable<InjectionReceipt['ranking']>['factors'][number]['name']>
   = new Set(['relevance', 'adoption', 'scene', 'maturity']);
 const RANKING_WEIGHTS_SOURCES = new Set<NonNullable<InjectionReceipt['ranking']>['weightsSource']>(['configured', 'default', 'invalid-fallback']);
@@ -87,6 +85,7 @@ function asInjectionReceipt(userId: string, value: RecallJsonRecord): InjectionR
     || !INJECTION_STATUSES.has(value.status as InjectionReceipt['status'])
     || (value.channel !== undefined && !INJECTION_CHANNELS.has(value.channel as InjectionReceipt['channel']))
     || (value.messageId !== undefined && !safeId(value.messageId))
+    || (value.dispatchBinding !== undefined && !validDispatchBinding(value.dispatchBinding, String(value.taskRunId)))
     || (value.reason !== undefined && typeof value.reason !== 'string')
     || (value.ranking !== undefined && !isValidRanking(value.ranking))
     || typeof value.createdAt !== 'string'
@@ -100,9 +99,10 @@ export async function recordInjectionReceipt(
     taskRunId: string; projectionId?: string; assetId: string; assetVersion: string;
     boundary: InjectionReceipt['boundary']; status: InjectionReceipt['status']; messageId?: string;
     channel?: InjectionReceipt['channel'];
+    dispatchBinding?: DispatchBinding;
     /** 被拦原因标识（status='omitted' 时用）：规则标识，不是原因码原文。 */
     reason?: string;
-    /** 「为什么排前」拆解（specs/012 T019）：因子名 + 数值；不进幂等键。 */
+    /** 「为什么排前」拆解：因子名 + 数值；不进幂等键。 */
     ranking?: InjectionReceipt['ranking'];
   },
 ): Promise<InjectionReceipt> {
@@ -117,6 +117,7 @@ export async function recordInjectionReceipt(
     || !INJECTION_STATUSES.has(input.status)
     || (input.channel !== undefined && !INJECTION_CHANNELS.has(input.channel))
     || (input.messageId !== undefined && !safeId(input.messageId))
+    || (input.dispatchBinding !== undefined && (!validDispatchBinding(input.dispatchBinding, input.taskRunId) || input.status !== 'dispatched'))
     || (input.reason !== undefined && typeof input.reason !== 'string')
     || (input.ranking !== undefined && !isValidRanking(input.ranking))
   ) throw new Error('invalid injection receipt reference');
@@ -130,16 +131,59 @@ export async function recordInjectionReceipt(
     assetId: input.assetId, assetVersion: input.assetVersion, boundary: input.boundary,
     status: input.status,
     ...(input.channel ? { channel: input.channel } : {}),
+    ...(input.dispatchBinding ? { dispatchBinding: input.dispatchBinding } : {}),
     ...(input.messageId ? { messageId: input.messageId } : {}),
     ...(input.reason ? { reason: input.reason } : {}),
     ...(input.ranking ? { ranking: input.ranking } : {}),
     createdAt: new Date().toISOString(),
   };
-  const existing = (await listInjectionReceipts(userId))
-    .find((item) => item.id === record.id);
+  const existing = await findExistingReceiptById(userId, record.id);
   if (existing) return existing;
   await appendRecallJsonlRecord(userId, 'injection-receipts', 'events', record);
+  noteReceiptIdIndexed(userId, record.id);
   return record;
+}
+
+/** 回执 id 的进程内索引：一轮 K 条注入此前要做 K 次全流读幂等检查，
+ *  现在只有进程内首次（建索引）付一次全读，之后 O(1) 判存在；本模块是这条
+ *  append-only 流的唯一写入方，append 后同步登记即可保持索引准确。purge
+ *  清空流后旧 id 仍留在索引里——方向是 fail-closed（拒绝重写已删除的回执），
+ *  可接受。极端量级设熔断：超限丢弃索引，下一次调用重建（多付一次全读）。 */
+const RECEIPT_ID_INDEX_LIMIT = 100_000;
+const receiptIdIndex = new Map<string, { ids: Set<string>; loading?: Promise<InjectionReceipt[]> }>();
+
+export function resetInjectionReceiptIdIndexForTest(): void {
+  receiptIdIndex.clear();
+}
+
+async function findExistingReceiptById(userId: string, receiptId: string): Promise<InjectionReceipt | undefined> {
+  let entry = receiptIdIndex.get(userId);
+  if (!entry) {
+    // 首次：一次全读同时建索引并完成本次查找（并发调用共享同一次读）。
+    entry = { ids: new Set() };
+    receiptIdIndex.set(userId, entry);
+    const bootstrap = listInjectionReceipts(userId).then((records) => {
+      for (const record of records) entry!.ids.add(record.id);
+      return records;
+    });
+    entry.loading = bootstrap.finally(() => { entry!.loading = undefined; });
+    const records = await bootstrap;
+    return records.find((item) => item.id === receiptId);
+  }
+  if (entry.loading) {
+    const records = await entry.loading;
+    return records.find((item) => item.id === receiptId);
+  }
+  if (!entry.ids.has(receiptId)) return undefined;
+  // 索引命中（同轮重试等罕见路径）：按需从流里取回完整记录，保持返回契约。
+  return (await listInjectionReceipts(userId)).find((item) => item.id === receiptId);
+}
+
+function noteReceiptIdIndexed(userId: string, receiptId: string): void {
+  const entry = receiptIdIndex.get(userId);
+  if (!entry) return;
+  if (entry.ids.size >= RECEIPT_ID_INDEX_LIMIT) entry.ids.clear();
+  entry.ids.add(receiptId);
 }
 
 export async function listInjectionReceipts(userId: string, taskRunId?: string): Promise<InjectionReceipt[]> {
@@ -151,14 +195,9 @@ export async function listInjectionReceipts(userId: string, taskRunId?: string):
   return records.filter((record) => !taskRunId || record.taskRunId === taskRunId);
 }
 
-/** 画像通道统一落账（2026-09-30 修2）：每条都留 InjectionReceipt（channel=
- *  profile_memory，无投影授权语义），其中**正式资产镜像**（id 非 onto-
- *  前缀——onto-<sha> 全仓只有 ontologyAssetFromEntry 一处生成，正式资产
- *  系统侧恒为 aa-<sha>）再按「带入即计一次使用」写 usage-records，对齐
- *  投影注入 / Commander 派发 / 模型自取的记账口径。
- *  2026-09-13「画像不是资产、不写 usage」的口径成立于画像块还渲染
- *  USER/MEMORY 文件的年代；通道显式化后画像渲染的已是过闸门的正式资产，
- *  不记账则个人偏好每轮真实生效、用量永远为零、成熟度证据链断。 */
+/** 个人背景通道每项均写 profile_memory 注入回执，不表达投影授权。
+ * 正式资产镜像同时写 usage-records，保持带入统计与投影、派发和主动读取一致；
+ * onto-* 兼容镜像没有正式资产身份，不写正式资产使用记录。 */
 export async function recordProfileMemoryInjection(
   userId: string,
   entries: ReadonlyArray<{ id: string; source: string; version: string }>,

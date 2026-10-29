@@ -1,3 +1,4 @@
+// 身份、发言与标签均为合成测试样例；时间仅用于解析和顺序断言。
 /**
  * transcript_recall — 多路召回层
  *
@@ -5,7 +6,7 @@
  *   - **结构性安全性质**：召回目标只能是词表已有词条（不可能发明新概念）、
  *     `confidence` 恒 < 1（模糊候选不得被当精确命中用）；
  *   - 四条护栏**与精确扫描同语义**（边界 / 语境黑白名单 / 保护区域 / 作用域）；
- *   - 阈值分层是实测定出来的：强模糊档可 `suggest`，弱通道（k42/coxy 一类）
+ *   - 阈值分层：强模糊档可 `suggest`，弱通道（k42/coxy 一类）
  *     只能 `review`；`trapWords` 与"脱域"一律降级；
  *   - 中文音近的接入口 `extraPhonetic`（零依赖下的拼音表挂点）；
  *   - `stats.residual` 必须把"兜不住的形态"报出来，而不是假装覆盖；
@@ -62,8 +63,14 @@ function entry(over: Partial<GlossaryEntry> & { wrong: string; correct: string }
   };
 }
 
-/** 项目真实种子里的几条代表性词条。 */
+/** 用于通道和护栏断言的代表性词条；不绑定个人资料。 */
 const cogseed = entry({ wrong: 'coxy', correct: 'Cogseed' });
+it('does not expand a name prefix inside its already correct full name', () => {
+  const names = [entry({ wrong: '史雨', correct: '史雨萱', kind: 'people' }), entry({ wrong: '樊中', correct: '樊中扬', kind: 'people' })];
+  const scan = recallCandidates('[00:49] 史雨萱: 好的。 [01:00] 樊中扬: 好的。', names);
+  expect(scan.candidates).toEqual([]);
+  expect(recallCandidates('史雨说话。樊中回答。', names).candidates.length).toBeGreaterThan(0);
+});
 const cogseedLong = entry({ wrong: 'cogseed', correct: 'Cogseed', riskLevel: 'high' });
 const kstar = entry({ wrong: 'K star', correct: 'KSTAR', kind: 'term' });
 const k4 = entry({ wrong: 'K4', correct: 'KSTAR', kind: 'term' });
@@ -71,7 +78,7 @@ const raymond = entry({ wrong: '雷蒙德', correct: 'Raymond', kind: 'people' }
 const mesh = entry({ wrong: 'mesh seed', correct: 'CogSeed' });
 const SEED = [cogseed, cogseedLong, kstar, k4, raymond, mesh];
 
-/** 与手工清理版附记一致的代表性域概念。 */
+/** 与本组词条匹配的域概念。 */
 const DOMAIN = ['Cogseed', 'KSTAR', 'Raymond'];
 
 describe('归一化与音形骨架', () => {
@@ -105,7 +112,7 @@ describe('归一化与音形骨架', () => {
   });
 });
 
-describe('通道分层（阈值来自实测，不是拍的）', () => {
+describe('通道分层', () => {
   it('归一化通道：K-STAR 命中词条 `K star`，相似度 1', () => {
     const r = recallCandidates('这块用的是 K-STAR 记录', SEED, { domainTerms: DOMAIN });
     const hit = r.candidates.find((c) => c.correct === 'KSTAR');
@@ -273,22 +280,22 @@ describe('四条护栏与精确扫描同语义', () => {
 });
 
 describe('中文音近接入口 extraPhonetic（零依赖下的拼音挂点）', () => {
-  const jingwen = entry({ wrong: '王婧', correct: '王婧', kind: 'people' });
+  const sampleName = entry({ wrong: '例甲', correct: '例甲', kind: 'people' });
 
   it('不注入拼音时中文音近召回不到（显式记录的已知缺口）', () => {
-    const r = recallCandidates('王晶说了这句话', [jingwen], { domainTerms: ['王婧'] });
+    const r = recallCandidates('例加说了这句话', [sampleName], { domainTerms: ['例甲'] });
     expect(r.candidates).toHaveLength(0);
   });
 
-  it('注入拼音表后 王晶 → 王婧 走 phonetic 通道命中', () => {
-    const r = recallCandidates('王晶说了这句话', [jingwen], {
-      domainTerms: ['王婧'],
-      extraPhonetic: { 王: 'wang', 晶: 'jing', 婧: 'jing' },
+  it('注入拼音表后 例加 → 例甲 走 phonetic 通道命中', () => {
+    const r = recallCandidates('例加说了这句话', [sampleName], {
+      domainTerms: ['例甲'],
+      extraPhonetic: { 例: 'li', 加: 'jia', 甲: 'jia' },
     });
     expect(r.candidates).toHaveLength(1);
     expect(r.candidates[0].channel).toBe('phonetic');
     expect(r.candidates[0].similarity).toBe(1);
-    expect(r.candidates[0].correct).toBe('王婧');
+    expect(r.candidates[0].correct).toBe('例甲');
   });
 });
 
@@ -340,7 +347,7 @@ describe('重叠消解与统计', () => {
   });
 });
 
-// ── 合并去重（specs/013 T016 / D5）：召回并入扫描同一清单前的消解 ───────────
+// ── 合并去重：召回并入扫描同一清单前的消解 ───────────
 describe('mergeRecallCandidates：同 span 双命中 → 一行，召回只作并列依据', () => {
   const row = (over: Partial<CorrectionCandidate> & { entryRef: string; span: CorrectionCandidate['span'] }): CorrectionCandidate => ({
     wrong: 'Cogseed X', correct: 'Cogseed', action: 'replace', confidence: 1,
@@ -350,7 +357,7 @@ describe('mergeRecallCandidates：同 span 双命中 → 一行，召回只作�
     ...over,
   });
 
-  it('同 span 双命中：清单只有一行、channel==="exact"、refs 含两条来源（T016 验收）', () => {
+  it('同 span 双命中：清单只有一行、channel==="exact"、refs 含两条来源', () => {
     const exact = row({
       entryRef: 'g_exact',
       span: { start: 10, end: 19 },

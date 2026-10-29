@@ -1,0 +1,14 @@
+[
+  "p3394-gateway/gateway.cjs",
+  "p3394-gateway/models-probe.cjs",
+  "p3394-gateway/sscli-shim.cjs",
+  "p3394-gateway/test/smoke.cjs",
+  "test/main/features/cogseed_backend/runtime-controller.test.ts",
+  "test/main/features/cogseed_backend/worktree-manager.test.ts",
+  "test/main/features/fixtures/shim-cancel-driver.cjs",
+  "test/main/features/local_agents/spawn-command.test.ts",
+  "test/main/features/p3394_bridge/external-gateways.test.ts",
+  "test/main/features/p3394_bridge/gateway-models-probe.test.ts",
+  "test/main/features/sscli-shim-cancel.test.ts",
+  "test/setup-env.ts"
+]

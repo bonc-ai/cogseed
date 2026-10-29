@@ -12,6 +12,8 @@ const Module = require('node:module');
 // the app's executable surface just because package.json includes bin/**/*.
 const CONNECTOR_CATALOG_ENTRYPOINTS = Object.freeze([
   'bing-webmaster-mcp-server.cjs',
+  'cli-bridge-mcp-server.cjs',
+  'email-mcp-server.cjs',
   'gcal-mcp-server.cjs',
   'gdocs-mcp-server.cjs',
   'gmail-mcp-server.cjs',
@@ -25,6 +27,7 @@ const CONNECTOR_CATALOG_ENTRYPOINTS = Object.freeze([
 const CONNECTOR_CATALOG_SOURCE_FILES = Object.freeze([
   'src/main/features/connectors/catalog.ts',
   'src/main/features/connectors/catalog-google.ts',
+  'src/main/features/connectors/catalog-email.ts',
 ]);
 const GOOGLE_CONNECTOR_CATALOG_SOURCE = 'src/main/features/connectors/catalog-google.ts';
 
@@ -61,7 +64,12 @@ const PACKAGED_BIN_ENTRYPOINTS = Object.freeze([
 // surfaces themselves. App-owned connector entrypoints load this proxy
 // bootstrap so their fetch can follow the route selected by Electron main.
 const PACKAGED_BIN_HELPERS = Object.freeze([
+  // Inert `electron` stand-in aliased by the TS-loading child workers.
+  'child-electron-stub.cjs',
   'proxy-bootstrap.cjs',
+  'email-mcp-core.cjs',
+  'tencent-meeting-actions.cjs',
+  'tencent-meeting-runtime.cjs',
   // Windows-aware CLI launch resolution, required by the Tencent Meeting adapter. It ships beside
   // the entrypoint because the adapter `require`s it at runtime, but it is not a spawn surface.
   'cli-launch.cjs',

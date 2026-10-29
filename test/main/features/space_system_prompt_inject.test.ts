@@ -26,6 +26,13 @@ vi.mock('../../../src/main/features/auth', async (importOriginal) => {
     getConfiguredModelCooldown: () => null,
     getConfiguredModelOAuthExpiredMessage: () => null,
     pickChatEntryGroup: async () => [fakeChatEntry],
+    // 显式用户线：runner 在 userId 已知时优先调用 *ForUser 变体（见 runner.ts 的 earlyUid 分支），
+    // 所以契约测试必须把它们一起 mock，否则会走到真实实现（测试环境无模型配置 → 不会有模型调用）。
+    hasConfiguredModelForUser: () => ({ configured: true }),
+    getConfiguredModelCooldownForUser: () => null,
+    getConfiguredModelOAuthExpiredMessageForUser: () => null,
+    pickChatEntryGroupForUser: async () => [fakeChatEntry],
+    pickChatEntryGroupForModelOverrideForUser: async () => [fakeChatEntry],
   };
 });
 

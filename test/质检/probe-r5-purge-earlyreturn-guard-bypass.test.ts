@@ -1,23 +1,5 @@
-/**
- * 探针 r5（边界测试员 · 第 5 轮）→ 主题：setStatus 幂等早退与守卫的次序。
- *
- * 疑点：setStatus 的 updater 内部（asset-service.ts:1054-1055）——
- *   if (reviewDecisionId && current.appliedReviewDecisionIds?.includes(reviewDecisionId)) return current;
- *   guard?.(current);
- * 幂等早退发生在 guard 之前：已应用的评审决定重放会**跳过 guard**。对
- * pause/resume 等纯状态路径无害（早退不落任何变更），但 purgeAbilityAsset
- * 在 setStatus 返回后**无条件**执行 removeRecallJsonlStream + 级联清理——
- * guard（requireDeleted：保留期清扫只许清 deleted）被跳过时，破坏性后续照跑。
- *
- * 现行三个 purge 调用方（ipc:2787/:2930、retention:80）都不带 reviewDecisionId，
- * 故属潜在陷阱（未来调用方/复用 input 对象即可踩中），非现行故障——对照组
- * 证明不带 rd 时 guard 正常拒绝。风格对齐 regression-r1-asset-lifecycle.test.ts。
- *
- * 2026-09-30 r1 收尾（记账员）：对应待议 P-r1-2（A 交换次序/B 仅 purge 内
- * 二次校验/C 收紧幂等判定，影响面不同待拍板）→ it.skip。注：本用例内嵌
- * 「不带 rd 时 guard 正常拒绝」对照断言（甄别 R-2 反证曾引其 :64-90 作幂等
- * 早退行为锁定），整例 skip 后该锁定随停——拍板 P-r1-2 时需拆分或反转本用例。
- */
+/** 幂等决定重放与 requireDeleted 清除前置条件的执行顺序。 */
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -53,9 +35,10 @@ async function loadAssets() {
 }
 
 async function mkAsset(id: string) {
-  const assets = await loadAssets();
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(UID, {
+  // 直接落历史记录（test-only 种子）：本探针考的是状态机的执行顺序，
+  // 不是创建门；正式创建路径见 createAbilityAsset 的探针。
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'personal', title: `资产 ${id}`, statement: `陈述 ${id}。`,
@@ -65,8 +48,8 @@ async function mkAsset(id: string) {
   }, { actor: 'user', reason: 'probe seed' });
 }
 
-describe('probe r5 › purge 幂等早退跳过 requireDeleted 守卫（待议 P-r1-2，拍板前 skip）', () => {
-  it.skip('带已应用 reviewDecisionId 的 purge：guard 被跳过、状态未变但版本流被清空', async () => {
+describe('purge 幂等早退先过 requireDeleted 守卫', () => {
+  it('带已应用 reviewDecisionId 的 purge：守卫照跑、拒绝清除且版本流原样保留', async () => {
     const assets = await loadAssets();
     await mkAsset('aa-p5b');
     const RD = 'rd_probeR5Guard01';
@@ -83,14 +66,39 @@ describe('probe r5 › purge 幂等早退跳过 requireDeleted 守卫（待议 P
       assets.purgeAbilityAsset(UID, 'aa-p5b', { actor: 'system', reason: '清扫' }, { requireDeleted: true }),
     ).rejects.toThrow(/retention purge requires a deleted asset/);
 
-    // 主探针：带已应用 rd → setStatus 幂等早退（guard 跳过）→ 破坏性后续照跑
-    const result = await assets.purgeAbilityAsset(
-      UID, 'aa-p5b',
-      { actor: 'system', reason: '清扫', reviewDecisionId: RD, sourceCandidateId: SC },
-      { requireDeleted: true },
-    );
-    expect(result.status).toBe('paused');   // 状态没变（未清成墓碑）
-    expect(result.statement).toContain('陈述'); // 内容没清
-    expect(await assets.listAbilityAssetVersions(UID, 'aa-p5b')).toEqual([]); // 版本流却被清空
+    // 主探针（应然契约）：守卫先于幂等早退——带已应用 rd 的重放同样被守卫拒绝，
+    // 不再出现「状态未变但版本流被清空」的半次清除。
+    await expect(
+      assets.purgeAbilityAsset(
+        UID, 'aa-p5b',
+        { actor: 'system', reason: '清扫', reviewDecisionId: RD, sourceCandidateId: SC },
+        { requireDeleted: true },
+      ),
+    ).rejects.toThrow(/retention purge requires a deleted asset/);
+    const after = await assets.readAbilityAsset(UID, 'aa-p5b');
+    expect(after.status).toBe('paused');
+    expect(after.statement).toContain('陈述');
+    expect((await assets.listAbilityAssetVersions(UID, 'aa-p5b')).length).toBeGreaterThan(0);
+  });
+
+  it('用户 purge 重放已应用 rd：记录未成墓碑时拒绝执行破坏性清理', async () => {
+    const assets = await loadAssets();
+    await mkAsset('aa-p5c');
+    const RD = 'rd_probeR5Guard02';
+    const SC = 'cand-aa-p5c';
+    await assets.pauseAbilityAsset(UID, 'aa-p5c', { actor: 'system', reason: '评审暂停', reviewDecisionId: RD, sourceCandidateId: SC });
+
+    // 已应用的 rd 重放：setStatus 幂等早退返回原记录，purge 必须整体拒绝，
+    // 而不是清掉活资产的版本流、把「内容还在」的半清除状态留给用户。
+    await expect(
+      assets.purgeAbilityAsset(
+        UID, 'aa-p5c',
+        { actor: 'user', reason: '重放清除', reviewDecisionId: RD, sourceCandidateId: SC },
+      ),
+    ).rejects.toThrow(/review decision already applied/);
+    const after = await assets.readAbilityAsset(UID, 'aa-p5c');
+    expect(after.status).toBe('paused');
+    expect(after.statement).toContain('陈述');
+    expect((await assets.listAbilityAssetVersions(UID, 'aa-p5c')).length).toBeGreaterThan(0);
   });
 });

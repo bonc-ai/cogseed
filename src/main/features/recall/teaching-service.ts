@@ -1,13 +1,12 @@
 import { getRecallCandidateCapabilities } from './candidate-capabilities';
-import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { safeId } from '../../storage';
+import { createLogger } from '../../logger';
 import {
   readRecallCandidate,
   rejectRecallCandidate,
-  saveRecallCandidate,
 } from './candidate-service';
 import { removeCognitionSource } from './source-control';
 import { recallJsonRecordPath } from './paths';
@@ -15,6 +14,7 @@ import { updateRecallJsonRecord, readRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 
 const TEACHING_COLLECTION = 'teaching-signals';
+const log = createLogger('recall.teaching');
 
 export type UserTeachingIntent = 'remember' | 'prefer' | 'avoid' | 'correct';
 export type UserTeachingScope = 'personal' | 'project' | 'agent';
@@ -34,22 +34,8 @@ export interface UserTeachingSignalRecord extends RecallJsonRecord {
   revokedAt?: string;
 }
 
-export interface RecordTeachingSignalInput {
-  conversationId: string;
-  messageId: string;
-  userMessage: string;
-  memoryContent: string;
-  memoryScope: UserTeachingScope;
-  memoryRef?: string;
-}
-
 function teachingDirectory(userId: string): string {
   return path.dirname(recallJsonRecordPath(userId, TEACHING_COLLECTION, 'placeholder'));
-}
-
-function stableId(prefix: string, ...parts: string[]): string {
-  const digest = createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 24);
-  return `${prefix}-${digest}`;
 }
 
 function compact(value: unknown, field: string, max: number): string {
@@ -106,79 +92,6 @@ function asTeachingSignal(value: RecallJsonRecord): UserTeachingSignalRecord {
   } as UserTeachingSignalRecord;
 }
 
-export function classifyTeachingIntent(userMessage: string): UserTeachingIntent | undefined {
-  const text = String(userMessage || '').trim();
-  if (!text) return undefined;
-  if (/纠正|更正|不是.{0,30}(?:而是|是)|\b(?:correct|correction|actually)\b|訂正|corrig/i.test(text)) return 'correct';
-  if (/避免|不要再|别再|請勿|\b(?:avoid|do not|don't|never)\b|避け|não\s+(?:faça|use)/i.test(text)) return 'avoid';
-  if (/偏好|更喜欢|我喜欢|\b(?:prefer|preference)\b|好み|prefir/i.test(text)) return 'prefer';
-  if (/记住|記住|请记|請記|\bremember\b|覚えて|lembre/i.test(text)) return 'remember';
-  return undefined;
-}
-
-export function teachingSignalId(input: Pick<RecordTeachingSignalInput, 'conversationId' | 'messageId' | 'memoryContent'> & { intent: UserTeachingIntent }): string {
-  return stableId('teach', input.conversationId, input.messageId, input.intent, input.memoryContent.trim());
-}
-
-export function teachingMemoryRef(scope: string, content: string): string {
-  return stableId('mem', scope, content.trim());
-}
-
-export async function recordTeachingSignalAfterMemoryWrite(
-  userId: string,
-  input: RecordTeachingSignalInput,
-): Promise<UserTeachingSignalRecord | undefined> {
-  const intent = classifyTeachingIntent(input.userMessage);
-  if (!intent) return undefined;
-  const conversationId = requireSafeId(input.conversationId, 'conversation id');
-  const messageId = requireSafeId(input.messageId, 'message id');
-  const memoryContent = compact(input.memoryContent, 'memory content', 4_000);
-  const scope = requireScope(input.memoryScope);
-  const memoryRef = input.memoryRef || teachingMemoryRef(scope, memoryContent);
-  requireSafeId(memoryRef, 'memory ref');
-  const id = teachingSignalId({ conversationId, messageId, memoryContent, intent });
-  // 标题与会话整理线统一（2026-09-29 子安拍板「两条线统一」）：短标题用
-  // makeDisplayTitle（正文首句、≤60 字，与当场记/旧记忆迁移线同款），不再
-  // 拿正文前 239 字截断当标题——那会让待我处理里的教学候选顶着半行正文。
-  const { makeDisplayTitle } = await import('./statement-fusion');
-  const summary = makeDisplayTitle(memoryContent) || `${memoryContent.slice(0, 239)}…`;
-
-  const candidate = await saveRecallCandidate(userId, {
-    judgment: memoryContent,
-    summary,
-    suggestedType: intent === 'remember' ? 'personal' : 'rule',
-    suggestedScope: scope,
-    captureKey: `teaching-${id}`,
-    sourceRefs: [
-      { kind: 'conversation', id: conversationId, subtype: 'session', scope: 'conversation' },
-      { kind: 'conversation', id: stableId('msg', conversationId, messageId), subtype: 'message', scope: 'conversation' },
-      { kind: 'user_teaching_signal', id, subtype: 'teaching', scope },
-    ],
-  });
-  const now = new Date().toISOString();
-  const record: UserTeachingSignalRecord = {
-    schemaVersion: 1,
-    taxonomyVersion: 2,
-    ownerId: userId,
-    id,
-    conversationId,
-    messageId,
-    intent,
-    scope,
-    status: 'active',
-    summary,
-    memoryRef,
-    candidateIds: [candidate.id],
-    createdAt: now,
-  };
-  return asTeachingSignal(await updateRecallJsonRecord(
-    userId,
-    TEACHING_COLLECTION,
-    id,
-    (current) => current || record,
-  ));
-}
-
 export async function readUserTeachingSignal(userId: string, signalId: string): Promise<UserTeachingSignalRecord> {
   if (!safeId(signalId)) throw new Error('invalid teaching signal id');
   const record = await readRecallJsonRecord(userId, TEACHING_COLLECTION, signalId);
@@ -219,12 +132,36 @@ async function readSortedTeachingSignals(
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
-  const records = await Promise.all(names
+  // 逐条降级，而不是让一条坏记录把整份教学回执列表读失败（照抄 listExperiences
+  // 的既有口径）：记录形状的不变量分布在 store 的 validateRecallRecord 和这里的
+  // asTeachingSignal 两层，任一层一抛，`recall.teaching.list` 就整体失败，好记录
+  // 也列不出。只降级记录形状的错；真正的 IO 故障（带 errno code）照旧上抛——
+  // 静默少几条等于把磁盘问题伪装成「教学信号变少了」。
+  const reads = await Promise.all(names
     .filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5)))
-    .map((name) => readRecallJsonRecord(userId, TEACHING_COLLECTION, name.slice(0, -5))));
-  return records
-    .filter((record): record is RecallJsonRecord => Boolean(record))
-    .map(asTeachingSignal)
+    .map(async (name) => {
+      const id = name.slice(0, -5);
+      try {
+        return { id, record: await readRecallJsonRecord(userId, TEACHING_COLLECTION, id) };
+      } catch (error) {
+        if (typeof (error as NodeJS.ErrnoException).code === 'string') throw error;
+        return { id, error: error as Error };
+      }
+    }));
+  const signals: UserTeachingSignalRecord[] = [];
+  for (const read of reads) {
+    if (read.error) {
+      log.warn('skipped an unreadable teaching signal', { teachingId: read.id, error: read.error.message });
+      continue;
+    }
+    if (!read.record) continue;
+    try {
+      signals.push(asTeachingSignal(read.record));
+    } catch (error) {
+      log.warn('skipped a malformed teaching signal', { teachingId: read.id, error: (error as Error).message });
+    }
+  }
+  return signals
     .filter((signal) => !conversationId || signal.conversationId === conversationId)
     .filter((signal) => !status || signal.status === status)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));

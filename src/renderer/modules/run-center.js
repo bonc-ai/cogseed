@@ -141,9 +141,12 @@
   let filteredVisibleRuns = [];
 
   function panel() { return document.getElementById('run-center-root'); }
+  // View tabs live in the shell sidebar (specs/008 D5), outside the panel.
+  function navHost() { return document.getElementById('sidebar-run-center-nav'); }
+  function navQuery(selector) { return navHost()?.querySelector?.(selector) || panel()?.querySelector(selector) || null; }
   function focusLater(selector) {
     if (!selector) return;
-    rootWindow.setTimeout(() => panel()?.querySelector(selector)?.focus(), 0);
+    rootWindow.setTimeout(() => navQuery(selector)?.focus(), 0);
   }
   function focusDetailDrawer() { focusLater('[data-run-center-detail-tab], [data-run-center-detail-back]'); }
   function escapedAttributeValue(value) {
@@ -224,7 +227,7 @@
     const matches = target?.querySelectorAll ? Array.from(target.querySelectorAll(snapshot.selector)) : [];
     const next = (attemptSelector ? target?.querySelector(attemptSelector) : null)
       || matches[snapshot.index] || target?.querySelector(snapshot.selector)
-      || (fallbackSelector ? target?.querySelector(fallbackSelector) : null);
+      || (fallbackSelector ? navQuery(fallbackSelector) : null);
     if (!next) return false;
     next.focus();
     if (snapshot.selectionStart != null && typeof next.setSelectionRange === 'function') {
@@ -628,7 +631,7 @@
   }
   function navigationHtml() {
     const activeView = state.view === 'runs' || state.view === 'history' ? 'tasks' : state.view;
-    return `<div class="run-center-view-tabs" role="tablist" aria-orientation="horizontal" aria-label="${esc(text('run_center.title'))}" data-run-center-scroll-key="view-tabs">${VIEW_DEFINITIONS.map(([view, label]) => `<button type="button" id="run-center-tab-${view}" role="tab" aria-controls="run-center-panel-${view}" aria-selected="${String(activeView === view)}" tabindex="${activeView === view ? '0' : '-1'}" class="run-center-tab${activeView === view ? ' is-active' : ''}" data-run-center-view="${view}">${esc(text(label))}</button>`).join('')}</div>`;
+    return `<div class="run-center-view-tabs sidebar-nav" role="tablist" aria-orientation="vertical" aria-label="${esc(text('run_center.title'))}">${VIEW_DEFINITIONS.map(([view, label]) => `<button type="button" id="run-center-tab-${view}" role="tab" aria-controls="run-center-panel-${view}" aria-selected="${String(activeView === view)}" tabindex="${activeView === view ? '0' : '-1'}" class="run-center-tab${activeView === view ? ' is-active' : ''}" data-run-center-view="${view}">${esc(text(label))}</button>`).join('')}</div>`;
   }
   function taskScopeHtml() {
     if (state.view !== 'runs' && state.view !== 'history') return '';
@@ -698,6 +701,17 @@
     const next = temporary.firstElementChild;
     if (next && typeof current.replaceWith === 'function') current.replaceWith(next);
   }
+  let lastSidebarNavHtml = '';
+  // Re-written only when it changes, so keyboard focus on a tab survives
+  // unrelated re-renders of the page.
+  function renderSidebarNav() {
+    const host = navHost();
+    if (!host) return;
+    const html = navigationHtml();
+    if (html === lastSidebarNavHtml && host.firstElementChild) return;
+    lastSidebarNavHtml = html;
+    host.innerHTML = html;
+  }
   function render(options = {}) {
     const target = panel();
     if (!target) return;
@@ -729,13 +743,14 @@
           <aside class="run-center-run-list-pane${state.runMode === 'board' ? ' is-board' : ''}" aria-label="${esc(text(state.runMode === 'board' ? 'run_center.mode_board' : 'run_center.mode_queue'))}">${state.runMode === 'board' ? boardHtml() : queueHtml()}</aside>
           <main class="run-center-run-detail-pane">${detailView.renderDetails()}</main>
         </div>`;
-    target.innerHTML = `<div class="run-center-shell" data-run-center-scroll-key="shell" data-run-center-state="${esc(state.dataState)}" aria-busy="${String(state.loading || state.refreshing)}">
-      <header class="run-center-header is-compact"><h1 class="ui-visually-hidden">${esc(text('run_center.title'))}</h1><nav class="run-center-navigation">${navigationHtml()}${taskScopeHtml()}</nav><div class="run-center-header-actions"><button type="button" class="btn btn-sm btn-primary" data-run-center-create-open title="${esc(text('run_center.create_task'))}" aria-label="${esc(text('run_center.create_task'))}">${icon('plus')}<span>${esc(text('run_center.create_task'))}</span></button><button type="button" class="run-center-icon-btn" data-run-center-refresh title="${esc(text('run_center.refresh'))}" aria-label="${esc(text('run_center.refresh'))}">${icon('refresh')}</button><div class="run-center-more-menu"><button type="button" class="run-center-icon-btn" data-run-center-tools-toggle title="${esc(text('run_center.more_tools'))}" aria-label="${esc(text('run_center.more_tools'))}" aria-haspopup="menu" aria-controls="run-center-tools-menu" aria-expanded="${String(state.toolsOpen)}">${icon('more-horizontal')}</button>${state.toolsOpen ? `<div id="run-center-tools-menu" role="menu" data-run-center-tools-menu><button type="button" role="menuitem" tabindex="0" data-run-center-settings-anchor="worktrees">${icon('git-branch')}<span>${esc(text('run_center.worktrees'))}</span></button><button type="button" role="menuitem" tabindex="-1" data-run-center-settings-anchor="diagnostics">${icon('activity')}<span>${esc(text('run_center.diagnostics'))}</span></button></div>` : ''}</div></div></header>
+    target.innerHTML = `<header class="run-center-header is-compact">${typeof rootWindow.uiShellHeaderSlot === 'function' ? rootWindow.uiShellHeaderSlot() : ''}<h1 class="run-center-title">${esc(text('run_center.title'))}</h1>${taskScopeHtml()}<div class="run-center-header-actions"><button type="button" class="btn btn-sm btn-primary" data-run-center-create-open title="${esc(text('run_center.create_task'))}" aria-label="${esc(text('run_center.create_task'))}">${icon('plus')}<span>${esc(text('run_center.create_task'))}</span></button><button type="button" class="run-center-icon-btn" data-run-center-refresh title="${esc(text('run_center.refresh'))}" aria-label="${esc(text('run_center.refresh'))}">${icon('refresh')}</button><div class="run-center-more-menu"><button type="button" class="run-center-icon-btn" data-run-center-tools-toggle title="${esc(text('run_center.more_tools'))}" aria-label="${esc(text('run_center.more_tools'))}" aria-haspopup="menu" aria-controls="run-center-tools-menu" aria-expanded="${String(state.toolsOpen)}">${icon('more-horizontal')}</button>${state.toolsOpen ? `<div id="run-center-tools-menu" role="menu" data-run-center-tools-menu><button type="button" role="menuitem" tabindex="0" data-run-center-settings-anchor="worktrees">${icon('git-branch')}<span>${esc(text('run_center.worktrees'))}</span></button><button type="button" role="menuitem" tabindex="-1" data-run-center-settings-anchor="diagnostics">${icon('activity')}<span>${esc(text('run_center.diagnostics'))}</span></button></div>` : ''}</div></div></header><div class="run-center-shell" data-run-center-scroll-key="shell" data-run-center-state="${esc(state.dataState)}" aria-busy="${String(state.loading || state.refreshing)}">
+
       ${refreshStatusHtml()}
       ${taskSummaryHtml()}
       ${filterable ? queryBarHtml({ modeSwitch: state.view === 'runs' || state.view === 'history' }) : ''}
       ${layout}${inactivePanels}
     </div>${createModalHtml(createAdvancedOpen)}`;
+    renderSidebarNav();
     showRenderedDialog(target);
     let restoredPendingContext = false;
     if (state.pendingRestoreContext && state.board && !state.loading) {
@@ -1125,7 +1140,7 @@
     if (!transition) return false;
     const { nextView, previousView } = transition;
     render({ resetScroll: previousView !== nextView });
-    if (focusTab) panel()?.querySelector(`[data-run-center-view="${nextView === 'runs' || nextView === 'history' ? 'tasks' : nextView}"]`)?.focus();
+    if (focusTab) navQuery(`[data-run-center-view="${nextView === 'runs' || nextView === 'history' ? 'tasks' : nextView}"]`)?.focus();
     return true;
   }
   function enterRunQueue(query = {}) {
@@ -1701,10 +1716,20 @@
       );
     }
   }
+  function handleViewButton(button) {
+    const requestedView = normalizeView(button.dataset.runCenterView);
+    if (requestedView === state.view) {
+      navQuery(`[data-run-center-view="${requestedView === 'runs' || requestedView === 'history' ? 'tasks' : requestedView}"]`)?.focus();
+    } else activateView(button.dataset.runCenterView, true);
+  }
   function bind() {
     const target = panel();
     if (!target || state.bound) return;
     state.bound = true;
+    navHost()?.addEventListener?.('click', (event) => {
+      const button = event.target?.closest?.('button[data-run-center-view]');
+      if (button) handleViewButton(button);
+    });
     target.addEventListener('click', (event) => {
       const backdrop = event.target?.closest?.('[data-run-center-detail-backdrop]');
       if (backdrop && event.target === backdrop) { closeDetails(); return; }
@@ -1798,13 +1823,7 @@
         return;
       }
       if (button.dataset.runCenterAgentConversation !== undefined) { openConversationFromRunCenter(button.dataset.runCenterAgentConversation); return; }
-      if (button.dataset.runCenterView) {
-        const requestedView = normalizeView(button.dataset.runCenterView);
-        if (requestedView === state.view) {
-          panel()?.querySelector(`[data-run-center-view="${requestedView === 'runs' || requestedView === 'history' ? 'tasks' : requestedView}"]`)?.focus();
-        } else activateView(button.dataset.runCenterView, true);
-        return;
-      }
+      if (button.dataset.runCenterView) { handleViewButton(button); return; }
       if (button.dataset.runCenterDetailTab) {
         state.detailTab = button.dataset.runCenterDetailTab;
         state.actionNotice = '';
@@ -1955,9 +1974,26 @@
       else if (event.key === 'Escape' && state.detailOpen) closeDetails();
     });
     rootWindow.addEventListener('i18n-change', () => render());
+    // Tearing the watch down on every hidden→visible toggle churned the IPC
+    // stream (dozens of rebuilds per day, some living under a second) with no
+    // benefit: `startWatch()` is idempotent and the stream is cheap while
+    // idle. Defer the teardown instead and cancel it if the panel returns.
+    const HIDDEN_STOP_DELAY_MS = 30000;
+    let hiddenStopTimer = null;
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) stopWatch();
-      else if (panel()?.closest('.panel')?.classList.contains('active')) { startWatch(); scheduleRefresh(); }
+      if (document.hidden) {
+        if (hiddenStopTimer) rootWindow.clearTimeout(hiddenStopTimer);
+        hiddenStopTimer = rootWindow.setTimeout(() => {
+          hiddenStopTimer = null;
+          stopWatch();
+        }, HIDDEN_STOP_DELAY_MS);
+        return;
+      }
+      if (hiddenStopTimer) {
+        rootWindow.clearTimeout(hiddenStopTimer);
+        hiddenStopTimer = null;
+      }
+      if (panel()?.closest('.panel')?.classList.contains('active')) { startWatch(); scheduleRefresh(); }
     });
   }
   function applyRequestedView(view) {

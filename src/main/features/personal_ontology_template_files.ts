@@ -1,5 +1,5 @@
 /**
- * Personal Ontology Template Files — 角色模板子域（2026-09-29 重构）。
+ * Personal Ontology Template Files — 角色模板子域。
  *
  * 一个已安装角色模板 = PoDocument 里一个 kind='template' 的组（po/model.ts）：
  * 分节（原 preset_group）承载在字段的 `section` 列上，字段分 T-box 声明的坑
@@ -18,7 +18,8 @@ import * as path from 'node:path';
 import { userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, genId12 } from '../storage';
 import { collectRoleTemplateMemoryEntries, removeRoleTemplateMemoryFromLive, restoreRoleTemplateMemoryEntries } from './memory';
-import { getRoleTemplate, listRoleTemplates } from './role_templates';
+import { withCognitionMemoryTransaction } from './cognition-memory-transaction';
+import { getRoleTemplate, listRoleTemplates, type RoleTemplate } from './role_templates';
 import { createLogger } from '../logger';
 import { registerDeferred } from '../util/boot_init';
 import { hasActiveUser, getActiveUserId } from './users';
@@ -29,6 +30,7 @@ import { poGroupRelPath, poGroupToMeta, renderTemplateGroupMarkdown } from './po
 import {
   isTemplateFileText,
   normalizeSource,
+  parseFieldValueLine,
   parseTemplateContent,
   resolveAsOfControl,
   serializeSection,
@@ -155,6 +157,65 @@ function groupContentFromTemplateText(
   return { fields, values, entries };
 }
 
+/**
+ * catalog 元数据回填。模板方言文本不携带 T-box 元数据，裸重建
+ * （groupContentFromTemplateText）会把全部字段造成 origin='user'——归档恢复
+ * 与 raw editor 保存两个入口都整体替换 fields，T-box 身份（origin/isRelation/
+ * description）随之永久丢失，且 origin==='schema' 只读守卫（poRenameField/
+ * poDeleteField/poSetFieldRelationFlag）失效。按 分节标题+字段名 命中 catalog
+ * 声明的字段回填 schema 身份；命不中的（用户自建/退役/改名期字段）保持 user。
+ * 历史名（previous_names）的换算不在此做——那是 schema 迁移的职责；空坑补齐
+ * 也不在此做——归档恢复保持 v1「原样」语义（见 templateGroupFromArchiveText）。
+ */
+function backfillCatalogFieldMeta(template: RoleTemplate, fields: PoField[]): void {
+  for (const preset of template.preset_groups) {
+    for (const declared of preset.fields) {
+      const hit = fields.find((f) => (f.section || '') === preset.title && f.name === declared.name);
+      if (!hit) continue;
+      hit.origin = 'schema';
+      if (declared.isRelation) hit.isRelation = true;
+      else delete hit.isRelation;
+      if (declared.description) hit.description = declared.description;
+      else delete hit.description;
+    }
+  }
+}
+
+/**
+ * 恢复侧过滤已清资产的投影值。投影级联
+ * （removeTemplateFieldValuesForRecallAsset）只扫活模板组——卸载归档目录
+ * （`_backup_<ts>/`，「卸载=数据保留」设计）不在级联面内：canonical 资产被
+ * 暂停/删除/清洗/type 改变后，归档里的投影值无从清理，重装恢复会把它们原样
+ * 复活。本函数在恢复入口过滤：带 assetId 所有权标记的值，仅当其资产记录仍在
+ * 且可投影（type=personal + status=active，与资产侧 reconcile 的可投影口径
+ * 一致）时保留；记录已不在（purge/物理删除）的整条过滤。手写/无标记值不受
+ * 影响。记录在场但读不回（坏档/IO 错误）时保守保留——宁多勿丢，写侧另有
+ * 坏档拒写防线。返回过滤条数。
+ */
+export async function dropRevivedValuesOfClearedAssets(uid: string, group: PoGroup): Promise<number> {
+  const assetIds = [...new Set(group.values.filter((v) => v.assetId).map((v) => v.assetId as string))];
+  if (!assetIds.length) return 0;
+  const { readRecallJsonRecord } = await import('./recall/store');
+  const keep = new Set<string>();
+  for (const assetId of assetIds) {
+    let keepIt = false;
+    try {
+      const raw = await readRecallJsonRecord(uid, 'ability-assets', assetId);
+      const record = raw as { type?: unknown; status?: unknown } | undefined;
+      keepIt = !!record && record.type === 'personal' && record.status === 'active';
+    } catch (err) {
+      keepIt = true;
+      log.warn('restore: asset record unreadable; keeping archived projection', {
+        uid, assetId, error: (err as Error).message,
+      });
+    }
+    if (keepIt) keep.add(assetId);
+  }
+  const before = group.values.length;
+  group.values = group.values.filter((v) => !v.assetId || keep.has(v.assetId));
+  return before - group.values.length;
+}
+
 // ── 安装 / 卸载 / 归档 ───────────────────────────────────────────────────
 
 export interface InstallTemplateFileResult {
@@ -222,8 +283,11 @@ function templateGroupFromArchiveText(uid: string, templateId: string, text: str
   group.installedAt = content.installed_at || group.installedAt;
   // 归档恢复 = **原样**（v1 语义）：结构以归档为准，不并入当前 catalog 的
   // 空坑——新版本补坑是 install 之后 reconcile（真迁移）的职责；提前并入
-  // 会把「检测到需要迁移」这个事实抹掉。
+  // 会把「检测到需要迁移」这个事实抹掉。原样指结构（坑位/值/流水），
+  // T-box 元数据（origin/isRelation/description）仍按 catalog 回填——方言
+  // 文本不携带它们，不回填则 seed 骨架被裸文本重建覆盖、只读守卫失效。
   const rebuilt = groupContentFromTemplateText(text);
+  backfillCatalogFieldMeta(template, rebuilt.fields);
   group.fields = rebuilt.fields;
   group.values = rebuilt.values;
   group.entries = rebuilt.entries;
@@ -251,6 +315,8 @@ export async function installTemplateFile(
     .filter((g) => g.kind === 'user' && reservedTitles.has(g.title))
     .map((g) => ({ group_id: g.id, title: g.title }));
 
+  // 锁外快路径检查（提示性）：权威终审在下方 editPoDoc 回调锁内用最新文档
+  // 复核——并发双击时两个调用都会穿过这里，靠锁内复核拦下第二份。
   if (doc.groups.some((g) => g.kind === 'template' && g.templateId === templateId)) {
     return { ok: true, already_installed: true, conflict_groups: conflictGroups };
   }
@@ -261,6 +327,8 @@ export async function installTemplateFile(
 
   let restored_from_archive = false;
   let restored_memory_count = 0;
+  // 归档记忆的期望恢复条数——全成功才允许清归档（见下方清档条件）。
+  let memory_restore_expected = 0;
   let newGroup: PoGroup | undefined;
   if (restoreData) {
     const archived = readTemplateArchive(uid, templateId);
@@ -273,24 +341,87 @@ export async function installTemplateFile(
   if (!newGroup) newGroup = seedTemplateGroup(templateId);
   if (!newGroup) return { ok: false, error: 'template not found' };
 
+  // 归档面不在投影级联扫描面内，已清资产（暂停/删除/清洗/type 改变
+  // 的 canonical 资产）的投影值在恢复入口过滤，防「重装+恢复」复活。
+  if (restored_from_archive && newGroup) {
+    const dropped = await dropRevivedValuesOfClearedAssets(uid, newGroup);
+    if (dropped > 0) {
+      log.warn('restore: dropped archived projection values of cleared assets', { uid, templateId, dropped });
+    }
+  }
+
   // 恢复随模板归档的全局记忆 —— 按实际成功数上报（B-3）。
   if (restoreData) {
     const memArchived = readTemplateMemoryArchive(uid, templateId);
     if (memArchived) {
+      memory_restore_expected = (memArchived.user?.length || 0) + (memArchived.memory?.length || 0);
       restored_memory_count = restoreRoleTemplateMemoryEntries(uid, templateId, memArchived);
     }
   }
-  if (restored_from_archive || restored_memory_count > 0) {
-    clearTemplateArchives(uid, templateId);
-  }
-
+  let alreadyInstalled = false;
   const result = await editPoDoc(uid, (ctx) => {
+    // 锁内终审：并发双击会装出第二份同 templateId 的组（不同 id 的孤儿——
+    // 迁移/卸载按 templateId find 只认第一份）、MAX_INSTALLED_TEMPLATES 同被
+    // 绕过。editPoDoc 锁内重载最新文档（po/store.ts），在此复核。
+    if (ctx.doc.groups.some((g) => g.kind === 'template' && g.templateId === templateId)) {
+      alreadyInstalled = true;
+      return; // 幂等：已装 → 不 push、不留快照
+    }
+    if (ctx.doc.groups.filter((g) => g.kind === 'template').length >= MAX_INSTALLED_TEMPLATES) {
+      return ctx.fail('template_limit_reached');
+    }
     ctx.doc.groups.push(newGroup!);
     ctx.touch(newGroup!.id);
   });
-  if (!result.ok) return { ok: false, error: result.error };
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: result.error,
+      ...(result.error === 'template_limit_reached' ? { conflict_groups: conflictGroups } : {}),
+    };
+  }
+  // 并发窗口里他方已装：幂等返回 already_installed。必须在此提前返回——
+  // 不能走到下面的 clearTemplateArchives：本调用恢复的数据并没有落盘，
+  // 此刻归档仍是唯一副本，清掉即永久丢数据。
+  if (alreadyInstalled) {
+    return { ok: true, already_installed: true, conflict_groups: conflictGroups };
+  }
+  // 归档清理必须在 editPoDoc 落盘成功之后：此刻归档是旧数据的唯一磁盘副本，
+  // 写失败/崩溃窗口里删掉它 = 旧数据永久丢失（与卸载侧「先写归档 → 再删活
+  // 数据」的次序原则对齐，恢复侧反序：先落活数据 → 再删归档）。
+  // **全成功才清**。存储模型对同源记忆是「同源单条」硬约束
+  // （memory-records ensureSourcedMemoryRecordWithKind），归档却是多条数组——
+  // legacy 双源存量恢复时第二条必被 source_content_mismatch 拒，照旧清归档
+  // 会让未恢复条目永久丢失（回执仍 ok）。两类失败都保留归档（数据在盘上，
+  // 重装可再试）：① 记忆恢复条数 < 归档条数；② 组归档存在但没恢复成功
+  // （解析失败回落空装）——此时若因记忆恢复 >0 而清档，会把组旧数据一并
+  // 抹掉。保留归档可供恢复未完成的条目。
+  const groupArchiveRestorePending = restoreData && templateHasArchive(uid, templateId) && !restored_from_archive;
+  const memoryRestoreComplete = restored_memory_count === memory_restore_expected;
+  if (!groupArchiveRestorePending && memoryRestoreComplete && (restored_from_archive || restored_memory_count > 0)) {
+    try {
+      const clear = await editPoDoc(uid, (ctx) => {
+        if (ctx.doc.groups.some((g) => g.kind === 'template' && g.templateId === templateId)) {
+          clearTemplateArchives(uid, templateId);
+        }
+      });
+      if (!clear.ok) {
+        log.warn('install: post-restore archive cleanup failed', { uid, templateId, error: clear.error });
+      }
+    } catch (err) {
+      log.warn('install: post-restore archive cleanup failed', { uid, templateId, error: (err as Error).message });
+    }
+  } else if (groupArchiveRestorePending || !memoryRestoreComplete) {
+    // 部分失败时归档保留（见上注释），必须留痕让失败可发现。
+    log.warn('install: restore incomplete; archives kept for retry', {
+      uid, templateId,
+      group_archive_pending: groupArchiveRestorePending,
+      restored_memory_count, memory_restore_expected,
+    });
+  }
   log.info('ontology template installed', {
     uid, templateId, restored_from_archive, restored_memory_count,
+    memory_restore_expected,
     installed_version: newGroup.templateVersion,
     catalog_version: template.version,
   });
@@ -411,44 +542,64 @@ export async function uninstallTemplateFile(
   const group = doc.groups.find((g) => g.kind === 'template' && g.templateId === templateId);
   if (!group) return { ok: true }; // 未安装 → 无操作
 
-  const currentText = renderTemplateGroupMarkdown(group);
   let archive_dir: string | undefined;
   let archived_memory_count = 0;
-  try {
-    archive_dir = templateArchiveDir(uid);
-    fs.mkdirSync(archive_dir, { recursive: true });
-    writeTextAtomicSync(path.join(archive_dir, `${templateId}.md`), currentText);
+  let removedGroup = false;
+  const result = await editPoDoc(uid, async (ctx) => {
+    // 归档渲染与落盘必须与删组同临界区：锁外快照渲染 + 归档落盘与锁内删组
+    // 之间的窗口里，他方经锁提交的值既不进归档也会随组被删（静默丢值）。
+    // 这里用锁内最新组渲染归档；写入失败转 failure，事务中止、组保留
+    // （归档失败即不删更安全）。
+    const idx = ctx.doc.groups.findIndex((g) => g.id === group.id);
+    if (idx === -1) return; // 他方已删 → 幂等无操作
+    const latest = ctx.doc.groups[idx];
+    try {
+      archive_dir = archive_dir || templateArchiveDir(uid);
+      fs.mkdirSync(archive_dir, { recursive: true });
+      writeTextAtomicSync(path.join(archive_dir, `${templateId}.md`), renderTemplateGroupMarkdown(latest));
+    } catch (err) {
+      return ctx.fail(`archive write failed: ${(err as Error).message}`);
+    }
+    // 记忆分支移进同一临界区、后置于组归档成功——修复前它在锁外
+    // 先删活记忆再进锁删组，组归档写失败即成分裂态（模板还在、活记忆已删、
+    // 只剩归档副本、产品内无恢复入口）。现在组归档失败时 ctx.fail 先行返回，
+    // 活记忆原样保留。收集/归档/删除整体再包一层 memory 事务（独立锁真正
+    // 封窗）：与全部事务化 MEMORY.md 写入方互斥，删除不会被并发事务的整文件
+    // 回滚复活/抹掉。锁序固定为组锁（已持有）→ memory 事务，仓内无反向嵌套。
     if (archiveMemory) {
       // 顺序保证（防崩溃窗口数据丢失）：先写归档文件 → 再删活数据。
-      const texts = collectRoleTemplateMemoryEntries(uid, templateId);
-      const all = [...(texts.user || []), ...(texts.memory || [])];
-      if (all.length) {
-        const parts: string[] = [];
-        if (texts.user.length) parts.push(`# user\n${texts.user.join('\n§\n')}`);
-        if (texts.memory.length) parts.push(`# memory\n${texts.memory.join('\n§\n')}`);
-        writeTextAtomicSync(path.join(archive_dir, `${templateId}.memory.md`), parts.join('\n\n'));
-        const removed = removeRoleTemplateMemoryFromLive(uid, templateId);
-        if (!removed.userOk || !removed.memoryOk) {
-          log.warn('uninstall: global-memory removal failed after archive write', { uid, templateId, removed });
-        }
-        archived_memory_count = all.length;
+      try {
+        const dir = archive_dir as string;
+        await withCognitionMemoryTransaction(uid, async () => {
+          const texts = collectRoleTemplateMemoryEntries(uid, templateId);
+          const all = [...(texts.user || []), ...(texts.memory || [])];
+          if (!all.length) return;
+          const parts: string[] = [];
+          if (texts.user.length) parts.push(`# user\n${texts.user.join('\n§\n')}`);
+          if (texts.memory.length) parts.push(`# memory\n${texts.memory.join('\n§\n')}`);
+          writeTextAtomicSync(path.join(dir, `${templateId}.memory.md`), parts.join('\n\n'));
+          const removed = removeRoleTemplateMemoryFromLive(uid, templateId);
+          if (!removed.userOk || !removed.memoryOk) {
+            log.warn('uninstall: global-memory removal failed after archive write', { uid, templateId, removed });
+          }
+          archived_memory_count = all.length;
+        });
+      } catch (err) {
+        return ctx.fail(`memory archive failed: ${(err as Error).message}`);
       }
     }
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
-
-  const result = await editPoDoc(uid, (ctx) => {
-    const idx = ctx.doc.groups.findIndex((g) => g.id === group.id);
-    if (idx !== -1) ctx.doc.groups.splice(idx, 1);
-    ctx.markRemoved(poGroupRelPath(group));
+    ctx.doc.groups.splice(idx, 1);
+    ctx.markRemoved(poGroupRelPath(latest));
+    removedGroup = true;
   });
   if (!result.ok) return { ok: false, error: result.error };
-  log.info('ontology template file uninstalled (archived)', {
-    uid, templateId,
-    archive_base: archive_dir ? path.basename(archive_dir) : undefined,
-    archived_memory_count,
-  });
+  if (removedGroup) {
+    log.info('ontology template file uninstalled (archived)', {
+      uid, templateId,
+      archive_base: archive_dir ? path.basename(archive_dir) : undefined,
+      archived_memory_count,
+    });
+  }
   return { ok: true, archive_dir, archived_memory_count };
 }
 
@@ -569,6 +720,10 @@ export async function writeTemplateFileContent(
     }
     const previousProjections = assetProjectionSignatures(group);
     const submittedGroupState = groupContentFromTemplateText(body);
+    // raw editor 保存同样按 catalog 回填 T-box 元数据，
+    // 防止 schema 坑被整组替换降级成 user（只读守卫失效、R-box/用途说明丢失）。
+    const catalog = group.templateId ? getRoleTemplate(group.templateId) : undefined;
+    if (catalog) backfillCatalogFieldMeta(catalog, submittedGroupState.fields);
     const submittedLike: PoGroup = { ...group, fields: submittedGroupState.fields, values: submittedGroupState.values, entries: submittedGroupState.entries };
     const submittedProjections = assetProjectionSignatures(submittedLike);
     if (previousProjections.length !== submittedProjections.length
@@ -590,14 +745,18 @@ export async function writeTemplateFileContent(
       const mapped = fieldIdOverride.get(v.fieldId);
       if (mapped) v.fieldId = mapped;
     }
-    const oldValuesByKey = new Map(group.values.map((v) => {
-      const f = group.fields.find((x) => x.id === v.fieldId);
-      return [`${f?.section || ''}\u0000${f?.name || ''}\u0000${v.text}`, v];
-    }));
+    // 同字段内同文本值沿用旧值 id——逐条一对一配对（旧 id 每个只消费一次）。
+    // 不能用 Map 按 分节+字段名+文本 建 key：同文本多值会互相覆盖，两条新值
+    // 拿同一旧 id，poDeleteValue 一次删两条、poUpdateValue 改错条。
+    // （此时 v.fieldId 已映射到旧字段 id 命名空间，直接比 fieldId 等价于比
+    // 分节+字段名，且免掉每条一次的字段查找。）
+    const usedValueIds = new Set<string>();
     for (const v of submittedLike.values) {
-      const f = submittedLike.fields.find((x) => x.id === v.fieldId);
-      const old = oldValuesByKey.get(`${f?.section || ''}\u0000${f?.name || ''}\u0000${v.text}`);
-      if (old) v.id = old.id;
+      const prior = group.values.find((ov) => ov.fieldId === v.fieldId && ov.text === v.text && !usedValueIds.has(ov.id));
+      if (prior) {
+        v.id = prior.id;
+        usedValueIds.add(prior.id);
+      }
     }
     group.fields = submittedLike.fields;
     group.values = submittedLike.values;
@@ -726,6 +885,7 @@ export async function appendExistingTemplateFieldValueToRef(
   source: string,
   project?: string,
   recallAssetId?: string,
+  verifyAsset?: () => Promise<boolean>,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   if (recallAssetId !== undefined && !safeId(recallAssetId)) return { ok: false, error: 'invalid recall asset id' };
@@ -746,7 +906,11 @@ export async function appendExistingTemplateFieldValueToRef(
     return { ok: false, error: 'field is not declared by the role template' };
   }
 
-  return editPoDoc(uid, (ctx) => {
+  return editPoDoc(uid, async (ctx) => {
+    // A sync may have waited on model routing while the asset was purged or
+    // edited. Re-read inside the PO write lock so a stale snapshot cannot
+    // recreate the projection.
+    if (verifyAsset && !await verifyAsset()) return ctx.fail('profile_asset_changed');
     const group = ctx.touch(groupId);
     if (!group) return ctx.fail('template group not found');
     const field = findSectionField(group, section, name);
@@ -780,11 +944,69 @@ export async function appendExistingTemplateFieldValueToRef(
   });
 }
 
-/** 只清除带该资产所有权标记的模板值；手写/导入/无标记值一律不动。 */
+/**
+ * 归档面投影清理：扫全部 `_backup_<ts>/` 归档目录里的模板 md，删掉
+ * 指向该资产的方言投影值行（正文与 @asset 标记一起走）。跳过
+ * `.memory.md`（全局记忆归档，无 @asset 投影行）。逐文件尽力而为：单文件
+ * 失败只记日志不阻塞其余清理；返回成功清除的行数。
+ */
+function scrubArchivedTemplateFilesForAsset(uid: string, recallAssetId: string): { scrubbed: number; errors: number } {
+  let scrubbed = 0;
+  let errors = 0;
+  for (const dir of listArchiveDirs(uid)) {
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      errors += 1;
+      continue;
+    }
+    for (const name of names) {
+      if (!name.endsWith('.md') || name.endsWith('.memory.md')) continue;
+      const file = path.join(dir, name);
+      let text: string;
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch {
+        errors += 1;
+        continue;
+      }
+      // 快路径：不含该资产标记的归档不动（零字节重写也免了）。
+      if (!text.includes(`@asset:${recallAssetId}`)) continue;
+      const kept: string[] = [];
+      let fileScrubbed = 0;
+      for (const line of text.split('\n')) {
+        const fv = parseFieldValueLine(line);
+        if (fv && fv.recallAssetId === recallAssetId) {
+          fileScrubbed += 1;
+          continue;
+        }
+        kept.push(line);
+      }
+      if (!fileScrubbed) continue;
+      try {
+        writeTextAtomicSync(file, kept.join('\n'));
+        scrubbed += fileScrubbed;
+      } catch (err) {
+        errors += 1;
+        log.warn('archive projection scrub failed', {
+          uid, assetId: recallAssetId, file: path.basename(file), error: (err as Error).message,
+        });
+      }
+    }
+  }
+  return { scrubbed, errors };
+}
+
+/** 只清除带该资产所有权标记的模板值；手写/导入/无标记值一律不动。
+ *  级联同时扩到归档面——活组清完后，`_backup_<ts>/` 归档 md 里的
+ *  投影值行一并清除（资产已清，归档残留即泄漏/复活面；恢复侧
+ *  dropRevivedValuesOfClearedAssets 仍作第二道防线）。归档清理与活组编辑
+ *  相互独立：活组编辑失败也照清归档。 */
 export async function removeTemplateFieldValuesForRecallAsset(
   uid: string,
   recallAssetId: string,
-): Promise<{ ok: boolean; removed: number; error?: string }> {
+): Promise<{ ok: boolean; removed: number; archivedScrubbed?: number; archiveErrors?: number; error?: string }> {
   if (!safeId(uid)) return { ok: false, removed: 0, error: 'invalid uid' };
   if (!safeId(recallAssetId)) return { ok: false, removed: 0, error: 'invalid recall asset id' };
 
@@ -794,7 +1016,16 @@ export async function removeTemplateFieldValuesForRecallAsset(
   for (const group of templateGroups) {
     removed += group.values.filter((v) => v.assetId === recallAssetId).length;
   }
-  if (!removed) return { ok: true, removed: 0 };
+  const archive = scrubArchivedTemplateFilesForAsset(uid, recallAssetId);
+  const archivedScrubbed = archive.scrubbed;
+  const archiveError = archive.errors > 0
+    ? { archiveErrors: archive.errors, error: 'archive projection cleanup incomplete' }
+    : {};
+  if (!removed) {
+    return archive.errors > 0
+      ? { ok: false, removed: 0, ...(archivedScrubbed ? { archivedScrubbed } : {}), ...archiveError }
+      : { ok: true, removed: 0, ...(archivedScrubbed ? { archivedScrubbed } : {}) };
+  }
   const result = await editPoDoc(uid, (ctx) => {
     for (const group of ctx.doc.groups) {
       if (group.kind !== 'template') continue;
@@ -806,7 +1037,9 @@ export async function removeTemplateFieldValuesForRecallAsset(
       }
     }
   });
-  return result.ok ? { ok: true, removed } : { ok: false, removed: 0, error: result.error };
+  if (result.ok && archive.errors === 0) return { ok: true, removed, ...(archivedScrubbed ? { archivedScrubbed } : {}) };
+  if (result.ok) return { ok: false, removed, ...(archivedScrubbed ? { archivedScrubbed } : {}), ...archiveError };
+  return { ok: false, removed: 0, ...(archivedScrubbed ? { archivedScrubbed } : {}), ...archiveError, error: result.error };
 }
 
 /** 流水追加：复合 id → 分节流水；普通组 id → 转发 appendToGroup。 */

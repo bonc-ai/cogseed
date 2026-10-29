@@ -518,6 +518,21 @@ describe('skills › extractSkillContainers', () => {
 });
 
 describe('skills › applySkillContainerFromCommander › create', () => {
+  it('writes a queued commander mutation under its explicit user scope', async () => {
+    const s = await loadSkills();
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('u2');
+    const r = await s.applySkillContainerFromCommander('u1', {
+      files: [{
+        path: 'SKILL.md',
+        content: '---\nname: "queued-skill"\ndescription: "Queued"\n---\n# body\n',
+      }],
+    });
+    expect(r.ok).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'u1', 'cloud', 'skills', 'queued-skill', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'u2', 'cloud', 'skills', 'queued-skill', 'SKILL.md'))).toBe(false);
+  });
+
   it('creates skill from frontmatter `name`, writes all blocks', async () => {
     const s = await loadSkills();
     const skillMdContent = '---\nname: "social-fetch"\ndescription_zh: "抓取并分析"\ndescription_en: "Fetch and analyze"\ncategory: "data"\n---\n\n# When to use\n…\n';
@@ -1107,6 +1122,23 @@ describe('skills › createCustomSkill', () => {
 });
 
 describe('skills › createFromDir', () => {
+  it('materializes a direct import in the requested user after an active-user switch', async () => {
+    const users = await import('../../../src/main/features/users');
+    const source = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/private/tmp' : os.tmpdir(), 'cogseed-import-source-'));
+    try {
+      fs.writeFileSync(path.join(source, 'SKILL.md'), '---\nname: "requested-import"\ndescription: "d"\n---\n\nbody');
+      users.activateUser('u2');
+      const s = await loadSkills();
+      const result = await s.createFromDirForUser(TEST_UID, null, null, source);
+
+      expect(result.ok).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'cloud', 'skills', 'requested-import', 'SKILL.md'))).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, 'u2', 'cloud', 'skills', 'requested-import', 'SKILL.md'))).toBe(false);
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true });
+    }
+  });
+
   it('enforces Windows import blacklists case-insensitively on the actual system drive', async () => {
     const s = await loadSkills();
     const options = {
@@ -1479,6 +1511,20 @@ describe('skills › createFromDir', () => {
   });
 });
 
+describe('skills › clearSkillChat', () => {
+  it('clears a requested user skill after the active user switches', async () => {
+    const users = await import('../../../src/main/features/users');
+    const s = await loadSkills();
+    const requestedUser = 'skills-clear-requested-user';
+    const skillDir = path.join(tmpDir, requestedUser, 'cloud', 'skills', 'clear-me');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: clear-me\ndescription: test\n---\n\nbody');
+    users.activateUser(TEST_UID);
+
+    expect(await s.clearSkillChat(requestedUser, 'clear-me')).toBe(true);
+  });
+});
+
 describe('skills › createFromUrl', () => {
   it('creates an editable draft without silently fetching or modeling a GitHub URL', async () => {
     const modelCalls: any[] = [];
@@ -1830,11 +1876,23 @@ describe('skills › listSkillTree', () => {
 });
 
 describe('skills › buildSkillEditSystemPrompt', () => {
+  it('injects the live interface language as fallback independently of the legacy Agent language', async () => {
+    const { setLanguage, setUiLanguage } = await import('../../../src/main/features/config');
+    writeCustomSkill('alpha');
+    const s = await loadSkills();
+    const skill = (await s.getCustomSkill('alpha'))!;
+    setLanguage('en');
+    setUiLanguage('zh');
+    expect(await s.buildSkillEditSystemPrompt(TEST_UID, skill)).toContain('fallback response language: **Chinese (简体中文)**');
+    setUiLanguage('en');
+    expect(await s.buildSkillEditSystemPrompt(TEST_UID, skill)).toContain('fallback response language: **English**');
+  });
+
   it('renders template with skill metadata + file list, no leftover placeholders', async () => {
     writeCustomSkill('alpha', 'name: "Alpha"\ndescription: "a demo"\ncategory: "writing"', 'body text');
     const s = await loadSkills();
     const skill = (await s.getCustomSkill('alpha'))!;
-    const sys = await s.buildSkillEditSystemPrompt(skill);
+    const sys = await s.buildSkillEditSystemPrompt(TEST_UID, skill);
     expect(sys).toContain('Alpha');
     expect(sys).toContain('a demo');
     expect(sys).toContain('alpha');     // shows up in skill_dir (dir name == id)
@@ -1843,6 +1901,23 @@ describe('skills › buildSkillEditSystemPrompt', () => {
     expect(sys).not.toMatch(/##\s*用户的初始请求/);
     // All placeholders resolved.
     expect(sys).not.toMatch(/\$skill_name|\$skill_description|\$skill_category|\$category_field_definition|\$skill_dir|\$skill_files/);
+  });
+
+  it('enumerates the requested user skill after the active user changes', async () => {
+    const users = await import('../../../src/main/features/users');
+    writeCustomSkill('alpha', 'name: "Alpha A"\ndescription: "a"');
+    const userBDir = path.join(tmpDir, 'u2', 'cloud', 'skills', 'alpha');
+    fs.mkdirSync(userBDir, { recursive: true });
+    fs.writeFileSync(path.join(userBDir, 'SKILL.md'), '---\nname: "Alpha B"\ndescription: "b"\n---\n\nuser-b-only.md');
+    fs.writeFileSync(path.join(customSkillsDir(), 'alpha', 'user-a-only.md'), 'user a');
+    const s = await loadSkills();
+    const skill = (await s.getSkillForEditForUser(TEST_UID, 'alpha'))!;
+
+    users.activateUser('u2');
+    const sys = await s.buildSkillEditSystemPrompt(TEST_UID, skill);
+
+    expect(sys).toContain('user-a-only.md');
+    expect(sys).not.toContain('user-b-only.md');
   });
 });
 
@@ -1898,6 +1973,24 @@ describe('skills › streamSendToSkillChat synthesized progress', () => {
     const persistedTexts = assistantMsg.process.map((p: any) => p.text);
     expect(persistedTexts).toContain('▶ 写入 notes.md');
     expect(persistedTexts).toContain('▶ 写入 scripts/helper.ts');
+  });
+
+  it('keeps queued skill edits in the requested user after an active-user switch', async () => {
+    const users = await import('../../../src/main/features/users');
+    writeCustomSkill('alpha');
+    const userBDir = path.join(tmpDir, 'u2', 'cloud', 'skills', 'alpha');
+    fs.mkdirSync(userBDir, { recursive: true });
+    fs.writeFileSync(path.join(userBDir, 'SKILL.md'), '---\nname: "alpha"\ndescription: "b"\n---\n\nuser b');
+    streamImpl.current = async function* () {
+      users.activateUser('u2');
+      yield { type: 'final', text: '<<<skill-file path=queued.txt\nuser a\n>>>' };
+    };
+
+    const s = await loadSkills();
+    for await (const _event of s.streamSendToSkillChat(TEST_UID, 'alpha', 'edit')) { /* drain */ }
+
+    expect(fs.readFileSync(path.join(tmpDir, TEST_UID, 'cloud', 'skills', 'alpha', 'queued.txt'), 'utf8')).toBe('user a');
+    expect(fs.existsSync(path.join(tmpDir, 'u2', 'cloud', 'skills', 'alpha', 'queued.txt'))).toBe(false);
   });
 
   it('marks rejected writes with the 拒绝写入 glyph', async () => {

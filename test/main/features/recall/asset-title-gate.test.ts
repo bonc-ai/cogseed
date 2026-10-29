@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -27,11 +30,11 @@ async function modules() {
   return { assets, store };
 }
 
-/** 直连 createAbilityAsset 的合规种子（绕开候选链，聚焦闸门本身）。 */
+/** Historical setup for maintenance/title tests; tested writes still use asset-service. */
 async function seedAsset(uid: string, id: string, title: string, statement: string) {
   const { assets } = await modules();
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(uid, {
+  return seedStoredAbilityAsset(uid, {
     schemaVersion: 2, ownerId: uid, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_${id}_gate_2026`,
     type: 'rule', title, statement,
@@ -42,34 +45,75 @@ async function seedAsset(uid: string, id: string, title: string, statement: stri
   }, { actor: 'user', reason: 'title gate seed' });
 }
 
-describe('标题闸门（设计 3.2）：createAbilityAsset 收口强制判定', () => {
+/** Genuine creation tests use the real nightly candidate and user review ledger.
+ * Pass the title directly to createAbilityAsset so promotion cannot repair it. */
+async function createAssetForTitleGate(uid: string, fixtureId: string, title: string, statement: string, actor: 'user' | 'system' = 'user') {
+  const { assets } = await modules();
+  const candidate = await createNightlyCandidateFixture(uid, { judgment: statement, summary: '清单先行',
+    suggestedType: 'rule', suggestedScope: 'general', suggestedAction: 'create', sourceRefs: [],
+    captureKey: `capture-title-${fixtureId}-${createHash('sha256').update(title).digest('hex').slice(0, 8)}`, rawStatement: true });
+  const { writeReviewDecision } = await import('../../../../src/main/features/cognition/review-decision');
+  const { cognitionSourceRefKey } = await import('../../../../src/main/features/recall/source-service');
+  const key = `confirm-${createHash('sha256').update(JSON.stringify({ candidateId: candidate.id,
+    judgment: candidate.judgment, value: candidate.value, type: candidate.suggestedType, scope: candidate.suggestedScope,
+    action: candidate.suggestedAction, targetAssetId: candidate.targetAssetId,
+    evidence: candidate.evidenceRefs.map(cognitionSourceRefKey).sort() })).digest('hex').slice(0, 32)}`;
+  const decision = await writeReviewDecision(uid, { targetRef: `recall_candidate:${candidate.id}`, antecedentRef: candidate.id,
+    decisionType: 'accept', decision: 'accept', actor: 'user', scope: candidate.suggestedScope, idempotencyKey: key });
+  const id = `aa-${createHash('sha256').update(`${candidate.id}\n${decision.decision_id}`).digest('hex').slice(0, 24)}`;
+  const now = new Date().toISOString();
+  return assets.createAbilityAsset(uid, { schemaVersion: 2, ownerId: uid, id, candidateId: candidate.id,
+    sourceCandidateIds: [candidate.id], reviewDecisionId: decision.decision_id, type: 'rule', title,
+    statement: candidate.judgment, evidenceRefs: candidate.evidenceRefs, scope: 'general', status: 'active',
+    lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1', createdAt: now, updatedAt: now,
+  }, { actor, reason: `review_decision:${decision.decision_id}` });
+}
+
+describe('标题闸门：createAbilityAsset 收口强制判定', () => {
   it('机器可判四项不合规的 title 一律拒绝', async () => {
     const { assets } = await modules();
-    const base = (title: string) => seedAsset('user-gate', 'aa-gate-reject-0000000001', title, STATEMENT)
+    const base = (title: string, statement = STATEMENT) => createAssetForTitleGate('user-gate', 'aa-gate-reject-0000000001', title, statement, 'system')
       .catch((error: Error) => Promise.reject(error));
     await expect(base('')).rejects.toThrow(/invalid ability asset title/);                       // ①空
     await expect(base('这是一个超过十六个字的历史遗留超长标题')).rejects.toThrow(/invalid ability asset title/); // ②中文>16 字
-    await expect(base('遇到同类任务先列清单')).rejects.toThrow(/invalid ability asset title/);   // ③与正文开头重复
+    await expect(base('先列已知与未知', '先列已知与未知。再补齐缺口。')).rejects.toThrow(/invalid ability asset title/); // ③完整首句复制
     await expect(base('清单先行。')).rejects.toThrow(/invalid ability asset title/);             // ④标点结尾
+  });
+
+  it('真实夜间候选的项目名标题直接创建，原正文保留且不额外调用模型改名', async () => {
+    const uid = 'user-project-title';
+    const title = '合成项目甲验收需合成签字人甲签字';
+    const statement = '合成项目甲每次验收需要合成签字人甲最终签字。自2026年9月22日起，合成签字人甲是合成项目甲的验收负责人；后续准备合成项目甲验收材料时应按此找合成签字人甲签字。此规则仅适用于合成项目甲，不能套用到其他项目。';
+    const suggestion = await import('../../../../src/main/features/recall/asset-title-suggestion');
+    const model = vi.spyOn(suggestion, 'suggestAbilityAssetTitle').mockRejectedValue(new Error('unnecessary title model call'));
+    try {
+      const candidate = await createNightlyCandidateFixture(uid, { judgment: statement, summary: title, suggestedType: 'rule', suggestedScope: 'general', suggestedAction: 'create', sourceRefs: [], rawStatement: true });
+      const candidates = await import('../../../../src/main/features/recall/candidate-service');
+      const saved = await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' });
+      expect(saved.asset).toMatchObject({ title, statement, version: '1', status: 'active' });
+      const { assets } = await modules();
+      expect(await assets.readAbilityAsset(uid, saved.asset.id)).toMatchObject({ title, statement });
+      expect(model).not.toHaveBeenCalled();
+    } finally { model.mockRestore(); }
   });
 
   it('create 路补与 update 对称的 bounded 归一：空白折叠、trim、≤120', async () => {
     const { assets } = await modules();
     // 折叠 + trim 后合规照常入库（落盘是归一形态）。
-    const stored = await seedAsset('user-bounded', 'aa-gate-bounded-000000001', '  清单   先行  ', STATEMENT);
+    const stored = await createAssetForTitleGate('user-bounded', 'aa-gate-bounded-000000001', '  清单   先行  ', STATEMENT);
     expect(stored.title).toBe('清单 先行');
     // 超 120 字在 bounded 层被拒（与 update 同款错误）。
-    await expect(seedAsset('user-bounded', 'aa-gate-bounded-000000002', `标${'题'.repeat(120)}`, STATEMENT))
+    await expect(createAssetForTitleGate('user-bounded', 'aa-gate-bounded-000000002', `标${'题'.repeat(120)}`, STATEMENT))
       .rejects.toThrow(/invalid ability asset title/);
   });
 });
 
-describe('标题闸门（设计 3.2）：updateAbilityAsset 收口强制判定', () => {
+describe('标题闸门：updateAbilityAsset 收口强制判定', () => {
   it('写入 title 时过判定；拒绝后不落盘（版本不动）', async () => {
     const { assets } = await modules();
     const asset = await seedAsset('user-upd', 'aa-gate-update-0000000001', '清单先行', STATEMENT);
     await expect(assets.updateAbilityAsset('user-upd', asset.id, {
-      title: '遇到同类任务的处理', reason: 'bad title', actor: 'user',
+      title: '字'.repeat(81), reason: '超出用户编辑标题上限', actor: 'user',
     })).rejects.toThrow(/invalid ability asset title/);
     const after = await assets.readAbilityAsset('user-upd', asset.id);
     expect(after.title).toBe('清单先行');
@@ -96,10 +140,18 @@ describe('标题闸门（设计 3.2）：updateAbilityAsset 收口强制判定',
     expect(updated.version).toBe('2');
     expect(updated.title).toBe('遇到同类任务时先列出已知与未知，再补齐缺口。这是正文首句当标题的老形态');
   });
+
+  it('用户审阅的标题遵循编辑器80字契约，可与正文首字相同并保留句读', async () => {
+    const { assets } = await modules();
+    const asset = await seedAsset('user-reviewed', 'aa-reviewed-name', '清单先行', STATEMENT);
+    const title = '遇到同类任务的处理。';
+    expect((await assets.updateAbilityAsset('user-reviewed', asset.id, { title, actor: 'user', reason: '用户明确改名' })).title).toBe(title);
+    await expect(assets.updateAbilityAsset('user-reviewed', asset.id, { title: '字'.repeat(81), actor: 'user', reason: '超长改名' })).rejects.toThrow('invalid ability asset title');
+  });
 });
 
-describe('回滚/选版闸门（设计 3.2 拍板项 #2）：目标快照标题不合规时保留在用标题', () => {
-  const BAD_SNAPSHOT_TITLE = '历史遗留的正文首句标题'; // 与快照正文开头重复 → 不合规
+describe('回滚/选版闸门：目标快照标题不合规时保留在用标题', () => {
+  const BAD_SNAPSHOT_TITLE = '历' + '史'.repeat(80); // 超过人工审阅标题80字契约
   const BAD_SNAPSHOT_STATEMENT = '历史遗留的正文首句标题，冻结在旧版本快照里。';
 
   /** 种子 + 追加一条标题不合规的 v5 快照（raw 直写版本流，模拟存量历史；
@@ -145,7 +197,7 @@ describe('回滚/选版闸门（设计 3.2 拍板项 #2）：目标快照标题�
   });
 });
 
-describe('同义归并闸门（设计 3.2 / 深探 F15）：source 在用标题不合规时不铺到 target', () => {
+describe('同义归并闸门：source 在用标题不合规时不铺到 target', () => {
   const SOURCE_STATEMENT = '源正文的第一句作为遗留坏标题被冻结在版本快照里。';
 
   /** target 合规在用；source 在用快照标题不合规且 updatedAt 更新（sourceNewer=true）。 */
@@ -154,8 +206,8 @@ describe('同义归并闸门（设计 3.2 / 深探 F15）：source 在用标题�
     const target = await seedAsset(uid, 'aa-gate-mtarget-00000001', '目标资产标题', '这是目标条目的在用正文。');
     const source = await seedAsset(uid, 'aa-gate-msource-00000001', '源资产标题', '这是源条目的初始正文。');
     if (sourceTitleCompliant) return { target, source };
-    // 在用快照带不合规标题（标题＝正文开头重复）：raw 追加 v2 快照并把在用指针拨过去。
-    const badTitle = SOURCE_STATEMENT.slice(0, 10);
+    // 在用快照带明确截断的标题：raw 追加 v2 快照并把在用指针拨过去。
+    const badTitle = `${SOURCE_STATEMENT.slice(0, 10)}…`;
     await store.appendRecallJsonlRecord(uid, 'ability-asset-versions', source.id, {
       schemaVersion: 1, ownerId: uid, id: `${source.id}-v2`, assetId: source.id, version: '2',
       at: new Date().toISOString(), reason: 'legacy bad-title active snapshot',
@@ -197,16 +249,16 @@ describe('同义归并闸门（设计 3.2 / 深探 F15）：source 在用标题�
   });
 });
 
-describe('投影刷新（设计 3.3 硬前提 / 深探 F6）：update 改 title 必伴随 committed 投影版本刷新', () => {
+describe('投影刷新：update 改 title 必伴随 committed 投影版本刷新', () => {
   /** raw 写一条引用该资产的 confirmed 投影（冻结 v1）。 */
-  async function seedCommittedProjection(uid: string, assetId: string) {
+  async function seedCommittedProjection(uid: string, assetId: string, purpose = 'gate test') {
     const { store } = await modules();
     const at = new Date().toISOString();
     await store.writeRecallJsonRecord(uid, 'projections', `proj-${assetId}`, {
       schemaVersion: 2, ownerId: uid, id: `proj-${assetId}`,
       assetIds: [assetId], assetVersions: { [assetId]: '1' },
       sourceRefs: [], omittedRefs: [],
-      taskRunId: 'task-gate', purpose: 'gate test', authorization: 'user-confirmed',
+      taskRunId: 'task-gate', purpose, authorization: 'user-confirmed',
       status: 'confirmed', createdAt: at, confirmedAt: at,
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     } as never);
@@ -234,5 +286,19 @@ describe('投影刷新（设计 3.3 硬前提 / 深探 F6）：update 改 title 
     await assets.updateAbilityAsset(uid, asset.id, { statement: '只换正文，标题不动。', reason: 'body only', actor: 'user' });
     const projection = await store.readRecallJsonRecord(uid, 'projections', projectionId);
     expect((projection as { assetVersions?: Record<string, string> }).assetVersions?.[asset.id]).toBe('1');
+  });
+
+  it('user_pinned 投影不随 title 升版，并可用冻结快照通过版本校验', async () => {
+    const { assets, store } = await modules();
+    const projections = await import('../../../../src/main/features/recall/context-projection');
+    const uid = 'user-proj-pin';
+    const asset = await seedAsset(uid, 'aa-gate-proj-00000000003', '清单先行', STATEMENT);
+    const projectionId = await seedCommittedProjection(uid, asset.id, 'user_pinned');
+
+    const updated = await assets.updateAbilityAsset(uid, asset.id, { title: '先列已知未知', reason: 'retitle', actor: 'user' });
+    expect(updated.version).toBe('2');
+    const projection = await store.readRecallJsonRecord(uid, 'projections', projectionId) as any;
+    expect(projection.assetVersions[asset.id]).toBe('1');
+    await expect(projections.validateCommittedProjectionAssetVersions(uid, projection)).resolves.toBeDefined();
   });
 });

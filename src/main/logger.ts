@@ -77,6 +77,11 @@ const REDACT_KEYS = new Set([
   'password', 'passwd', 'pwd',
   'authorization',
   'cookie', 'setcookie', 'set-cookie',
+  // 模块 A 的凭据名（安全审计 2026-09-21）：`hub_token` 是 URL 查询参数里的
+  // Hub 访问令牌，`code_verifier` 是 PKCE 的秘密 —— 两者原先都不在脱敏表里，
+  // 而 `?hub_token=` 也不匹配下面的查询串正则（它要求字段名精确匹配）。
+  'hub_token', 'hubtoken',
+  'code_verifier', 'codeverifier',
   // PII (defense-in-depth — no current call site logs these unmasked, but
   // the rule shields against future regressions).
   'phone', 'mobile',

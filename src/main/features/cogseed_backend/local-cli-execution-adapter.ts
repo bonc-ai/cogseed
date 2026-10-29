@@ -174,6 +174,17 @@ function terminalEnvelope(input: CogSeedLocalCliExecutionInput, result: RunCliAg
   if (result.status === 'cancelled') {
     return { type: 'error', ...base, status: 'cancelled', error: 'cancelled' };
   }
+  if (result.status === 'background') {
+    // Promoted instead of killed (B line / decision 1B): the CLI keeps running, so
+    // this is an explicitly NON-terminal status the controller must not close on.
+    return {
+      type: 'result',
+      ...base,
+      status: 'background',
+      text: result.output || '',
+      metadata: { background: result.background },
+    };
+  }
   return {
     type: 'error',
     ...base,
@@ -236,6 +247,10 @@ export function createCogSeedLocalCliExecutionAdapter(
           prompt,
           cwd,
           signal,
+          // Decision 1B opt-in: a long local-CLI turn is handed to the background
+          // instead of being killed at the deadline. Opt-in via env so the default
+          // behaviour stays unchanged until the feature is signed off.
+          ...(process.env.COGSEED_PROMOTE_ON_DEADLINE === '1' ? { promoteOnDeadline: true } : {}),
           onEvent: (event) => {
             if (event.type === 'process-info') {
               const pid = typeof event.pid === 'number' ? event.pid : undefined;
@@ -346,6 +361,20 @@ async function* runViaP3394Gateway(
   }
   if (!result) {
     yield { type: 'error', ...base, status: 'failed', error: 'p3394 gateway execution ended without a result' };
+    return;
+  }
+  if (result.background) {
+    // Decision 2 phase 1: the gateway accepted the run as a background job. This
+    // is NOT the task result — report a non-terminal `background` status so the
+    // task stays live and the UI shows "已转后台"; phase 2 arrives later through
+    // the hub's independent channel.
+    yield {
+      type: 'result',
+      ...base,
+      status: 'background',
+      text: result.text || '',
+      metadata: { background: result.background, p3394: true },
+    };
     return;
   }
   if (result.failureCode || result.error) {

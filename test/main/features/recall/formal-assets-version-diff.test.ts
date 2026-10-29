@@ -97,4 +97,52 @@ describe('formal asset version diff', () => {
     expect(diff?.actor).toBe('system');
     expect(diff?.reason).toBe('kstar precipitation');
   });
+
+  /** P-r1-22：快照实存 17 键而显式比对此前只覆盖 8 个，仅改 type/scopePolicy
+   *  等字段的版本 diff 为空、被整体跳过——待办漏报、版本页跳版。 */
+  it('P-r1-22：仅改 type 的版本不再被跳过，且归类为 type 变更', () => {
+    const before = snapshot({ type: 'rule' });
+    const after = snapshot({ type: 'template', version: '2' });
+    const changes = diffAssetSnapshots(before, after);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].kind).toBe('type');
+    expect(changes[0].before).toBe('rule');
+    expect(changes[0].after).toBe('template');
+  });
+
+  it('P-r1-22：仅改 scopePolicy 的版本归类为 scope 变更（进待办的口径）', () => {
+    const before = snapshot({});
+    const after = snapshot({ scopePolicy: { defaultVisibility: 'owner' }, version: '2' });
+    const changes = diffAssetSnapshots(before, after);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].kind).toBe('scope');
+    expect(changes[0].field).toBe('scopePolicy');
+    // 空对象摘要与有值可区分
+    expect(changes[0].before).toBe('—');
+    expect(changes[0].after).toContain('owner');
+  });
+
+  it('P-r1-22：其余快照键（血统元数据等）的变化走「其他变更」兜底', () => {
+    const before = snapshot({});
+    const after = snapshot({ learningSignal: { lastOutcome: 'validated' }, relations: [{ target: 'B-2' }], version: '2' });
+    const changes = diffAssetSnapshots(before, after);
+    expect(changes.map((change) => change.kind).every((kind) => kind === 'other')).toBe(true);
+    expect(changes.map((change) => change.field).sort()).toEqual(['learningSignal', 'relations']);
+  });
+
+  it('P-r1-22：快照里的 version 字段不参与比对（每版必变，比它等于谎报）', () => {
+    const before = snapshot({ version: '1' });
+    const after = snapshot({ version: '2' });
+    expect(diffAssetSnapshots(before, after)).toEqual([]);
+  });
+
+  it('P-r1-22：kinds 排序把 type 放最前、other 放最后', () => {
+    const before = snapshot({ type: 'rule', title: '旧题' });
+    const after = snapshot({ type: 'template', title: '新题', learningSignal: { x: 1 }, version: '2' });
+    const diff = latestAssetVersionDiff('A-1', [
+      version('1', '2026-08-01T00:00:00.000Z', before),
+      version('2', '2026-08-02T00:00:00.000Z', after),
+    ]);
+    expect(diff?.kinds).toEqual(['type', 'title', 'other']);
+  });
 });

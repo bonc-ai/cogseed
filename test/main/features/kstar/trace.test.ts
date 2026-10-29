@@ -186,3 +186,49 @@ it('includes a control failure persisted with only conversationId', async () => 
     expect.objectContaining({ stage: 'failure', errorCode: 'control_failed', summary: 'control receipt failed' }),
   ]));
 });
+
+it('surfaces a judge failure as a failed routing node rather than an ordinary skip', async () => {
+  const store = await import('../../../../src/main/features/kstar/requirement-store');
+  await store.writeConversationTaskState('user-a', {
+    ...store.createInitialConversationTaskState('user-a', 'cid-routing-failed'),
+    routingDecisions: [
+      { at: '2026-09-18T00:00:00.000Z', kind: 'answer_confirmation', isTask: false, reason: 'selection' },
+      { at: '2026-09-18T00:00:01.000Z', kind: 'routing_failed', isTask: false, reason: 'routing judge unavailable (timeout)' },
+    ],
+  });
+
+  const trace = await (await import('../../../../src/main/features/kstar/trace')).readKstarTrace('user-a', { conversationId: 'cid-routing-failed' });
+  const routing = trace.nodes.filter((entry) => entry.stage === 'routing');
+
+  // A confirmation is a deliberate skip; a judge failure means the turn opened
+  // no task because we never got an answer. Collapsing both into "skipped"
+  // hides the only signal that governance was lost.
+  expect(routing).toEqual(expect.arrayContaining([
+    expect.objectContaining({ source: 'answer_confirmation', status: 'skipped' }),
+    expect.objectContaining({ source: 'routing_failed', status: 'failed' }),
+  ]));
+});
+
+it('labels the two formerly silent gates as skips, not as successes', async () => {
+  const store = await import('../../../../src/main/features/kstar/requirement-store');
+  await store.writeConversationTaskState('user-a', {
+    ...store.createInitialConversationTaskState('user-a', 'cid-routing-silent'),
+    routingDecisions: [
+      { at: '2026-09-18T00:00:00.000Z', kind: 'model_judged', isTask: true, continuation: false, reason: 'opened' },
+      { at: '2026-09-18T00:00:01.000Z', kind: 'obviously_trivial', isTask: false, reason: 'greeting' },
+      { at: '2026-09-18T00:00:02.000Z', kind: 'routing_unavailable', isTask: false, reason: 'no configured model; routing not possible' },
+    ],
+  });
+
+  const trace = await (await import('../../../../src/main/features/kstar/trace')).readKstarTrace('user-a', { conversationId: 'cid-routing-silent' });
+  const routing = trace.nodes.filter((entry) => entry.stage === 'routing');
+
+  // These two gates open nothing, so both are skips — but neither may be read
+  // as a successful judgement, and `routing_unavailable` must not inherit the
+  // `failed` label that belongs to a judge that never answered.
+  expect(routing).toEqual(expect.arrayContaining([
+    expect.objectContaining({ source: 'model_judged', status: 'ok' }),
+    expect.objectContaining({ source: 'obviously_trivial', status: 'skipped' }),
+    expect.objectContaining({ source: 'routing_unavailable', status: 'skipped' }),
+  ]));
+});

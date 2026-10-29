@@ -21,6 +21,7 @@ export interface NativeRuntimeTurnRecord {
   role: 'user' | 'assistant' | 'tool' | 'system';
   content: string;
   created_at: string;
+  tool?: { name: string; input: Record<string, unknown>; result: import('./tools/file-tools').RuntimeToolResult };
 }
 
 export type NativeRuntimeSessionRecord = NativeRuntimeSessionHeader | NativeRuntimeTurnRecord;

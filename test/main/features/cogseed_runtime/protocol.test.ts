@@ -389,6 +389,55 @@ describe('CogSeed Runtime protocol normalization', () => {
     // 无附件的纯文字任务，工作空间目录必须作为只读根兜底，否则 search_files /
     // grep_files 会因 read_only_roots 为空触发 E_RUNTIME_NO_ROOTS。
     expect(result.request.read_only_roots).toContain(workDir);
-    expect(result.request.writable_roots).toEqual([workDir]);
+    expect(result.request.writable_roots).toEqual(expect.arrayContaining([workDir]));
+    expect(result.request.writable_roots?.length).toBeGreaterThan(1);
+    expect(result.request.workspace_root).toBe(workDir);
+    // 生产侧（protocol.ts）用 path.join(workspaceRoot, '.git') 生成默认保护路径，
+    // 断言必须同源拼：硬编码 `${workDir}/.git` 在 win32 上是 `\` 分隔，永不相等。
+    expect(result.request.protected_paths).toContain(path.join(workDir, '.git'));
+  });
+
+  it('carries explicit workspace identity, temp roots and protected paths', () => {
+    const root = tmpRoot();
+    const workDir = path.join(root, 'workspace');
+    const tempDir = path.join(root, 'temp');
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.mkdirSync(tempDir, { recursive: true });
+
+    const result = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Work in the selected workspace.',
+      workspace_root: workDir,
+      workspace_id: 'task:task-1',
+      workspace_source: 'task',
+      temp_roots: [tempDir],
+      protected_paths: [path.join(workDir, '.git')],
+    }, { allowedRoots: [root] });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.request.workspace_root).toBe(workDir);
+    expect(result.request.workspace_id).toBe('task:task-1');
+    expect(result.request.workspace_source).toBe('task');
+    expect(result.request.temp_roots).toEqual([tempDir]);
+    expect(result.request.writable_roots).toEqual(expect.arrayContaining([workDir, tempDir]));
+    expect(result.request.protected_paths).toContain(path.join(workDir, '.git'));
+  });
+
+  it('rejects a workspace_root that disagrees with working_dir', () => {
+    const root = tmpRoot();
+    const workDir = path.join(root, 'workspace');
+    const otherDir = path.join(root, 'other');
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.mkdirSync(otherDir, { recursive: true });
+
+    const result = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Do not split the workspace identity.',
+      workspace_root: workDir,
+      working_dir: otherDir,
+    }, { allowedRoots: [root] });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.code).toBe('E_RUNTIME_INVALID_REQUEST');
   });
 });

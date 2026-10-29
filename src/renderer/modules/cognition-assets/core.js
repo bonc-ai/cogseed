@@ -1,22 +1,15 @@
 /* ============================================================================
  * 认知资产 · 核心层（cognition-assets/core.js）
  *
- * 从零重写的认知资产前端。与旧实现（skills.js 里 4600 行 + skills-bindings
- * 分散绑定 + 175 行面板标记）的三点结构差异：
- *
- *  1. 单一命名空间 `window.CogAssets`：api / store / router / ui / actions
- *     各司其职，视图只依赖这一份契约；
- *  2. 状态驱动渲染：所有数据进 store，动作完成后 `reload()` 重取 + `render()` 
- *     重画，不存在"哪个 DOM 谁负责"的隐性分工；
- *  3. 事件全在一个委托层（app.js）：所有交互走 `data-go` / `data-act`，
- *     不再有散落各处的 addEventListener。
- *
- * 后端契约（IPC）不变：本文件是唯一调用窗口。
+ * `window.CogAssets` 提供 api / store / router / ui / actions。
+ * 数据进入 store 后驱动视图重画；app.js 统一委托 data-go / data-act 交互。
+ * 本文件集中管理 IPC、路由与动作，视图只消费状态。
  * ========================================================================== */
 (function () {
   'use strict';
 
   const NS = window.CogAssets = window.CogAssets || {};
+  const loadLog = typeof createLogger === 'function' ? createLogger('cognition-assets') : null;
   NS.version = '2.0.0';
 
   /* ────────────────────────── i18n ────────────────────────── */
@@ -54,100 +47,11 @@
   }
   NS.truncateText = truncateText;
 
-  /* ── 语义融合（移植自 statement-fusion.ts）：句级三档融入 ──
-   * 重述（重叠≥0.50 且新句更长/近全等）→ 保留更长；
-   * 改写（重叠≥0.45）→ 新替旧；
-   * 增量 → 追加到尾部。截断 4000 字。 */
-  const FUSION_STATEMENT_LIMIT = 4000;
-  const RESTATED_OVERLAP = 0.50;
-  const RESTATED_LENGTH_RATIO = 1.8;
-  const RESTATED_NEAR_TOTAL = 0.75;
-  const REWRITE_OVERLAP = 0.45;
-
-  function fusionBigrams(text) {
-    const normalized = String(text || '').replace(/\s+/g, '');
-    const grams = new Set();
-    for (let i = 0; i + 1 < normalized.length; i += 1) grams.add(normalized.slice(i, i + 2));
-    return grams;
-  }
-  function fusionOverlapCoefficient(left, right) {
-    const a = fusionBigrams(left), b = fusionBigrams(right);
-    if (!a.size || !b.size) return 0;
-    let shared = 0;
-    a.forEach(function (g) { if (b.has(g)) shared += 1; });
-    return shared / Math.min(a.size, b.size);
-  }
-  function fusionSplitSentences(text) {
-    return String(text || '').replace(/([。！？!?；;\n])/g, '$1\u0001').split('\u0001').map(function (x) { return x.trim(); }).filter(Boolean);
-  }
-  function fuseStatements(oldStatement, incoming) {
-    const oldSentences = fusionSplitSentences(oldStatement);
-    const newSentences = fusionSplitSentences(incoming);
-    if (!oldSentences.length) {
-      const statement = String(incoming || '').trim().slice(0, FUSION_STATEMENT_LIMIT);
-      return { statement: statement, added: statement ? [statement] : [], replaced: [], keptCount: 0, truncated: (incoming || '').trim().length > FUSION_STATEMENT_LIMIT };
-    }
-    if (!newSentences.length) return { statement: oldStatement, added: [], replaced: [], keptCount: oldSentences.length, truncated: false };
-    const working = oldSentences.slice();
-    for (const sentence of newSentences) {
-      let bestIndex = -1, bestOverlap = 0;
-      for (let i = 0; i < working.length; i += 1) {
-        const overlap = fusionOverlapCoefficient(sentence, working[i]);
-        if (overlap > bestOverlap) { bestOverlap = overlap; bestIndex = i; }
-      }
-      if (bestIndex === -1) { working.push(sentence); continue; }
-      const lengthRatio = sentence.length / working[bestIndex].length;
-      if ((bestOverlap >= RESTATED_OVERLAP && lengthRatio >= RESTATED_LENGTH_RATIO) || bestOverlap >= RESTATED_NEAR_TOTAL) {
-        if (sentence.length > working[bestIndex].length) working[bestIndex] = sentence;
-      } else if (bestOverlap >= REWRITE_OVERLAP) {
-        working[bestIndex] = sentence;
-      } else {
-        working.push(sentence);
-      }
-    }
-    const joined = working.join('');
-    return { statement: joined.slice(0, FUSION_STATEMENT_LIMIT), replaced: [], keptCount: working.length, truncated: joined.length > FUSION_STATEMENT_LIMIT };
-  }
-  NS.fuseStatements = fuseStatements;
-  NS.resolveMergeChainTarget = resolveMergeChainTarget;
-  NS.isAutoCaptureEligible = isAutoCaptureEligible;
-  NS.dedupRefs = dedupRefs;
-
-  /* ── 归并链跟随（对齐后端 promote 实时语义查重）：目标 archived 时 ──
-   * 落到 mergedIntoAssetId 指向的最终存活目标，防止链式归并死循环。 */
-  function resolveMergeChainTarget(asset, allAssets) {
-    let cur = asset;
-    const seen = new Set([String(cur.id)]);
-    while (cur.mergedIntoAssetId) {
-      const next = (allAssets || []).find(function (a) { return String(a.id) === String(cur.mergedIntoAssetId); });
-      if (!next || seen.has(String(next.id))) break;
-      seen.add(String(next.id));
-      cur = next;
-    }
-    return cur;
-  }
-
-  /* ── 自动采纳门禁（对齐 isAutoCaptureEligible）：只有 pending_review ──
-   * 且非高风险的候选可自动写入；其余转待确认由用户手动处理。 */
-  function isAutoCaptureEligible(candidate) {
-    const caps = candidate.capabilities || {};
-    return String(candidate.status || '') === 'pending_review'
-      && String(candidate.risk || 'low') !== 'high'
-      && (caps.canConfirm !== false);
-  }
-
-  /* ── 证据引用去重（对齐 normalizeCognitionSourceRefs seen-set）── */
-  function dedupRefs(refs) {
-    const seen = new Set();
-    const out = [];
-    for (const ref of refs || []) {
-      const key = String(ref);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(ref);
-    }
-    return out;
-  }
+  /* ── 语义融合 / 归并链跟随 / 自动采纳门禁 / 引用去重：真源在后端 ──
+   * 这些判定全部发生在主进程的写入路径上，渲染层只消费结果：
+   *   · 句级语义融合（重述/改写/增量三档）→ src/main/features/recall/statement-fusion.ts
+   *   · 归并链跟随、自动采纳门禁、证据引用去重 → src/main/features/recall/candidate-service.ts
+   * 渲染层不维护这些业务判定的镜像，避免与主进程口径分叉。 */
 
   const toArr = (value, keys) => {
     if (Array.isArray(value)) return value;
@@ -177,6 +81,11 @@
   NS.alertUser = alertUser;
 
   const confirmUser = async (message, danger) => {
+    if (typeof window.uiModal === 'function' && typeof document !== 'undefined' && document.getElementById('ca-root')) {
+      const dialog = window.uiModal({ title: String(message).split('\n')[0], closeLabel: T('common.close', '关闭'), bodyHtml: `<div class="ca-prototype-source-block">${esc(message)}</div>`, size: 'md', actions: [{ id: 'cancel', label: T('common.cancel', '取消') }, { id: 'confirm', label: T('common.confirm', '确认'), role: danger ? 'danger' : 'primary' }] });
+      dialog.overlay.classList.add('ca-prototype-modal'); document.getElementById('ca-root').appendChild(dialog.overlay);
+      return (await dialog).value === 'confirm';
+    }
     if (danger && typeof window.uiConfirmDanger === 'function') {
       return !!(await window.uiConfirmDanger({ message, dangerLabel: T('common.confirm', '确认'), cancelLabel: T('common.cancel', '取消') }));
     }
@@ -185,7 +94,7 @@
   };
   NS.confirmUser = confirmUser;
 
-  /** 文本输入弹窗（specs/016 经验归档的必填原因）：返回输入串，取消返回 null。
+  /** 文本输入弹窗：经验归档原因必填；返回输入串，取消返回 null。
    *  与 confirmUser 同一来源（dialogs.js 的 uiPrompt），不引入新的弹窗形态；
    *  取不到共享弹窗时返回 null（fail-closed：宁可不做，不绕道 window.prompt）。 */
   const promptUser = async (message) => {
@@ -196,10 +105,10 @@
   };
   NS.promptUser = promptUser;
 
-  /* ────── 拦截原因可读化（2026-09-25 验收修复 US-601 AC4 / US-604 AC1）──────
+  /* ────── 拦截原因可读化──────
    * 主进程的准入判定给两样东西：code（分类）与 blockRule（具体规则标识）。
    * 此前渲染层把 Error.message 原文甩给用户——英文 + 内部 id，等于"被拦了但
-   * 不知道被什么拦"（验收问题⑤）。现在一律按 blockRule 翻四语规则名，code 只
+   * 不知道被什么拦"。按 blockRule 翻四语规则名，code 只
    * 作兜底；任何分支都不上屏原文，未知规则走兜底文案（如实说"当前不可引用"，
    * 不替主进程编一条规则）。 */
   function blockReasonText(error) {
@@ -231,7 +140,7 @@
   }
   NS.blockReasonText = blockReasonText;
 
-  /* ────── 经验目录枚举 → 人话（specs/016 R6：纯函数导出，用例直测）──────
+  /* ────── 经验目录枚举 → 人话──────
    *  口径与主进程对齐：分组措辞沿用 task-level-precipitation 的既有中文
    *  （lesson=可复用经验 / workflow=已验证的工作流程 / gap=待修正经验），
    *  任务类型对齐 userScopeLabel（SCOPE_LABELS）。未知值一律中性兜底，
@@ -271,7 +180,7 @@
     const entry = EXPERIENCE_VERIFICATION_TEXTS[String(value || '')];
     return entry ? T(entry[0], entry[1]) : T('cognition.experience_verification_unknown', '验证状态未知');
   }
-  /** 迁移跳过/失败理由码 → 人话（E7/E8 稳定码逐条；未知码中性兜底，
+  /** 迁移跳过/失败理由码 → 人话（已知码逐条映射；未知码中性兜底，
    *  不上屏主进程 message 原文）。 */
   const EXPERIENCE_MIGRATION_REASON_TEXTS = {
     no_kstar_provenance: ['cognition.experience_migration_skip_no_kstar_provenance', '无 KSTAR 沉淀标记（不是任务复盘沉淀的）'],
@@ -308,9 +217,9 @@
     statusLabel: experienceStatusLabel,
   };
 
-  /** 经验管理动作的失败文案（E3~E6 的错误是英文 message、无 code）：按已知
+  /** 经验管理动作的失败文案（错误是英文 message、无 code）：按已知
    *  message 片段翻四语，认不出原样透出（与候选码表同一条纪律——宁可露出
-   *  英文也不吞失败）。跨类型合并给专门文案（R5 键表）。 */
+   *  英文也不吞失败）。跨类型合并给专门文案。 */
   function experienceActionErrorText(error) {
     const raw = String((error && error.message) || error || '');
     if (raw.includes('requires the same experienceType')) return T('cognition.experience_merge_same_type_required', '只能合并同类型的经验');
@@ -322,7 +231,7 @@
   NS.experienceActionErrorText = experienceActionErrorText;
 
   /** 引用被拦/失败的统一出口：资产标题 + 规则名。只给标题（不给内部 id、
-   *  不给正文——受限资产正文不得进界面，US-604 AC3）。 */
+   *  不给正文——受限资产正文不得进界面）。 */
   async function reportBlocked(error, title) {
     const reason = blockReasonText(error);
     const name = String(title || '').trim();
@@ -343,10 +252,10 @@
       if (result && result.ok === false) {
         const error = new Error(result.error || result.message || `ipc failed: ${channel}`);
         error.code = result.code || '';
-        // 具体规则标识（US-604 AC1）：界面据此说明"哪条规则拦的"，
+        // 具体规则标识：界面据此说明"哪条规则拦的"，
         // 而不是把主进程的英文原文甩给用户。
         error.blockRule = result.blockRule || '';
-        // 结构化业务返回体不能被这一层吞掉（specs/015 US-702 T022）：版本冲突
+        // 结构化业务返回体不能被这一层吞掉：版本冲突
         // 是"被拒绝的一次确认"，不是普通失败——渲染层要靠 versionConflict 里
         // 的版本号才能如实提示并按当前在用版重新展示差异。只搬运字段，不做判定。
         if (result.versionConflict) error.versionConflict = result.versionConflict;
@@ -372,142 +281,132 @@
   const store = {
     loaded: false,
     loading: false,
+    blockStatus: {},
     errors: [],
     assets: [],
+    assetsError: '',
+    assetCapabilities: null,
+    ontologySnapshot: null,
+    ontologyError: '',
     candidates: [],
+    assetApprovals: [],
+    /** Unified suggestion read model: candidates, approvals and inspection findings. */
+    inbox: [],
+    inboxResolved: [],
+    inboxGroups: [],
+    inboxError: '',
+    /** 本体候选：与资产候选同页展示，读失败单独记错。 */
     captures: [],
+    capturesError: '',
     captureCounts: {},
     captureSettings: null,
-    /** 资产详情按需拉的版本链（版本组 2026-09-16）：{assetId, versions}。 */
+    captureModelSelection: null,
+    captureCapabilities: null,
+    /** 模型主快照读失败标记：settings 区块失败时 captureModel
+     *  为 null——视图不得把「没读到」伪装成「还没配置模型」的错误指引；
+     *  此标记让设置页如实显示读取失败。 */
+    captureModelError: '',
+    captureStats: null,
+    captureStatsError: '',
+    /** 资产详情按需拉的版本链：{assetId, versions}。 */
     assetVersions: null,
     /** 单资产完整事实链：全局最近记录有数量上限，不能用来判断旧版本挂载是否仍有效。 */
     assetTimeline: null,
     /** 资产编辑器的范围目标目录（只含用户可读名称与稳定 id）。失败时只
      *  禁用范围修改；正文编辑仍可保存，并且不会覆盖原范围策略。 */
     assetScopeOptions: { status: 'idle', agents: [], spaces: [], error: '' },
-    /** 确认更新撞版本冲突的就地状态（specs/015 US-702 T022，2026-09-25）：
+    /** 确认更新撞版本冲突的就地状态：
      *  {candidateId, baselineVersion, currentVersion, targetVersionUsed,
      *   currentStatement, versionsLoading, versionsFailed} 或 null。
      *  只表达一个事实——"这次确认没有生效，资产在你确认前被改过"，并给冲突块
      *  提供**当前在用版正文**（重展示差异的数据源）。候选仍是待处理；这里不存
      *  任何"已完成"语义，处置（重锚/稍后/拒绝）后立即清空。 */
     candidateVersionConflict: null,
-    /** KSTAR 溯源（2026-09-17）：{[episodeId]: {goal,status,at}} 摘要缓存；
-     *  kstarEpisode 为点开中的单条详情 {episodeId, episode, review}。 */
+    /** KSTAR 溯源：{[episodeId]: {goal,status,at}} 摘要缓存；
+     *  kstarEpisode 为点开中的单条详情 {episodeId, episode, review, loading, failed}。 */
     kstarSummaries: null,
-    /** 已请求过且拿到响应的 kse id（2026-09-18）：区分「还没拉到」与「确实
+    /** 已请求过且拿到响应的 kse id：区分「还没拉到」与「确实
      *  没有」——前者维持兜底文案，后者如实显示「来源记录不可用」；顺带
      *  止住缺失 id 永远进不了缓存、每次 notify 重发同一次 IPC 的循环。 */
     kstarSummariesSettled: [],
     kstarEpisode: null,
-    /** 会话标题缓存（2026-09-25 验收修复 US-603）：{[cid]: title}。证据来源里
+    /** 会话标题缓存：{[cid]: title}。证据来源里
      *  的 cid 要翻成用户看得懂的会话名，且候选/资产/版本/使用记录/KSTAR 五处
      *  必须同名。来源目录只有 100 条窗口，窗口外的会话此前一律退化成「一段
      *  对话」；conversationTitlesSettled 记「已请求且确认查无」的 cid——查无
      *  即来源失效，界面如实显示「来源记录不可用」，不是裸 id。 */
     conversationTitles: {},
     conversationTitlesSettled: [],
-    /** 正被"模型自选"挂着的资产 id（2026-09-18）：面板目录视图据此标"模型挂着"，
+    /** 正被"模型自选"挂着的资产 id：面板目录视图据此标"模型挂着"，
      *  用户不必翻会话才知道模型给哪个任务挂了东西。 */
     modelSelectedAssetIds: [],
     /** KSTAR 任务复盘列表（kstar-episodes tab）：kstar.episodes.list 的记录。 */
     kstarEpisodes: null,
-    /** 改进分析结论（specs/015 US-701 AC3 / T016）：{items, loading, failed, stale}，
+    /** 改进分析结论：{items, loading, failed, stale}，
      *  null = 还没拉过。数据源 = 只读通道 `kstar.improvement.outcomes.list`（倒序）。
      *  只读分区用；结论不是待办，不参与任何计数。 */
     improvementOutcomes: null,
-    /** 失败面（`kstar.failures.list`，specs/015 T016 接上）：{items, loading, failed}，
+    /** 失败面（`kstar.failures.list`）：{items, loading, failed}，
      *  null = 还没拉过。只有真的存在失败类结论时才拉（整集合读取，不给无失败的用户白付）。 */
     kstarFailures: null,
-    /** 经验目录（specs/016 US-801，「经验」页签）：{items, loading, failed, stale}，
-     *  null = 还没拉过。items 是 E1 列表行（目录行，天然不含 body）；拉全量
+    /** 经验目录：{items, loading, failed, stale}，
+     *  null = 还没拉过。items 是列表行（目录行，天然不含 body）；拉全量
      *  （status:'all'）再由视图过滤——列表只摆 active/paused，归档/并入的终态
      *  条目留在 store 里供详情深链与合并目标比对用。 */
     experiences: null,
-    /** 经验详情（E2 按需拉）：{experienceId, experience, loading, failed}。 */
+    /** 经验详情（按需拉取）：{experienceId, experience, loading, failed}。 */
     experienceDetail: null,
-    /** 存量迁移（E7/E8）：{preview, previewLoading, previewFailed, lastRun}。
+    /** 存量迁移：{preview, previewLoading, previewFailed, lastRun}。
      *  preview 是只读扫描结果；lastRun 是最近一次 run/status 的回执（可核对
-     *  「已迁/未迁/原因」，不满足于一枚 toast）。 */
+     *  「已迁/未迁/原因」）。 */
     experienceMigration: null,
     /** 旧 USER.md / MEMORY.md 归属核对：只读预览 + 用户选中的内容哈希；
      *  真正迁入必须从「待我处理」逐项勾选并确认。 */
-    legacyMemoryMigration: null,
     /** Agent / Space / 旧 Project 记忆迁移：按来源文件指纹逐项核对，保留各自权限边界。 */
-    legacyScopedMemoryMigration: null,
-    /** 标签库（specs/012 US-201，T012/T013 数据源）：{items, loading, failed,
-     *  stale}；items 是 recall.tags.list 的 TagView——排序口径（assetCount DESC
-     *  常用置顶）在主进程定死，渲染层不重排。null = 还没拉过。 */
-    tags: null,
-    /** 列表批量打标（specs/012 T011）：{running, done, total, updated,
-     *  unchanged, failed}；failed 是逐项失败清单（**不截断**），中断后已完成
-     *  项保留、可重跑（幂等）。null = 不在批量流程中。 */
-    tagBatch: null,
-    /** 多选态选中的资产 id（T011）：只在 route.tagSelect 多选态消费；
-     *  批量结束后保留（重跑同一批），退出多选才清空。 */
-    tagSelectIds: [],
-    /** 批量三选一语义：'add' | 'remove' | 'replace'（replace 与 add/remove
-     *  不同时给——三语义不混，contracts/ipc.md §2.2）。 */
-    tagBatchOp: 'add',
-    /** 标签管理弹层的行内编辑态：正在重命名的 tagId（空 = 无）。 */
-    tagManageEdit: '',
-    /** 标签管理弹层的合并态：{sourceId, sourceName, targetName}（null = 无）。
-     *  确认前必须先显示影响面（T013）。 */
-    tagManageMerge: null,
-    /** 「可能重复的标签」建议（T013，只读）：[{sourceName, targetName, reason}]；
-     *  null = 还没拉过；[] = 没有建议（如实呈现空态）。 */
-    tagSuggestions: null,
     sources: [],
-    tree: null,
-    /** 树懒重建标记：cognition:changed 的 ontology/tree 区块置 false，
-     *  app.js 的补树钩子据此在树页/概览页重拉（不无条件重建）。 */
-    treeRequested: false,
     proofs: [],
-    /** 「真实使用」白名单（2026-09-25 US-602）：由主进程单一定义、随
-     *  `recall.timeline.list` 载荷下发；列表侧「最近使用」与详情侧使用记录共用它。
+    /** 「真实使用」白名单：由主进程单一定义、随
+     *  `recall.timeline.list/forAsset` 载荷下发；列表侧「最近使用」与详情侧使用记录共用它。
      *  缺失时按空集处理（fail-closed）——绝不回落成"不过滤"（那正是缺陷本体）。 */
     realUsageKinds: [],
-    /** 资产详情的采用回执（2026-09-25 US-602 AC5/AC6）：{assetId, items, loading}。
+    /** 资产详情的采用回执：{assetId, items, loading}。
      *  「实际采用」只认这里（回执 applied），usage_recorded 一律归「被带入任务」。 */
     adoptionReceipts: null,
-    /** 整理详情页的「对话上下文」（2026-09-15 详情页改造）：{captureId, data}
+    /** 整理详情页的「对话上下文」：{captureId, data}
      *  按任务缓存；data 为 null 表示上下文不可用（详情页降级渲染）。 */
     captureContext: null,
     /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
-    organizeListExpanded: false,
     /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
-    route: { name: 'tree', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '', candCreate: '', ontologyBox: '', experienceId: '', tagFilter: '', tagMode: '', tagUntagged: '', tagSelect: '', tagOverlay: '', manage: '' },
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', inboxId: '', poCandidateId: '', activityQuery: '', activityPage: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', candCreate: '', experienceId: '', manage: '' },
     /** 资产详情异步补数会触发整页 render；编辑表单草稿留在 store，防止
      * 版本/回执/排序依据到达时替换 DOM 并丢掉用户尚未保存的输入。 */
     assetEditDrafts: {},
     backStack: [],
     /** 上一帧的路由名：渲染层据此判断「离开 ontology 页」需要先归还本体 section。 */
-    prevRouteName: 'tree',
+    prevRouteName: 'overview',
   };
   NS.store = store;
 
   /** 派生统计：全部从这里取，视图不自己算口径。 */
   NS.stats = function stats() {
     const s = store;
-    const confirmed = s.assets.filter((a) => String(a.status || 'active') !== 'archived').length;
-    // 待确认口径（2026-09-16 B1 统一）：需要判断且未被"稍后处理"静音——
-    // 与 views.candidateAwaiting 同一份口径（countsAsPending && !isSnoozed），
-    // deferred 不再占「待确认」名额（三套口径 7/5/0 分叉的修复）。
-    const pending = s.candidates.filter((c) => (c.capabilities && c.capabilities.countsAsPending) && !(c.capabilities && c.capabilities.isSnoozed)).length;
+    const confirmed = s.assets.filter((a) => !['archived', 'deleted', 'purged', 'revoked'].includes(String(a.status || 'active'))).length;
+    // 需要关注与活动列表共用口径；稍后不是完成，仍保留在关注清单中。
+    const pending = NS.activityModel ? NS.activityModel().attention.length : s.candidates.filter((c) => !c.activityExclusionReason && !(NS.isKstarCandidate && NS.isKstarCandidate(c)) && (c.capabilities && c.capabilities.countsAsPending)).length;
     const validated = s.assets.filter((a) => a.maturity === 'effectiveness_validated').length;
     const transferOk = s.assets.filter((a) => a.maturity === 'transfer_validated' || a.maturity === 'effectiveness_validated').length;
     const sourceIssues = s.sources
       .flatMap((group) => (Array.isArray(group.items) ? group.items : []))
       // 用户主动暂停的来源（reason=source_paused）不算"需要处理"——用户
       // 自己停的，再提示他去处理自相矛盾；连接器断开等真故障的 paused
-      // 仍计入（2026-09-14 修：实机出现 [paused] source_paused 假警报）。
-      // 执行失败轮次同样不算（2026-09-16）：与 views.sourceItemNeedsAttention
+      // 仍计入。
+      // 执行失败轮次同样不算：与 views.sourceItemNeedsAttention
       // 同口径，agent 执行失败不是用户可修复的来源故障。
       .filter((item) => String(item.kind || '') !== 'execution_evaluation'
         && (item.status === 'failed'
           || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused'))).length;
     const failedTasks = Number(s.captureCounts && s.captureCounts.failed || 0);
-    // 任务执行失败（承接表 01 / G1，2026-09-26 补落点）：会话最后一回合没
+    // 任务执行失败：会话最后一回合没
     // 得到回复且没有整理记录——那是**任务**失败了（不是整理失败），反馈要与
     // 「整理任务需要重试」分开说。
     const captureConvIds = new Set((Array.isArray(s.captures) ? s.captures : [])
@@ -526,19 +425,8 @@
   const LOADERS = {
     async snapshot() {
       store.errors = [];
-      // 注：cognition.inbox.list（治理待办）2026-09-14 撤下、2026-09-25 重上
-      // （specs/008 T051）——动作入口齐了才回来；详见 BLOCK_FETCHERS.inbox。
-      // 各区块独立命名函数（不再位置解构）——事件驱动刷新与冷启动共用同一份，
-      // 新增区块只需在 BLOCK_FETCHERS 加一个具名条目，串位事故从结构上消失。
-      await Promise.all([
-        BLOCK_FETCHERS.assets(),
-        BLOCK_FETCHERS.candidates(),
-        BLOCK_FETCHERS.captures(),
-        BLOCK_FETCHERS.settings(),
-        BLOCK_FETCHERS.sources(),
-        BLOCK_FETCHERS.inbox(),
-        BLOCK_FETCHERS.timeline(),
-      ]);
+      // 事件驱动刷新与冷启动共用具名 BLOCK_FETCHERS，避免位置解构导致区块错配。
+      await loadBlocks(['assets', 'ontology', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox'], true);
       // 跨区块联动 stale（改复盘/沉淀/打标后回来别吃旧值）：按需加载器的
       // stale 守卫会跳过从未拉过的场景，这里只标记已存在的状态。
       if (store.improvementOutcomes) store.improvementOutcomes = { ...store.improvementOutcomes, stale: true };
@@ -546,22 +434,48 @@
       if (store.tags) store.tags = { ...store.tags, stale: true };
       store.loaded = true;
     },
-    async tree() { await loadTree(true); },
   };
   NS.loaders = LOADERS;
 
-  async function loadTree(rebuild) {
-    const result = await api.soft(rebuild ? 'recall.tree.rebuild' : 'recall.tree.read', {}, {});
-    const tree = result && result.tree ? result.tree : result;
-    if (tree && (tree.nodes || tree.edges || tree.error)) store.tree = tree;
-  }
-
   const listeners = new Set();
   NS.onChange = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
-  NS.reload = async function reload(options) {
-    const opts = options || {};
-    if (opts.tree) { await LOADERS.tree(); listeners.forEach((fn) => fn()); return; }
-    // C4（2026-09-29）：loading 窗口内到达的 reload 不再静默丢弃——记一次
+  NS.loadReviewEvidence = async function loadReviewEvidence(kind, id, force) {
+    if (!id || !['candidate', 'asset'].includes(kind)) return;
+    const states = store.reviewEvidence || (store.reviewEvidence = {});
+    const key = kind + ':' + id;
+    if (!force && (states[key]?.loading || states[key]?.loaded)) return;
+    const state = states[key] = { loading: true, loaded: false, items: [], error: '' };
+    NS.notify();
+    try {
+      const result = await api.call('recall.reviewEvidence.read', { [kind + 'Id']: id });
+      if (store.reviewEvidence?.[key] !== state) return;
+      if (!Array.isArray(result.items)) throw new Error('invalid evidence response');
+      state.items = result.items; state.loaded = true;
+    } catch (_) {
+      if (store.reviewEvidence?.[key] !== state) return;
+      state.error = T('cognition.prototype_evidence_failed', '来源原文暂时无法读取，请重试或打开来源核对。'); state.loaded = true;
+    } finally {
+      if (store.reviewEvidence?.[key] === state) { state.loading = false; NS.notify(); }
+    }
+  };
+  NS.loadAssetEvidence = (id, force) => NS.loadReviewEvidence('asset', id, force);
+  function invalidateReviewEvidence(kind) {
+    const entries = Object.entries(store.reviewEvidence || {});
+    store.reviewEvidence = kind ? Object.fromEntries(entries.filter(([key]) => !key.startsWith(kind + ':'))) : {};
+  }
+  function invalidateAssetDetails() {
+    store.assetVersions = null;
+    invalidateAssetUsageDetails();
+  }
+  function invalidateAssetUsageDetails() {
+    store.assetTimeline = null;
+    store.adoptionReceipts = null;
+    NS.rankingWhy = null;
+  }
+  NS.reload = async function reload() {
+    invalidateReviewEvidence();
+    invalidateAssetDetails();
+    // loading 窗口内到达的 reload 不再静默丢弃——记一次
     // pendingReload，本次读完后立刻补拉。此前连续两次操作时第二次的刷新会
     // 直接落空，只能等写入广播自愈。
     if (store.loading) { store.pendingReload = true; return; }
@@ -584,7 +498,7 @@
   // 可能一直挂在内存里，因此收到反馈事件时清掉相关读缓存，让详情下一次
   // 展示时读取新回执，而不是继续显示旧的「已采用」。
   /* ────────────────────────── cognition:changed 订阅中枢 ──────────────────────────
-   * 2026-09-27 刷新机制重写：主进程每次认知资产写入（recall store / 决策账本 /
+   * 刷新机制重写：主进程每次认知资产写入（recall store / 决策账本 /
    * 本体分组 / 长期记忆）广播 {collection, generation, op?, recordId?}。
    * 面板不再轮询整理进度、不再监听 window CustomEvent：本中枢是唯一刷新入口——
    *   · collection → 区块映射：只重拉受影响的读通道（BLOCK_FETCHERS），
@@ -597,50 +511,161 @@
 
   /** 每个区块一个重拉函数；冷启动 snapshot 与事件驱动刷新共用同一份，
    *  不存在"两套口径"。字段处理逻辑沿自主快照原实现。 */
+  /* ── ──
+   * 刷新 drain（flushPendingRefresh）与 reload/snapshot 无互斥：同一区块可能
+   * 并发发起两次读取（例：drain 在资产删除前发出旧请求、广播触发的 reload
+   * 拉到新数据先落地），旧响应后到会把已删资产复活显示、直到下次广播。
+   * 每区块维护单调世代号：发起读取时 +1，落地前本区块又有新读取发起的，
+   * 本次响应作废——数据由后发起的读取负责。 */
+  const blockReadGenerations = new Map();
+  function beginBlockRead(block) {
+    const gen = (blockReadGenerations.get(block) || 0) + 1;
+    blockReadGenerations.set(block, gen);
+    return gen;
+  }
+  function isStaleBlockRead(block, gen) {
+    return blockReadGenerations.get(block) !== gen;
+  }
   const BLOCK_FETCHERS = {
     async assets() {
-      const assets = await api.soft('recall.assets.list', {}, {});
-      store.assets = toArr(assets, ['assets', 'items']);
+      const gen = beginBlockRead('assets');
+      try {
+        const assets = await api.call('recall.assets.list', {});
+        if (isStaleBlockRead('assets', gen)) return;
+        if (!Array.isArray(assets) && !Array.isArray(assets?.assets) && !Array.isArray(assets?.items)) throw new Error('invalid asset list response');
+        store.assets = toArr(assets, ['assets', 'items']);
+        store.assetCapabilities = assets?.capabilities || null;
+        store.assetsError = '';
+      } catch (error) {
+        if (isStaleBlockRead('assets', gen)) return;
+        // 保留最近一次成功读到的内容；读取失败不能被当成空库。
+        store.assetsError = String(error?.message || error || 'load_failed');
+      }
+    },
+    async inbox() {
+      const gen = beginBlockRead('inbox');
+      try {
+        const result = await api.call('cognition.inbox.list', {});
+        if (isStaleBlockRead('inbox', gen)) return;
+        store.inbox = toArr(result, ['items']);
+        store.inboxResolved = Array.isArray(result?.resolvedInspectionFindings) ? result.resolvedInspectionFindings : [];
+        store.inboxGroups = Array.isArray(result?.groups) ? result.groups : [];
+        store.inboxError = '';
+      } catch (error) {
+        if (isStaleBlockRead('inbox', gen)) return;
+        // Keep the last readable list; a failed read is not an empty inbox.
+        store.inboxGroups = Array.isArray(store.inboxGroups) ? store.inboxGroups : [];
+        store.inboxError = String(error?.message || error || 'load_failed');
+      }
+    },
+    async ontology() {
+      const gen = beginBlockRead('ontology');
+      try {
+        const snapshot = await api.call('cognition.ontology.snapshot', {}, {});
+        if (isStaleBlockRead('ontology', gen)) return;
+        if (!snapshot.ontology?.records) throw new Error(T('ontologyWorkspace.loadFailed', '本体暂时无法加载'));
+        store.ontologySnapshot = snapshot.ontology; store.ontologyError = '';      } catch (error) {
+        if (isStaleBlockRead('ontology', gen)) return;
+        store.ontologyError = String(error?.message || error);
+      }
     },
     async candidates() {
-      // A5（2026-09-29）：候选清单读失败不再软降级成空数组——那会把「没读到」
+      // 候选清单读失败不再软降级成空数组——那会把「没读到」
       // 伪装成「没有要你决定的」，用户据此误以为清净了。失败进显式错误态，
       // 视图层给重试入口；成功后清掉错误标记。
-      // 第 3 批（2026-09-29）：改拉 review-queue 视图——服务端裁掉历史处理
+      // 改拉 review-queue 视图——服务端裁掉历史处理
       // 记录（页面只显示最近 5 条）并做字段白名单投影；细分分组仍在本层做。
+      const gen = beginBlockRead('candidates');
       try {
-        const candidates = await api.call('recall.candidates.list', { view: 'review-queue' }, {});
+        const candidates = await api.call('recall.candidates.list', { view: 'activity-queue' }, {});
+        if (isStaleBlockRead('candidates', gen)) return;
+        if (!Array.isArray(candidates) && !Array.isArray(candidates?.candidates) && !Array.isArray(candidates?.items)) throw new Error('invalid candidate list response');
+        if (candidates?.assetApprovals !== undefined && !Array.isArray(candidates.assetApprovals)) throw new Error('invalid asset approval list response');
         store.candidates = toArr(candidates, ['candidates', 'items']);
+        store.assetApprovals = candidates?.assetApprovals || [];
         store.candidatesError = '';
       } catch (error) {
-        store.candidates = [];
+        if (isStaleBlockRead('candidates', gen)) return;
         store.candidatesError = String((error && error.message) || error || 'load_failed');
       }
     },
     async captures() {
+      const gen = beginBlockRead('captures');
       // scope:'all'：整理页要展示完整历史（含系统判定无留存内容的静默记录）。
-      const captures = await api.soft('recall.captures.list', { limit: 40, scope: 'all' }, {});
-      store.captures = toArr(captures, ['items', 'captures', 'tasks']);
-      store.captureCounts = (captures && captures.counts) || {};
+      try {
+        const captures = await api.call('recall.captures.list', { limit: 40, scope: 'all' });
+        if (isStaleBlockRead('captures', gen)) return;
+        if (!Array.isArray(captures) && !['items', 'captures', 'tasks'].some(key => Array.isArray(captures?.[key]))) throw new Error('invalid capture list response');
+        const rows = new Map(toArr(captures, ['items', 'captures', 'tasks']).map(row => [row.id, row]));
+        store.captures = Array.from(rows.values());
+        store.captureCounts = (captures && captures.counts) || {};
+        store.capturesError = '';
+      } catch (error) {
+        if (isStaleBlockRead('captures', gen)) return;
+        store.capturesError = String(error?.message || error || 'load_failed');
+      }
     },
     async settings() {
-      const settings = await api.soft('recall.captures.settings.get', {}, {});
-      store.captureSettings = (settings && settings.settings) || settings || null;
-      store.captureModel = (settings && settings.model) || null;
+      // 模型主快照读失败此前被 api.soft
+      // 兜成 {} → captureModel=null，视图把「没读到」伪装成「还没配置模型」
+      // 并给「去应用设置」的错误指引（误导力强于同屏横幅）。settings 半边
+      // 经复证实测不触发（兜底 {} truthy，整理页 warn 不出现），为保持该行为
+      // 不变：失败时 store 形状照旧（captureSettings={}、captureModel=null、
+      // errors 照记），只补 captureModelError 分区标记供视图区分。
+      const gen = beginBlockRead('settings');
+      let result = null;
+      let failed = false;
+      try {
+        result = await api.call('recall.captures.settings.get', {});
+      } catch (error) {
+        result = {};
+        failed = true;
+        // 过期响应（含失败）不落地：错误横幅也是「本次读取的产物」，由后发起
+        // 的读取负责，避免旧失败盖掉新成功。
+        if (isStaleBlockRead('settings', gen)) return;
+        store.errors.push({ channel: 'recall.captures.settings.get', message: String((error && error.message) || error) });
+      }
+      if (isStaleBlockRead('settings', gen)) return;
+      store.captureSettings = (result && result.settings) || result || null;
+      store.captureCapabilities = (result && result.capabilities) || null;
+      store.captureModelSelection = result?.modelSelection || null;
+      const model = (result && result.model) || null;
+      // A renderer reload can precede the main-process restart in source mode.
+      // The previous settings handler already proved API configuration and OAuth
+      // status, but had no channel field. Preserve that evidence; configured:false
+      // cannot rule out a CLI fallback and must remain unknown.
+      const legacyApiSnapshot = model && model.runtimeStatus === undefined && model.channel === undefined
+        && model.configured === true && typeof model.authorizationRequired === 'boolean';
+      store.captureModel = legacyApiSnapshot ? Object.assign({}, model, {
+        runtimeStatus: 'legacy', apiConfigured: true,
+        channel: model.authorizationRequired ? 'unavailable' : undefined,
+        available: model.authorizationRequired ? false : undefined,
+      }) : model;
+      store.captureModelError = failed ? 'load_failed' : '';
+    },
+    async captureStats() {
+      const gen = beginBlockRead('captureStats');
+      try {
+        const result = await api.call('recall.captures.stats', {});
+        if (isStaleBlockRead('captureStats', gen)) return;
+        store.captureStats = result;
+        store.captureStatsError = '';
+      } catch (error) {
+        if (isStaleBlockRead('captureStats', gen)) return;
+        store.captureStatsError = String(error?.message || error || 'load_failed');
+      }
     },
     async sources() {
-      // limit:100=IPC 上限（审计 C1，2026-09-16）：默认 25 会在会话超 25 后静默丢行。
+      const gen = beginBlockRead('sources');
+      // limit:100=IPC 上限：默认 25 会在会话超 25 后静默丢行。
       const sources = await api.soft('recall.sources.list', { limit: 100 }, {});
+      if (isStaleBlockRead('sources', gen)) return;
       store.sources = toArr(sources, ['groups', 'sources']);
     },
-    async inbox() {
-      const inbox = await api.soft('cognition.inbox.list', {}, {});
-      store.inbox = toArr(inbox, ['items']);
-      // 治理分组（specs/010 T013）：缺失/非数组 = null → 渲染层退回扁平清单。
-      store.inboxGroups = inbox && Array.isArray(inbox.groups) ? inbox.groups : null;
-    },
     async timeline() {
+      const gen = beginBlockRead('timeline');
       const proofs = await api.soft('recall.timeline.list', { limit: 500 }, {});
+      if (isStaleBlockRead('timeline', gen)) return;
       store.proofs = toArr(proofs, ['items', 'events']);
       store.realUsageKinds = Array.isArray(proofs && proofs.realUsageKinds)
         ? proofs.realUsageKinds.map((kind) => String(kind || '')).filter(Boolean)
@@ -650,24 +675,75 @@
     },
   };
 
+  // Route reads are request-local and independent. A full reload keeps its existing
+  // contract; first entry/tab switches only load their own blocks, once per mount.
+  const blockRequests = new Map();
+  function routeBlocks() {
+    const route = store.route || {};
+    if (route.name === 'ontology') return ['ontology'];
+    if (route.name === 'settings') return ['settings', 'captureStats'];
+    // 统一收件箱只在会展示它的页面读取：认知生长，或已打开资产详情的我的认知。
+    if (route.name === 'overview') return [
+      'assets',
+      ...(store.libraryView?.sort === 'used' ? ['timeline'] : []),
+      ...(route.assetId ? ['inbox'] : []),
+    ];
+    return ['assets', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox'];
+  }
+  async function loadBlocks(names, force = false) {
+    let started = false;
+    const reads = names.map(name => {
+      const reloadInbox = !force && name === 'inbox' && inboxNeedsReload;
+      if (reloadInbox) inboxNeedsReload = false;
+      const effectiveForce = force || reloadInbox;
+      if (!effectiveForce && blockRequests.has(name)) return blockRequests.get(name);
+      if (!effectiveForce && store.blockStatus[name]?.loaded) return Promise.resolve();
+      started = true;
+      pendingRefresh.delete(name);
+      const startedAt = Date.now();
+      store.blockStatus[name] = { loaded: Boolean(store.blockStatus[name]?.loaded), loading: true };
+      const pending = Promise.resolve().then(() => BLOCK_FETCHERS[name]()).finally(() => {
+        if (blockRequests.get(name) !== pending) return;
+        blockRequests.delete(name);
+        store.blockStatus[name] = { loaded: true, loading: false };
+        store.loaded = true;
+        loadLog?.info('block read completed', { block: name, ms: Date.now() - startedAt });
+        NS.notify();
+      });
+      blockRequests.set(name, pending);
+      return pending;
+    });
+    if (started) NS.notify();
+    await Promise.all(reads);
+  }
+  NS.loadRoute = () => loadBlocks(routeBlocks());
+  NS.loadActivityOntology = () => loadBlocks(['ontology']);
+  NS.isRouteLoading = () => routeBlocks().some(name => !store.blockStatus[name]?.loaded);
+
   /** collection → 需要刷新的区块/动作。没列出的 collection（world-model 等）
    *  面板没有对应区块，静默忽略——主进程广播所有认知写入，订阅端自取所需。 */
   const COLLECTION_BLOCKS = {
-    'ability-assets': ['assets', 'timeline', 'tree', 'ontology'],
-    'ability-asset-versions': ['assets', 'tree'],
+    'ability-assets': ['assets', 'timeline', 'candidates', 'inbox'],
+    'ability-asset-versions': ['assets', 'candidates', 'inbox'],
     'ability-asset-audit': ['assets', 'timeline'],
-    'candidates': ['candidates', 'tree'],
-    'ontology-candidates': ['ontology'],
+    'source-controls': ['assets', 'candidates', 'sources', 'timeline', 'inbox'],
+    'candidates': ['candidates', 'captureStats', 'inbox'],
+    // 旧停驻页退役：po 候选与 Recall 候选同住「待我处理」收件箱，
+    // 广播改刷 candidates 区块（两个列表一并重拉），旧页面刷新入口已删除。
+    'ontology-candidates': ['candidates', 'inbox'],
+    'ontology': ['ontology', 'assets', 'inbox'],
     'captures': ['captures'],
-    'capture-settings': ['settings'],
+    'capture-settings': ['settings', 'captureStats'],
+    'capture-sweep': ['captureStats'],
+    'capture-model-budgets': ['captureStats'],
     'usage-records': ['timeline'],
     'asset-usage-receipts': ['timeline'],
     'injection-receipts': ['timeline'],
     'transfer-proofs': ['timeline'],
-    // C1（2026-09-29）：治理待办的数据源写入后，治理分区（inbox 区块）也要
+    // 治理待办的数据源写入后，治理分区（inbox 区块）也要
     // 重拉——此前全表无 inbox 映射，事件刷新永远轮不到它，只靠动作后全量
     // reload 兜底。巡检 runs 不经 recall store 广播，其处置后的刷新由动作
-    // 响应路径补（第 3 批）。
+    // 响应路径补。
     'cleanup-reports': ['timeline', 'inbox'],
     'effectiveness-proofs': ['timeline'],
     'validation-records': ['timeline'],
@@ -675,16 +751,14 @@
     'asset-handoff-receipts': ['timeline'],
     'workspace-refs': ['assets'],
     'workspace-ref-history': ['assets'],
-    'ontology-groups': ['ontology'],
-    'ontology-conflicts': ['ontology', 'inbox'],
-    'ontology-graph': ['ontology'],
+    // 旧停驻页退役：ontology 区块 applier 随旧模块删除，冲突仍走 inbox。
+    'ontology-conflicts': ['assets'],
     'longterm-memory': ['legacy'],
     'experiences': ['experiences'],
-    'tree': ['treeRead'],
-    'graph': ['tree'],
   };
 
   const pendingRefresh = new Set();
+  let inboxNeedsReload = false;
   let refreshDrain = null;
   let changeRailVisible = () => true;
   let changeRailBound = false;
@@ -692,24 +766,17 @@
   /** 区块 → 动作。一次 drain 串行合并正在读取时到达的新事件；非 fetch 类（树/经验/
    *  迁移预览）走各自的失效语义（懒重建或 stale 标记，loaders 的守卫防重入）。 */
   function applyBlock(block) {
-    if (BLOCK_FETCHERS[block]) return async () => { await BLOCK_FETCHERS[block](); };
-    if (block === 'tree') return async () => {
-      // 资产或候选变更后，树按需从这两类源数据重建。
-      store.tree = null;
-      store.treeRequested = false;
-    };
-    if (block === 'treeRead') return async () => { await loadTree(false); };
+    // 其他区块的写入不替未展示收件箱的页面预读它；若它已读过，进页面时强制换新。
+    if (block === 'inbox' && !(store.route?.name === 'activity'
+      || (store.route?.name === 'overview' && store.route?.assetId))) {
+      if (store.blockStatus.inbox?.loaded) inboxNeedsReload = true;
+      return null;
+    }
+    if (BLOCK_FETCHERS[block]) return () => loadBlocks([block], true);
     if (block === 'experiences') return async () => {
       if (store.experiences) store.experiences = { ...store.experiences, stale: true };
     };
     if (block === 'legacy') return async () => {
-      if (store.legacyMemoryMigration) void NS.loadLegacyMemoryMigrationPreview(true);
-      if (store.legacyScopedMemoryMigration) void NS.loadLegacyScopedMemoryMigrationPreview(true);
-    };
-    if (block === 'ontology') return async () => {
-      if (typeof window.refreshPersonalOntology === 'function') {
-        await window.refreshPersonalOntology({ deferWhenHidden: true });
-      }
     };
     if (block === 'projections') return async () => {
       await NS.loadModelSelectedAssets();
@@ -718,21 +785,33 @@
   }
 
   const BLOCK_APPLIERS = {};
-  for (const name of [...Object.keys(BLOCK_FETCHERS), 'tree', 'treeRead', 'experiences', 'legacy', 'ontology', 'projections']) {
+  for (const name of [...Object.keys(BLOCK_FETCHERS), 'experiences', 'legacy', 'projections']) {
     const apply = applyBlock(name);
     if (apply) BLOCK_APPLIERS[name] = apply;
   }
 
+  // An unvisited tab retains its invalidation without doing hidden work. Already
+  // loaded blocks still refresh so counters/data stay current across tab switches.
+  function readablePendingBlocks() {
+    const needed = new Set(routeBlocks());
+    return [...pendingRefresh].filter(name => !BLOCK_FETCHERS[name] || needed.has(name) || store.blockStatus[name]?.loaded);
+  }
   function flushPendingRefresh() {
-    if (refreshDrain) return refreshDrain;
-    if (!changeRailVisible() || pendingRefresh.size === 0) return Promise.resolve();
+    const visible = changeRailVisible();
+    if (refreshDrain || !visible || !readablePendingBlocks().length) {
+      // A records dialog can have its own detail reads without ever loading the
+      // global timeline. Wake that visible consumer; leave the global block lazy.
+      if (visible && pendingRefresh.has('timeline')) NS.notify();
+      return refreshDrain || Promise.resolve();
+    }
     refreshDrain = (async () => {
       // Keep one drain in flight. Events arriving during a read stay in the set
       // and are consumed by the next pass instead of being discarded by a
       // per-block in-flight guard.
       while (pendingRefresh.size > 0 && changeRailVisible()) {
-        const blocks = [...pendingRefresh];
-        pendingRefresh.clear();
+        const blocks = readablePendingBlocks();
+        if (!blocks.length) break;
+        blocks.forEach(name => pendingRefresh.delete(name));
         await Promise.all(blocks.map((name) => {
           const apply = BLOCK_APPLIERS[name];
           return apply ? apply() : Promise.resolve();
@@ -743,7 +822,7 @@
       refreshDrain = null;
       // If visibility changed or another notice landed at the end of a pass,
       // schedule a new drain rather than leaving it stranded.
-      if (pendingRefresh.size > 0 && changeRailVisible()) void flushPendingRefresh();
+      if (readablePendingBlocks().length && changeRailVisible()) void flushPendingRefresh();
     });
     return refreshDrain;
   }
@@ -763,12 +842,32 @@
       const collection = String((notice && notice.collection) || '');
       const blocks = COLLECTION_BLOCKS[collection];
       if (!blocks) return;
+      // 收件箱只在展示页读取；若已读过，离开期间的变化标记为回页时补读。
+      if (blocks.includes('inbox') && store.blockStatus.inbox?.loaded
+        && !(store.route?.name === 'activity' || (store.route?.name === 'overview' && store.route?.assetId)))
+        inboxNeedsReload = true;
+      // Main coalesces notices by collection and retains only the final recordId.
+      // Invalidate every loaded entry in that collection, including hidden views.
+      if (collection === 'ability-assets' || collection === 'ability-asset-versions') {
+        store.assetVersions = null;
+        invalidateReviewEvidence('asset');
+      } else if (collection === 'candidates') invalidateReviewEvidence('candidate');
+      else if (collection === 'source-controls') {
+        invalidateReviewEvidence();
+        invalidateAssetDetails();
+      }
+      if (blocks.includes('timeline')) {
+        invalidateAssetUsageDetails();
+        // The version response includes adoption counts for each version.
+        if (collection === 'asset-usage-receipts') store.assetVersions = null;
+      }
       for (const block of blocks) pendingRefresh.add(block);
       if (changeRailVisible()) void flushPendingRefresh();
     });
   };
   /** 供 app.js 的可见性监听在面板回到前台时调用（隐藏期间挂起的区块此刻补拉）。 */
   NS.changeRailVisible = (visible) => { changeRailVisible = () => visible; };
+  NS.isChangeRailVisible = () => changeRailVisible();
 
   /** 整理详情页按需拉「对话上下文」（本次整理实际读到的消息 + 参与角色）。
    *  按任务缓存；失败降级为 data:null（不进全局 errors——上下文缺席不该
@@ -790,125 +889,17 @@
     NS.notify();
   };
 
-  /** 标签库（specs/012 T012/T013 数据源）：只拉 active（筛选条/打标候选/
-   *  管理弹层的主清单）；已停用/已合并在管理弹层打开时按需带 retired 重拉。
-   *  失败记 failed（读不到 ≠ 没有标签：筛选条静默不渲染，不吓人）。 */
-  NS.loadTags = async function loadTags(options) {
-    const opts = options || {};
-    const state = store.tags;
-    if (!opts.force && !opts.includeRetired && state && !state.stale && !state.failed) return;
-    if (!opts.force && opts.includeRetired && state && state.includeRetired && !state.stale && !state.failed) return;
-    store.tags = {
-      items: (state && state.items) || [],
-      loading: true,
-      failed: false,
-      stale: false,
-      includeRetired: Boolean(opts.includeRetired),
-    };
-    NS.notify();
-    let items = [];
-    let failed = false;
-    try {
-      const result = await api.call('recall.tags.list', opts.includeRetired ? { includeRetired: true } : {});
-      items = (result && Array.isArray(result.tags)) ? result.tags : [];
-    } catch (error) {
-      failed = true;
-    }
-    store.tags = { items, loading: false, failed, stale: false, includeRetired: Boolean(opts.includeRetired) };
-    NS.notify();
-  };
-
-  /** 「可能重复的标签」建议（T013，只读；只建议不合并）。管理弹层打开时拉。 */
-  NS.loadTagSuggestions = async function loadTagSuggestions(force) {
-    if (!force && Array.isArray(store.tagSuggestions)) return;
-    let suggestions = [];
-    try {
-      const result = await api.call('recall.tags.suggestions', {});
-      suggestions = (result && Array.isArray(result.suggestions)) ? result.suggestions : [];
-    } catch (error) {
-      suggestions = [];
-    }
-    store.tagSuggestions = suggestions;
-    NS.notify();
-  };
-
-  /** 标签筛选的纯判定件（views 与用例共用同一份口径，T012）：
-   *  「未分类」= !tags || length===0；并集(any)=命中任一；交集(all)=全部命中。
-   *  三种组合的空集语义（契约 renderer-seams §一）：
-   *  - 仅「未分类」→ 只看未打标；
-   *  - 「未分类」+ 名单(any) → 命中任一 **或** 未打标（未分类 = 并集里的一项）；
-   *  - 「未分类」+ 名单(all) → 恒空集（一条资产不可能既有标签又没有）。 */
-  NS.matchesTagFilter = function matchesTagFilter(asset, names, untagged, mode) {
-    const tags = (Array.isArray(asset.tags) ? asset.tags : []).map((entry) => String(entry || '').trim().toLocaleLowerCase());
-    const wanted = (Array.isArray(names) ? names : []).map((name) => String(name || '').trim().toLocaleLowerCase()).filter(Boolean);
-    const isUntagged = tags.length === 0;
-    if (!wanted.length) return untagged ? isUntagged : true;
-    const hit = mode === 'all'
-      ? wanted.every((name) => tags.includes(name))
-      : wanted.some((name) => tags.includes(name));
-    if (!untagged) return hit;
-    return mode === 'all' ? false : (hit || isUntagged);
-  };
-
-  /** 路由里的标签筛选解析：tagFilter 用 \u001f 连接（标签名可含逗号，不能用
-   *  逗号做分隔）；tagMode ''/'all'（缺省 = 并集 any）。 */
-  NS.parseTagFilterRoute = function parseTagFilterRoute(route) {
-    const joined = String((route && route.tagFilter) || '');
-    const names = joined.split('\u001f').map((name) => name.trim()).filter(Boolean);
-    return {
-      names,
-      untagged: String((route && route.tagUntagged) || '') === '1',
-      mode: String((route && route.tagMode) || '') === 'all' ? 'all' : 'any',
-    };
-  };
-  NS.joinTagFilter = function joinTagFilter(names) {
-    return names.filter(Boolean).join('\u001f');
-  };
-
-  /** 标签管理/更多 弹层的接线（T012「更多」/T013 管理）：弹层 markup 由
-   *  views 放进持久壳的槽位（#ca-tag-overlay-slot），这里把它过
-   *  uiModalController（焦点圈/Escape/滚动锁共享件），每次渲染按槽位当前
-   *  DOM 重建控制器——槽位不随内容区重渲染被拔掉，控制器在弹层打开期间
-   *  保持同一实例，焦点不乱跳。 */
-  let tagOverlayController = null;
-  NS.wireTagOverlay = function wireTagOverlay() {
-    if (typeof document === 'undefined' || typeof window.uiModalController !== 'function') return;
-    const slot = document.getElementById('ca-tag-overlay-slot');
-    const overlay = slot ? slot.querySelector(':scope > [data-tag-overlay]') : null;
-    if (!overlay) {
-      // 弹层已关（路由切走/槽位清空）：把还开着的控制器收掉（解锁 body 滚动）。
-      if (tagOverlayController && tagOverlayController.isOpen()) {
-        tagOverlayController.close('unmounted', { restoreFocus: false });
-      }
-      tagOverlayController = null;
-      return;
-    }
-    if (tagOverlayController && tagOverlayController.overlay === overlay && tagOverlayController.isOpen()) return;
-    // 节点被重渲染替换（整壳 rebuild 或路由态切换）时，旧控制器的 document
-    // 捕获监听与 body 滚动锁计数必须先释放——否则每次替换泄漏一个控制器，
-    // 弹层关闭后 Tab 键全应用失效（2026-09-28 修）。
-    if (tagOverlayController) tagOverlayController.close('replaced', { restoreFocus: false });
-    const dialog = overlay.querySelector('[role="dialog"]');
-    if (!dialog) return;
-    tagOverlayController = window.uiModalController({
-      overlay,
-      dialog,
-      onRequestClose: () => router.go(
-        Object.assign({}, store.route, { tagOverlay: '' }),
-        { replace: true },
-      ),
-    });
-    tagOverlayController.open();
-  };
-
-  /** 后台巡检状态（specs/008 US-405）：开关 + 最近一轮的概要。
-   *  失败降级为空——巡检读不到不该让整理页报"部分数据读取失败"。 */
-  NS.loadInspection = async function loadInspection() {
-    if (store.inspection && !store.inspection.stale) return;
+  /** 后台巡检状态：开关 + 最近一轮的概要。
+   *  失败降级为空但不冻结——失败置 stale（巡检读不到不该让
+   *  整理页报"部分数据读取失败"，视图照旧；stale 让下次触发自愈重拉，
+   *  「没读到」不再永久伪装「没有」）。 */
+  NS.loadInspection = async function loadInspection(force) {
+    if (store.inspection?.loading || (!force && store.inspection && (!store.inspection.stale || store.inspection.failed))) return;
     store.inspection = { loading: true, settings: (store.inspection && store.inspection.settings) || null, latestRun: (store.inspection && store.inspection.latestRun) || null };
     NS.notify();
     let settings = null;
     let latestRun = null;
+    let stale = false;
     try {
       const [settingsResult, runsResult] = await Promise.all([
         api.call('recall.inspection.settings', {}),
@@ -919,82 +910,88 @@
     } catch (error) {
       settings = null;
       latestRun = null;
+      stale = true;
     }
-    store.inspection = { loading: false, settings, latestRun };
+    store.inspection = { loading: false, settings, latestRun, stale, failed: stale };
     NS.notify();
   };
 
-  /** 整理报告按需拉取（specs/008 US-403）。按次缓存；失败降级为空列表——
-   *  报告读不到不该让整页报"部分数据读取失败"，它只是整理页的一块。 */
-  NS.loadCleanupReports = async function loadCleanupReports() {
-    if (store.cleanupReports && !store.cleanupReports.stale) return;
+  /** 整理报告按需拉取。按次缓存；失败降级为空列表——
+   *  报告读不到不该让整页报"部分数据读取失败"，它只是整理页的一块。
+   *  失败置 stale（同 loadInspection，自愈重拉不冻结）。 */
+  NS.loadCleanupReports = async function loadCleanupReports(force) {
+    if (store.cleanupReports?.loading || (!force && store.cleanupReports && (!store.cleanupReports.stale || store.cleanupReports.failed))) return;
     store.cleanupReports = { loading: true, reports: (store.cleanupReports && store.cleanupReports.reports) || [] };
     NS.notify();
     let reports = [];
+    let stale = false;
     try {
       const result = await api.call('recall.cleanup.list', { limit: 20 });
       reports = (result && result.reports) || [];
     } catch (error) {
       reports = [];
+      stale = true;
     }
-    store.cleanupReports = { loading: false, reports };
+    store.cleanupReports = { loading: false, reports, stale, failed: stale };
     NS.notify();
   };
 
-  /** 资产详情按需拉版本链（版本组 2026-09-16）。按资产缓存；读失败保留显式
-   *  failed 标记 + 重试入口（2026-09-30 r3 补齐，对齐 loadAssetTimeline 口径）——
+  /** 资产详情按需拉版本链。按资产缓存；读失败保留显式
+   *  failed 标记 + 重试入口（与 loadAssetTimeline 一致）——
    *  版本链区是版本组 UI 的主入口，失败时整体消失等于把「没读到」伪装成
-   *  「没有版本」，且失败态被缓存后无恢复路径。`force`（specs/015 T022）：
+   *  「没有版本」，且失败态被缓存后无恢复路径。`force`：
    *  版本冲突后必须重拉——缓存里的链正是冲突前那一份，拿它重展示差异等于
    *  拿旧差异糊弄用户；重试按钮同走 force 绕过失败态缓存判重。 */
   NS.loadAssetVersions = async function loadAssetVersions(assetId, force) {
     const id = String(assetId || '');
     if (!id || (!force && store.assetVersions && store.assetVersions.assetId === id)) return;
-    store.assetVersions = { assetId: id, loading: true };
+    const state = store.assetVersions = { assetId: id, loading: true };
     NS.notify();
     let versions = [];
     let usage = [];
     let audit = [];
-    let frozen = [];
     let failed = false;
     try {
       const result = await api.call('recall.assets.versions.list', { assetId: id });
       versions = (result && result.versions) || [];
       usage = (result && result.usage) || [];
       audit = (result && result.audit) || [];
-      frozen = (result && result.frozen) || [];
     } catch (error) {
       versions = [];
       usage = [];
       audit = [];
-      frozen = [];
       failed = true;
     }
-    if (!store.assetVersions || store.assetVersions.assetId !== id) return;
-    store.assetVersions = { assetId: id, versions, usage, audit, frozen, failed };
+    if (store.assetVersions !== state) return;
+    store.assetVersions = { assetId: id, versions, usage, audit, failed };
     NS.notify();
   };
 
-  /** 资产详情需要完整的单资产事实链：全局时间线只返回最近 500 条，不能用它
-   *  判断较早的长期挂载是否还固定在旧版本。读失败时保留显式 failed 标记，
-   *  详情不得把「无法核对」伪装成「没有旧版本挂载」。 */
+  /** 按资产读取使用与管理记录；保留失败状态供记录弹窗重试。 */
   NS.loadAssetTimeline = async function loadAssetTimeline(assetId, force) {
     const id = String(assetId || '');
     if (!id || (!force && store.assetTimeline && store.assetTimeline.assetId === id && !store.assetTimeline.stale)) return;
     const cachedItems = store.assetTimeline && store.assetTimeline.assetId === id
       ? store.assetTimeline.items || []
       : [];
-    store.assetTimeline = { assetId: id, items: cachedItems, loading: true, failed: false };
+    const state = store.assetTimeline = { assetId: id, items: cachedItems, loading: true, failed: false };
     NS.notify();
     let items = [];
+    let realUsageKinds = [];
     let failed = false;
     try {
       const result = await api.call('recall.timeline.forAsset', { assetId: id });
       items = (result && result.items) || [];
+      realUsageKinds = Array.isArray(result && result.realUsageKinds)
+        ? result.realUsageKinds.map((kind) => String(kind || '')).filter(Boolean)
+        : [];
     } catch (error) {
       failed = true;
     }
-    if (!store.assetTimeline || store.assetTimeline.assetId !== id) return;
+    if (store.assetTimeline !== state) return;
+    // A library-first visit may never load the global timeline. Consume the
+    // same host whitelist with this detail response; missing metadata stays closed.
+    if (!failed) store.realUsageKinds = realUsageKinds;
     store.assetTimeline = { assetId: id, items, loading: false, failed };
     NS.notify();
   };
@@ -1006,7 +1003,7 @@
     if (!id || (!force && store.adoptionReceipts && store.adoptionReceipts.assetId === id)) return;
     const cachedItems = store.adoptionReceipts && store.adoptionReceipts.assetId === id
       ? store.adoptionReceipts.items || [] : [];
-    store.adoptionReceipts = { assetId: id, items: cachedItems, loading: true, failed: false };
+    const state = store.adoptionReceipts = { assetId: id, items: cachedItems, loading: true, failed: false };
     NS.notify();
     let items = [];
     let failed = false;
@@ -1016,12 +1013,12 @@
     } catch (error) {
       failed = true;
     }
-    if (!store.adoptionReceipts || store.adoptionReceipts.assetId !== id) return;
+    if (store.adoptionReceipts !== state) return;
     store.adoptionReceipts = { assetId: id, items: failed ? cachedItems : items, loading: false, failed };
     NS.notify();
   };
 
-  /** 批量补 kse 摘要（2026-09-18 抽共用入口）：结果并入缓存；本次请求里
+  /** 批量补 kse 摘要：结果并入缓存；本次请求里
    *  响应没有的 id 记进 settled——没有就是没有，chip 据此如实显示「来源
    *  记录不可用」；失败不记（读不到 ≠ 不存在，保持兜底文案）。 */
   async function fetchKstarEpisodeSummaries(rawIds) {
@@ -1046,9 +1043,9 @@
     }
   }
 
-  /** KSTAR 溯源（2026-09-17）：资产详情证据含 kse 引用时批量拉任务目标
+  /** KSTAR 溯源：资产详情证据含 kse 引用时批量拉任务目标
    *  摘要（chip 显示用）；失败静默（chip 退回占位标题）。
-   *  2026-09-18 修：此前只取资产级 evidenceRefs，版本块渲染读的却是
+   *  修：此前只取资产级 evidenceRefs，版本块渲染读的却是
    *  snapshot.evidenceRefs——历史版本的 kse id 从没拉过摘要，永远命中不了
    *  缓存。现在把已加载版本的快照证据一并纳入（版本异步到达后，onChange
    *  会再触发一次，新 id 自然补拉）。 */
@@ -1065,7 +1062,7 @@
     await fetchKstarEpisodeSummaries(refs.map((ref) => String(ref.id || '')));
   };
 
-  /** 批量补会话标题（2026-09-25 验收修复 US-603）：与 kse 摘要同一套防循环
+  /** 批量补会话标题：与 kse 摘要同一套防循环
    *  模式——已命中的不再请求，响应里没有的 cid 记进 settled（查无 = 来源已
    *  失效，界面据此显示「来源记录不可用」）；请求失败不记 settled（读不到 ≠
    *  不存在，下次渲染再试）。只有真的拿到新数据才 notify，避免失败时无限重渲染。 */
@@ -1077,7 +1074,7 @@
     const missing = wanted.filter((id) => !Object.prototype.hasOwnProperty.call(have, id) && !settled.includes(id));
     if (!missing.length) return;
     let changed = false;
-    // IPC 单次上限 50（contracts/ipc.md C7）：分批取满，不做隐式截断——截断会
+    // IPC 单次上限 50：分批取满，不做隐式截断——截断会
     // 让"没问到"与"查无此会话"混为一谈，界面就会误报来源失效。
     for (let start = 0; start < missing.length; start += 50) {
       const batch = missing.slice(start, start + 50);
@@ -1102,7 +1099,7 @@
   }
 
   /** 资产详情的会话类证据 + 使用记录事件的 cid 一起补标题（使用记录要「可定位
-   *  会话」，US-602 AC2）。版本快照里的证据一并纳入——与 kse 摘要同一处坑：
+   *  会话」）。版本快照里的证据一并纳入——与 kse 摘要同一处坑：
    *  历史版本的引用此前从没拉过。 */
   NS.loadConversationTitles = async function loadConversationTitles(assetId) {
     const id = String(assetId || '');
@@ -1120,30 +1117,14 @@
         }
       }
     }
-    for (const proof of store.proofs || []) {
+    const timeline = store.assetTimeline;
+    const proofItems = timeline && String(timeline.assetId || '') === id
+      && !timeline.loading && !timeline.failed && Array.isArray(timeline.items)
+      ? timeline.items : store.proofs;
+    for (const proof of proofItems || []) {
       const refs = (proof && proof.refs) || {};
       if (id && String(refs.assetId || '') !== id) continue;
       if (refs.conversationId) ids.push(String(refs.conversationId));
-    }
-    const assetTimeline = store.assetTimeline && String(store.assetTimeline.assetId || '') === id
-      ? store.assetTimeline.items || []
-      : [];
-    const currentVersion = String((asset && (asset.activeVersion || asset.version)) || '');
-    const now = Date.now();
-    let stalePinCount = 0;
-    for (const item of assetTimeline) {
-      const refs = (item && item.refs) || {};
-      const longLived = refs.authorization === 'model_selected'
-        || (refs.authorization === 'user_confirmed' && refs.purpose === 'user_pinned');
-      if (String(item && item.kind || '') !== 'projection_confirmed' || !longLived
-        || !refs.version || String(refs.version) === currentVersion) continue;
-      if (refs.expiresAt) {
-        const expiry = Date.parse(String(refs.expiresAt));
-        if (!Number.isFinite(expiry) || expiry <= now) continue;
-      }
-      if (refs.conversationId) ids.push(String(refs.conversationId));
-      stalePinCount += 1;
-      if (stalePinCount >= 5) break;
     }
     await fetchConversationTitles(ids);
   };
@@ -1157,7 +1138,7 @@
     await fetchConversationTitles(ids);
   };
 
-  /** 模型自选挂载的资产（2026-09-18）：confirmed 的 model_selected 投影里
+  /** 模型自选挂载的资产：confirmed 的 model_selected 投影里
    *  出现的资产 id 集合；失败静默（标记缺席不影响目录）。 */
   NS.loadModelSelectedAssets = async function loadModelSelectedAssets() {
     try {
@@ -1169,7 +1150,7 @@
         for (const assetId of projection.assetIds || []) ids.push(String(assetId));
       }
       const next = [...new Set(ids)];
-      // 防重入（2026-09-18 P0 修复）：onChange 每次 notify 都会调本函数——若
+      // 防重入：onChange 每次 notify 都会调本函数——若
       // 无条件再 notify 就成了"加载→重画→再加载"死循环，整页被拖死。集合没变
       // 就直接返回（对照 loadKstarEpisodes 的守卫）。
       const prev = Array.isArray(store.modelSelectedAssetIds) ? store.modelSelectedAssetIds : [];
@@ -1189,20 +1170,24 @@
     await fetchKstarEpisodeSummaries(ids);
   };
 
-  /** 点开单条任务复盘详情（就地展开块）。 */
+  /** 点开单条任务复盘详情（就地展开块）。失败记 failed（读不到 ≠ 没有，
+   *  与 loadExperienceDetail 同一惯例）：视图给失败文案与收起重试出口。 */
   NS.loadKstarEpisode = async function loadKstarEpisode(episodeId) {
     const id = String(episodeId || '');
     if (!id) return;
-    store.kstarEpisode = { episodeId: id };
+    store.kstarEpisode = { episodeId: id, loading: true, failed: false };
     NS.notify();
     let data = null;
+    let failed = false;
     try {
       data = await api.call('recall.kstar.episode.read', { episodeId: id });
     } catch (error) {
+      // 显式记失败：不用 !data 代替（成功但空载荷 ≠ 失败，防误报）。
       data = null;
+      failed = true;
     }
     if (!store.kstarEpisode || String(store.kstarEpisode.episodeId) !== id) return;
-    store.kstarEpisode = { episodeId: id, episode: data && data.episode, review: data && data.review };
+    store.kstarEpisode = { episodeId: id, episode: data && data.episode, review: data && data.review, loading: false, failed };
     NS.notify();
   };
 
@@ -1222,12 +1207,12 @@
     NS.notify();
   };
 
-  /* ────────── 经验目录数据装载（specs/016 US-801，通道 E1/E2/E7/E8）───────────
+  /* ────────── 经验目录数据装载───────────
    *  与改进分析同一套按需模式：不进主快照（经验通道与资产快照隔离），进
    *  「经验」页签才拉；失败记 failed（读不到 ≠ 没有，空态与失败分开呈现）。
    *  所有通道只读，动作（暂停/类型/合并/归档/迁移）在 actions 层。 */
 
-  /** 经验列表（E1）：status:'all' 一次拉全（≤200，E1 上限），视图侧过滤
+  /** 经验列表：status:'all' 一次拉全（上限 200 条），视图侧过滤
    *  active/paused——避免为两个非终态各发一次请求；stale 由 snapshot 打、
    *  动作后 force 重拉。 */
   NS.loadExperiences = async function loadExperiences(force) {
@@ -1243,10 +1228,13 @@
       failed = true;
     }
     store.experiences = { items, loading: false, failed, stale: false };
-    NS.notify();
+    // 失败不 notify——app.js 钩子在
+    // overview/experiences 路由每帧补拉，失败态再 notify 即成自激死循环；
+    // 自愈自重试保留，成功照常 notify。
+    if (!failed) NS.notify();
   };
 
-  /** 经验详情（E2）：按条缓存；不存在（已归档仍可读，物理删除后查无）如实
+  /** 经验详情：按条缓存；不存在（已归档仍可读，物理删除后查无）如实
    *  记 failed——详情页给「读不到」文案，不冒充空条目。 */
   NS.loadExperienceDetail = async function loadExperienceDetail(experienceId, force) {
     const id = String(experienceId || '');
@@ -1265,14 +1253,20 @@
     }
     if (!store.experienceDetail || String(store.experienceDetail.experienceId) !== id) return;
     store.experienceDetail = { experienceId: id, experience, loading: false, failed };
-    NS.notify();
+    // 失败不 notify——app.js 钩子
+    // 在详情路由每帧补拉，失败态再 notify 即成自激死循环。自愈自重试保留
+    // （失败态保留按需重读，避免 notify 触发自激循环），成功照常 notify。
+    if (!failed) NS.notify();
   };
 
-  /** 迁移预览（E7 只读）：扫描结果进 store，界面据此逐条核对后显式发起。 */
+  /** 迁移预览（只读）：扫描结果进 store，界面据此逐条核对后显式发起。 */
   NS.loadExperienceMigrationPreview = async function loadExperienceMigrationPreview(force) {
+    // 不再整体替换——run 的 running、status 读取的 statusLoading 等瞬态照原样
+    // 保留，只动 preview 一族字段，免得扫描在途的提示被另一路读取抹掉。
     const state = store.experienceMigration;
+    if (state && state.previewLoading) return;
     if (!force && state && state.preview && !state.previewFailed) return;
-    store.experienceMigration = { preview: state && state.preview, previewLoading: true, previewFailed: false, lastRun: state && state.lastRun };
+    store.experienceMigration = { ...state, previewLoading: true, previewFailed: false };
     NS.notify();
     let preview = null;
     let previewFailed = false;
@@ -1282,116 +1276,63 @@
       previewFailed = true;
     }
     const current = store.experienceMigration;
-    store.experienceMigration = { preview, previewLoading: false, previewFailed, lastRun: current && current.lastRun };
+    if (!current || current.previewLoading !== true) return;
+    store.experienceMigration = { ...current, preview, previewLoading: false, previewFailed };
     NS.notify();
   };
 
-  /** 旧记忆文件的只读预览。失败时保留“读不到”状态，不把它伪装成空清单。 */
-  NS.loadLegacyMemoryMigrationPreview = async function loadLegacyMemoryMigrationPreview(force) {
-    const previous = store.legacyMemoryMigration;
-    if (previous && previous.loading) return;
-    if (!force && previous && previous.preview && !previous.failed) return;
-    store.legacyMemoryMigration = {
-      preview: previous && previous.preview || null,
-      loading: true,
-      failed: false,
-      selectionKeys: [],
-      running: false,
-      lastRun: previous && previous.lastRun || null,
-      runFailed: false,
-    };
-    NS.notify();
-    let preview = null;
-    let failed = false;
-    try {
-      const result = await api.call('recall.memory.migrate', { dryRun: true });
-      if (!result || !result.sources || !result.fingerprints || !Array.isArray(result.items)) {
-        throw new Error('invalid legacy memory preview');
-      }
-      preview = result;
-    } catch (_) {
-      failed = true;
-    }
-    const current = store.legacyMemoryMigration;
-    store.legacyMemoryMigration = {
-      preview,
-      loading: false,
-      failed,
-      selectionKeys: [],
-      running: false,
-      lastRun: current && current.lastRun || null,
-      runFailed: current && current.runFailed || false,
-    };
-    NS.notify();
-  };
-
-  /** Agent / Space / Project 记忆只读盘点；不触发旧 Agent 文件的位置搬迁。 */
-  NS.loadLegacyScopedMemoryMigrationPreview = async function loadLegacyScopedMemoryMigrationPreview(force) {
-    const previous = store.legacyScopedMemoryMigration;
-    if (previous && previous.loading) return;
-    if (!force && previous && previous.preview && !previous.failed) return;
-    store.legacyScopedMemoryMigration = {
-      preview: previous && previous.preview || null,
-      loading: true,
-      failed: false,
-      selectionKeys: [],
-      running: false,
-      lastRun: previous && previous.lastRun || null,
-      runFailed: false,
-    };
-    NS.notify();
-    let preview = null;
-    let failed = false;
-    try {
-      const result = await api.call('recall.scopedMemoryMigration.preview', {});
-      if (!result || !result.fingerprints || !Array.isArray(result.sources) || !Array.isArray(result.items)) {
-        throw new Error('invalid scoped memory migration preview');
-      }
-      preview = result;
-    } catch (_) {
-      failed = true;
-    }
-    const current = store.legacyScopedMemoryMigration;
-    store.legacyScopedMemoryMigration = {
-      preview,
-      loading: false,
-      failed,
-      selectionKeys: [],
-      running: false,
-      lastRun: current && current.lastRun || null,
-      runFailed: current && current.runFailed || false,
-    };
-    NS.notify();
-  };
-
-  /** 迁移状态（E8 只读）：最近一次 run 的回执；从未跑过时 migrationId 为
+  /** 迁移状态（只读）：最近一次 run 的回执；从未跑过时 migrationId 为
    *  null——界面如实说「还没执行过」，不把空态误报成失败。 */
   NS.loadExperienceMigrationStatus = async function loadExperienceMigrationStatus() {
+    // 读取时不能整体替换 store.experienceMigration
+    // 并把 lastRun 抹成 null、running/previewLoading 一并丢失——扫描/迁移在途时
+    // 常驻入口的「迁移在途」提示被抹掉、界面重现旧清单；读失败还静默把旧
+    // lastRun 置 null 误报「还没执行过」。改为：在途不重入；读取期间保留全部
+    // 现值（只加 statusLoading 标记）；失败保留现值；落地前若已被 run 的终态
+    // 写入接管（statusLoading 不再是本次置位）则不落地。
     const state = store.experienceMigration;
-    store.experienceMigration = { preview: state && state.preview, previewLoading: false, previewFailed: state && state.previewFailed || false, lastRun: null, statusLoading: true };
+    if (state && state.statusLoading) return;
+    store.experienceMigration = {
+      preview: (state && state.preview) || null,
+      previewLoading: Boolean(state && state.previewLoading),
+      previewFailed: Boolean(state && state.previewFailed),
+      running: Boolean(state && state.running),
+      lastRun: (state && state.lastRun) || null,
+      statusLoading: true,
+    };
     NS.notify();
     let lastRun = null;
+    let failed = false;
     try {
       const result = await api.call('recall.experiences.migration.status', {});
       lastRun = result && result.migrationId ? result : null;
     } catch (error) {
-      lastRun = null;
+      // 读失败保留现值（旧 lastRun 不被伪装成「还没执行过」）。
+      failed = true;
     }
     const current = store.experienceMigration;
-    store.experienceMigration = { preview: current && current.preview, previewLoading: false, previewFailed: current && current.previewFailed || false, lastRun, statusLoading: false };
+    if (!current || current.statusLoading !== true) return;
+    store.experienceMigration = {
+      ...current,
+      lastRun: failed ? (current.lastRun || null) : lastRun,
+      statusLoading: false,
+    };
     NS.notify();
   };
 
-  /* ────────── 改进分析（specs/015 US-701 AC3 / T016）与依据链数据装载 ──────────
+  /* ────────── 改进分析与依据链数据装载 ──────────
    * 两个只读通道都不进主快照：结论是「进待我处理页签才需要」，失败面更是整集合
    * 读取——只有真的存在失败类结论时才拉，不给没有失败的用户白付这份开销。
-   * 路由副作用放在 core（与 app.js 的 onChange 编排同一套模式；本批只动
-   * views/core 两个文件，见 specs/015 T016）。 */
+   * 路由副作用放在 core，与 app.js 的 onChange 编排保持一致。 */
 
   /** 改进分析结论（`kstar.improvement.outcomes.list`，倒序，只读）。
    *  失败记 `failed`（读不到 ≠ 没有：空态与读取失败必须分开呈现）；`force` 重拉。 */
   NS.loadImprovementOutcomes = async function loadImprovementOutcomes(force) {
-    if (store.improvementOutcomes && !force && !store.improvementOutcomes.stale) return;
+    // 另半边（失败后无恢复路径）：守卫此前只认 stale，失败后
+    // （failed=true、stale=false）被判重挡死——页签钩子的补拉每次都落空，
+    // 只能等整页 reload。与 loadExperiences 一样：失败态放行
+    // 重拉，配合上面的「失败不 notify」即得「自愈自重试且不成环」。
+    if (store.improvementOutcomes && !force && !store.improvementOutcomes.stale && !store.improvementOutcomes.failed) return;
     store.improvementOutcomes = { items: [], loading: true, failed: false, stale: false };
     NS.notify();
     let items = [];
@@ -1403,7 +1344,10 @@
       failed = true;
     }
     store.improvementOutcomes = { items, loading: false, failed, stale: false };
-    NS.notify();
+    // 失败不 notify——本页签的 onChange
+    // 钩子看到 failed 就补拉，失败态再 notify 即成自激死循环；自愈自重试
+    // 保留，成功照常 notify。
+    if (!failed) NS.notify();
   };
 
   /** 失败面（`kstar.failures.list`，只读）：失败类结论的就地详情数据源。 */
@@ -1420,38 +1364,12 @@
       failed = true;
     }
     store.kstarFailures = { items, loading: false, failed };
-    NS.notify();
+    // 失败不 notify。
+    // 环=「下方钩子放行 failed 态」×「装载尾部无条件 notify」两件事，只掐
+    // 后一半即断环；自愈自重试保留（下一次任意 notify 经钩子看到 failed
+    // 仍会重拉），成功路径照常 notify 刷新失败面详情。
+    if (!failed) NS.notify();
   };
-
-  const IMPROVEMENT_FAILURE_CONCLUSIONS = new Set(['analysis_failed', 'submit_failed']);
-
-  /** 进「待我处理」页签：补拉结论；有失败类结论时补拉失败面；顺手补复盘摘要
-   *  （来源任务 chip 要显示任务目标，而不是兜底"一次任务"）。各 loader 自带
-   *  缓存/在途守卫，这里只做"什么时候该拉"的判断。 */
-  NS.onChange(() => {
-    if (String((store.route && store.route.name) || '') !== 'activity') return;
-    const state = store.improvementOutcomes;
-    if (!state || state.failed || state.stale) { void NS.loadImprovementOutcomes(); return; }
-    if (state.loading) return;
-    const items = Array.isArray(state.items) ? state.items : [];
-    void NS.loadKstarEpisodeSummariesByIds(items.map((row) => String(row.episodeId || '')));
-    if (!store.kstarFailures || store.kstarFailures.failed) {
-      if (items.some((row) => IMPROVEMENT_FAILURE_CONCLUSIONS.has(String(row.conclusion || '')))) {
-        void NS.loadKstarFailures();
-      }
-    }
-  });
-
-  /** 进入承载旧记忆迁移工具卡的页签时读取原文；启动和其他页签均不扫描。
-   *  两区已自「待我处理」页尾挪入设置页（2026-09-28 两页重整）——门控路由
-   *  清单随挪页扩入 settings（照 app.js 懒加载先例），review 保留兜底（返回
-   *  栈深链），不扩则设置页两区永久 loading 且该分支无任何按钮（深探 F23）。 */
-  NS.onChange(() => {
-    const routeName = String((store.route && store.route.name) || '');
-    if (!['review', 'settings'].includes(routeName) || String(store.route.candidateId || '')) return;
-    if (!store.legacyMemoryMigration) void NS.loadLegacyMemoryMigrationPreview(false);
-    if (!store.legacyScopedMemoryMigration) void NS.loadLegacyScopedMemoryMigrationPreview(false);
-  });
 
   /** 进候选详情：依据链的采用证据按目标方法补拉（`recall.assets.adoptionReceipts`，
    *  与资产详情「实际采用记录」同一个只读口、同一份缓存）；同次任务的复盘摘要
@@ -1469,45 +1387,51 @@
 
   /* ────────────────────────── 路由 ────────────────────────── */
 
-  /* 2026-09-26 specs/018 后端驱动重构：入口覆盖认知全景、本体工作区、资产管理、
-   * 待我处理、系统活动和设置。认知树保留为默认顶级入口；资产管理内也能切到
-   * 同一批资产的树投影。旧整理/经验路由在 router.go 与 views.render 两级归一化，
-   * 深链与历史栈不断。 */
+  // 认知树暂不开放，默认进入「我的认知」。
   const TABS = [
-    // 认知树恢复为顶级页签（2026-09-26 子安真机否决降级方案）：树是全景
-    // 第一眼，保留独立入口与默认落地；「我的认知」内仍留树视图按钮互通。
-    { id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树' },
-    // 「我的认知」在「本体」前（2026-09-27 子安定序，勿再对调）。
+    { id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树', disabled: true },
+    // 「我的认知」在「本体」前。
     { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
     { id: 'ontology', titleKey: 'cognition.tab_ontology', title: '本体' },
-    { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
-    { id: 'activity', titleKey: 'cognition.tab_activity', title: '系统活动' },
+    // 认知资产全量重构：独立「待我处理」页签下线——全部
+    // 治理动作收敛到「认知生长」的需要关注/已处理；旧 review 路由在
+    // router.go 归一化到 activity，深链与历史栈不断。
+    { id: 'activity', titleKey: 'cognition.tab_activity', title: '认知生长' },
     { id: 'settings', titleKey: 'cognition.tab_settings', title: '资产设置' },
   ];
   NS.TABS = TABS;
-  // 归边判定 NS.isKstarAsset / NS.isKstarCandidate 由 views.js 定义
-  //（2026-09-17 B 档两线分开；渲染层唯一消费方，跟着渲染代码走）。
+  // 归边判定 NS.isKstarAsset / NS.isKstarCandidate 由 views.js 定义。
 
   const router = {
     go(next, options) {
       const opts = options || {};
       const current = store.route;
-      // 旧路由名归一（specs/018）：tree 保持为认知树顶级页；organize→系统活动、
-      // organize-settings→设置、experiences→我的认知·经验档（specs/017）。
+      // 旧路由名归一：tree 暂时回到我的认知；
+      // organize→认知生长、organize-settings→设置、experiences→我的
+      // 认知·经验档；review（已下线的独立待我处理页）→认知生长·需要关注。
       // 在入栈/落 store 前归一，app.js 的 onChange 钩子读到的恒为新名。
       let target = next || {};
       const legacyName = String(target.name || '');
-      if (legacyName === 'organize') target = Object.assign({}, target, { name: 'activity' });
+      if (legacyName === 'tree') target = Object.assign({}, target, { name: 'overview' });
+      else if (legacyName === 'organize') target = Object.assign({}, target, { name: 'activity' });
       else if (legacyName === 'organize-settings') target = Object.assign({}, target, { name: 'settings' });
       else if (legacyName === 'experiences') target = Object.assign({}, target, { name: 'overview', category: target.category || 'experiences' });
+      else if (legacyName === 'review') target = Object.assign({}, target, { name: 'activity' });
+      target = Object.assign({}, target);
+      for (const key of ['tagFilter', 'tagMode', 'tagUntagged', 'tagSelect', 'tagOverlay']) delete target[key];
       if (target.category === 'kstar') target = Object.assign({}, target, { category: '' });
       // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
-      // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
-      const merged = Object.assign({ name: 'tree', category: '', assetId: '', candidateId: '', proofEventId: '', captureBucket: '', captureId: '', sourceIssueOpen: '', taskFailedOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', familyRename: '', candCreate: '', ontologyBox: '', experienceId: '', tagFilter: '', tagMode: '', tagUntagged: '', tagSelect: '', tagOverlay: '', manage: '' }, target);
+      // 避免连点同一 tab 堆积重复栈项）。
+      const linkedCandidate = target.candidateId && store.candidates.find(candidate => String(candidate.id) === String(target.candidateId));
+      if (target.name === 'activity' && linkedCandidate && ['confirmed', 'integrated', 'rejected', 'ignored', 'expired', 'superseded'].includes(String(linkedCandidate.status))) {
+        target = Object.assign({}, target, { activityView: 'done', activityDone: '1' });
+      }
+      if (target.candCreate) target = Object.assign({}, target, { candCreate: '' });
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', approvalId: '', moduleId: '', recordId: '', recordVersion: '', proofEventId: '', inboxId: '', poCandidateId: '', activityQuery: '', activityPage: '', captureBucket: '', captureId: '', sourceIssueOpen: '', taskFailedOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', candCreate: '', experienceId: '', manage: '', activityDone: '' }, target);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
-      // 滚动不在这里清零（2026-09-17 修）：views.render 的 restoreScroll 按
+      // 滚动不在这里清零：views.render 的 restoreScroll 按
       // routeKey 判定——页面级路由变了回顶，就地展开（使用记录/版本详情/
       // KSTAR 复盘）保持原位。此前无条件清零会把展开后的视口打回页面顶部。
       NS.notify();
@@ -1527,6 +1451,8 @@
    * promotion.ts::PromotionBlockReason。 */
 
   const RECALL_CANDIDATE_ERROR_TEXTS = {
+    recall_content_purged: ['cognition.content_purged_note',
+      '关联资产的内容已清除。此记录保留处理状态，不能编辑、确认或恢复内容。'],
     recall_candidate_terminal: ['cognition.candidate_error_terminal',
       '这条候选已经处理过了（已确认、已拒绝或已失效），不能再改。回「待我处理」看当前待办。'],
     recall_candidate_not_promotable: ['cognition.candidate_error_not_promotable',
@@ -1551,6 +1477,12 @@
       '有一条证据引用在来源列表里找不到，不能保存。证据只能从真实来源中选取。'],
     recall_candidate_similar_asset: ['cognition.candidate_error_similar_asset',
       '检测到与现有资产高度相似——确认是新条目，还是同一条的修订（改为更新）。'],
+    recall_candidate_changed_during_confirmation: ['cognition.candidate_error_changed_during_confirmation',
+      '确认过程中这条候选被改动过，当前内容可能已更新。请重新核对后再确认。'],
+    recall_candidate_content_too_long: ['cognition.candidate_error_content_too_long',
+      '内容太长，先精简后再保存。'],
+    ontology_meaning_unresolved: ['cognition.ontology_meaning_unresolved',
+      '本体建议仍有未明确的含义，本次没有保存。请核对“价值与不确定性”，明确说明后保存修改并重新核对建议。'],
     recall_capture_not_review_ready: ['cognition.candidate_error_capture_not_review_ready',
       '它所属的沉淀任务还没到可复核状态，稍后再确认。'],
     recall_capture_writing: ['cognition.candidate_error_capture_writing',
@@ -1561,6 +1493,8 @@
   const RECALL_PROMOTION_BLOCK_TEXTS = {
     personal_is_project_fact: ['cognition.candidate_block_personal_is_project_fact',
       '这是项目或任务事实，它属于项目，不属于个人信息。'],
+    fact_not_stable: ['cognition.candidate_block_fact_not_stable',
+      'fact 只收长期稳定的事实（项目、环境、领域、工具链）；带「今天/本次/当前」这类时间限定、又没写明长期有效的叙述只是任务状态，不算可复用事实。请核对长期有效性并改写内容。'],
     template_not_reusable_structure: ['cognition.candidate_block_template_not_reusable_structure',
       '模板要的是从来源里抽出来的可复用结构，指向原文件本身不算。'],
     skill_not_executable: ['cognition.candidate_block_skill_not_executable',
@@ -1570,7 +1504,7 @@
     judgment_is_meta_commentary: ['cognition.candidate_block_judgment_is_meta_commentary',
       '这段判断是在评价这条候选本身，不是可复用的内容。'],
     type_conflicts_with_existing: ['cognition.candidate_block_type_conflicts_with_existing',
-      '同一句话已经以另一种类型存在，分类不可信；先裁定它到底属于哪一类。'],
+      '这条内容与已有认知存在冲突，请先核对已有内容和关联目标。'],
   };
 
   /** 单条晋升阻断原因 → 用户文案（候选确认卡内联说明用）。 */
@@ -1582,21 +1516,50 @@
   /** 把 IPC 失败体（{code, error, blockRule, promotionReasons}）翻成给用户看的话。 */
   NS.recallErrorText = function recallErrorText(result) {
     const code = String((result && result.code) || '');
-    // 资产准入/挂载类失败（2026-09-25 US-604 AC1/AC7）：走规则名映射，并如实说明
+    if (String(result?.error || result?.message || '') === 'capture formation source is unavailable')
+      return T('cognition.formation_source_changed', '原文已变化或来源暂不可用，本次没有正式保存。请核对来源后刷新；原文变化需通过夜间发现重新核对。');
+    // 资产准入/挂载类失败：走规则名映射，并如实说明
     // 「这次操作没有生效」——绝不把主进程的英文原文与内部 id 甩给用户。
     if (code.startsWith('projection_') || (result && result.blockRule)) {
       return T('cognition.action_not_applied', '这次操作没有生效：{reason}', { reason: blockReasonText(result) });
     }
-    // 治理处置的稳定错误码（specs/010 T021/T030）：补条件未过门禁（没落库）、
+    // 治理处置的稳定错误码：补条件未过门禁（没落库）、
     // 版本冲突（别的改动先落了）。都如实说"这次没有生效"，不甩原文。
+    if (code === 'model_not_configured') {
+      return T('cognition.candidate_error_model_required', '当前没有可用模型，自动整理步骤无法完成，本次正式保存未完成。候选修改仍保留，可调整认知名称或在应用设置中配置模型后重试。');
+    }
+    if (code === 'baseline_changed') {
+      return T('cognition.ontology_baseline_changed', '本体版本发生变化，本次没有保存，原建议保留。请核对目标记录及关联内容，再点击“重新核对关联建议”。');
+    }
+    if (code === 'stock_organization_baseline_changed') {
+      return T('cognition.stock_baseline_changed', '整理依据发生变化，本次没有保存，原建议保留。请核对当前内容、在用版本、来源及关联记录后更新建议。');
+    }
+    if (code === 'ontology_meaning_unresolved') {
+      return T('cognition.ontology_meaning_unresolved', '本体建议仍有未明确的含义，本次没有保存。请核对“价值与不确定性”，明确说明后保存修改并重新核对建议。');
+    }
     if (code === 'invalid_boundary') {
       return T('cognition.inbox_error_boundary_invalid', '条件没有通过规则门禁——没有保存，请补齐后再试。');
+    }
+    // 待办处置入口区分：id 不合法 / 对象不存在或不能在这里处置 / 动作不适用。
+    // 主进程 message 是中文人话但带动态插值，四语用户读不到——按码翻成固定
+    // 词条；这三码的 7 条抛出路径（含 6 处旧路径）经此一处分支全部覆盖。
+    if (code === 'invalid_item_id') {
+      return T('cognition.inbox_error_item_id_invalid', '这条待办的标识不合法，请刷新后重试。');
+    }
+    if (code === 'unsupported_item_kind') {
+      return T('cognition.inbox_error_item_kind_unsupported', '这条待办指向的对象已不存在或不能再在这里处置，请刷新列表查看最新状态。');
+    }
+    if (code === 'unsupported_action') {
+      return T('cognition.inbox_error_action_unsupported', '这个操作不适用于这条待办，请刷新后查看最新状态。');
     }
     if (code === 'version_conflict') {
       return T('cognition.inbox_error_version_conflict', '这条资产刚被别的改动更新过（版本冲突），请重试。');
     }
+    if (code === 'tags_conflict') {
+      return T('cognition.inbox_error_tags_conflict', '这条资产的标签在你看过之后被改过，这条提议已作废；AI 会基于最新内容重新提议。');
+    }
     if (code === 'promotion_gate_rejected') {
-      // 2026-09-29 第 2 批：冲突选边后半程——另一边已出局，保留侧没过晋升
+      // 冲突选边后半程——另一边已出局，保留侧没过晋升
       // 闸门。主进程 message 已是人话（含原因与去向），这里只保证兜底文案。
       return (result && result.error) || T('cognition.inbox_error_gate_rejected', '选边已生效，但保留的这一条还需要你到「待我处理」的候选详情里完成确认。');
     }
@@ -1625,6 +1588,7 @@
       'conversation is still waiting for a response': ['cognition.capture_error_waiting_response', '当前会话仍在等待回复，完成后才能沉淀。'],
       'recall capture is disabled': ['cognition.capture_error_disabled', '会话整理暂不可用，请查看资产设置。'],
       'conversation not found': ['cognition.capture_error_conversation_not_found', '找不到这个会话，暂时无法沉淀。'],
+      'capture formation source is unavailable': ['cognition.formation_source_changed', '原文已变化或来源暂不可用，本次没有正式保存。请核对来源后刷新；原文变化需通过夜间发现重新核对。'],
     };
     const localized = messages[raw];
     if (localized) return T(localized[0], localized[1]);
@@ -1637,15 +1601,14 @@
   const CANDIDATE_CHANNELS = {
     reject: 'recall.candidates.reject',
     ignore: 'recall.candidates.ignore',
-    'keep-current': 'recall.candidates.keepCurrent',
     defer: 'recall.candidates.defer',
-    resume: 'recall.candidates.resume',
+    'keep-current': 'recall.candidates.keepCurrent',
   };
 
-  // originKindOf 已随出身收敛退役（2026-09-20）：「模型记的=已确定」，
+  // originKindOf 已随出身收敛退役：「模型记的=已确定」，
   // 出身三值不再是显示或行为维度；出身章与转正动作一并移除。
 
-  /* ── 确认更新撞版本冲突的就地处置（specs/015 US-702 T022）────────────────
+  /* ── 确认更新撞版本冲突的就地处置────────────────
    * 确认时主进程在 `updateAbilityAsset` **锁内**比对"候选锚定的版本"与"当前
    * 在用版"；不一致就返回结构化冲突（资产零改动、候选不落终态）。渲染层在这
    * 里做三件事：
@@ -1694,6 +1657,57 @@
     NS.notify();
   }
 
+  function confirmedPromotion(result, candidateId) {
+    const candidate = result?.candidate;
+    if (String(candidate?.id || '') === String(candidateId) && candidate?.proposalTarget === 'ontology'
+      && candidate.status === 'integrated' && !candidate.promotedAssetId) {
+      const handoff = candidate.ontologyHandoff, receipt = result.ontologyHandoff;
+      if (handoff?.status === 'integrated' && handoff.commandId && handoff.recordIds?.length
+        && receipt?.commandId === handoff.commandId && receipt.ontologyRevision === handoff.ontologyRevision
+        && JSON.stringify(receipt.recordIds) === JSON.stringify(handoff.recordIds)) return { candidate, ontologyHandoff: handoff };
+      return null;
+    }
+    const assetId = String(candidate?.promotedAssetId || '');
+    if (String(candidate?.id || '') !== String(candidateId) || candidate?.status !== 'confirmed' || !assetId) return null;
+    if (String(result?.asset?.id || '') !== assetId) return null;
+    return { candidate, asset: result.asset, assetId };
+  }
+
+  async function verifyPromotion(result, candidateId) {
+    const direct = confirmedPromotion(result, candidateId);
+    if (direct) return direct;
+    // Use these exact read responses, never a shared cache whose request may
+    // have been superseded by a concurrent write broadcast.
+    try {
+      const read = await api.call('recall.candidates.read', { candidateId });
+      const candidate = read?.candidate;
+      if (String(candidate?.id || '') === String(candidateId) && candidate?.proposalTarget === 'ontology' && candidate.status === 'integrated') {
+        const snapshot = await api.call('cognition.ontology.snapshot');
+        const handoff = candidate.ontologyHandoff;
+        const receipt = snapshot?.ontology?.receipts?.[handoff?.commandId];
+        if (!receipt || receipt.revision !== handoff.ontologyRevision
+          || JSON.stringify(receipt.changedIds) !== JSON.stringify(handoff.recordIds)
+          || receipt.changedIds.some(id => !snapshot.ontology.records?.[id])) return null;
+        return confirmedPromotion({ candidate, ontologyHandoff: handoff }, candidateId);
+      }
+      if (String(candidate?.id || '') !== String(candidateId) || candidate.status !== 'confirmed' || !candidate.promotedAssetId) return null;
+      const saved = await api.call('recall.assets.read', { assetId: candidate.promotedAssetId });
+      return confirmedPromotion({ candidate, asset: saved?.asset }, candidateId);
+    } catch {
+      return null;
+    }
+  }
+
+  function requireLibraryAsset(assetId, statuses = ['active', 'paused']) {
+    if (store.assetsError) throw new Error(T('cognition.library_stale_readonly', '当前显示上次读取的内容；请刷新核对后再修改。'));
+    const asset = store.assets.find(row => String(row.id || '') === String(assetId || ''));
+    if (!asset || !assetId || !['cognition', 'personal', 'fact', 'rule', 'template', 'skill_method'].includes(asset.type)
+      || !statuses.includes(asset.status)) {
+      throw new Error(T('cognition.library_action_unavailable', '当前内容状态不允许此操作，请刷新核对后再试。'));
+    }
+    return asset;
+  }
+
   const actions = {
     /** 资产编辑按需加载可读的 Agent / 工作空间名称。目录失败不阻断正文
      *  编辑；保存时省略 scopePolicy，后端就会保留原策略。 */
@@ -1724,13 +1738,28 @@
 
     /** 采纳：可选携带编辑后的字段（adjust=true 时从表单读取）。 */
     async adoptCandidate(candidateId, formValues) {
+      const activityRoute = store.route.name === 'activity';
+      const activityOperation = activityRoute ? NS.activityController?.beginDecision() : undefined;
       const candidate = store.candidates.find((c) => c.id === candidateId);
       if (!candidate) return;
+      if (candidate.contentOrganization) {
+        if (formValues?.outputs) await api.call('recall.candidates.organization.update', { candidateId, outputs: formValues.outputs });
+        const result = await api.call('recall.candidates.promote', { candidateId, organizationOutputs: formValues?.outputs || candidate.contentOrganization.draft.outputs });
+        const receipt = result.candidate?.organizationReceipt;
+        if (!receipt || receipt.assets?.length !== candidate.contentOrganization.draft.outputs.length)
+          throw new Error(T('cognition.activity_draft_missing', '没有读到保存后的候选，请刷新后核对。'));
+        NS.activityController?.clearDraft?.(candidateId);
+        await NS.reload();
+        if (activityOperation) NS.activityController.afterDecision(candidateId, false, activityOperation);
+        toast(T('cognition.organization_saved', '整组内容已保存，原条目已归档。'), 'success');
+        return;
+      }
+
       // Keep the user's edits available for alternate decisions later in this
       // flow (for example, changing a similar new item into an update). The
       // store snapshot is still the pre-edit version until reload completes.
       const promotionDraft = formValues ? Object.assign({}, candidate, formValues) : candidate;
-      // 版本冲突后的**再次确认**（specs/015 T022③）：冲突状态还挂在这个候选上
+      // 版本冲突后的**再次确认**：冲突状态还挂在这个候选上
       // 时，用户这次点击就是"我已看过对当前在用版的差异，再确认一次"——把
       // `confirmBaselineVersion = 冲突返回的当前在用版` 带下去，主进程在资产锁内
       // 再校验一次。这只是把用户这一次点击的意图传下去，**不是自动重试**：撞了
@@ -1745,7 +1774,7 @@
         if (!ok) return;
       }
       if (formValues) {
-        await api.call('recall.candidates.update', Object.assign({
+        const edited = await api.call('recall.candidates.update', Object.assign({
           candidateId,
           value: candidate.value || '',
           evidenceSummary: candidate.evidenceSummary || '',
@@ -1757,16 +1786,26 @@
           targetAssetId: candidate.targetAssetId,
           // 证据与适用/禁止边界不在表单里编辑：原样带回，防止一次"调整后采纳"
           // 把候选原有的证据链与边界静默清空。
-          sourceRefs: candidate.evidenceRefs || candidate.sourceRefs || [],
+          sourceRefs: candidate.sourceRefs || candidate.evidenceRefs || [],
           evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || [],
           applicableWhen: candidate.applicableWhen || [],
           forbiddenWhen: candidate.forbiddenWhen || [],
         }, formValues));
+        if (candidate.ontologyFormation) {
+          if (edited?.candidate?.id !== candidateId) throw new Error(T('cognition.activity_draft_missing', '没有读到保存后的候选，请刷新后核对。'));
+          store.candidates[store.candidates.findIndex(item => item.id === candidateId)] = edited.candidate;
+          NS.activityController?.clearDraft?.(candidateId);
+          if (edited.candidate.ontologyFormation?.blockedReasons?.length) {
+            toast(T('cognition.formation_recheck_required', '认知修改已保存；关联本体建议需要重新核对，尚未正式生效。'));
+            NS.notify();
+            return;
+          }
+        }
       } else if (!String(candidate.suggestedScope || '').trim()) {
         await alertUser(T('cognition.candidate_scope_required', '先填写作用范围：没有范围的资产不会被带入任何任务。'));
         return;
       }
-      // 版本组防分裂（2026-09-16）：create 候选与现有资产语义高度相似时后端
+      // 版本组防分裂：create 候选与现有资产语义高度相似时后端
       // 拦下并返回专用错误码——问用户"仍存新条目"还是回来改为更新。
       // 重锚声明只挂在"主确认"这一次调用上：相似资产的二次选择（`promote(true)`）
       // 是另一条分流，主进程对 create 落点也没有版本比对面。
@@ -1780,16 +1819,35 @@
       try {
         result = await promote(false, confirmBaselineVersion);
       } catch (error) {
-        // 版本冲突（specs/015 US-702）：这条资产在确认前被改过——**这次没有
+        // 版本冲突：这条资产在确认前被改过——**这次没有
         // 生效**（不是部分生效、更不是静默覆盖）。把结构化冲突摆到页面上，按
         // 当前在用版重新展示差异并等用户显式重新确认；不自动重试。
+        if (['baseline_changed', 'stock_organization_baseline_changed'].includes(error?.code)) {
+          const message = NS.recallErrorText(error);
+          const states = store.formationRechecks || (store.formationRechecks = {});
+          if (candidate.ontologyFormation) states[candidateId] = { running: false, error: message, completed: false };
+          try {
+            const read = await api.call('recall.candidates.read', { candidateId });
+            if (read?.candidate?.id !== candidateId) throw new Error('candidate refresh unavailable');
+            const index = store.candidates.findIndex(item => item.id === candidateId);
+            if (index >= 0) store.candidates[index] = read.candidate;
+          } catch (_) {
+            if (candidate.ontologyFormation) states[candidateId].error += ' ' + T('cognition.activity_read_failed', '部分变化未能读取，请重试；不能据此判断没有待处理内容。');
+          }
+          // Refresh source warnings without clearing the detail controller's drafts.
+          await NS.loadReviewEvidence('candidate', candidateId, true);
+          NS.notify();
+          await alertUser(message);
+          if (activityRoute) NS.activityController?.focusFormationRecovery(candidateId, activityOperation);
+          return;
+        }
         if (error && error.versionConflict) {
           await openCandidateVersionConflict(candidate, error.versionConflict);
           return;
         }
         if (error && error.code === 'recall_candidate_similar_asset') {
           const info = String(error.message || '').replace(/^similar asset [^ ]+ /, '').replace(/ \(score [\d.]+\)$/, '');
-          // 相似确认改双选（2026-09-17 报告建议 F）：此前用「确认=新条目 /
+          // 相似确认改双选：此前用「确认=新条目 /
           // 取消=改为更新」——取消不等于取消，用户凭"别乱存"的本能点取消
           // 会被推进一个没预期的流程。uiChoice 三义各归其位：存为新条目 /
           // 更新到该条 / 先不动（真取消）。
@@ -1819,11 +1877,12 @@
                 value: promotionDraft.value || '',
                 summary: promotionDraft.summary || '',
                 suggestedType: promotionDraft.suggestedType,
+                ...(promotionDraft.contentCategory == null ? {} : { contentCategory: promotionDraft.contentCategory }),
                 suggestedScope: promotionDraft.suggestedScope || 'general',
                 suggestedAction: 'update',
                 targetAssetId,
                 risk: promotionDraft.risk || 'low',
-                sourceRefs: candidate.evidenceRefs || candidate.sourceRefs || [],
+                sourceRefs: candidate.sourceRefs || candidate.evidenceRefs || [],
                 evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || [],
               });
               toast(T('cognition.candidate_switched_to_update', '已改为更新——请对照差异后确认'));
@@ -1837,27 +1896,30 @@
           throw error;
         }
       }
+      const confirmed = await verifyPromotion(result, candidateId);
+      if (!confirmed) {
+        store.lastPromoted = null;
+        toast(T('cognition.manual_save_unconfirmed', '内容已提交，暂时无法确认正式保存结果。请打开这条记录核对状态，不必重复提交。'), 'warning');
+        NS.notify();
+        return;
+      }
+      result = Object.assign({}, result, confirmed);
       // 存量候选没有记录任务当时的版本（`versionCheckSkipped`）：主进程没有可
       // 核对的对象，这次确认照常生效——但必须如实说清"无法核对改进对象"，绝不
-      // 假装核过（T022⑤）。这条只出现在确认成功的返回体上。
+      // 假装核过。这条只出现在确认成功的返回体上。
       if (result && result.versionCheckSkipped === true) {
         toast(T('cognition.candidate_version_check_skipped', '这条候选没有记录任务当时的版本，无法核对改进对象；本次确认按当前内容生效。'), 'warning');
       }
       // 确认已落地：冲突状态不再成立（重锚成功也走这里）。
       store.candidateVersionConflict = null;
-      // 晋升可能改变个人画像投影：异步刷新本体，失败只提醒不阻断（资产已落库）。
-      void (async () => {
-        if (typeof window.refreshPersonalOntology !== 'function') return;
-        try {
-          await window.refreshPersonalOntology();
-        } catch (error) {
-          toast(T('personalOntology.profile_sync_warning', '资产已保存，个人画像自动更新未完成，稍后可重试。'), 'warning');
-        }
-      })();
       // promote 结果体的资产身份在 `asset.id`（顶层 `assetId` 是更早契约的读法，
       // 兼容保留）。拿得到才发去向提示并直落资产详情；拿不到不发——认知树没有
       // 资产级节点，宁可不给入口也不往树跳。
-      const promotedAssetId = String((result && result.asset && result.asset.id) || (result && result.assetId) || '');
+      const promotedAssetId = confirmed.assetId;
+      if (confirmed.ontologyHandoff) {
+        store.lastPromoted = null;
+        toast(T('cognition.ontology_proposal_saved', '本体变化已保存'), 'success');
+      }
       if (promotedAssetId) {
         toast(T('cognition.candidate_promoted', '已成为正式资产'), 'success');
         // 检修剪：update 候选确认会 bump 目标资产版本——曾缓存的版本链失效。
@@ -1869,13 +1931,9 @@
           title: String(candidate.summary || candidate.judgment || ''),
           at: Date.now(),
         };
-        router.go({ name: 'overview', assetId: promotedAssetId });
-      } else {
-        toast(T('cognition.candidate_promoted', '已成为正式资产'), 'success');
-        store.lastPromoted = null;
-        router.go({ name: 'review' });
+        if (!activityRoute) router.go({ name: 'overview', assetId: promotedAssetId });
       }
-      // 第 3 批（2026-09-29）：晋升的就地消费——候选响应直接替换 store 条目
+      // 晋升的就地消费——候选响应直接替换 store 条目
       //（confirmed + promotedAssetId），资产/树/时间线由写入广播重拉（candidates /
       //  ability-assets 两路 collection 都有映射）；不再整池 reload（此前与广播
       // 同一秒拉两遍）。响应缺候选时退回全量重读，行为不劣化。
@@ -1883,47 +1941,18 @@
         const index = store.candidates.findIndex((c) => String(c.id) === String(result.candidate.id));
         if (index >= 0) store.candidates[index] = result.candidate;
         else store.candidates.push(result.candidate);
+        if (activityOperation) NS.activityController.afterDecision(candidateId, false, activityOperation);
         NS.notify();
       } else {
         await NS.reload();
+        if (activityOperation) NS.activityController.afterDecision(candidateId, false, activityOperation);
       }
-    },
-    /** 「记一条」（设计 7.2，2026-09-28）：手动新建走 recall.candidates.save
-     *  产生**候选**（不直接入库），保存后跳「待我处理」确认——不破坏
-     *  "确认后才入库"一致性。标题（summary）与内容（judgment）渲染层先做
-     *  必填提示；正式标题闸门在晋升/入库收口（3.2）。
-     *  manual 标记（2026-09-28 拍板 A）：手动候选的"证据"就是用户本人的
-     *  直接输入——证据闸防的是自动提炼线编造来源，手动线不适用该威胁模型。
-     *  主进程按 manual=true + 空来源豁免"证据不足"降级，直接 pending_review
-     *  可确认；自动提炼线行为零变化。 */
-    async saveManualCandidate(form) {
-      const input = form || {};
-      const judgment = String(input.judgment || '').trim();
-      const summary = String(input.summary || '').trim();
-      if (!judgment || !summary) {
-        toast(T('cognition.cand_create_need_title', '标题和内容都要填，才能存成候选。'), 'warning');
-        return;
-      }
-      await api.call('recall.candidates.save', {
-        judgment,
-        summary,
-        suggestedType: String(input.suggestedType || 'personal'),
-        suggestedScope: String(input.suggestedScope || '').trim() || 'general',
-        suggestedAction: 'create',
-        manual: true,
-        sourceRefs: [],
-        ...(input.value ? { value: String(input.value) } : {}),
-        ...(input.uncertainty ? { uncertainty: String(input.uncertainty) } : {}),
-      });
-      toast(T('cognition.cand_create_done', '已存好。去「待我处理」确认后才会入库。'), 'success');
-      router.go({ name: 'overview', candCreate: '' }, { replace: true });
-      router.go({ name: 'review' });
-      await NS.reload();
     },
     async decideCandidate(candidateId, action) {
       const channel = CANDIDATE_CHANNELS[action];
       if (!channel) return;
-      // 第 3 批（2026-09-29）：处置响应携带更新后的完整候选——就地替换 store
+      const activityOperation = store.route.name === 'activity' ? NS.activityController?.beginDecision() : undefined;
+      // 处置响应携带更新后的完整候选——就地替换 store
       // 里的对应条目，不再整池重读（写入广播仍会在合并窗口后重拉 candidates
       // 区块作兜底；此前是「显式 reload + 广播重拉」同一秒拉两遍）。
       const result = await api.call(channel, { candidateId });
@@ -1940,32 +1969,27 @@
       } else {
         // 响应没带候选（老后端/通道差异）：退回全量重读，行为不劣化。
         await NS.reload();
+        if (activityOperation) NS.activityController.afterDecision(candidateId, false, activityOperation);
         return;
       }
-      if (action === 'defer') {
-        // 「稍后处理」的提示与导航随语境分流（2026-09-16 子安口径；整理详情
-        // 内嵌表单删除后（2026-09-28）「稍后处理」只剩待我处理侧入口，非
-        // review 路由的 toast 分支留作防御）：
-        if (String(store.route && store.route.name || '') === 'review') {
-          router.go({ name: 'review' });
-        } else {
-          toast(T('cognition.candidate_deferred', '已放入稍后处理'));
-        }
-      } else {
-        toast({ reject: T('cognition.candidate_rejected', '已拒绝'), ignore: T('cognition.candidate_ignored', '已忽略'), resume: T('cognition.candidate_resumed', '已恢复，回到待确认') }[action] || T('common.done', '已完成'));
-      }
+      toast({ reject: T('cognition.candidate_rejected', '已拒绝'), ignore: T('cognition.candidate_ignored', '已忽略'), defer: T('cognition.activity_deferred_saved', '已标记稍后处理，仍保留在需要关注中。') }[action] || T('common.done', '已完成'));
+      if (activityOperation) NS.activityController.afterDecision(candidateId, action === 'defer', activityOperation);
       NS.notify();
     },
     async rateProof(proofId, feedback, extra) {
-      await api.call('recall.proofs.effectiveness.feedback', Object.assign({ transferProofId: proofId, feedback }, extra || {}));
-      toast(T('cognition.proof_rating_done', '已记下这次评价'));
+      const busy = store.proofRatingsBusy || (store.proofRatingsBusy = {});
+      if (busy[proofId]) return;
+      busy[proofId] = true;
+      try {
+      const details = Object.assign({}, extra || {});
+      const result = await api.call('recall.proofs.effectiveness.feedback', Object.assign({ transferProofId: proofId, feedback }, details));
+      toast(result?.proof?.outcome === 'insufficient_evidence'
+        ? T('cognition.effect_insufficient', '评价已记录；证据不足，未提升验证程度。') : T('cognition.proof_rating_done', '已记下这次评价'));
       await NS.reload();
+      return result;
+      } finally { delete busy[proofId]; }
     },
     async assetAction(assetId, action) {
-      // 'revoke'（撤回使用）已随界面按钮删除（审计 R3，2026-09-28：0 使用＋
-      // 终态危险）。保留物一条不删：audit_revoked 台账标签、block_reason_
-      // revoked 词条、各处 status==='revoked' 过滤逻辑——历史撤回记录仍要
-      // 如实展示；recall.assets.revoke 通道本体由 7.1 退役批判定。
       const channels = {
         pause: 'recall.assets.pause', resume: 'recall.assets.resume',
         archive: 'recall.assets.archive', restore: 'recall.assets.restore',
@@ -1981,25 +2005,24 @@
         const ok = await confirmUser(dangerCopy[action], true);
         if (!ok) return;
       }
+      requireLibraryAsset(assetId, { pause: ['active'], resume: ['paused'], restore: ['archived', 'deleted'], purge: ['deleted'] }[action] || ['active', 'paused']);
       await api.call(channel, { assetId });
-      // 删除给时间感（报告建议 G）：保留期常量 30 天在后端标注 TODO(产品确
-      // 认)，文案先按现值显示，定稿后同步。
+      // 删除反馈说明当前保留期；恢复资格仍以服务端记录为准。
       toast(action === 'delete'
         ? T('cognition.asset_delete_done_retention', '已删除，30 天内可在「已删除」中恢复')
         : T('cognition.asset_action_done', '已完成'));
       if (action === 'delete' || action === 'purge') router.go({ name: 'overview' });
       await NS.reload();
     },
-    /** 选用历史版本为在用版（版本组 2026-09-16）：切指针不产生新版本号。 */
+    /** 选用历史版本为在用版：切指针不产生新版本号。 */
     async selectAssetVersion(assetId, version) {
+      requireLibraryAsset(assetId);
       await api.call('recall.assets.versions.select', { assetId, version });
       toast(T('cognition.asset_version_selected', '已选用 v{n}', { n: String(version) }));
       store.assetVersions = null;
       await NS.reload();
     },
-    /** 集成维护（2026-09-29 子安拍板「合并成一个集成功能」）：一个动作跑全套
-     *  = 检查资产库 + 完整清理（recall.maintenance.run，后端组合两个服务）。
-     *  结果分两段 toast：检查发现几条、清理执行几项；报告照旧分别落账。 */
+    /** 维护只检查并生成建议；不改资产、候选或历史。 */
     async runMaintenance() {
       store.cleanupReports = { loading: true, reports: (store.cleanupReports && store.cleanupReports.reports) || [] };
       NS.notify();
@@ -2007,7 +2030,7 @@
         const result = await api.call('recall.maintenance.run', {});
         const run = (result && result.inspection) || null;
         const report = (result && result.cleanup) || null;
-        toast(T('cognition.maint_run_done', '维护完成：检查发现 {findings} 条 · 清理执行 {applied} 项，拿不准 {uncertain} 项', {
+        toast(T('cognition.maint_run_done', '检查完成：发现 {findings} 条 · 整理建议 {uncertain} 项；没有修改内容', {
           findings: String(((run && run.findings) || []).length),
           applied: String(((report && report.items) || []).filter((item) => item.status === 'applied').length),
           uncertain: String(((report && report.uncertain) || []).length),
@@ -2019,82 +2042,36 @@
       }
       await NS.reload();
     },
-    /** 发起一轮大扫除（specs/008 US-403）：只做不改变含义的整理，拿不准的进清单。 */
-    async runCleanup() {
-      store.cleanupReports = { loading: true, reports: (store.cleanupReports && store.cleanupReports.reports) || [] };
-      NS.notify();
-      try {
-        const result = await api.call('recall.cleanup.run', { trigger: 'user' });
-        const report = (result && result.report) || null;
-        toast(T('cognition.cleanup_done', '整理完成：执行 {applied} 项，拿不准 {uncertain} 项', {
-          applied: String(((report && report.items) || []).filter((item) => item.status === 'applied').length),
-          uncertain: String(((report && report.uncertain) || []).length),
-        }));
-        // 完整整理轮的分轮失败（如模型未配置）如实补报——不静默（各轮
-        // "整轮失败上报"硬口径在合并报告里的出口）。
-        const roundErrors = report && report.roundErrors ? Object.values(report.roundErrors).filter(Boolean) : [];
-        if (roundErrors.length) toast(roundErrors.join('；'));
-        store.cleanupReports = { loading: false, stale: true, reports: [] };
-      } catch (error) {
-        store.cleanupReports = { loading: false, stale: true, reports: [] };
-        throw error;
-      }
-      await NS.reload();
-    },
-    /** 待办处置（specs/008 T051；specs/010 扩展可选参数）：动作由读模型给出，
-     *  这里只转发。没有一键动作的类别不在这里——渲染层也不给按钮。
-     *  `params`（specs/010）：set_boundary 带 `applicableWhen`/`forbiddenWhen`
-     *  （2026-09-29 A1 恢复就地补条件表单）；keep/merge 带 `targetAssetId`。
-     *  第 3 批（2026-09-29）：处置成功后就地移除对应行——不再整池重读。
-     *  底层会广播的（proposal→asset-approvals、cleanup→cleanup-reports、
-     *  conflict→candidates/ontology-conflicts）由订阅中枢重拉兜底；巡检
-     *  runs 不经 recall store、没有广播，inspection: 前缀的处置在这里显式
-     *  重拉一次 inbox 区块。 */
-    async resolveInboxItem(id, action, params) {
-      const payload = { id: String(id || ''), action: String(action || '') };
-      if (params && Array.isArray(params.applicableWhen)) payload.applicableWhen = params.applicableWhen.map(String);
-      if (params && Array.isArray(params.forbiddenWhen)) payload.forbiddenWhen = params.forbiddenWhen.map(String);
-      if (params && params.targetAssetId) payload.targetAssetId = String(params.targetAssetId);
-      await api.call('cognition.inbox.resolve', payload);
-      toast(T('cognition.inbox_resolved', '已处理'));
-      const rowId = String(id || '');
-      if (Array.isArray(store.inbox)) store.inbox = store.inbox.filter((row) => String((row && row.id) || '') !== rowId);
-      if (Array.isArray(store.inboxGroups)) {
-        store.inboxGroups = store.inboxGroups
-          .map((group) => group && Array.isArray(group.items)
-            ? { ...group, items: group.items.filter((row) => String((row && row.id) || '') !== rowId) }
-            : group)
-          .filter((group) => group && Array.isArray(group.items) && group.items.length);
-      }
-      if (rowId.startsWith('inspection:')) await BLOCK_FETCHERS.inbox();
-      NS.notify();
-    },
-    /** 「已删除」列表按需拉（specs/008 US-306/T051）：保留期剩余天数由服务端现算。 */
-    async loadDeletedAssets() {
-      if (store.deletedAssets && !store.deletedAssets.stale) return;
-      store.deletedAssets = { loading: true, items: (store.deletedAssets && store.deletedAssets.items) || [], total: (store.deletedAssets && store.deletedAssets.total) || 0 };
+    /** 「已删除」列表按需拉：保留期剩余天数由服务端现算。 */
+    async loadDeletedAssets(force = false) {
+      if (!force && store.deletedAssets && !store.deletedAssets.stale) return;
+      store.deletedAssets = { loading: true, items: (store.deletedAssets && store.deletedAssets.items) || [], total: (store.deletedAssets && store.deletedAssets.total) || 0, error: undefined };
       NS.notify();
       let items = [];
       let total = 0;
+      let error;
+      // 失败置 stale——「没读到」不得伪装成
+      // 「没有」后被判重挡死；置 stale 后守卫放行，用户可点重试或下次进页自愈。
       try {
         const result = await api.call('recall.assets.deleted.list', { limit: 200 });
         items = (result && result.items) || [];
         total = Number(result && result.total) || items.length;
-      } catch (error) {
+      } catch (failure) {
         items = [];
         total = 0;
+        error = (failure && failure.message) || T('cognition.deleted_read_failed', '已删除列表读取失败，请重试。');
       }
-      store.deletedAssets = { loading: false, items, total };
+      store.deletedAssets = { loading: false, items, total, stale: !!error, ...(error ? { error } : {}) };
       NS.notify();
     },
-    /** 保留期内的「立即彻底删除」（入口只在这里，specs/008 US-306 口径）。 */
+    /** 保留期内的「立即彻底删除」入口。 */
     async purgeDeletedAsset(assetId) {
       await api.call('recall.assets.deleted.purgeNow', { assetId: String(assetId || '') });
       toast(T('cognition.deleted_purged', '已彻底删除：内容与记录一并清除，不可恢复'));
       store.deletedAssets = { loading: false, stale: true, items: (store.deletedAssets && store.deletedAssets.items) || [], total: (store.deletedAssets && store.deletedAssets.total) || 0 };
       await NS.reload();
     },
-    /** 巡检开关（specs/008 US-405 T049）：关掉之后不再自动运行；
+    /** 巡检开关：关掉之后不再自动运行；
      *  手动触发不受影响（那是用户自己要的）。
      *  opts.silent：自动维护总开关联动时用——不弹自己的 toast（总开关已有
      *  统一反馈），数据照常置 stale 供「最近检查」行刷新。 */
@@ -2117,7 +2094,7 @@
       store.inspection = { loading: false, stale: true, settings: (store.inspection && store.inspection.settings) || null, latestRun: run };
       await NS.reload();
     },
-    /** 逐项回滚：报告项自带的锚点就是回滚入口（US-404 已建的机制，不另造一套）。 */
+    /** 逐项回滚：报告项自带的锚点就是回滚入口。 */
     async rollbackCleanupItem(assetId, version) {
       await api.call('recall.assets.rollback', { assetId, version });
       toast(T('cognition.cleanup_rolled_back', '已回滚到整理前的内容（生成新版本）'));
@@ -2133,16 +2110,13 @@
       store.cleanupReports = { loading: false, stale: true, reports: (store.cleanupReports && store.cleanupReports.reports) || [] };
       await NS.reload();
     },
-    /** 台账行内「一步回滚」（US-404 T030）已随渲染入口删除（审计 R2，
-     *  2026-09-28）：与版本区「切回此版」重叠。recall.assets.rollback 通道
-     *  保留——大扫除逐项回滚（rollbackCleanupItem）仍共用它，且大扫除属
-     *  红线不动。 */
-    /** 真删单个版本（2026-09-17）：物理移除该版本记录；引用它的已确认注入
+    /** 真删单个版本：物理移除该版本记录；引用它的已确认注入
      *  在服务端冻结内容副本后继续可用。危险操作，双按钮确认。 */
     async deleteAssetVersion(assetId, version) {
       const ok = await confirmUser(T('cognition.asset_version_delete_confirm',
         '永久删除 v{n}，不可恢复。引用过它的已确认注入会继续使用保留的内容副本。确认删除？', { n: String(version) }), true);
       if (!ok) return;
+      requireLibraryAsset(assetId);
       await api.call('recall.assets.versions.delete', { assetId, version });
       toast(T('cognition.asset_version_deleted', '已删除 v{n}', { n: String(version) }));
       if (String(store.route.assetVersionId || '') === String(version)) {
@@ -2151,12 +2125,11 @@
       store.assetVersions = null;
       await NS.reload();
     },
-    /** 基于某一版修改（2026-09-17 子安口径：编辑入口只在版本行）：历史版
+    /** 基于某一版修改：编辑入口在版本行；历史版
      *  先设为在用（select 通道，切指针不产新版本），再进入编辑——"切回+
      *  编辑"合一步，每个版本都能成为编辑起点。 */
     async editFromVersion(assetId, version) {
-      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
-      if (!asset) return;
+      const asset = requireLibraryAsset(assetId);
       if (String(asset.activeVersion || asset.version) !== String(version)) {
         await api.call('recall.assets.versions.select', { assetId, version });
         toast(T('cognition.asset_version_selected', '已选用 v{n}', { n: String(version) }));
@@ -2165,52 +2138,37 @@
       }
       router.go({ name: 'overview', assetId, assetVersionId: '', assetVersionDiff: '', assetEdit: '1' }, { replace: true });
     },
-    /** 族命名三入口（enterFamilyRename/renameFamily/exitFamilyRename）已随
-     *  界面按钮删除（审计 N2，2026-09-28：0 使用）。已有族名（familyName）
-     *  的分组展示保留；recall.families.rename 通道本体退役判定在 7.1 批。 */
-    /** 用户主动使用（2026-09-19）：把这条资产钉到最近会话——confirmed 投影
-     *  + 投影卡，下一轮起注入命中，卡上可撤销。lastConversationCid 由
-     *  state.js 记录（切面板不清空）；还没进过任何对话时给出口径提示。 */
-    async attachAssetToConversation(assetId) {
-      const cid = (typeof lastConversationCid !== 'undefined' && lastConversationCid) ? String(lastConversationCid) : '';
-      if (!cid) {
-        toast(T('cognition.asset_use_in_chat_no_chat', '还没有可用的对话——先在任意会话里说一句话，再回来钉它。'));
-        return;
-      }
-      const asset = store.assets.find((a) => String(a.id) === String(assetId));
-      try {
-        const result = await api.call('recall.projections.attachToConversation', { assetId, conversationId: cid });
-        if (result && result.ok) {
-          toast(T('cognition.asset_use_in_chat_done', '已挂到当前对话：下一轮起生效，会话里的卡片可随时撤销。'));
-        }
-      } catch (error) {
-        // 拦截必须可见并说明规则（US-604 AC1）：此前这里没有 try/catch，失败
-        // 只落 logger，用户看到的是"点了没反应"——静默忽略正是验收问题⑤。
-        await NS.reportBlocked(error, asset && asset.title);
-      }
-    },
-    // confirmAssetOrigin（转正）已随出身收敛退役（2026-09-20）：模型记的=已
-    // 确定，出身升格动作失去意义；views 侧按钮已删。
-    /** 手动编辑资产（2026-09-17 报告建议 A）：改动自己写的话不该以"系统先
+    /** 手动编辑资产：改动自己写的话不该以"系统先
      *  产候选"为前提。与现值逐字段比对，无实际修改不提交——后端没有内容
      *  等价检查，相同内容也会 bump 出空版本。 */
     async editAsset(assetId) {
-      const card = document.querySelector('.ca-asset-edit');
-      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
-      if (!card || !asset) return;
+      const card = document.querySelector('.ca-detail-expand .ca-asset-edit') || document.querySelector('.ca-library-detail:not(.is-mirror) .ca-asset-edit') || document.querySelector('.ca-asset-edit');
+      if (!card) return;
+      const asset = requireLibraryAsset(assetId);
+      const editDraft = (store.assetEditDrafts || {})[String(assetId)] || {};
       const raw = (name) => { const el = card.querySelector(`[data-f="${name}"]`); return el ? String(el.value || '').trim() : ''; };
       const splitList = (text) => (text ? String(text).split(/[、;；,，\n]/).map((s) => s.trim()).filter(Boolean) : []);
+      const reviewBase = editDraft.baseReviewDetails;
+      const originalConditionText = (field) => (Array.isArray(reviewBase?.[field]) ? reviewBase[field].join('、').trim() : undefined);
+      const conditionValue = (name, field) => {
+        if (!card.querySelector(`[data-f="${name}"]`)) return reviewBase?.[field] || asset[field] || [];
+        // Existing prose can contain punctuation that is also the entry
+        // separator. An untouched display string must preserve its exact array.
+        if (originalConditionText(field) === raw(name)) return [...reviewBase[field]];
+        return splitList(raw(name));
+      };
       const payload = {
+        ...(card.querySelector('[data-f="contentCategory"]') ? { contentCategory: raw('contentCategory') } : {}),
         title: raw('title'),
         statement: raw('statement'),
-        applicableWhen: splitList(raw('applicable')),
-        forbiddenWhen: splitList(raw('forbidden')),
+        ...(card.querySelector('[data-f="value"]') ? { value: raw('value') } : {}),
+        applicableWhen: conditionValue('applicable', 'applicableWhen'),
+        forbiddenWhen: conditionValue('forbidden', 'forbiddenWhen'),
       };
       // 范围编辑以可读目录作选择，持久层仍写稳定 id。只修改用户实际碰过的
       // 两个维度；角色/项目/用途等其他维度保持原样。目录不可用时不提交策略，
       // 因此用户仍可保存正文而不会意外放宽现有权限。
       const policy = asset.scopePolicy && typeof asset.scopePolicy === 'object' ? asset.scopePolicy : {};
-      const editDraft = (store.assetEditDrafts || {})[String(assetId)] || {};
       const scopeSelection = editDraft.scopeSelection && typeof editDraft.scopeSelection === 'object'
         ? editDraft.scopeSelection : {};
       const scopeUnrestrict = new Set(Array.isArray(editDraft.scopeUnrestrict) ? editDraft.scopeUnrestrict : []);
@@ -2240,6 +2198,7 @@
           const selected = Array.from(new Set((Array.isArray(scopeSelection[dimension.field]) ? scopeSelection[dimension.field] : [])
             .map((value) => String(value || '').trim()).filter(Boolean)));
           if (!selected.length) {
+            if (editDraft.scopeSelectionModes?.[dimension.field] === 'restrict') throw new Error(T('cognition.library_scope_selection_required', '选择“仅所选对象”后，请至少选择一个仍可用的对象。'));
             // 空选择不能隐式扩大范围。已有维度只有通过显式 scopeUnrestrict
             // 动作才能删除；无现有限制时空选择仍代表不新增限制。
             continue;
@@ -2250,10 +2209,12 @@
         }
         if (visibilityChanged) payload.scopePolicy = nextPolicy;
       }
-      // 敏感级变更检测已随敏感级机制整体删除（2026-09-28）：表单不再有该控件，
+      // 敏感级变更检测已随敏感级机制整体删除：表单不再有该控件，
       // 保存负载也不携带 sensitivity。
       const unchanged = payload.title === String(asset.title || '')
+        && (!Object.prototype.hasOwnProperty.call(payload, 'contentCategory') || payload.contentCategory === NS.ui.contentCategoryOf(asset))
         && payload.statement === String(asset.statement || '')
+        && (!Object.prototype.hasOwnProperty.call(payload, 'value') || payload.value === String(asset.value || ''))
         && JSON.stringify(payload.applicableWhen) === JSON.stringify((asset.applicableWhen || []))
         && JSON.stringify(payload.forbiddenWhen) === JSON.stringify((asset.forbiddenWhen || []))
         && !visibilityChanged;
@@ -2268,17 +2229,52 @@
         exitEdit();
         return;
       }
-      const result = await api.call('recall.assets.update', { assetId, ...payload, reason: 'user manual edit' });
+      // 编辑基准属于草稿，不能拿广播刷新后的资产版本替代。
+      const retainFailure = (message, conflict = false) => {
+        store.assetEditDrafts = { ...(store.assetEditDrafts || {}), [String(assetId)]: {
+          ...editDraft, ...(Object.prototype.hasOwnProperty.call(payload, 'contentCategory') ? { contentCategory: payload.contentCategory } : {}), title: raw('title'), statement: raw('statement'), applicable: raw('applicable'), forbidden: raw('forbidden'), saveError: message, saveConflict: conflict,
+        } };
+        toast(message, 'warning');
+        NS.notify();
+      };
+      if (!editDraft.baseVersion || !editDraft.baseActiveVersion) {
+        retainFailure(T('cognition.library_edit_baseline_missing', '编辑基准未能读取，草稿已保留。请重新核对当前版本后再保存。'));
+        return;
+      }
+      if (store.assetCapabilities?.versionedUpdate !== true) {
+        retainFailure(T('cognition.library_restart_required', '当前后台版本较旧，暂时无法保存修改。请先复制草稿，再完全退出并重新打开 CogSeed。'));
+        return;
+      }
+      const semanticText = (value) => String(value || '').trim().replace(/\s+/g, ' ');
+      const semanticConditions = (values) => JSON.stringify([...new Set((values || []).map(semanticText).filter(Boolean))].sort());
+      const conditionEdited = (name, field) => semanticText(raw(name)) !== semanticText(originalConditionText(field))
+        && semanticConditions(payload[field]) !== semanticConditions(reviewBase?.[field]);
+      const reviewedDetails = !!reviewBase && ['statement', 'applicable', 'forbidden'].every(name => card.querySelector(`[data-f="${name}"]`))
+        && (semanticText(payload.statement) !== semanticText(reviewBase.statement)
+          || conditionEdited('applicable', 'applicableWhen') || conditionEdited('forbidden', 'forbiddenWhen'));
+      let result;
+      try {
+        result = await api.call('recall.assets.update', { assetId, ...payload, ...(reviewedDetails ? { reviewedDetails: true } : {}), expectedVersion: String(editDraft.baseVersion), expectedActiveVersion: String(editDraft.baseActiveVersion), reason: 'user manual edit' });
+      } catch (error) {
+        const conflict = /version conflict/i.test(String(error?.message || ''));
+        retainFailure(conflict ? T('cognition.library_edit_conflict', '内容或在用版本已在其他位置变化，未覆盖现有内容。草稿已保留，请核对最新版本后重试。') : T('cognition.library_edit_save_failed', '保存未完成，草稿已保留，请稍后重试。'), conflict);
+        return;
+      }
       const version = String((result && result.asset && result.asset.version) || '');
+      if (String(result?.asset?.id || '') !== String(assetId) || !version) {
+        retainFailure(T('cognition.manual_save_unconfirmed', '内容已提交，暂时无法确认正式保存结果。请打开这条记录核对状态，不必重复提交。'));
+        return;
+      }
       toast(T('cognition.asset_edit_saved', '已保存为新版本 v{n}', { n: version }));
       store.assetVersions = null;
       exitEdit();
       await NS.reload();
     },
-    /** 推荐卡「知道了」（2026-09-21 Phase 5 闭环）：确认已了解系统建议
+    /** 推荐卡「知道了」：确认已了解系统建议
      *  （暂停/返工），后端清除 recommendedAction 并写 recommendation_cleared
      *  审计。推荐是告知不是强制——确认只清卡，不改变资产状态。 */
     async acknowledgeAssetRecommendation(assetId) {
+      requireLibraryAsset(assetId);
       const result = await api.call('recall.assets.update', {
         assetId,
         acknowledgeRecommendation: true,
@@ -2289,12 +2285,12 @@
       store.assetVersions = null;
       await NS.reload();
     },
-    /** 两版合并为新版（2026-09-17 报告建议 H）：把所选版正文接在在用版正文
+    /** 两版合并为新版：把所选版正文接在在用版正文
      *  之后存为新版本（只合并正文，标题/范围取在用版）；合并后可用「编辑」
      *  整理措辞。合成结果与在用版相同则不提交（后端无内容等价检查）。 */
     async mergeAssetVersion(assetId, version) {
       const state = store.assetVersions;
-      const asset = (store.assets || []).find((a) => String(a.id) === String(assetId));
+      const asset = requireLibraryAsset(assetId);
       if (!state || state.assetId !== String(assetId) || !asset) return;
       const pick = (v) => (state.versions || []).find((x) => String(x.version) === String(v));
       const activeV = pick(asset.activeVersion || asset.version);
@@ -2317,12 +2313,16 @@
       store.assetVersions = null;
       await NS.reload();
     },
-    /** 同义资产归并（2026-09-16 存量治理）：本条并入目标条目（版本链续接、
+    /** 同义资产归并：本条并入目标条目（版本链续接、
      *  本条归档）。破坏性低但影响面大（两条合一），双重确认。 */
     async mergeAssets(sourceAssetId, targetAssetId) {
-      const target = (store.assets || []).find((a) => String(a.id) === String(targetAssetId));
-      const ok = await confirmUser(T('cognition.asset_merge_confirm', '将把本条的全部历史版本并入「{title}」，本条归档不再单独显示。确认合并？', { title: (target && target.title) || targetAssetId }), true);
+      const target = requireLibraryAsset(targetAssetId);
+      const source = requireLibraryAsset(sourceAssetId);
+      if (source.id === target.id || source.type !== target.type) throw new Error(T('cognition.library_action_unavailable', '当前内容状态不允许此操作，请刷新核对后再试。'));
+      const ok = await confirmUser(T('cognition.asset_merge_confirm', '将把本条的全部历史版本并入「{title}」，本条归档不再单独显示。确认版本归组？', { title: (target && target.title) || targetAssetId }), true);
       if (!ok) return;
+      requireLibraryAsset(sourceAssetId);
+      requireLibraryAsset(targetAssetId);
       await api.call('recall.assets.merge', { sourceAssetId, targetAssetId });
       toast(T('cognition.asset_merge_done', '已合并为同一版本组'));
       // 检修剪：target 的版本链缓存必须失效（曾在本次会话打开过它的详情）。
@@ -2330,7 +2330,7 @@
       router.go({ name: 'overview', assetId: targetAssetId });
       await NS.reload();
     },
-    /* ── 经验目录管理（specs/016 US-803，契约 E3~E6）──────────────────────
+    /* ── 经验目录管理──────────────────────
      *  四个动作全走经验专属通道（与 recall.assets.* 零调用——隔离边界）；
      *  危险动作（归档/合并）二次确认，归档原因必填（uiPrompt 收集，进台账）。 */
     /** 动作后的统一刷新：列表 force 重拉；仍停在这条详情上时详情也重拉。 */
@@ -2361,7 +2361,7 @@
     async experienceMerge(sourceExperienceId, targetExperienceId) {
       const target = ((store.experiences && store.experiences.items) || [])
         .find((row) => String(row.id) === String(targetExperienceId));
-      // 危险动作二次确认（R1 seam 契约）：合并把 source 的来源与证据并入目标、
+      // 危险动作二次确认：合并把 source 的来源与证据并入目标、
       // source 转「已并入」不再单独显示——影响的条目名必须出现在确认文案里。
       const ok = await confirmUser(T('cognition.experience_merge_confirm', '将把本条的全部来源与证据并入「{title}」，本条转为「已并入」不再单独显示。确认合并？', { title: (target && target.title) || T('cognition.experience_merge_pick_target', '所选目标') }), true);
       if (!ok) return;
@@ -2377,7 +2377,7 @@
       await NS.loadExperienceDetail(targetExperienceId, true);
     },
     async experienceArchive(experienceId) {
-      // 归档原因必填（E6 契约）：先收原因——这一步本身就是一次显式确认；
+      // 归档原因必填：先收原因——这一步本身就是一次显式确认；
       // 再走危险确认，与资产删除的二次确认口径一致。
       const reason = await promptUser(T('cognition.experience_archive_reason_prompt', '填写这条经验过期或失效的清理原因（必填，会记录进台账）'));
       if (reason == null) return; // 取消 = 不动
@@ -2397,23 +2397,36 @@
       }
       await this.refreshExperience(experienceId);
     },
-    /* ── 存量迁移（specs/016 US-801，契约 E7/E8）────────────────────────── */
+    /* ── 存量迁移────────────────────────── */
     async experienceMigrationPreview() {
       await NS.loadExperienceMigrationPreview(true);
     },
     async experienceMigrationRun(assetIds) {
+      // 判重（对齐 legacyMemoryMigrationRun 先例）：迁移执行中的写入广播会
+      // drain 重画换 DOM，按钮的 pending 保护失效后可再次点击启动双跑——
+      // running 必须放 store（局部变量在换 DOM 后作废），视图侧据此 disabled。
+      const state = store.experienceMigration;
+      if (state && state.running) return;
       const ids = [...new Set((assetIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
       if (!ids.length) return;
       const ok = await confirmUser(T('cognition.experience_migration_run_confirm', '将迁移以上 {n} 条经验类资产：先冻结历史引用，再写入经验目录并从资产库迁出；跳过与失败会如实列出。确认执行？', { n: String(ids.length) }), true);
       if (!ok) return;
+      store.experienceMigration = { ...store.experienceMigration, running: true };
+      NS.notify();
       let result;
       try {
         result = await api.call('recall.experiences.migration.run', { assetIds: ids });
-      } catch (error) { throw new Error(experienceActionErrorText(error)); }
+      } catch (error) {
+        // 失败显式复位 running（成功路径下方整体重建对象天然复位）：
+        // 否则迁移失败一次后这个入口永久锁死。
+        store.experienceMigration = { ...store.experienceMigration, running: false };
+        NS.notify();
+        throw new Error(experienceActionErrorText(error));
+      }
       const migrated = (result && result.migrated) || 0;
       const skipped = (result && result.skipped) || 0;
       const failed = (result && result.failed) || 0;
-      // 结果走 uiAlert 可核对（R1：toast 一句话了事不满足「可核对」），
+      // 结果走 uiAlert 可核对，
       // 随后重拉预览与列表——预览清单必须反映迁出后的真实存量。
       await alertUser(T('cognition.experience_migration_result', '迁移完成：已迁 {migrated} 条，跳过 {skipped} 条，失败 {failed} 条', { migrated: String(migrated), skipped: String(skipped), failed: String(failed) }));
       // 结果同时摆进折叠区（lastRun 可核对），并重拉预览与列表——预览清单
@@ -2436,257 +2449,6 @@
       const failed = lastRun.failed || 0;
       toast(T('cognition.experience_migration_last_run', '上次迁移：已迁 {migrated} 条，跳过 {skipped} 条，失败 {failed} 条', { migrated: String(migrated), skipped: String(skipped), failed: String(failed) }));
     },
-    async legacyMemoryMigrationToggle(scope, contentHash, checked) {
-      const state = store.legacyMemoryMigration;
-      if (!state || !state.preview || state.loading || state.running) return;
-      const safeScope = String(scope || '');
-      const safeHash = String(contentHash || '');
-      const item = state.preview.items.find((row) => row.scope === safeScope && row.contentHash === safeHash);
-      if (!item) return;
-      const key = `${safeScope}:${safeHash}`;
-      const keys = new Set(state.selectionKeys || []);
-      if (checked) keys.add(key);
-      else keys.delete(key);
-      state.selectionKeys = [...keys];
-      NS.notify();
-    },
-    async legacyMemoryMigrationRun() {
-      const state = store.legacyMemoryMigration;
-      if (!state || !state.preview || state.loading || state.running) return;
-      const selected = new Set(state.selectionKeys || []);
-      const selectedEntries = state.preview.items
-        .filter((item) => selected.has(`${item.scope}:${item.contentHash}`))
-        .map((item) => ({ scope: item.scope, contentHash: item.contentHash }));
-      if (!selectedEntries.length) return;
-      const selectedCount = state.preview.items
-        .filter((item) => selected.has(`${item.scope}:${item.contentHash}`))
-        .reduce((total, item) => total + Math.max(1, Number(item.occurrences) || 1), 0);
-      const confirmed = await confirmUser(T('memory.legacy_migration_confirm', '将迁入你勾选的 {n} 条。只有成功写入并核验原文备份后，才会从旧文件移除对应条目；待审核、失败、未选中或源文件已变化的内容仍会保留。', { n: String(selectedCount) }), true);
-      if (!confirmed) return;
-
-      store.legacyMemoryMigration = { ...state, running: true, runFailed: false };
-      NS.notify();
-      try {
-        const report = await api.call('recall.memory.migrate', {
-          selectedEntries,
-          expectedFingerprints: state.preview.fingerprints,
-        });
-        store.legacyMemoryMigration = {
-          ...store.legacyMemoryMigration,
-          running: false,
-          selectionKeys: [],
-          lastRun: report,
-          runFailed: false,
-        };
-        await NS.reload();
-        await NS.loadLegacyMemoryMigrationPreview(true);
-        return report;
-      } catch (_) {
-        store.legacyMemoryMigration = { ...store.legacyMemoryMigration, running: false, runFailed: true };
-        NS.notify();
-        await alertUser(T('memory.legacy_migration_failed', '迁移没有完成；旧记忆仍保留，请重试。'));
-        return null;
-      }
-    },
-    async legacyScopedMemoryMigrationToggle(kind, id, contentHash, checked) {
-      const state = store.legacyScopedMemoryMigration;
-      if (!state || !state.preview || state.loading || state.running) return;
-      const safeKind = String(kind || '');
-      const safeId = String(id || '');
-      const safeHash = String(contentHash || '');
-      const item = state.preview.items.find((row) => row.kind === safeKind
-        && String(row.id) === safeId && row.contentHash === safeHash);
-      if (!item) return;
-      const key = `${safeKind}:${safeId}:${safeHash}`;
-      const keys = new Set(state.selectionKeys || []);
-      if (checked) keys.add(key);
-      else keys.delete(key);
-      state.selectionKeys = [...keys];
-      NS.notify();
-    },
-    async legacyScopedMemoryMigrationRun() {
-      const state = store.legacyScopedMemoryMigration;
-      if (!state || !state.preview || state.loading || state.running) return;
-      const selected = new Set(state.selectionKeys || []);
-      const rows = state.preview.items.filter((item) => selected.has(`${item.kind}:${item.id}:${item.contentHash}`));
-      const selectedEntries = rows.map((item) => ({
-        kind: item.kind,
-        id: item.id,
-        contentHash: item.contentHash,
-        sourceKeys: item.sourceKeys,
-      }));
-      if (!selectedEntries.length) return;
-      const selectedCount = rows.reduce((total, item) => total + Math.max(1, Number(item.occurrences) || 1), 0);
-      const confirmed = await confirmUser(T(
-        'memory.scoped_migration_confirm',
-        '将迁入你勾选的 {n} 条 Agent、工作空间或项目记忆。每条会保留原使用范围；只有正式资产写入成功且原文备份核验通过后，才会从对应旧文件移除。待审核、失败、未选中或来源变化的内容仍会保留。',
-        { n: String(selectedCount) },
-      ), true);
-      if (!confirmed) return;
-
-      store.legacyScopedMemoryMigration = { ...state, running: true, runFailed: false };
-      NS.notify();
-      try {
-        const report = await api.call('recall.scopedMemoryMigration.run', {
-          selectedEntries,
-          expectedFingerprints: state.preview.fingerprints,
-        });
-        store.legacyScopedMemoryMigration = {
-          ...store.legacyScopedMemoryMigration,
-          running: false,
-          selectionKeys: [],
-          lastRun: report,
-          runFailed: false,
-        };
-        await NS.reload();
-        await NS.loadLegacyScopedMemoryMigrationPreview(true);
-        return report;
-      } catch (_) {
-        store.legacyScopedMemoryMigration = { ...store.legacyScopedMemoryMigration, running: false, runFailed: true };
-        NS.notify();
-        await alertUser(T('memory.scoped_migration_failed', '迁移没有完成；旧记忆仍保留，请重新检查后重试。'));
-        return null;
-      }
-    },
-    /* ── 标签系统（specs/012 US-201，T010 单打标 / T011 批量 / T013 管理）───
-     *  写路径全走 recall.assets.tags.set|batch 与 recall.tags.rename|merge|delete
-     *  （主进程侧唯一写路径 updateAbilityAsset）；批量按 ≤200/批循环，进度与
-     *  逐项失败清单进 store.tagBatch（中断后已完成项保留、可重跑：同名标签
-     *  不会重复加）。 */
-    async refreshTags(includeRetired) {
-      await NS.reload();
-      await NS.loadTags({ force: true, includeRetired: Boolean(includeRetired) });
-    },
-    /** 单条打标（T010，整组替换语义）。 */
-    async setAssetTags(assetId, tags) {
-      await api.call('recall.assets.tags.set', { assetId, tags });
-      toast(T('cognition.tag_added_toast', '已打标'));
-      await this.refreshTags();
-    },
-    async addAssetTag(assetId, name) {
-      const asset = (store.assets || []).find((row) => String(row.id) === String(assetId));
-      if (!asset) return;
-      const raw = String(name || '').trim();
-      if (!raw) return;
-      const key = (value) => String(value || '').trim().toLocaleLowerCase();
-      const current = Array.isArray(asset.tags) ? asset.tags : [];
-      // 同名（大小写不敏感）不新增第二枚（renderer-seams §2.1）。
-      if (current.some((entry) => key(entry) === key(raw))) {
-        toast(T('cognition.tag_duplicate_hint', '已有同名标签（不区分大小写），不再重复添加'), 'warning');
-        return;
-      }
-      await this.setAssetTags(assetId, [...current, raw]);
-    },
-    async removeAssetTag(assetId, name) {
-      const asset = (store.assets || []).find((row) => String(row.id) === String(assetId));
-      if (!asset) return;
-      const key = (value) => String(value || '').trim().toLocaleLowerCase();
-      const current = Array.isArray(asset.tags) ? asset.tags : [];
-      const next = current.filter((entry) => key(entry) !== key(name));
-      if (next.length === current.length) return;
-      await api.call('recall.assets.tags.set', { assetId, tags: next });
-      toast(T('cognition.tag_removed_toast', '已移除「{name}」', { name: String(name || '') }));
-      await this.refreshTags();
-    },
-    /** 列表批量打标（T011）：三选一语义（replace 与 add/remove 不混）；
-     *  整批 IPC 拒绝时按本地名单逐项记失败，失败清单不截断。 */
-    async batchTags(names, opOverride) {
-      const op = opOverride || store.tagBatchOp || 'add';
-      const ids = [...store.tagSelectIds];
-      if (!ids.length) { toast(T('cognition.tag_batch_none_selected', '先勾选要打标的资产'), 'warning'); return; }
-      const key = (value) => String(value || '').trim().toLocaleLowerCase();
-      const wanted = (Array.isArray(names) ? names : [names]).map((value) => String(value || '').trim()).filter(Boolean);
-      if (!wanted.length) { toast(T('cognition.tag_batch_no_tags', '先填标签名'), 'warning'); return; }
-      const seen = new Set();
-      const unique = wanted.filter((value) => {
-        if (seen.has(key(value))) return false;
-        seen.add(key(value));
-        return true;
-      });
-      const opPayload = op === 'replace' ? { replace: unique } : op === 'remove' ? { remove: unique } : { add: unique };
-      store.tagBatch = { running: true, done: 0, total: ids.length, updated: 0, unchanged: 0, failed: [] };
-      NS.notify();
-      let updated = 0;
-      let unchanged = 0;
-      const failed = [];
-      const CHUNK = 200;
-      for (let at = 0; at < ids.length; at += CHUNK) {
-        const chunk = ids.slice(at, at + CHUNK);
-        try {
-          const result = await api.call('recall.assets.tags.batch', { assetIds: chunk, op: opPayload });
-          const report = (result && result.report) || { updated: 0, unchanged: 0, items: [] };
-          updated += Number(report.updated || 0);
-          unchanged += Number(report.unchanged || 0);
-          failed.push(...(report.items || []).filter((item) => String(item.status || '') === 'failed'));
-        } catch (error) {
-          failed.push(...chunk.map((assetId) => ({
-            assetId,
-            title: ((store.assets || []).find((row) => String(row.id) === String(assetId)) || {}).title || '',
-            note: String((error && error.message) || error),
-            status: 'failed',
-          })));
-        }
-        store.tagBatch = { running: true, done: Math.min(at + CHUNK, ids.length), total: ids.length, updated, unchanged, failed };
-        NS.notify();
-      }
-      store.tagBatch = { running: false, done: ids.length, total: ids.length, updated, unchanged, failed };
-      NS.notify();
-      toast(T('cognition.tag_batch_done', '批量完成：改 {updated} 条，未变 {unchanged} 条，失败 {failed} 条', { updated: String(updated), unchanged: String(unchanged), failed: String(failed.length) }), failed.length ? 'warning' : 'success');
-      await this.refreshTags(String(store.route.tagOverlay || '') === 'manage');
-    },
-    /** 管理三动作（T013）。合并前必须显示影响面；删除确认语含「只摘除标签，
-     *  资产本身不受影响」；完成 toast 的数字与实际一致（0 条不显示数字）。 */
-    async renameTag(tagId) {
-      const input = document.querySelector('[data-tag-rename-input]');
-      const name = input ? String(input.value || '').trim() : '';
-      if (!name) return;
-      const key = (value) => String(value || '').trim().toLocaleLowerCase();
-      const tag = ((store.tags && store.tags.items) || []).find((row) => String(row.id) === String(tagId));
-      const old = String((tag && tag.name) || '');
-      if (key(name) === key(old)) { store.tagManageEdit = ''; NS.notify(); return; }
-      const ok = await confirmUser(T('cognition.tag_rename_confirm', '改名后，引用旧名「{old}」的 {n} 条资产会一并改为「{name}」。确认改名？', { old, name, n: String(Number((tag && tag.assetCount) || 0)) }));
-      if (!ok) return;
-      const result = await api.call('recall.tags.rename', { tagId, name });
-      const updated = Number((result && result.report && result.report.updated) || 0);
-      toast(updated
-        ? T('cognition.tag_renamed_toast', '已改名，{n} 条资产同步更新', { n: String(updated) })
-        : T('cognition.tag_renamed_toast_zero', '已改名'));
-      store.tagManageEdit = '';
-      await this.refreshTags(true);
-    },
-    async mergeTag(sourceId, targetName) {
-      const key = (value) => String(value || '').trim().toLocaleLowerCase();
-      const items = (store.tags && store.tags.items) || [];
-      const source = items.find((row) => String(row.id) === String(sourceId));
-      const target = items.find((row) => row.state === 'active'
-        && String(row.id) !== String(sourceId)
-        && key(row.name) === key(targetName));
-      if (!source || !target) {
-        toast(T('cognition.tag_merge_need_target', '先选择要并入的目标标签'), 'warning');
-        return;
-      }
-      const ok = await confirmUser(T('cognition.tag_merge_impact', '将把 {n} 条资产的「{source}」改为「{target}」，源标签将停用。确认合并？', { n: String(Number(source.assetCount || 0)), source: source.name, target: target.name }), true);
-      if (!ok) return;
-      const result = await api.call('recall.tags.merge', { sourceTagId: source.id, targetTagId: target.id });
-      const updated = Number((result && result.report && result.report.updated) || 0);
-      toast(updated
-        ? T('cognition.tag_merged_toast', '合并完成，{n} 条资产同步更新', { n: String(updated) })
-        : T('cognition.tag_merged_toast_zero', '合并完成'));
-      store.tagManageMerge = null;
-      await this.refreshTags(true);
-    },
-    async deleteTag(tagId) {
-      const tag = ((store.tags && store.tags.items) || []).find((row) => String(row.id) === String(tagId));
-      if (!tag) return;
-      const ok = await confirmUser(T('cognition.tag_delete_confirm', '只摘除标签，资产本身不受影响。确认停用「{name}」？', { name: String(tag.name || '') }), true);
-      if (!ok) return;
-      const result = await api.call('recall.tags.delete', { tagId });
-      const updated = Number((result && result.report && result.report.updated) || 0);
-      toast(updated
-        ? T('cognition.tag_deleted_toast', '已停用，{n} 条资产同步更新', { n: String(updated) })
-        : T('cognition.tag_deleted_toast_zero', '已停用'));
-      await this.refreshTags(true);
-    },
     async sourceAction(kind, sourceId, action) {
       const channels = {
         pause: 'recall.sources.pause', resume: 'recall.sources.resume',
@@ -2698,60 +2460,45 @@
       toast(T('common.done', '已完成'));
       await NS.reload();
     },
-    // teachingRevoke（渲染层）已删（2026-09-28 四病整改 7.0 顺带清理）：教学
-    // 回执卡的撤销按钮走 conversation.js 直连 recall.teaching.revoke 通道
-    //（conversation.js:5507），本函数自 3841ef53 起零调用——深探 F39 坐实。
-    async captureAction(captureId, action) {
-      // 行内动作直接用后端语义 id（run_now / pause / resume / cancel / retry），
-      // 与 vocabulary.CAPTURE_ACTION 的键一字不差；导航类动作（去确认 / 打开
-      // 会话等）在 app.js 委托层分流，不到这里。
-      const channels = {
-        pause: 'recall.captures.pause', resume: 'recall.captures.resume', cancel: 'recall.captures.cancel',
-        retry: 'recall.captures.retry', run_now: 'recall.captures.runNow',
-      };
-      const channel = channels[action];
-      if (!channel) return;
-      if (action === 'cancel') {
-        const ok = await confirmUser(T('cognition.capture_cancel_confirm', '确认取消这个整理任务？'));
-        if (!ok) return;
-      }
-      await api.call(channel, { captureId });
-      toast(T('common.done', '已完成'));
-      await NS.reload();
+    async recheckCandidateFormation(candidateId) {
+      const candidate = store.candidates.find(item => String(item.id) === String(candidateId));
+      if (!candidate?.ontologyFormation || !NS.candidate?.attentionReady(candidate)) return;
+      const states = store.formationRechecks || (store.formationRechecks = {});
+      if (states[candidateId]?.running) return;
+      const state = states[candidateId] = { running: true, error: '', completed: false };
+      NS.notify();
+      try {
+        const result = await api.call('recall.candidates.recheckOntologyFormation', { candidateId });
+        if (result?.candidate?.id !== candidateId || result.candidate.ontologyFormation?.schemaVersion !== 1)
+          throw new Error(T('cognition.formation_recheck_failed', '重新核对未完成。原建议和已保存修改仍保留，可重试。'));
+        const index = store.candidates.findIndex(item => String(item.id) === String(candidateId));
+        if (index >= 0) store.candidates[index] = result.candidate;
+        state.completed = true;
+        if (store.activityHistory?.[candidateId]) store.activityHistory[candidateId].loaded = false;
+      } catch (error) {
+        state.error = T('cognition.formation_recheck_failed', '重新核对未完成。原建议和已保存修改仍保留，可重试。');
+      } finally { state.running = false; NS.notify(); }
     },
-    /** 批量控制：ids 由调用方收敛到「当前已加载且该动作可执行」的行。只做
-     *  批量重试（2026-09-21 原型 v7 定调）：批量「立即整理」入口不迁移——
-     *  每次立即整理都是一次模型额度消耗，用户旅程只需逐条处理；后端
-     *  batchRunNow 能力保留但前端不再触达。 */
-    async captureBatch(action, ids) {
-      if (action !== 'retry' || !ids.length) return;
-      const result = await api.call('recall.captures.batchRetry', { captureIds: ids });
-      const outcome = (result && result.result) || { succeeded: [], failed: [] };
-      if (outcome.failed && outcome.failed.length) {
-        toast(T('cognition.capture_batch_partial', '已处理 {ok} 条，{fail} 条没有成功（多为状态已变化）', { ok: String(outcome.succeeded.length), fail: String(outcome.failed.length) }), 'warning');
-      } else {
-        toast(T('cognition.capture_batch_done', '已处理 {n} 条', { n: String(outcome.succeeded.length) }));
-      }
-      await NS.reload();
-      return outcome;
+    async resolveInbox(id, action, extra = {}) {
+      const result = await api.call('cognition.inbox.resolve', { id, action, ...extra });
+      await loadBlocks(['inbox', 'assets', 'candidates'], true);
+      return result;
     },
-    async organizeConversation(conversationId) {
-      const created = await api.call('recall.captures.historicalAutoStart', { conversationId });
-      const capture = created && created.capture;
-      // 「开始整理」按钮的语义就是立即提炼：后端这一步只建 waiting_manual 任务
-      // （runNow 是既定的唯一额度消耗入口，2026-09-15 用户实测反馈点了没响应），
-      // 这里紧跟的那次 runNow 就是按钮点击本身——显式、且只此一次。
-      if (capture && capture.status === 'waiting_manual') {
-        await api.call('recall.captures.runNow', { captureId: capture.id });
-      }
-      toast(T('cognition.capture_started', '已开始整理'));
-      await NS.reload();
-    },
-    async updateCaptureSettings(patch) {
+    async updateCaptureSettings(patch, options = {}) {
       const result = await api.call('recall.captures.settings.update', patch);
+      if (typeof patch.autoApproval === 'boolean' && result?.settings?.autoApproval !== patch.autoApproval) {
+        throw new Error(T('cognition.settings_auto_save_unconfirmed', '未收到自动批准设置的有效保存结果，请刷新页面核对。'));
+      }
+      if (Array.isArray(patch.modelCandidates) && JSON.stringify(result?.settings?.modelCandidates) !== JSON.stringify(patch.modelCandidates)) {
+        throw new Error(T('cognition.settings_nightly_model_save_error', '未能保存模型列表，请重试。'));
+      }
       store.captureSettings = (result && result.settings) || store.captureSettings;
-      toast(T('common.saved', '已保存'));
+      if (!options?.silent) toast(T('common.saved', '已保存'));
       await NS.reload();
+    },
+    async stopNightlyScan() { await api.call('recall.captures.sweep.stop', {}); await NS.reload(); },
+    async runNightlyScanNow() {
+      await api.call('recall.captures.sweep.run', {});
     },
   };
   NS.actions = actions;
@@ -2764,9 +2511,12 @@
     if (!assetId) return false;
     showRecallPanel();
     router.go({ name: 'overview', category: '', assetId: String(assetId) });
+    NS.library?.revealAsset(String(assetId));
     // 面板可能早已开在内存里（对话侧写入无广播直达这里）：跳转时重拉一次，
-    // 防止详情按陈旧 store 判成「已不在待处理列表」的假空态（审计 B11/D1）。
-    void NS.reload();
+    // 防止详情按陈旧 store 判成「已不在待处理列表」的假空态。
+    void NS.reload().then(() => {
+      if (store.route.name === 'overview' && store.route.assetId === String(assetId)) NS.library?.revealAsset(String(assetId));
+    });
     return true;
   };
 
@@ -2774,29 +2524,45 @@
   window.openCognitionCandidateById = function openCognitionCandidateById(candidateId) {
     if (!candidateId) return false;
     showRecallPanel();
-    router.go({ name: 'review', candidateId: String(candidateId) });
-    // 同上：对话里刚保存的候选不在陈旧 store 里，必须重取后才找得到（B11/D1）。
+    router.go({ name: 'activity', candidateId: String(candidateId) });
+    // 同上：对话里刚保存的候选不在陈旧 store 里，必须重取后才找得到。
     void NS.reload();
     return true;
   };
 
-  /** 跳到认知资产「待我处理」页（审计 R4 拍板项 #6，2026-09-28）：会话头
-   *  部的认知衔接行是本会话 N/M 计数行、无具体资产 id——跳资产详情不可
-   *  执行，统一去向＝「待我处理」（本会话的候选就在那排队）。
+  window.openCognitionApprovalById = function openCognitionApprovalById(proposalId) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(proposalId || '')) return false;
+    showRecallPanel();
+    NS.activityController?.openLinkedDetail();
+    router.go({ name: 'activity', approvalId: String(proposalId) });
+    void NS.reload();
+    return true;
+  };
+
+  /** 会话头部的认知衔接行落点：原「待我处理」页已
+   *  下线，统一去向＝「认知生长」需要关注（本会话的候选就在那排队）。
    *  conversation-info.js 调用；不依赖调用方已在认知资产页。 */
   window.openCognitionReview = function openCognitionReview() {
     showRecallPanel();
-    router.go({ name: 'review', candidateId: '' });
+    router.go({ name: 'activity', candidateId: '' });
     // 同 openCognitionCandidateById：对话侧写入无广播直达这里，跳转后重拉。
     void NS.reload();
     return true;
   };
 
-  /* ────────────────────────── 个人本体（内嵌工作台） ────────────────────────── */
-  /* #panel-personal-ontology 整体内嵌在 #panel-recall（index.html），
-   * 渲染函数来自 personal-ontology.js（随 recall 特性组
-   * 加载）。旧实现的显隐控制在 skills.js 被删的 4549 行里；此处接管：
-   * overview 常驻入口（views.js）+ boot.js 深链。 */
+  /** 最终答复中的本体依据打开确切记录版本；读取失败由正式工作台显示。 */
+  window.openCognitionOntologyRecord = function openCognitionOntologyRecord(moduleId, recordId, recordVersion) {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(moduleId || '') || !/^[A-Za-z0-9_-]{1,160}$/.test(recordId || '')
+      || !Number.isInteger(recordVersion) || recordVersion < 1 || recordVersion > 999999999) return false;
+    showRecallPanel();
+    NS.openPersonalOntology({ moduleId, recordId, recordVersion });
+    void NS.reload();
+    return true;
+  };
+
+  /* ────────────────────────── 本体工作台挂载 ────────────────────────── */
+  /* 当前路由在 cognition-assets 的 #ca-ontology-mount 内加载 cognition-ontology；
+   * 旧深链 setView('personal-ontology') 在 boot.js 归一化后进入同一路由。 */
 
   function showRecallPanel() {
     try {
@@ -2818,46 +2584,38 @@
     return false;
   };
 
-  /* ───────────── 个人本体独立页(2026-09-21 认知页签迁移) ───────────── */
-  /* 本体不再是"隐藏 ca-root + 整屏替换"的独立形态,而是认知资产顶级入口中的一个路由:
-   * 渲染层在 ca-scroll 里放 #ca-ontology-mount,再由这里把 index.html 的
-   * #skills-cognition-personal-ontology section 从 parking 容器移进 mount,
-   * 调 renderPersonalOntology()。离开路由时先归还 parking 再擦除内容区——
-   * section 始终是同一个 DOM 节点,本体内部状态(_pocSelected 等)不销毁。 */
+  /* ───────────── 本体工作台路由挂载 ───────────── */
+  /* 本体是认知资产顶级入口下的完整工作台。此处只负责加载并挂载，不复用旧图谱
+   * 写接口。旧数据以有来源的只读投影出现，整理通过共同候选入口提交。 */
 
   NS.unmountPersonalOntology = function unmountPersonalOntology() {
-    const section = document.getElementById('skills-cognition-personal-ontology');
-    if (!section) return;
-    const parking = document.getElementById('ca-ontology-parking');
-    if (parking && section.parentElement !== parking) parking.appendChild(section);
-    section.hidden = true;
-    section.classList.remove('is-standalone');
+    if (typeof window.unmountCognitionOntology === 'function') window.unmountCognitionOntology();
   };
 
   NS.mountPersonalOntology = async function mountPersonalOntology(options = {}) {
     showRecallPanel();
-    const section = document.getElementById('skills-cognition-personal-ontology');
     const mount = document.getElementById('ca-ontology-mount');
-    if (!section || !mount) return;
-    // 深链可能早于特性组加载完成:渲染函数不在时按需补载再画。
-    if (typeof window.renderPersonalOntology !== 'function') {
-      const load = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
-      if (typeof load === 'function') {
-        try { await load('personal-ontology'); } catch (_) { /* 渲染函数缺席时下面跳过 */ }
-      }
+    if (!mount) return;
+    const load = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+    if (typeof window.mountCognitionOntology !== 'function' && typeof load === 'function') {
+      try { await load('cognition-ontology'); } catch (_) { /* visible error is rendered below */ }
     }
-    if (mount.parentElement && section.parentElement !== mount) mount.appendChild(section);
-    section.hidden = false;
-    section.classList.add('is-standalone');
-    if (typeof window.renderPersonalOntology === 'function') {
-      try {
-        await window.renderPersonalOntology(options.resetToOverview ? { view: 'overview' } : {});
-      } catch (_) { /* 本体渲染失败不阻塞主 UI */ }
+    if (typeof window.mountCognitionOntology === 'function') {
+      await window.mountCognitionOntology(mount, options);
+      return;
     }
+    mount.innerHTML = `<main class="ontology-workspace"><div class="ontology-ws-error" role="alert"><h1>${T('ontologyWorkspace.loadFailed', '本体暂时无法加载')}</h1><p>${T('ontologyWorkspace.loadBundleFailed', '本体工作台加载失败，请重试。')}</p>${typeof window.uiButton === 'function' ? window.uiButton({ label: T('ontologyWorkspace.retry', '重试'), role: 'primary', attrs: { id: 'ontology-workspace-retry' } }) : ''}</div></main>`;
+    const retry = mount.querySelector('#ontology-workspace-retry');
+    if (retry) retry.addEventListener('click', () => { void NS.mountPersonalOntology(options); });
   };
 
-  NS.openPersonalOntology = function openPersonalOntology() {
-    NS.router.go({ name: 'ontology' });
+  NS.openPersonalOntology = function openPersonalOntology(options = {}) {
+    NS.router.go({ name: 'ontology',
+      ...(options.candidateId ? { candidateId: String(options.candidateId) } : {}),
+      ...(options.moduleId ? { moduleId: String(options.moduleId) } : {}),
+      ...(options.recordId ? { recordId: String(options.recordId) } : {}),
+      ...(options.recordVersion ? { recordVersion: Number(options.recordVersion) } : {}),
+    });
   };
 
 })();

@@ -1,0 +1,3 @@
+cases:
+- id: smoke-seo-opportunity
+  kind: manual-smoke

@@ -37,7 +37,10 @@ describe('CogSeed cold-start recovery', () => {
     const cases = [
       { status: 'queued', expected: ['task.created', 'task.queued', 'task.recoverable'] },
       { status: 'running', expected: ['task.created', 'task.started', 'task.recoverable'] },
-      { status: 'waiting_user', expected: ['task.created', 'task.waiting_user', 'task.recoverable'] },
+      // c3287a28: a waiting_user task is a durable interaction. Restarting the
+      // process must not turn the confirmation card into a generic recoverable
+      // error; the stored scan/confirmation token is still resumable.
+      { status: 'waiting_user', expected: ['task.created', 'task.waiting_user'] },
       { status: 'recoverable', errorCode: 'worker_restart', expected: ['task.created', 'task.recoverable'] },
       { status: 'failed', errorCode: 'worker_failed', expected: ['task.created', 'task.failed'] },
       { status: 'cancelled', expected: ['task.created', 'task.cancelled'] },
@@ -65,7 +68,9 @@ describe('CogSeed cold-start recovery', () => {
     const first = await boot.recoverCogSeedTasksAtBoot(USER);
     const second = await boot.recoverCogSeedTasksAtBoot(USER);
 
-    expect(first.recoveredCount).toBe(3);
+    // queued + running recover; waiting_user stays resumable; an already
+    // recoverable task is not counted twice.
+    expect(first.recoveredCount).toBe(2);
     expect(second.recoveredCount).toBe(0);
     for (const { task, entry } of records) {
       expect((await events.readCogSeedTaskEvents(USER, task.taskId, 0, 20)).map((event) => event.type))
@@ -115,14 +120,14 @@ describe('CogSeed cold-start recovery', () => {
     fs.rmSync(paths.cogseedTaskEventsFile(USER, created.taskId), { force: true });
 
     const report = await boot.recoverCogSeedTasksAtBoot(USER);
-    const recoveredIds = [created, queued, running, waiting].map((task) => task.taskId).sort();
+    const recoveredIds = [created, queued, running].map((task) => task.taskId).sort();
 
     expect(report).toMatchObject({
-      recoveredCount: 4,
+      recoveredCount: 3,
       dispatchedCount: 0,
       taskIds: recoveredIds,
     });
-    for (const task of [created, queued, running, waiting]) {
+    for (const task of [created, queued, running]) {
       await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({
         status: 'recoverable',
         errorCode: 'worker_restart',
@@ -135,6 +140,12 @@ describe('CogSeed cold-start recovery', () => {
         expect(storedEvents.map((event) => event.type)).toEqual(['task.created', 'task.recoverable']);
       }
     }
+    // waiting_user survives the restart untouched so its confirmation resumes.
+    await expect(tasks.readCogSeedTask(USER, waiting.taskId)).resolves.toMatchObject({
+      status: 'waiting_user',
+    });
+    const waitingEvents = await events.readCogSeedTaskEvents(USER, waiting.taskId, 0, 20);
+    expect(waitingEvents.filter((event) => event.type === 'task.recoverable')).toEqual([]);
     await expect(tasks.readCogSeedTask(USER, completed.taskId)).resolves.toMatchObject({ status: 'completed' });
   });
 

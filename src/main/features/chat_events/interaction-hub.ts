@@ -1,8 +1,6 @@
-// ─── 通用双向交互枢纽（conv-core M2） ──────────────────────────────────────
+// ─── 通用双向交互枢纽 ────────────────────────────────────────────────────
 //
-// 把 bridge-permissions / launch-confirm 两处各自为政的「请求-等待-超时
-// 拒绝」审批骨架泛化为统一 InteractionHub：审批（approval）与提问
-// （question）都走这里。语义（对照 bridge.js 先例与 spec.md 契约）：
+// 审批（approval）与提问（question）共用请求、等待和关闭流程。交互生命周期：
 //   - 超时按 deny/放弃处理，绝不悬停；
 //   - 晚到回复幂等吞掉（交互已关闭后再回复无害）；
 //   - Turn 取消时连带关闭其未决交互（reason=turnCancelled）；
@@ -31,6 +29,8 @@ export interface InteractionRequestInput {
   timeoutMs?: number;
   /** approval 专用：动作类别（bash/文件写入/外部服务），UI 图标用。 */
   approvalCategory?: 'bash' | 'fileWrite' | 'externalService';
+  /** False for a decision about one exact contract, not an ongoing permission. */
+  allowAlways?: boolean;
 }
 
 export interface InteractionResolved {
@@ -73,6 +73,7 @@ function requestEvent(interactionId: string, input: InteractionRequestInput) {
     cid: input.cid,
     ...(input.detail ? { detail: input.detail } : {}),
     timeoutMs: input.timeoutMs ?? DEFAULT_INTERACTION_TIMEOUT_MS,
+    ...(input.allowAlways !== undefined ? { allowAlways: input.allowAlways } : {}),
     ...(input.kind === 'approval' && input.approvalCategory
       ? { approvalCategory: input.approvalCategory }
       : {}),
@@ -141,7 +142,7 @@ export function respondInteraction(
   if (!entry) return false;
 
   if (entry.input.kind === 'approval') {
-    const decision = payload.decision === 'allowAlways' ? 'allowAlways'
+    const decision = payload.decision === 'allowAlways' && entry.input.allowAlways !== false ? 'allowAlways'
       : payload.decision === 'allow' ? 'allow'
       : 'deny';
     entry.resolve({ interactionId, reason: 'answered', decision });
@@ -154,10 +155,10 @@ export function respondInteraction(
 }
 
 /** Turn 取消连带：关闭该 Turn 的全部未决交互（避免悬空等待占住 worker）。 */
-export function cancelInteractionsForTurn(turnId: string): number {
+export function cancelInteractionsForTurn(turnId: string, owner?: { uid: string; cid: string }): number {
   let closed = 0;
   for (const [id, entry] of _pending) {
-    if (entry.input.turnId !== turnId) continue;
+    if (entry.input.turnId !== turnId || (owner && (entry.input.uid !== owner.uid || entry.input.cid !== owner.cid))) continue;
     entry.resolve({
       interactionId: id,
       reason: 'turnCancelled',

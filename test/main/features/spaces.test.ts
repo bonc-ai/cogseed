@@ -8,12 +8,19 @@ import * as path from 'node:path';
 const visibleSkillIds = vi.hoisted(() => new Set<string>());
 const visibleAgentIds = vi.hoisted(() => new Set<string>());
 const externalCliAgentIds = vi.hoisted(() => new Set<string>());
+const visibleSkillIdsByUser = vi.hoisted(() => new Map<string, Set<string>>());
+const visibleAgentIdsByUser = vi.hoisted(() => new Map<string, Set<string>>());
 
 vi.mock('../../../src/main/features/skills', () => ({
   listSkillCatalog: async () => Array.from(visibleSkillIds).map((id) => ({ id, name: id })),
+  listSkillCatalogForUser: async (uid: string) => Array.from(visibleSkillIdsByUser.get(uid) || visibleSkillIds).map((id) => ({ id, name: id })),
 }));
 vi.mock('../../../src/main/features/agents', () => ({
   listAgents: async () => Array.from(visibleAgentIds).map((agent_id) =>
+    externalCliAgentIds.has(agent_id)
+      ? { agent_id, name: agent_id, runtime: { kind: 'cli', cli: agent_id } }
+      : { agent_id, name: agent_id }),
+  listAgentsForUser: async (uid: string) => Array.from(visibleAgentIdsByUser.get(uid) || visibleAgentIds).map((agent_id) =>
     externalCliAgentIds.has(agent_id)
       ? { agent_id, name: agent_id, runtime: { kind: 'cli', cli: agent_id } }
       : { agent_id, name: agent_id }),
@@ -36,6 +43,8 @@ beforeEach(async () => {
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
+  visibleSkillIdsByUser.clear();
+  visibleAgentIdsByUser.clear();
 });
 
 afterEach(() => {
@@ -605,6 +614,54 @@ describe('spaces › listSpaces 失效数（真实有效集合，假阳性回归
     expect(me?.agent_count).toBe(1); // 空间可用智能体：清单= CogSeed + 外接（此处无外接 → 1）
     expect(me?.usable_agents).toEqual(['commander']);
     expect(me?.invalid_count).toBe(2); // 仅 2 个真失效
+  });
+});
+
+describe('spaces › explicit user resource resolution', () => {
+  it('uses requested user catalogs when the active user is different', async () => {
+    const users = await import('../../../src/main/features/users');
+    const requested = 'u-requested';
+    visibleSkillIdsByUser.set(requested, new Set(['requested-skill']));
+    visibleAgentIdsByUser.set(requested, new Set(['requested-agent']));
+    visibleSkillIdsByUser.set('u-active', new Set(['active-skill']));
+    visibleAgentIdsByUser.set('u-active', new Set(['active-agent']));
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(requested, { name: '按用户列出' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(requested, created.space.space_id, 'skill', 'requested-skill');
+    await spaces.addSpaceResource(requested, created.space.space_id, 'agent', 'requested-agent');
+    users.activateUser('u-active');
+
+    const listed = await spaces.listSpaces(requested);
+    const row = listed.find((item) => item.space_id === created.space.space_id)!;
+    expect(row.invalid_count).toBe(0);
+  });
+
+  it('uses requested user catalogs for draft creation and resource resolution', async () => {
+    const users = await import('../../../src/main/features/users');
+    const requested = 'u-requested';
+    visibleSkillIdsByUser.set(requested, new Set(['requested-skill']));
+    visibleAgentIdsByUser.set(requested, new Set(['requested-agent']));
+    visibleSkillIdsByUser.set('u-active', new Set(['active-skill']));
+    visibleAgentIdsByUser.set('u-active', new Set(['active-agent']));
+    const spaces = await loadSpaces();
+    users.activateUser('u-active');
+
+    const draft = await spaces.createSpaceFromDraft(requested, {
+      name: '草稿按用户',
+      main_skill_ref: { asset_id: 'requested-skill', version: '1.0.0' },
+      extra_skill_ids: ['requested-skill'],
+      extra_agent_ids: ['requested-agent'],
+    });
+    expect(draft.ok).toBe(true);
+    if (!draft.ok) return;
+    expect(draft.space.main_skill_ref?.asset_id).toBe('requested-skill');
+    const loaded = await spaces.getSpace(requested, draft.space.space_id);
+    expect(loaded?.extra_skills).toContain('requested-skill');
+    expect(loaded?.extra_agents).toContain('requested-agent');
+
+    const resolved = await spaces.resolveSpaceResourcesForUser(requested, loaded!);
+    expect(resolved.invalid_refs).toEqual({ skills: [], agents: [] });
   });
 });
 

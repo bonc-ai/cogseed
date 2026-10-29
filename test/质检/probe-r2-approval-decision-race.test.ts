@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
 /**
  * 探针 r2（红队-越权与状态，新一轮 r2）：审批决定的 check-then-act 竞态——
  * 用户「拒绝」的 AI 变更提议被并发「确认」覆盖，内容照样生效。
@@ -14,6 +15,10 @@
  * 修法唯一方向：patchProposal 的 updater 锁内复核终态（或把 decide 的状态机
  * 迁入单锁段），本探针锁定现状（竞态可稳定复现）。
  * 风格对齐 probe-r1-purge-tombstone-residue.test.ts（同域探针）。
+ *
+ * 收尾状态（2026-10-01 记账员）：对应待议 **P-r2-2（拍板：锁内 CAS+补偿回滚）**——
+ * 主用例已随修复启用（断言反转：恰一个决定生效、被拒内容不留资产、审计不矛盾）；
+ * 本探针为上遍遗留、本轮甄别去重组 2 并入同一待议项。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -50,7 +55,7 @@ const ACT = { actor: 'user' as const, reason: 'probe' };
 const APPROVED_STATEMENT = 'APPROVAL_RACE_改后正文：所有对外输出先走审阅队列';
 
 describe('probe r2 › 审批决定 check-then-act 竞态', () => {
-  it('并发 confirm+reject：拒绝先落盘仍被 confirm 覆盖，被拒绝的变更生效', async () => {
+  it('【P-r2-2 已修】并发 confirm+reject：恰有一个决定生效，被拒绝的变更不留在资产上', async () => {
     const { createAbilityAsset, readAbilityAsset } = await import('../../src/main/features/recall/asset-service');
     const {
       createAssetChangeProposal,
@@ -61,7 +66,7 @@ describe('probe r2 › 审批决定 check-then-act 竞态', () => {
 
     const id = 'aa-ap-race';
     const now = new Date().toISOString();
-    await createAbilityAsset(UID, {
+    await seedStoredAbilityAsset(UID, {
       schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
       sourceCandidateIds: [`cand-${id}`], reviewDecisionId: 'rd_probeapract',
       type: 'personal', title: '演示资产', statement: '改前正文',
@@ -81,29 +86,41 @@ describe('probe r2 › 审批决定 check-then-act 竞态', () => {
     });
     expect(proposal.state).toBe('pending');
 
-    // 并发两个相反决定：reject 链短几乎必先完成（state=rejected），
-    // confirm 链长后完成——按 :302 的读侧检查本应「已经处置过」被拦
+    // 并发两个相反决定：reject 链短几乎必先完成（state=rejected），confirm
+    // 链长后到——修复后靠锁内 CAS（写前复核 + patch 迁移复核）保证只有一个生效。
     const [confirmResult, rejectResult] = await Promise.all([
       decideAssetChangeProposal(UID, proposal.id, 'confirm'),
       decideAssetChangeProposal(UID, proposal.id, 'reject'),
     ]);
 
-    // 两个决定都成功返回（各自视角里提议都是 pending）
-    expect(rejectResult.ok).toBe(true);
-    expect(confirmResult.ok).toBe(true);
+    // 恰有一个决定成功：两个都 ok=true（旧漏洞的「双成功」）不允许再出现。
+    const wins = [confirmResult.ok, rejectResult.ok].filter(Boolean).length;
+    expect(wins).toBe(1);
 
-    // 发现主体：终态被 confirm 覆盖，被拒绝的变更生效到资产上
+    // 提议终态与赢家一致，不存在「rejected 被 confirmed 覆盖」的翻转。
     const finalProposal = await readAssetChangeProposal(UID, proposal.id);
-    expect(finalProposal?.state).toBe('confirmed');
-    const asset = await readAbilityAsset(UID, id);
-    expect(asset.statement).toBe(APPROVED_STATEMENT);
+    expect(['confirmed', 'rejected']).toContain(finalProposal?.state);
+    const winner = finalProposal?.state === 'confirmed' ? confirmResult : rejectResult;
+    expect(winner.ok).toBe(true);
 
-    // 审计流同时留下两条矛盾记录：拒绝发生过、然后被确认覆盖
+    // 被拒绝的内容不留在资产上：reject 赢时正文保持原值（即便 confirm 的资产
+    // 写入曾短暂生效，也会被补偿回滚到提议前的取值）。
+    const asset = await readAbilityAsset(UID, id);
+    if (finalProposal?.state === 'rejected') {
+      expect(asset.statement).toBe('改前正文');
+    } else {
+      expect(asset.statement).toBe(APPROVED_STATEMENT);
+    }
+
+    // 审计不再出现「拒绝后被确认覆盖生效」的矛盾对：approval_confirmed 若与
+    // approval_rejected 并存，confirmed 那行必须写明是冲突回执/回滚，不是生效。
     const audit = await listRecallJsonlRecords(UID, 'ability-asset-audit', id, 0);
-    const actions = audit.map((row) => String((row as unknown as { action?: string }).action || ''));
-    expect(actions).toContain('approval_rejected');
-    expect(actions).toContain('approval_confirmed');
-    // 顺序实证：拒绝在前、确认在后（后到者覆盖了它）
-    expect(actions.indexOf('approval_rejected')).toBeLessThan(actions.lastIndexOf('approval_confirmed'));
+    const rows = audit as unknown as Array<{ action?: string; reason?: string }>;
+    if (rows.some((row) => row.action === 'approval_rejected')) {
+      const confirmedRows = rows.filter((row) => row.action === 'approval_confirmed');
+      for (const row of confirmedRows) {
+        expect(String(row.reason || '')).toContain('回滚');
+      }
+    }
   });
 });

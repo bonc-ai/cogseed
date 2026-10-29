@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatTokens, formatDuration, formatRate, formatLatency,
-  messageMetricsLine, foldSessionMetrics,
+  messageMetricsLine, foldSessionMetrics, cacheHitPercentText,
 } from '../../src/renderer/modules/conversation-metrics.js';
 
 describe('formatTokens', () => {
@@ -180,5 +180,40 @@ describe('foldSessionMetrics', () => {
     );
     // 单价为 ¥/百万 token：1M×2 + 1M×8 = ¥10
     expect(f.costText).toBe('¥10.00');
+  });
+});
+
+// 缓存命中率口径（对齐 DSH dsh-client-ui-chat::formatCacheHitPercent，见模块头注释）：
+// 分母 = billedInput = input+cacheRead+cacheWrite；"部分命中"绝不允许显示成 100%。
+// 这条公式以前只有实现没有测试——口径漂移过一次就会让 UI 撒谎，所以在此锁住。
+describe('cacheHitPercentText', () => {
+  it('denominator is the full prompt side (includes cacheWrite)', () => {
+    // 50 命中 /(50 裸输入 + 50 命中 + 100 写入) = 25%
+    expect(cacheHitPercentText(50, 50, 100)).toBe('25%');
+    // 写入不计入分母时会算成 50%——那是口径错误
+    expect(cacheHitPercentText(50, 50, 100)).not.toBe('50%');
+  });
+
+  it('reports 0% for uncached prompt input and null when nothing was billed', () => {
+    expect(cacheHitPercentText(0, 100, 0)).toBe('0%');
+    expect(cacheHitPercentText(0, 0, 0)).toBeNull();
+  });
+
+  it('reports 100% only when every billed token was a cache read', () => {
+    expect(cacheHitPercentText(100, 0, 0)).toBe('100%');
+    expect(cacheHitPercentText(10, 0, 10)).toBe('50%');
+  });
+
+  it('never rounds a partial hit up to 100%', () => {
+    for (const [read, input, expected] of [
+      [9999, 1, '99.99%'],
+      [999999, 1, '99.9999%'],
+      [99, 1, '99%'],
+      [99999, 3, '99.997%'],
+    ] as const) {
+      const text = cacheHitPercentText(read, input, 0);
+      expect(text, `${read}/${read + input}`).toBe(expected);
+      expect(text, `${read}/${read + input}`).not.toBe('100%');
+    }
   });
 });

@@ -258,6 +258,11 @@ describe('Recall store foundation', () => {
 
     await expect(store.readRecallJsonRecord(userId, 'profiles', 'bad_json'))
       .rejects.toThrow(/malformed recall record: invalid json/i);
+
+    // An updater that declines to produce a row is an absent record, not a
+    // corrupt one; callers skip it instead of entering repair paths.
+    await expect(store.updateRecallJsonRecord(userId, 'profiles', 'absent_update', (() => undefined) as never))
+      .rejects.toThrow(/missing recall record: record is absent/i);
   });
 
   it('serializes per-record updates under a lock so concurrent updates are not lost', async () => {

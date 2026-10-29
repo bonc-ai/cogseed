@@ -1,0 +1,3 @@
+cases:
+- id: smoke-ui-taste
+  kind: manual-smoke

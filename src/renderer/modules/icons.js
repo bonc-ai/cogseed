@@ -33,6 +33,8 @@
   }
 
   const UI_ICONS = {
+    'grip-vertical': '<circle cx="9" cy="5" r="1" fill="currentColor" stroke="none"></circle><circle cx="15" cy="5" r="1" fill="currentColor" stroke="none"></circle><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"></circle><circle cx="9" cy="19" r="1" fill="currentColor" stroke="none"></circle><circle cx="15" cy="19" r="1" fill="currentColor" stroke="none"></circle>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 6 9 7 9-7"></path>',
     search: '<circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path>',
     // 新建会话场景图标（index.html data-ui-icon="target"）：同心圆靶心。
     target: '<circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="5"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle>',
@@ -87,6 +89,7 @@
     zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>',
     external: '<path d="M14 4h6v6"></path><path d="M20 4 10 14"></path><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"></path>',
     maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>',
+    'expand-detail': '<path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3 14 10"></path><path d="M3 21l7-7"></path>',
     'more-horizontal': '<circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle>',
     'panel-list': '<rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path><path d="M7 8h4"></path><path d="M7 12h4"></path><path d="M7 16h4"></path>',
     panel: '<rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path>',
@@ -164,10 +167,26 @@
     brush: '<path d="M4 20c3 0 4-2 4-4a3 3 0 0 0-3-3c-2.7 0-4 2-3 7 2-1 2-3 2-3z"></path><path d="M9.5 14.5 19 5a2 2 0 0 0-3-3l-9.5 9.5"></path>',
   };
 
-  // Multi-color messaging marks bypass the stroke-based ui-icon wrapper. The
-  // Feishu artwork is a bundled raster supplied for this surface; the remaining
-  // brands stay vector so they remain crisp at menu and detail-header sizes.
+  // Brand marks bypass the stroke-based ui-icon wrapper. Fixed image viewports crop bundled
+  // originals in CSS without resampling the PNGs or redrawing logos. This uses native <img>
+  // loading so the bundled images display reliably in production cards.
+  function croppedConnectorIcon(name, asset, sourceSize, viewport) {
+    const [width, height] = sourceSize;
+    const [x, y, size] = viewport;
+    const geometry = `width:${width / size * 100}%;height:${height / size * 100}%;left:${-x / size * 100}%;top:${-y / size * 100}%;`;
+    return `<span class="ui-connector-brand-icon is-${name}" aria-hidden="true"><img src="../resources/icons/connectors/${asset}" alt="" draggable="false" style="${geometry}"></span>`;
+  }
+
   const BRAND_ICONS = {
+    'connector-email-163': croppedConnectorIcon('connector-email-163', 'email-163.png', [816, 1092], [412, -31, 124]),
+    'connector-email-qq': croppedConnectorIcon('connector-email-qq', 'email-qq.png', [440, 120], [138, 29, 60]),
+    'connector-tencent-meeting': croppedConnectorIcon('connector-tencent-meeting', 'tencent-meeting.svg', [125, 23], [0, -8.5, 40]),
+    'connector-tencent-survey': croppedConnectorIcon('connector-tencent-survey', 'tencent-survey.png', [160, 160], [0, 0, 160]),
+    'connector-feishu': croppedConnectorIcon('connector-feishu', 'feishu.png', [156, 48], [0, -7, 62]),
+    'connector-wecom': croppedConnectorIcon('connector-wecom', 'wecom.svg', [408, 390], [96, 237.5, 31]),
+    'connector-dingtalk': croppedConnectorIcon('connector-dingtalk', 'dingtalk.png', [228, 126], [14, 14, 84]),
+    'connector-tencent-docs': croppedConnectorIcon('connector-tencent-docs', 'tencent-docs.svg', [394, 48], [0, -3.5, 55]),
+    'connector-wps': croppedConnectorIcon('connector-wps', 'wps.svg', [24, 24], [0, 0, 24]),
     feishu: '<img class="is-feishu" src="../resources/icons/feishu.png" alt="" draggable="false" aria-hidden="true">',
     lark: '<svg class="is-lark" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><path fill="#00C2B8" d="M8 9h25l7 7-16 23H8z"/><path fill="#175CE6" d="M7 21l13 14c7 7 16 4 21-2l-7-7-8 5z"/><path fill="#0A3EAA" d="M7 21l13 14 14-9-12-11z"/></svg>',
     wechat: '<svg class="is-wechat" viewBox="-4 -8 356 364" width="24" height="24" aria-hidden="true"><g fill-rule="evenodd" fill="none"><path fill="#07C160" d="M0 103.374c0 31.012 16.907 59.345 43.037 78.105 2.306 1.531 3.458 3.829 3.458 6.892 0 .765-.384 1.914-.384 2.68-1.921 7.657-5.38 20.292-5.764 20.675-.384 1.148-.768 1.914-.768 3.062 0 2.298 1.921 4.212 4.227 4.212.768 0 1.537-.383 2.305-.766l27.283-15.697c1.92-1.149 4.226-1.915 6.532-1.915 1.153 0 2.69 0 3.843.383 12.68 3.829 26.513 5.743 40.731 5.743 68.782 0 124.5-46.327 124.5-103.374S193.282 0 124.5 0 0 46.327 0 103.374"/><path fill="#FFFFFF" stroke="#D5D8DB" stroke-width="3" d="M240.5 267.585c11.883 0 23.383-1.543 33.733-4.629.767-.386 1.917-.386 3.067-.386 1.917 0 3.833.772 5.367 1.543l22.616 13.116c.767.385 1.15.771 1.917.771a3.447 3.447 0 003.45-3.472c0-.771-.383-1.543-.383-2.7 0-.386-3.067-10.8-4.6-17.358-.384-.772-.384-1.543-.384-2.315 0-2.314 1.15-4.243 3.067-5.786C330.2 230.553 344 207.023 344 180.792 344 132.96 297.617 94 240.5 94S137 132.574 137 180.792c0 47.833 46.383 86.793 103.5 86.793z"/><path fill="#187E28" d="M99 70c0 8.93-7.07 16-16 16s-16-7.07-16-16 7.07-16 16-16 16 7.07 16 16m83 0c0 8.93-7.07 16-16 16s-16-7.07-16-16 7.07-16 16-16 16 7.07 16 16"/><path fill="#858C8C" d="M262 154c0 7.778 6.222 14 14 14s14-6.222 14-14-6.222-14-14-14-14 6.222-14 14m-69 0c0 7.778 6.222 14 14 14s14-6.222 14-14-6.222-14-14-14-14 6.222-14 14"/></g></svg>',

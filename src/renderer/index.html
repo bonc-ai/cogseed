@@ -14,6 +14,11 @@
   <link rel="stylesheet" href="./workspace.css" />
   <link rel="stylesheet" href="./recall-local.css" />
   <link rel="stylesheet" href="./cognition-assets.css" />
+  <link rel="stylesheet" href="./modules/cognition-assets/settings.css" />
+  <link rel="stylesheet" href="./modules/cognition-activity.css" />
+  <link rel="stylesheet" href="./modules/cognition-assets/library.css" />
+  <link rel="stylesheet" href="./modules/cognition-assets/prototype.css" />
+  <link rel="stylesheet" href="./modules/cognition-assets/details.css" />
   <link rel="stylesheet" href="./ui-components.css" />
   <link rel="stylesheet" href="./shell-navigation.css" />
   <link rel="stylesheet" href="./plugins.css" />
@@ -30,34 +35,91 @@
 </head>
 <body>
   <div class="app-container">
-    <div class="app-shell-tools sidebar-tools" id="app-shell-tools"></div>
+    <!-- Left rail (specs/008-shell-rail-layout): icon-only top-level modules,
+         rendered by ui-app-rail.js through uiIconButton(). The top band holds
+         the macOS traffic lights; the account entry (with Settings) sits at
+         the bottom. -->
+    <nav class="app-rail" id="app-rail" data-i18n-aria-label="rail.label" aria-label="主导航">
+      <div class="app-rail-titlebar" aria-hidden="true"></div>
+      <div class="app-rail-items" id="app-rail-items"></div>
+      <div class="app-rail-footer">
+        <!-- 用户状态 + 设置入口：account-chip.js 渲染。初始 hidden，拿到
+             status DTO 后按登录状态显示；status 拿不到则降级为「设置」形态
+             （面板仅含本地功能），保证设置入口永不丢失。 -->
+        <div class="sidebar-footer-account app-rail-account" id="hub-account-chip-root" hidden></div>
+      </div>
+    </nav>
+    <!-- Contextual sidebar: one host per module (data-sidebar-for); app-shell.js
+         shows the current module's host or hides the sidebar entirely. -->
     <aside class="sidebar">
-      <div class="sidebar-logo">
-        <img class="logo-icon" src="../resources/icons/logo.png" alt="" draggable="false" />
-        <div class="logo-text" data-i18n="brand.name">CogSeed</div>
+      <!-- Sidebar title row (drag band). Shell tools are real children here so
+           their no-drag rectangles follow the band in DOM order (Electron
+           applies app-region rectangles in document order). -->
+      <div class="sidebar-titlebar">
+        <div class="app-shell-tools sidebar-tools" id="app-shell-tools"></div>
       </div>
-      <div class="sidebar-actions">
-        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="plus" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
-        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
-        <button class="sidebar-btn" id="kb-btn"><span data-ui-icon="book-open" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.kb">知识库</span></button>
-        <button class="sidebar-btn" id="run-center-btn" hidden aria-hidden="true"><span data-ui-icon="activity" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.run_center">运行与协作</span></button>
-        <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
-        <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
-        <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">智能体 / 技能 / 连接</span></button>
-      </div>
-      <div class="sidebar-conversation-nav">
-        <div class="sidebar-section sidebar-conversations-section">
-          <div class="conversation-list" id="conversation-list">
-            <div class="conv-empty" data-i18n="sidebar.conv_empty">No conversations yet</div>
+      <div class="sidebar-module" data-sidebar-for="task">
+        <div class="sidebar-actions">
+          <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="plus" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span></button>
+          <!-- A2A 通讯录入口：顶栏 rail 只收顶层模块，通讯录属于任务模块侧栏动作；
+               contacts.js 用共享 uiButton 渲染 #contacts-btn。 -->
+          <div id="contacts-nav-host"></div>
+        </div>
+        <div class="sidebar-conversation-nav">
+          <div class="sidebar-section sidebar-conversations-section">
+            <div class="conversation-list" id="conversation-list">
+              <div class="conv-empty" data-i18n="sidebar.conv_empty">No conversations yet</div>
+            </div>
           </div>
         </div>
       </div>
-      <div class="sidebar-footer-actions">
-        <!-- 左下角融合入口（用户状态 + 设置）：account-chip.js 渲染。初始 hidden，
-             拿到 status DTO 后按登录状态显示；status 拿不到则降级为「设置」形态
-             （面板仅含本地功能），保证设置入口永不丢失——侧栏折叠态下同样
-             常驻（压缩为图标按钮，点击仍可展开面板，见 style.css）。 -->
-        <div class="sidebar-footer-account" id="hub-account-chip-root" hidden></div>
+      <div class="sidebar-module" data-sidebar-for="kb" id="sidebar-kb-nav" hidden></div>
+      <div class="sidebar-module" data-sidebar-for="recall" id="sidebar-recall-nav" hidden></div>
+      <div class="sidebar-module" data-sidebar-for="connections" hidden>
+        <div class="connections-tabs sidebar-nav" role="tablist" aria-orientation="vertical" data-i18n-aria-label="sidebar.connections" aria-label="智能体 / 技能 / 连接">
+          <button type="button" class="connections-tab sidebar-nav-item is-active" role="tab" aria-selected="true" data-connections-tab="agents" data-i18n="connections.tab.agents">智能体</button>
+          <button type="button" class="connections-tab sidebar-nav-item" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
+          <button type="button" class="connections-tab sidebar-nav-item" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
+          <button type="button" class="connections-tab sidebar-nav-item" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="sources" data-i18n="connections.tab.sources">资料库</button>
+          <button type="button" class="connections-tab sidebar-nav-item" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">IM</button>
+        </div>
+      </div>
+      <div class="sidebar-module" data-sidebar-for="run-center" id="sidebar-run-center-nav" hidden></div>
+      <div class="sidebar-module" data-sidebar-for="settings" hidden>
+        <nav class="settings-tabs sidebar-nav" aria-label="设置" data-i18n-aria-label="settings.title">
+          <button type="button" class="settings-back-btn" id="settings-back-btn">
+            <span data-ui-icon="chevron-left" data-ui-icon-class="settings-back-icon"></span>
+            <span data-i18n="settings.back_to_app">返回应用</span>
+          </button>
+          <button class="settings-tab is-active" data-settings-tab="data">
+            <span data-ui-icon="database" data-ui-icon-class="settings-tab-icon"></span>
+            <span data-i18n="settings.tab.data">数据</span>
+          </button>
+          <button class="settings-tab" data-settings-tab="configuration">
+            <span data-ui-icon="key" data-ui-icon-class="settings-tab-icon"></span>
+            <span data-i18n="settings.tab.configuration">Configuration</span>
+          </button>
+          <button class="settings-tab" data-settings-tab="account">
+            <span data-ui-icon="lock" data-ui-icon-class="settings-tab-icon"></span>
+            <span data-i18n="settings.tab.account">账号</span>
+          </button>
+          <button class="settings-tab" data-settings-tab="usage">
+            <span data-ui-icon="clock" data-ui-icon-class="settings-tab-icon"></span>
+            <span data-i18n="settings.tab.usage">账号与用量</span>
+          </button>
+          <button class="settings-tab" data-settings-tab="general">
+            <span data-ui-icon="settings" data-ui-icon-class="settings-tab-icon"></span>
+            <span data-i18n="settings.tab.general">通用</span>
+          </button>
+          <button class="settings-tab" data-settings-tab="security">
+            <span data-ui-icon="shield" data-ui-icon-class="settings-tab-icon"></span>
+            <span data-i18n="settings.tab.security">安全与信任</span>
+          </button>
+          <button class="settings-tab" data-settings-tab="about">
+            <span data-ui-icon="info" data-ui-icon-class="settings-tab-icon"></span>
+            <span data-i18n="settings.tab.about">关于我们</span>
+          </button>
+        </nav>
       </div>
       <div class="sidebar-resize-handle" id="sidebar-resize-handle"
            role="separator" aria-orientation="vertical"
@@ -83,10 +145,18 @@
            Greeting is filled in by JS lifecycle hooks; see
            _refreshEmptyStateGreeting. -->
       <section class="panel active" id="panel-new-chat">
-        <div class="app-top-drag-strip" aria-hidden="true"></div>
+        <!-- Shared page header (specs/008 D12); markup mirrors uiPageHeader(). -->
+        <header class="ui-page-header new-chat-page-header">
+          <div class="ui-page-header__shell" data-shell-header-slot></div>
+          <div class="ui-page-header__body">
+            <div class="ui-page-header__title-row">
+              <h1 class="ui-page-header__title" data-i18n="sidebar.new_chat">新建任务</h1>
+            </div>
+          </div>
+        </header>
         <div class="new-chat-center">
           <div class="new-chat-header">
-            <h1 class="new-chat-greeting" id="new-chat-greeting"></h1>
+            <h2 class="new-chat-greeting" id="new-chat-greeting"></h2>
           </div>
           <div class="new-chat-input-wrapper">
             <div class="new-chat-input-area">
@@ -188,23 +258,26 @@
       <section class="panel" id="panel-conversation">
         <div class="chat-container">
           <div class="chat-main-pane">
-            <!-- Conversation header — Surface C top per PC/docs/design/PATTERNS.md.
+            <!-- Conversation header — adopts the shared uiPageHeader contract
+                 (specs/008 D12): [shell slot][title/breadcrumb/meta][actions].
+                 Surface C top per PC/docs/design/PATTERNS.md.
                  Title + project swatch + name + stacked agent
                  avatars + counts + 详情 toggle. Filled in by JS lifecycle hook
                  `_refreshChatHeader()` in conversation.js. -->
-            <div class="chat-header" id="chat-header">
-              <div class="chat-header-main">
+            <header class="ui-page-header chat-header" id="chat-header">
+              <div class="ui-page-header__shell" data-shell-header-slot></div>
+              <div class="chat-header-main ui-page-header__body">
                 <nav class="chat-header-breadcrumb" id="chat-header-breadcrumb" aria-label="面包屑导航" hidden></nav>
                 <div class="chat-header-main-inline">
                 <div class="chat-header-title-row">
-                  <h1 class="chat-header-title" id="chat-header-title"></h1>
+                  <h1 class="chat-header-title ui-page-header__title" id="chat-header-title"></h1>
                   <input type="text" class="chat-header-title-input" id="chat-header-title-input"
                          autocomplete="off" spellcheck="false" hidden />
                 </div>
                 <div class="chat-header-meta" id="chat-header-meta"></div>
                 </div>
               </div>
-              <div class="chat-header-actions">
+              <div class="chat-header-actions ui-page-header__actions">
                 <button type="button" class="chat-header-details-btn" id="run-center-return-btn"
                         data-i18n-title="run_center.return_to_center"
                         data-i18n-aria-label="run_center.return_to_center"
@@ -240,7 +313,7 @@
                    待确认）时由 conversation-info.js 显示，点叉按会话关闭；N=M=0
                    时保持隐藏。 -->
               <div class="chat-cognition-strip" id="chat-cognition-strip" hidden></div>
-            </div>
+            </header>
             <!-- Plan strip — permanent slot between chat header and history.
                  Restyled inline below; plan-rail.js writes into the same ids
                  (#plan-rail, #plan-rail-progress, #plan-rail-bar). Body is
@@ -267,6 +340,9 @@
               <div class="empty" data-i18n="chat.empty">No messages yet...</div>
             </div>
             <div class="chat-input-wrapper">
+              <!-- 请示条留在输入区（和这次会话绑定）；跨方消息卡是页面级浮层，
+                   挂在 body 上，见文件末尾。 -->
+              <div id="a2a-consultation-strip" hidden></div>
               <div class="chat-queue" id="chat-queue" style="display:none">
                 <div class="chat-queue-header">
                   <span class="chat-queue-label"><span data-i18n="chat.queue_label">Queued</span> <span class="chat-queue-count" id="chat-queue-count">0</span></span>
@@ -345,6 +421,10 @@
             <div id="terminal-panel" class="terminal-panel" hidden></div>
           </div>
           <aside class="conversation-info-panel" id="conversation-info-panel" hidden>
+            <div class="conversation-info-resize-handle" id="conversation-info-resize-handle"
+                 role="separator" aria-orientation="vertical"
+                 data-i18n-title="sidebar.resize_title"
+                 title="Drag to resize · double-click to reset"></div>
             <div class="conversation-info-header">
               <div class="conversation-info-heading-wrap">
                 <div class="conversation-info-title" data-i18n="conversation_info.title">运行上下文</div>
@@ -457,64 +537,6 @@
       <!-- Cognitive assets -->
       <section class="panel ui-resource-page" id="panel-recall">
                   <div id="ca-root"></div>
-          <!-- 个人本体 section 的常驻停车场：本体路由激活时被移进 #ca-ontology-mount，
-               离开时归还这里——同一 DOM 节点往返，内部状态不销毁（2026-09-21 五页签迁移）。 -->
-          <div id="ca-ontology-parking" hidden>
-          <section class="recall-personal-ontology-section" id="skills-cognition-personal-ontology" hidden>
-            <!-- 个人本体（#panel-personal-ontology）整体内嵌：保留 id，渲染函数照常工作。 -->
-            <section class="panel skills-embedded-panel recall-personal-ontology-frame" id="panel-personal-ontology">
-              <div class="personal-onto-layout">
-                <!-- 左栏：文件列表（候选 / 角色模板 / 记忆分组）资料库风格 -->
-                <div class="personal-onto-sidebar" id="personal-onto-sidebar">
-                  <div class="personal-onto-sidebar-header">
-                    <span class="personal-onto-sidebar-title" data-i18n="personalOntology.title">本体</span>
-                    <span class="personal-onto-sidebar-actions" id="personal-onto-sidebar-actions"></span>
-                  </div>
-                  <div class="personal-onto-nav" id="personal-onto-nav"></div>
-                </div>
-                <!-- 右栏：内容（候选详情 / 分组 md 内容） -->
-                <div class="personal-onto-main">
-                  <div class="personal-onto-main-header" id="personal-onto-main-header"></div>
-                  <div class="personal-onto-main-body" id="personal-onto-main-body"></div>
-                </div>
-              </div>
-              <!-- Reject reason modal -->
-              <div class="personal-onto-modal-overlay" id="personal-onto-modal" style="display:none">
-                <div class="personal-onto-modal">
-                  <div class="personal-onto-modal-header">
-                    <span data-i18n="personalOntology.reject_reason_title">驳回原因</span>
-                  </div>
-                  <div class="personal-onto-modal-body">
-                    <textarea id="personal-onto-modal-reason" rows="3" placeholder="可选，填写驳回原因..." data-i18n-placeholder="personalOntology.reject_reason_placeholder"></textarea>
-                  </div>
-                  <div class="personal-onto-modal-footer">
-                    <button class="btn btn-sm" id="personal-onto-modal-cancel" data-i18n="common.cancel">取消</button>
-                    <button class="btn btn-sm btn-primary" id="personal-onto-modal-ok" data-i18n="personalOntology.reject_btn">驳回</button>
-                  </div>
-                </div>
-              </div>
-              <!-- 角色模板库弹窗：未安装模板列表 -->
-              <div class="personal-onto-modal-overlay" id="personal-onto-template-library-modal" style="display:none">
-                <div class="personal-onto-modal personal-onto-library-modal">
-                  <div class="personal-onto-modal-header">
-                    <span data-i18n="personalOntology.template_library">角色模板库</span>
-                    <button type="button" class="modal-close-btn" id="personal-onto-template-library-close" aria-label="Close">×</button>
-                  </div>
-                  <div class="personal-onto-modal-body">
-                    <div class="personal-onto-library-sub muted" data-i18n="personalOntology.template_library_sub">未安装的角色模板，安装后显示在左侧「角色模板」区（最多 3 个）</div>
-                    <div class="personal-onto-library-layout">
-                      <div class="personal-onto-library-list" id="personal-onto-template-library-list"></div>
-                      <div class="personal-onto-library-detail" id="personal-onto-template-library-detail"></div>
-                    </div>
-                  </div>
-                  <div class="personal-onto-modal-footer">
-                    <button class="btn btn-sm" id="personal-onto-template-library-cancel" data-i18n="common.close">关闭</button>
-                  </div>
-                </div>
-              </div>
-            </section>
-            </section>
-          </div>
 </section>
 
 
@@ -526,6 +548,7 @@
         <!-- Grid view (default) -->
         <div class="marketplace-grid-view" id="marketplace-grid-view">
           <div class="marketplace-header">
+            <div class="ui-page-header__shell" data-shell-header-slot></div>
             <button type="button" class="btn btn-sm" data-mp-close data-i18n="common.back">Back</button>
             <div class="marketplace-tabs">
               <button type="button" class="marketplace-tab" data-mp-tab="agent" data-i18n="marketplace.tab_agent">Agents</button>
@@ -545,6 +568,7 @@
         <!-- Detail view (replaces grid when a card is clicked) -->
         <div class="marketplace-detail-view" id="marketplace-detail-view" style="display:none">
           <div class="marketplace-detail-header">
+            <div class="ui-page-header__shell" data-shell-header-slot></div>
             <button type="button" class="btn btn-sm" data-mp-detail-back data-i18n="common.back">Back</button>
             <span class="marketplace-detail-avatar-slot" data-mp-detail-avatar></span>
             <div class="marketplace-detail-title-wrap">
@@ -561,19 +585,11 @@
            MCP 与工具 tab 真嵌入原 connectors 网格（connectors.js 仍按这些 ID 渲染）；
            Agent / 数据源 / 触点 / 模型与额度 为入口卡，跳转到各自面板。 -->
       <section class="panel ui-resource-page" id="panel-connections">
-        <div class="app-top-drag-strip" aria-hidden="true"></div>
         <!-- 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）：
              标题为语义 h1，全宽通栏；连接页是 tab 容器，操作落在各 tab 内，故不设页级操作。
              渲染入口见 connections.js::_renderConnectionsPageHeader。 -->
         <div id="connections-page-header"></div>
         <div class="connections-container">
-          <div class="connections-tabs ui-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="智能体 / 技能 / 连接">
-            <button type="button" class="connections-tab ui-tab is-active" role="tab" aria-selected="true" data-connections-tab="agents" data-i18n="connections.tab.agents">智能体</button>
-            <button type="button" class="connections-tab ui-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
-            <button type="button" class="connections-tab ui-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
-            <button type="button" class="connections-tab ui-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="sources" data-i18n="connections.tab.sources">资料库</button>
-            <button type="button" class="connections-tab ui-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">IM</button>
-          </div>
           <div class="connections-body">
 
             <!-- Agent → AI 团队面板整体内嵌 -->
@@ -589,6 +605,8 @@
             </div>
           </div>
           <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="agent" style="display:none"></div>
+          <!-- S4（specs/009）：「我的智能体」子视图的返回行，由 agents.js 渲染。 -->
+          <div class="catalog-subview-back" id="agents-subview-back" hidden></div>
           <div class="agents-resource-toolbar">
             <!-- Category controls and search are rendered by agents.js through
                  the shared segmented/button/form primitives. -->
@@ -596,7 +614,9 @@
             <div class="agents-resource-toolbar-controls">
               <div class="agents-search-field" id="agents-search-field"></div>
               <div class="header-actions">
+                <span class="catalog-toolbar-actions" id="agents-catalog-actions"></span>
                 <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="create-agent-btn" data-i18n="agents.create_btn">+ Create</button>
+                <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="agents-mine-btn" data-agents-contribution-mine data-i18n="agents.contribute_mine">My contributions</button>
                 <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="agents-more-btn" data-i18n="agents.more_btn">More</button>
               </div>
             </div>
@@ -606,6 +626,13 @@
             <div class="agents-empty" id="agents-empty" data-i18n="agents.empty">No agents yet</div>
           </div>
         </div>
+
+        <!-- Hub Agent contribution page (hub-agent-contributions.js, registry HUBC-PV-004):
+             same-level view toggled like grid/detail; content is rendered by the module. -->
+        <div class="hubc-view" id="agents-contribute-view" style="display:none" data-i18n-aria-label="agents.contribute_page_label" aria-label="Contribute agent"></div>
+        <!-- "My contributions" opened from the Agent page renders here (same module/page as the Skill one,
+             hub-contributions.js) so the 智能体 tab stays highlighted. -->
+        <div class="hubc-view" id="agents-contributions-view" style="display:none" data-i18n-aria-label="skills.contribute_mine" aria-label="My contributions"></div>
 
         <!-- Detail view (replaces grid when a card is opened) -->
         <div class="agents-detail-view" id="agents-detail-view" style="display:none">
@@ -752,14 +779,6 @@
                       <div class="connectors-empty empty" id="connectors-empty" style="display:none" data-i18n="connectors.empty">No connectors available.</div>
                     </div>
                   </div>
-                  <!-- 连接器详情视图：与网格互斥，由 connectors.js 填入。
-                       两个 host 只承载骨架——所有控件都由共享原语渲染，故 index.html
-                       的裸控件预算不变。结构登记见 docs/renderer-structural-registry.md
-                       的 CONN-PV-001。 -->
-                  <div class="connectors-detail-view" id="connectors-detail-view" style="display:none">
-                    <div class="connectors-detail-topbar" id="connectors-detail-topbar"></div>
-                    <div class="connectors-detail-body" id="connectors-detail-body"></div>
-                  </div>
                 </div>
                 <div class="connections-tools-view" data-connections-tools-view="plugins" hidden>
                   <div class="plugins-root" id="plugins-root"></div>
@@ -780,11 +799,14 @@
                     <span data-i18n="skills.title">Skills</span>
                   </div>
                   <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="skill" style="display:none"></div>
+                  <!-- S4（specs/009）：「我的技能」子视图的返回行，由 skills.js 渲染。 -->
+                  <div class="catalog-subview-back" id="skills-subview-back" hidden></div>
                   <div class="skills-resource-toolbar">
                     <div class="marketplace-categories skills-categories" id="skills-categories"></div>
                     <div class="skills-resource-toolbar-controls">
                       <div class="skills-search-field" id="skills-search-field"></div>
                       <div class="header-actions">
+                        <span class="catalog-toolbar-actions" id="skills-catalog-actions"></span>
                         <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="create-skill-btn" data-i18n="skills.add">+ Create</button>
                         <button type="button" class="btn ui-button ui-button--secondary ui-button--sm" id="skills-more-btn" data-i18n="skills.more_btn">More</button>
                       </div>
@@ -987,7 +1009,6 @@
 
       <!-- Run Center: private Task/Event projections only, loaded on demand. -->
       <section class="panel" id="panel-run-center">
-        <div class="app-top-drag-strip" aria-hidden="true"></div>
         <!-- 唤醒审批控制中心（conv-core T3）：跨会话 pending wake 请求聚合。
              无待审批时整条隐藏；有则置顶显示，批准/拒绝/跳会话与聊天内审批卡等效。 -->
         <div class="wake-approvals-strip" id="wake-approvals-strip" hidden>
@@ -999,12 +1020,16 @@
 
       <!-- Workspace Center (空间中心：任务/产物/资产三 tab，由 workspace.js 渲染) -->
       <section class="panel ui-resource-page" id="panel-workspace">
-        <div class="app-top-drag-strip" aria-hidden="true"></div>
         <div class="ws-view" id="ws-view"></div>
       </section>
 
       <!-- Knowledge Base (知识库工作台：生态 rail + 三栏，由 kb-eco.js / kb-workbench.js 渲染) -->
-      <section class="panel" id="panel-kb">
+
+
+        <!-- A2A 通讯录（MVP）：联系人/新的联系人，由 contacts-page.js 渲染 -->
+        <section class="panel" id="panel-contacts">
+          <div id="contacts-view"></div>
+        </section><section class="panel" id="panel-kb">
         <div class="kb-view" id="kb-view"></div>
       </section>
 
@@ -1015,41 +1040,6 @@
              渲染入口见 settings_tabs.js::_renderSettingsPageHeader。 -->
         <div id="settings-page-header"></div>
         <div class="settings-container">
-          <aside class="settings-tabs" aria-label="设置" data-i18n-aria-label="settings.title">
-            <button type="button" class="settings-back-btn" id="settings-back-btn">
-              <span data-ui-icon="chevron-left" data-ui-icon-class="settings-back-icon"></span>
-              <span data-i18n="settings.back_to_app">返回应用</span>
-            </button>
-            <button class="settings-tab is-active" data-settings-tab="data">
-              <span data-ui-icon="database" data-ui-icon-class="settings-tab-icon"></span>
-              <span data-i18n="settings.tab.data">数据</span>
-            </button>
-            <button class="settings-tab" data-settings-tab="configuration">
-              <span data-ui-icon="key" data-ui-icon-class="settings-tab-icon"></span>
-              <span data-i18n="settings.tab.configuration">Configuration</span>
-            </button>
-            <button class="settings-tab" data-settings-tab="account">
-              <span data-ui-icon="lock" data-ui-icon-class="settings-tab-icon"></span>
-              <span data-i18n="settings.tab.account">账号</span>
-            </button>
-            <button class="settings-tab" data-settings-tab="usage">
-              <span data-ui-icon="clock" data-ui-icon-class="settings-tab-icon"></span>
-              <span data-i18n="settings.tab.usage">账号与用量</span>
-            </button>
-            <button class="settings-tab" data-settings-tab="general">
-              <span data-ui-icon="settings" data-ui-icon-class="settings-tab-icon"></span>
-              <span data-i18n="settings.tab.general">通用</span>
-            </button>
-            <button class="settings-tab" data-settings-tab="security">
-              <span data-ui-icon="shield" data-ui-icon-class="settings-tab-icon"></span>
-              <span data-i18n="settings.tab.security">安全与信任</span>
-            </button>
-            <button class="settings-tab" data-settings-tab="about">
-              <span data-ui-icon="info" data-ui-icon-class="settings-tab-icon"></span>
-              <span data-i18n="settings.tab.about">关于我们</span>
-            </button>
-          </aside>
-
           <div class="settings-body">
 
             <!-- ───────────────────────── 数据 ───────────────────────── -->
@@ -1151,6 +1141,25 @@
                 </div>
               </div>
 
+                <div class="settings-group ui-settings-section">
+                  <div class="settings-group-head">
+                    <div class="settings-group-title" data-i18n="settings.a2a.title">Agent 通信</div>
+                    <div class="settings-group-sub" data-i18n="settings.a2a.sub">联系人向你的助理提问时，每次都需要你确认。</div>
+                  </div>
+                  <div class="settings-row">
+                    <label class="settings-toggle">
+                      <span id="settings-a2a-discoverable-toggle"></span>
+                      <span data-i18n="settings.a2a.discoverable">允许别人通过手机号添加我</span>
+                    </label>
+                  </div>
+                  <div class="settings-row">
+                    <label class="settings-toggle">
+                      <span id="settings-a2a-questions-toggle"></span>
+                      <span data-i18n="settings.a2a.questions">接收联系人向我的助理提问</span>
+                    </label>
+                  </div>
+                </div>
+
               <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.localexec.title">Tool Execution Access</div>
@@ -1214,6 +1223,8 @@
             <div class="settings-tab-pane" data-settings-pane="configuration" hidden>
               <h1 class="settings-pane-title" data-i18n="settings.tab.configuration">配置</h1>
               <div class="settings-section-note" data-i18n="settings.section.models_note">API keys and OAuth tokens are stored locally only — never synced or sent off-device.</div>
+
+              <div id="settings-semantica-host"></div>
 
               <div class="settings-group ui-settings-section" id="settings-auth-profiles-recovery" hidden>
                 <div class="settings-group-head">
@@ -1481,7 +1492,7 @@
   </div>
 
   <!-- Create Agent Modal -->
-  <div class="modal-overlay" id="agent-modal">
+  <div class="modal-overlay" id="agent-modal" hidden>
     <div class="modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title">
       <div class="modal-header">
         <h3 class="modal-title" id="agent-modal-title" data-i18n="agent_modal.title">New agent</h3>
@@ -1504,39 +1515,42 @@
           <input type="text" id="agent-name-input" data-i18n-placeholder="agent_modal.name_placeholder" placeholder="e.g. CodeReviewAssistant" />
         </div>
         <div class="form-row">
-          <label data-i18n="agents.label_output_format">Output format</label>
-          <div class="ai-select" id="agent-output-format-select"></div>
-        </div>
-        <div class="form-row">
           <label><span data-i18n="agent_modal.desc">Summary</span> <span class="form-hint" data-i18n="agent_modal.desc_hint">One line on what it does — the AI will generate a workflow from this</span></label>
           <textarea id="agent-desc-input" rows="4" data-i18n-placeholder="agent_modal.desc_placeholder" placeholder="e.g. Review my code before commit, focus on logic bugs and security issues..."></textarea>
         </div>
+        <!-- 输出格式不在创建时选（默认「自动」）：创建后在智能体详情里设置（2026-10-20）。 -->
+        <p class="form-hint agent-create-later-hint" data-i18n="agent_modal.create_later_hint">Output format, skills and more can be set in the agent's details after it is created.</p>
       </div>
 
       <!-- External panel (P3394 way): a picked CLI joins through a managed
            p3394-gateway — one protocol for ANY external agent (Hermes,
            Claude Code, Codex, OpenClaw, WorkBuddy, user-built agents). -->
       <div class="skill-modal-panel" data-agent-panel="external">
+        <!-- 2026-10-20 改版：本机识别到的智能体做成卡片选择（agent-ext-pick，由 local-agents.js 渲染），
+             选中后才出现自动填好的名称 / 简介和（Claude Code、Codex 的）模型供应商。 -->
         <div class="form-row">
-          <label data-i18n="agent_modal.ext_cli_label">Agent</label>
-          <div class="ai-select" id="agent-modal-ext-cli-select"></div>
-          <div class="form-hint" id="agent-ext-missing-hint" style="display:none"></div>
-          <div class="form-hint" data-i18n="agent_modal.ext_p3394_hint">Connect over the P3394 protocol — CogSeed starts a local gateway and registers the agent as a collaboration node.</div>
+          <div class="agent-ext-pick-head">
+            <!-- 点未检测到的卡片时，原因显示在这条提示里（不新增一行，弹窗高度不变）。 -->
+            <label><span data-i18n="agent_modal.ext_pick_label">Choose an agent on this computer</span> <span class="form-hint" id="agent-ext-missing-hint" aria-live="polite" data-i18n="agent_modal.ext_pick_hint">Ones installed on this computer are detected automatically</span></label>
+            <span id="agent-ext-rescan"></span>
+          </div>
+          <div class="agent-ext-pick" id="agent-ext-pick" role="radiogroup" data-i18n-aria-label="agent_modal.ext_pick_label" aria-label="Choose an agent on this computer"></div>
         </div>
-        <div class="form-row">
-          <label data-i18n="agent_modal.ext_name">Name</label>
-          <input type="text" id="agent-ext-name-input" data-i18n-placeholder="agent_modal.ext_name_placeholder" placeholder="e.g. ClaudeCode" />
+        <div class="agent-ext-fields is-idle" id="agent-ext-fields">
+          <div class="form-row">
+            <label><span data-i18n="agent_modal.ext_name">Name</span> <span class="form-hint" data-i18n="agent_modal.ext_autofill_hint">Filled in from your choice; you can change it</span></label>
+            <input type="text" id="agent-ext-name-input" data-i18n-placeholder="agent_modal.ext_name_placeholder" placeholder="e.g. ClaudeCode" />
+          </div>
+          <div class="form-row">
+            <label data-i18n="agent_modal.ext_desc">Summary</label>
+            <textarea id="agent-ext-desc-input" rows="2" data-i18n-placeholder="agent_modal.ext_desc_placeholder" placeholder="(auto-filled when a CLI is picked; can be overridden)"></textarea>
+          </div>
+          <div class="form-row" id="agent-ext-provider-row">
+            <label><span data-i18n="agent_modal.ext_provider_label">Model provider</span> <span class="form-hint" data-i18n="agent_modal.ext_provider_hint">Optional. Leave empty to use the CLI's own configuration.</span></label>
+            <div class="ai-select" id="agent-modal-ext-provider-select"></div>
+          </div>
         </div>
-        <div class="form-row">
-          <label data-i18n="agent_modal.ext_desc">Summary</label>
-          <textarea id="agent-ext-desc-input" rows="4" data-i18n-placeholder="agent_modal.ext_desc_placeholder" placeholder="(auto-filled when a CLI is picked; can be overridden)"></textarea>
-        </div>
-        <!-- P3394 已接入节点（统一注册表管理区）：当前已注册的全部 P3394
-             节点（含自研网关/远端 peer），在线状态 + 移除/停用。 -->
-        <div class="form-row form-row-ext-peers">
-          <label data-i18n="agent_modal.ext_peers_label">Connected P3394 nodes</label>
-          <div id="agent-ext-peers"></div>
-        </div>
+        <div id="agent-ext-peers"></div>
       </div>
 
       <div class="form-msg" id="agent-form-msg"></div>
@@ -1891,6 +1905,7 @@
   <script src="./modules/user-error.js"></script>
   <script src="./modules/model-guard.js"></script>
   <script src="./modules/delete-file-confirm.js"></script>
+  <script src="./modules/transcript-glossary-confirm.js"></script>
   <script src="./modules/interactive-tour.js"></script>
   <script src="./modules/continue-work.js"></script>
   <script src="./modules/boot.js"></script>
@@ -1900,8 +1915,11 @@
   <script src="./modules/chat-lightbox.js"></script>
   <script src="./modules/icons.js"></script>
   <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-tooltip.js"></script>
   <script src="./modules/ui-user-menu.js"></script>
   <script src="./modules/ui-sidebar-tools.js"></script>
+  <script src="./modules/ui-app-rail.js"></script>
+  <script src="./modules/app-shell.js"></script>
   <script src="./modules/ui-segmented-control.js"></script>
   <script src="./modules/ui-tabs.js"></script>
   <script src="./modules/ui-status.js"></script>
@@ -1924,6 +1942,7 @@
   <script src="./modules/chat-aside.js"></script>
   <script src="./modules/chat-side-browser.js"></script>
   <script src="./modules/strip-structural-blocks.js"></script>
+  <script src="./modules/chat-path-links.js"></script>
   <script src="./modules/name-limit.js"></script>
   <script src="./modules/conv-bucket.js"></script>
   <script src="./modules/recall-projection-card.js"></script>
@@ -1936,6 +1955,11 @@
   <script src="./modules/conversation-metrics.js"></script>
   <!-- 多 Agent 选择：会话成员 / 正文点名标记 / 按来源模型配置。加载在
        conversation.js 与 agents.js 之前——两者在初始化时直接读 window.composerMembers。 -->
+  <script src="./modules/contacts.js"></script>
+  <script src="./modules/a2a-message-marks.js"></script>
+  <script src="./modules/relay-inbox.js"></script>
+  <script src="./modules/consultation-card.js"></script>
+  <script src="./modules/a2a-compose-guards.js"></script>
   <script src="./modules/composer-members.js"></script>
   <script src="./modules/member-work-state.js"></script>
   <!-- 资产审批卡片（specs/008 US-406）：conversation.js 的两个挂载点按名字调用
@@ -2032,5 +2056,8 @@
   </script>
   <script src="./modules/math.js"></script>
   <script src="./modules/sidebar-resize.js"></script>
+  <script src="./modules/info-panel-resize.js"></script>
+  <!-- A2A 跨方消息提示卡：页面级浮层（右上角），任何视图/会话下都在。 -->
+  <div id="a2a-relay-strip" class="a2a-inbox-host" hidden></div>
 </body>
 </html>

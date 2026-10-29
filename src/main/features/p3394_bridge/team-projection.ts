@@ -55,6 +55,34 @@ interface ProjectionFile { schema_version: number; projections: Record<string, {
 
 const PROJECTION_SCHEMA_VERSION = 1;
 
+/** 节点 id → 该节点的外接身份（用来匹配已有 agent 的 runtime.cli）。
+ *
+ *  自报网关 id 可能带后缀（"workbuddy-final"、"codex-2"），按**最长已知 CLI
+ *  前缀**归一——这正是"自报 id ≠ cli 类型时复用同 cli 卡片"的原意；完全不相关
+ *  的自建节点身份就是它自己。
+ *
+ *  绝不返回“任意一个 gateway agent”：旧实现用 `(!cli || rt.cli === cli)` 把
+ *  未知节点交给 `find()` 取**列表里第一个**外接 agent，于是本机上 workbuddy
+ *  节点会被挂到 Codex 名下（`conversation-runtime.ts` 用这条映射决定回复归属，
+ *  于是 WorkBuddy 的回答显示成 Codex）。 */
+export function gatewayCliIdentityForNode(nodeId: string): string {
+  const id = String(nodeId || '').trim();
+  const lower = id.toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(KNOWN_CLIS, lower)) return lower;
+  const variant = Object.keys(KNOWN_CLIS)
+    .filter((cli) => lower.startsWith(cli + '-') || lower.startsWith(cli + '_') || lower.startsWith(cli + '.'))
+    .sort((a, b) => b.length - a.length)[0];
+  return variant || id;
+}
+
+/** 该 agent 是否是 nodeId 的合法绑定目标：必须是外接 agent，且 cli 与本节点
+ *  身份一致（同 CLI 才复用卡片，跨 CLI 一律不绑）。 */
+function agentMatchesNode(agent: { runtime?: unknown } | null | undefined, nodeId: string): boolean {
+  const rt = agent && (agent.runtime as { kind?: string; cli?: string } | undefined);
+  return !!rt && rt.kind === 'p3394-gateway'
+    && String(rt.cli || '') === gatewayCliIdentityForNode(nodeId);
+}
+
 function projectionFile(): string {
   return p3394StateFile('p3394-team-projection.json');
 }
@@ -240,24 +268,41 @@ export async function projectP3394NodeToTeam(input: {
   });
   if (!allLoopback) return { projected: false, reason: 'skip_non_local' };
 
-  // 已投影过 → 只有目标 Agent 仍存在时才幂等返回。Agent 被删除后，
-  // 必须允许当前在线 P3394 节点重新进入 AI 团队目录，不能被陈旧映射卡死。
+  // 已投影过 → 只有「目标 Agent 仍存在 + 仍是外接 agent + cli 与本节点身份一致」
+  // 才幂等返回。Agent 被删除后必须允许当前在线 P3394 节点重新进入 AI 团队目录；
+  // 指向别的 CLI（真机：workbuddy 节点 → Codex 的 agent_id）属于历史错绑，必须
+  // 纠正——否则该节点的回答会一直挂在错误成员名下（见 conversation-runtime 的
+  // teamAgentIdForPeer）。
   const agents = await import('../agents');
+  const identity = gatewayCliIdentityForNode(nodeId);
   const already = readProjections().get(nodeId);
   if (already) {
     const existingProjected = await agents.getAgent(already);
-    if (existingProjected && existingProjected.runtime?.kind === 'p3394-gateway') {
+    if (existingProjected && agentMatchesNode(existingProjected, nodeId)) {
       return { projected: false, agent_id: already, reason: 'already_projected' };
+    }
+    if (existingProjected) {
+      log.warn('P3394 projection pointed at an unrelated agent — reprojecting', {
+        nodeId,
+        mapped_agent_id: already,
+        expected_cli: identity,
+        actual_cli: String((existingProjected.runtime as { cli?: string } | undefined)?.cli || ''),
+      });
     }
   }
 
-  // 已存在同 cli 的 p3394-gateway agent（用户外接流程创建的）→ 记录映射，不重复创建。
+  // 已存在**同 CLI** 的 p3394-gateway agent（用户外接流程创建的 / 带后缀的自报
+  // 节点如 workbuddy-final）→ 记录映射，不重复创建。跨 CLI 一律不匹配：宁可多
+  // 一张自己的卡片，也不能让两个不同智能体共用一张（回答归属会串）。
   const existingAgents = await agents.listAgents();
-  const cli = Object.prototype.hasOwnProperty.call(KNOWN_CLIS, nodeId) ? nodeId : null;
-  const match = existingAgents.find((agent) => {
+  const cli = Object.prototype.hasOwnProperty.call(KNOWN_CLIS, identity) ? identity : null;
+  // 精确优先：节点 id 与外接身份完全一致时绝不退而求其次。否则 `codex-proxy`
+  // 这类"看起来像 codex 变体"的自建节点会被绑到真 Codex 卡片上（同一种串号）。
+  const exact = existingAgents.find((agent) => {
     const rt = agent.runtime as { kind?: string; cli?: string } | undefined;
-    return rt && rt.kind === 'p3394-gateway' && (!cli || rt.cli === cli);
+    return !!rt && rt.kind === 'p3394-gateway' && String(rt.cli || '') === nodeId;
   });
+  const match = exact || existingAgents.find((agent) => agentMatchesNode(agent, nodeId));
   if (match) {
     writeProjection(nodeId, match.agent_id);
     return { projected: false, agent_id: match.agent_id, reason: 'existing_agent' };
@@ -292,12 +337,14 @@ export async function projectP3394NodeToTeam(input: {
       description_en: descriptionEn,
       icon: 'code',
       color: 'sage',
-      runtime: { kind: 'p3394-gateway', cli: cli || nodeId },
+      // cli 用归一后的身份：带后缀的自报节点（workbuddy-final）建出的卡片仍
+      // 按 workbuddy 派发，否则 runtime.cli 是个未知名、发送时才报 unsupported。
+      runtime: { kind: 'p3394-gateway', cli: identity },
       category: 'general',
     });
     if (!created) return { projected: false, reason: 'create_failed' };
     writeProjection(nodeId, created.agent_id);
-    log.info('P3394 node projected into AI team', { nodeId, agent_id: created.agent_id, name });
+    log.info('P3394 node projected into AI team', { nodeId, agent_id: created.agent_id, name, cli: identity });
     return { projected: true, agent_id: created.agent_id };
   } catch (error) {
     log.warn('P3394 team projection failed', { nodeId, error: error instanceof Error ? error.message : String(error) });

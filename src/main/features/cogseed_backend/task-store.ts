@@ -53,6 +53,8 @@ const COGSEED_TASK_STATUSES = new Set<string>([
   'failed',
   'cancelled',
   'recoverable',
+    // Decision 1B: a promoted run keeps going outside the turn.
+    'background',
 ]);
 
 export {
@@ -230,6 +232,7 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   if (row.runtimeWorkerId !== undefined && (typeof row.runtimeWorkerId !== 'string' || !row.runtimeWorkerId.startsWith('cogseed-worker-'))) throw new Error('malformed CogSeed task');
   if (row.coordinationId !== undefined && (typeof row.coordinationId !== 'string' || !row.coordinationId.startsWith('cogseed-coord-'))) throw new Error('malformed CogSeed task');
   if (row.parentTaskId !== undefined && (typeof row.parentTaskId !== 'string' || !row.parentTaskId.startsWith('cogseed-task-'))) throw new Error('malformed CogSeed task');
+  if (row.traceId !== undefined && (typeof row.traceId !== 'string' || !row.traceId.startsWith('cogseed-task-'))) throw new Error('malformed CogSeed task trace id');
   if (row.coordinationDepth !== undefined && (!Number.isInteger(row.coordinationDepth) || Number(row.coordinationDepth) < 1)) throw new Error('malformed CogSeed task');
   if (row.kstarTaskId !== undefined && (typeof row.kstarTaskId !== 'string' || !safeId(row.kstarTaskId))) throw new Error('malformed CogSeed task');
   if (row.kstarRequirementId !== undefined && (typeof row.kstarRequirementId !== 'string' || !safeId(row.kstarRequirementId))) throw new Error('malformed CogSeed task');
@@ -436,7 +439,7 @@ async function repairTaskCreationArtifacts(
   if (!firstEvent) {
     await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, creationEventType, {
       requestId: task.requestId,
-    });
+    }, taskEventRefs(task));
   }
 }
 
@@ -526,7 +529,9 @@ export async function ensureCogSeedTaskLifecycleArtifact(
       task.sessionId,
       expectedType,
       repairPayloadForTask(task, payload),
-    );
+
+        taskEventRefs(task),
+      );
     return true;
   });
 }
@@ -582,7 +587,7 @@ export async function updateCogSeedTaskWithEvent(
     const validated = validateTask(userId, next, taskId);
     await writeJson(file, validated);
     try {
-      await appendCogSeedTaskEvent(userId, taskId, validated.sessionId, event.type, event.payload);
+      await appendCogSeedTaskEvent(userId, taskId, validated.sessionId, event.type, event.payload, taskEventRefs(current));
       return validated;
     } catch (error) {
       await writeJson(file, current);
@@ -594,6 +599,20 @@ export async function updateCogSeedTaskWithEvent(
 /** Append an execution-progress event only while the task is still active.
  * Taking the task lock before the event lock matches lifecycle transitions and
  * prevents a late Runtime callback from being written after a terminal event. */
+/** Traceability refs for the task event stream (N-09). Pure: callers already
+ *  hold the task record, so this costs no extra read. */
+function taskEventRefs(task: {
+  conversationId?: string;
+  agentId?: string;
+  groupChatRunId?: string;
+}): { conversationId?: string; agentId?: string; runId?: string } {
+  return {
+    ...(task.conversationId ? { conversationId: task.conversationId } : {}),
+    ...(task.agentId ? { agentId: task.agentId } : {}),
+    ...(task.groupChatRunId ? { runId: task.groupChatRunId } : {}),
+  };
+}
+
 export async function appendCogSeedTaskEventIfActive(
   userId: string,
   taskId: string,
@@ -610,10 +629,72 @@ export async function appendCogSeedTaskEventIfActive(
     // state. Lifecycle events for created/queued/recoverable use the separate
     // atomic task+event transition path and must not be appended here.
     if (task.status !== 'running' && task.status !== 'waiting_user') return null;
-    return appendCogSeedTaskEvent(userId, taskId, task.sessionId, type, payload);
+    return appendCogSeedTaskEvent(userId, taskId, task.sessionId, type, payload, taskEventRefs(task));
   });
 }
 
+
+/**
+ * Converge the group-chat task owned by a finished run.
+ *
+ * A task used to keep its non-terminal status after its run had finished: the
+ * 2026-10-12 evidence shows a task created 17:14:22 still `waiting_user` at
+ * 17:17:23 while its turn had already ended (`turn_end=1`), so the sidebar kept
+ * reporting the run as executing. When a run reaches its derived terminal, the
+ * task must follow it:
+ *
+ *   - run completed          → task completed (with a `task.completed` event)
+ *   - run failed/blocked/... → task failed, carrying the run status as errorCode
+ *   - waiting for the human  → left alone: `waiting_user` is a legitimate state,
+ *                              not a stuck one (the read side reports it as
+ *                              attention instead of progress).
+ *
+ * Returns the converged task, or null when there was nothing to converge.
+ */
+export async function convergeCogSeedTaskForRun(
+  userId: string,
+  input: {
+    runId: string;
+    outcome: 'completed' | 'failed';
+    /** True when the run is blocked only because it awaits the user. */
+    waitingForUser?: boolean;
+    errorCode?: string;
+  },
+): Promise<{ taskId: string; status: CogSeedTaskRecord['status'] } | null> {
+  assertCogSeedUserId(userId);
+  if (input.waitingForUser) return null;
+
+  const tasks = await listCogSeedTasks(userId);
+  const open = tasks.filter((task) => (
+    task.executionKind === 'group-chat'
+    && task.groupChatRunId === input.runId
+    && !TERMINALS.has(task.status)
+  ));
+  if (!open.length) return null;
+  // A run owns one task; if several ever matched, converge the most recent.
+  const target = open.slice().sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt))).at(-1)!;
+
+  const now = new Date().toISOString();
+  const converged = await updateCogSeedTaskWithEvent(
+    userId,
+    target.taskId,
+    (current) => ({
+      ...current,
+      status: input.outcome === 'completed' ? 'completed' : 'failed',
+      updatedAt: now,
+      ...(input.outcome === 'completed'
+        ? {}
+        : { errorCode: input.errorCode || 'run_failed' }),
+    }),
+    {
+      type: input.outcome === 'completed' ? 'task.completed' : 'task.failed',
+      payload: { runId: input.runId, source: 'run-finalize' },
+    },
+  );
+  return { taskId: converged.taskId, status: converged.status };
+}
+
+const TERMINALS = new Set<CogSeedTaskRecord['status']>(['completed', 'failed', 'cancelled']);
 
 export async function readCogSeedTaskByRequestId(userId: string, requestId: string): Promise<CogSeedTaskRecord | null> {
   assertCogSeedUserId(userId);
@@ -630,7 +711,7 @@ export async function readCogSeedTaskByRequestId(userId: string, requestId: stri
     });
   } catch (error) {
     if (isEnoent(error)) {
-      const orphaned = (await listCogSeedTasks(userId)).filter((task) => task.requestId === requestId);
+      const orphaned = (await listCogSeedTasks(userId)).filter((task) => task.requestId === requestId || task.lastResumeRequestId === requestId);
       if (orphaned.length > 1) throw new Error('multiple CogSeed tasks found for request ID');
       return orphaned[0] ?? null;
     }
@@ -785,6 +866,21 @@ export async function purgeCogSeedGroupChatTasksByConversation(
   return report;
 }
 
+/**
+ * A task is runtime-owned when its execution backend is the CogSeed Runtime.
+ *
+ * Group Chat also projects actor turns into CogSeed tasks (`executionKind:
+ * 'group-chat'`) so Run Center can show them, but those tasks are owned and
+ * executed by the Group Chat bus. Their status vocabulary overlaps the
+ * runtime's, so callers that decide whether a task may be *continued* must
+ * check the owner explicitly instead of inferring it from `status`.
+ */
+export function isRuntimeOwnedCogSeedTask(
+  task: Pick<CogSeedTaskRecord, 'executionKind'> | null | undefined,
+): boolean {
+  return !!task && task.executionKind !== 'group-chat';
+}
+
 export async function readLatestCogSeedTaskForAgent(
   userId: string,
   conversationId: string,
@@ -918,9 +1014,17 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
     const abilityAssetIds = normalizeAbilityAssetIds(input.abilityAssetIds);
     const workingDir = typeof input.workingDir === 'string' ? input.workingDir.trim() : undefined;
     if (workingDir && !path.isAbsolute(workingDir)) throw new Error('CogSeed working directory must be absolute');
+    const taskId = `cogseed-task-${genId12()}`;
+    // Root of a delegation tree owns the trace; a child inherits its parent's
+    // trace so metrics and join results can be correlated across processes.
+    const parentTaskId = input.parentTaskId ? assertCogSeedTaskId(String(input.parentTaskId)) : undefined;
+    const parentTraceId = parentTaskId
+      ? ((await readCogSeedTask(userId, parentTaskId))?.traceId ?? parentTaskId)
+      : undefined;
     const taskRecord: CogSeedTaskRecord = {
       schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
-      taskId: `cogseed-task-${genId12()}`,
+      taskId,
+      traceId: parentTraceId ?? taskId,
       sessionId: session.sessionId,
       runtimeSessionId: session.runtimeSessionId,
       ...(initialStatus === 'created' ? { executionId: 'cogseed-exec-' + genId12() } : {}),
@@ -968,7 +1072,7 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       ...(workingDir ? { workingDir } : {}),
       ...(input.retryOfTaskId ? { retryOfTaskId: assertCogSeedTaskId(String(input.retryOfTaskId)) } : {}),
       ...(input.coordinationId ? { coordinationId: assertCogSeedCoordinationId(String(input.coordinationId)) } : {}),
-      ...(input.parentTaskId ? { parentTaskId: assertCogSeedTaskId(String(input.parentTaskId)) } : {}),
+      ...(parentTaskId ? { parentTaskId } : {}),
       ...(input.coordinationDepth !== undefined ? { coordinationDepth: (() => { const depth = Number(input.coordinationDepth); if (!Number.isInteger(depth) || depth < 1) throw new Error('invalid CogSeed coordination depth'); return depth; })() } : {}),
       ...(input.kstarTaskId ? { kstarTaskId: safeId(String(input.kstarTaskId)) ? String(input.kstarTaskId) : (() => { throw new Error('invalid KSTAR task id'); })() } : {}),
       ...(input.kstarRequirementId ? { kstarRequirementId: safeId(String(input.kstarRequirementId)) ? String(input.kstarRequirementId) : (() => { throw new Error('invalid KSTAR requirement id'); })() } : {}),

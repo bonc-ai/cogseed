@@ -172,6 +172,18 @@ describe('session_import/transcript-normalize › parseWorkbuddyTranscript', () 
     expect(parseWorkbuddyTranscript(withGarbage, 's').turns.length).toBe(3);
   });
 
+  it('accounts for every dropped line instead of dropping silently', () => {
+    const mixed = [
+      'not json',                                              // malformed
+      JSON.stringify({ type: 'ai-title', aiTitle: 'x' }),      // internal
+      JSON.stringify({ type: 'message', role: 'user', content: [{ type: 'input_text', text: '<system-reminder>scaffolding</system-reminder>' }] }), // empty
+      JSON.stringify({ type: 'message', role: 'user', content: [{ type: 'input_text', text: '真实提问' }] }),
+    ].join('\n');
+    const parsed = parseWorkbuddyTranscript(mixed, 's');
+    expect(parsed.turns.map((t) => t.text)).toEqual(['真实提问']);
+    expect(parsed.skipped).toEqual({ malformed: 1, internal: 1, empty: 1 });
+  });
+
   it('returns empty turns for a transcript with no usable messages', () => {
     const onlyNoise = [
       JSON.stringify({ type: 'ai-title', aiTitle: 'x' }),

@@ -22,15 +22,14 @@ class FakeClassList {
   }
 }
 
+// specs/008-shell-rail-layout D13: collapse lives in the sidebar title row
+// (#sidebar-collapse-btn); expand lives in every page header's shell slot.
+// Both are wired by delegation on data-shell-action.
 function loadSidebar(savedCollapsed = false) {
   const body = { classList: new FakeClassList() };
-  const buttonHandlers: Record<string, () => void> = {};
-  const button = {
-    title: '',
-    attributes: {} as Record<string, string>,
-    setAttribute(key: string, value: string) { this.attributes[key] = value; },
-    addEventListener(type: string, handler: () => void) { buttonHandlers[type] = handler; },
-  };
+  const documentHandlers: Record<string, (event: any) => void> = {};
+  const collapseButton = { focus: vi.fn() };
+  const headerExpand = { focus: vi.fn(), getClientRects: () => [1] };
   const handle = { classList: new FakeClassList(), addEventListener: vi.fn() };
   const sidebar = {
     getBoundingClientRect: () => ({ width: body.classList.contains('sidebar-collapsed') ? 0 : 280 }),
@@ -38,7 +37,6 @@ function loadSidebar(savedCollapsed = false) {
   const storage = new Map<string, string>();
   if (savedCollapsed) storage.set('cogseed:sidebar-collapsed', '1');
   const windowHandlers: Record<string, () => void> = {};
-  const closeRunCenterGlobal = vi.fn();
   const sandbox: any = {
     document: {
       readyState: 'complete',
@@ -49,12 +47,13 @@ function loadSidebar(savedCollapsed = false) {
         removeEventListener: vi.fn(),
       },
       getElementById(id: string) {
-        if (id === 'sidebar-collapse-btn') return button;
+        if (id === 'sidebar-collapse-btn') return collapseButton;
         if (id === 'sidebar-resize-handle') return handle;
         return null;
       },
       querySelector: (selector: string) => selector === '.sidebar' ? sidebar : null,
-      addEventListener: vi.fn(),
+      querySelectorAll: (selector: string) => selector.includes('expand-sidebar') ? [headerExpand] : [],
+      addEventListener: (type: string, handler: (event: any) => void) => { documentHandlers[type] = handler; },
     },
     localStorage: {
       getItem: (key: string) => storage.get(key) || null,
@@ -65,7 +64,6 @@ function loadSidebar(savedCollapsed = false) {
     t: (key: string) => key,
   };
   sandbox.window = sandbox;
-  sandbox.window.closeRunCenterGlobal = closeRunCenterGlobal;
   sandbox.window.addEventListener = (type: string, handler: () => void) => {
     windowHandlers[type] = handler;
   };
@@ -73,38 +71,50 @@ function loadSidebar(savedCollapsed = false) {
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
 
-  return { body, button, buttonHandlers, closeRunCenterGlobal, storage, windowHandlers };
+  const press = (action: string) => {
+    const control = { dataset: { shellAction: action } };
+    documentHandlers.click({ target: { closest: () => control } });
+  };
+  return { body, collapseButton, headerExpand, press, sandbox, storage, windowHandlers, documentHandlers };
 }
 
 describe('sidebar shell collapse', () => {
-  it('collapses to the shell recovery state and expands with the same button', () => {
-    const { body, button, buttonHandlers, closeRunCenterGlobal, storage } = loadSidebar();
+  it('collapses from the sidebar row and expands from the page header slot', () => {
+    const { body, collapseButton, headerExpand, press, storage } = loadSidebar();
 
-    expect(button.attributes['aria-expanded']).toBe('true');
-    buttonHandlers.click();
+    press('collapse-sidebar');
     expect(body.classList.contains('sidebar-collapsed')).toBe(true);
     expect(body.classList.contains('shell-sidebar-hidden')).toBe(true);
-    expect(button.title).toBe('展开侧边栏');
-    expect(button.attributes['aria-expanded']).toBe('false');
-    expect(button.attributes['data-i18n-title']).toBe('sidebar.expand_title');
     expect(storage.get('cogseed:sidebar-collapsed')).toBe('1');
-    expect(closeRunCenterGlobal).toHaveBeenCalledTimes(1);
+    expect(headerExpand.focus).toHaveBeenCalledOnce();
 
-    buttonHandlers.click();
+    press('expand-sidebar');
     expect(body.classList.contains('sidebar-collapsed')).toBe(false);
     expect(body.classList.contains('shell-sidebar-hidden')).toBe(false);
-    expect(button.title).toBe('收起侧边栏');
-    expect(button.attributes['aria-expanded']).toBe('true');
     expect(storage.get('cogseed:sidebar-collapsed')).toBe('0');
+    expect(collapseButton.focus).toHaveBeenCalledOnce();
   });
 
-  it('restores a saved collapse without losing the expand entry', () => {
-    const { body, button, buttonHandlers, windowHandlers } = loadSidebar(true);
+  it('restores a saved collapse and keeps it global across sidebar-less modules', () => {
+    const { body, press, sandbox, windowHandlers } = loadSidebar(true);
 
     expect(body.classList.contains('shell-sidebar-hidden')).toBe(true);
-    expect(button.attributes['aria-label']).toBe('展开侧边栏');
-    windowHandlers.load();
-    buttonHandlers.click();
+    body.classList.add('shell-no-sidebar');
+    sandbox.window.syncSidebarShellState();
+    expect(body.classList.contains('sidebar-collapsed')).toBe(true);
     expect(body.classList.contains('shell-sidebar-hidden')).toBe(false);
+    body.classList.remove('shell-no-sidebar');
+    sandbox.window.syncSidebarShellState();
+    expect(body.classList.contains('shell-sidebar-hidden')).toBe(true);
+
+    windowHandlers.load();
+    press('expand-sidebar');
+    expect(body.classList.contains('shell-sidebar-hidden')).toBe(false);
+  });
+
+  it('ignores clicks outside shell controls', () => {
+    const { body, documentHandlers } = loadSidebar();
+    documentHandlers.click({ target: { closest: () => null } });
+    expect(body.classList.contains('sidebar-collapsed')).toBe(false);
   });
 });

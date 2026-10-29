@@ -20,7 +20,7 @@
  * 通用条目因"相关度达标"条件不满足而缺席——宁可少给，不编分数。
  */
 
-import { scopeForTask } from '../kstar/extraction-service';
+import { scopeForTask } from './experience-taxonomy';
 import { catalogTruncate } from './asset-catalog';
 import {
   evaluateExperienceRuntimeEligibility,
@@ -39,6 +39,8 @@ export interface ExperienceCatalogEntry {
   experienceType: ExperienceRecord['experienceType'];
   taskType: ExperienceRecord['source']['taskType'];
   outcome: ExperienceRecord['verification']['outcome'];
+  /** 旧目录调用兼容缺失值；实际经验的生产投影均透传核验状态。 */
+  verificationState?: ExperienceRecord['verification']['state'];
   /** 引用冻结口径的展示版本：经验没有版本计数器，用 updatedAt 派生。 */
   version: string;
   /** ★ = 当轮相关度 ≥ 阈值。 */
@@ -103,6 +105,7 @@ export function experienceCatalogLine(entry: ExperienceCatalogEntry, index: numb
   const meta = [
     EXPERIENCE_TYPE_LABELS[entry.experienceType] || entry.experienceType,
     TASK_TYPE_LABELS[entry.taskType] || entry.taskType,
+    `核验:${entry.verificationState || 'unknown'}`,
     OUTCOME_LABELS[entry.outcome] || entry.outcome,
     `v${entry.version.slice(0, 10)}`,
   ].join('·');
@@ -147,22 +150,22 @@ export async function buildExperienceCatalog(
     return { entries: [], lines: [], text: '', omitted: [] };
   }
 
-  // ① 准入：清单是自动构建路径（模型默认可见），按静默默认注入口径判——
-  // applicableWhen 声明却对不上当前任务的经验不得出现（闸门的
-  // not_applicable_context），forbidden 命中同理。
+  // ① 目录可查阅不等于经验已自动采用。硬边界走共同 inspect；
+  // 适用性继续作为目录的相关性条件，不删除闸门返回的阻断理由。
   const gateContext: AssetRuntimeContext = {
     ...options.runtimeContext,
     ...(taskText ? { scope: scopeForTask(taskText) } : {}),
     taskText: taskText || undefined,
-    silentDefaultInjection: true,
+    operation: 'inspect',
   };
   const admitted: ExperienceRecord[] = [];
   const blockedActive = new Map<string, string[]>();
   for (const exp of all) {
     if (exp.status !== 'active') continue;
     const eligibility = evaluateExperienceRuntimeEligibility(userId, exp, gateContext);
-    if (eligibility.eligible) admitted.push(exp);
-    else blockedActive.set(exp.id, [...eligibility.reasons]);
+    if (eligibility.eligible && eligibility.relevance !== 'mismatched') admitted.push(exp);
+    else blockedActive.set(exp.id, eligibility.relevance === 'mismatched'
+      ? [...eligibility.reasons, 'not_applicable_context'] : [...eligibility.reasons]);
   }
 
   // ② 类型过滤：当前任务类型 + 「通用且相关度达标」。
@@ -190,6 +193,7 @@ export async function buildExperienceCatalog(
     experienceType: exp.experienceType,
     taskType: exp.source.taskType,
     outcome: exp.verification.outcome,
+    verificationState: exp.verification.state,
     version: experienceVersion(exp),
     relevant: relevantScore(exp) >= EXPERIENCE_CATALOG_RELEVANT_MARK,
     sourceTaskLabel: catalogTruncate(String(exp.source.taskGoal || ''), 24),

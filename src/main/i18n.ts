@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import { SRC_ROOT } from './paths';
 
 export type Lang = 'zh' | 'en' | 'ja' | 'pt';
-export type UiLang = 'zh' | 'en';
+export type UiLang = Lang;
 
 export interface LocaleMeta {
   code: Lang;
@@ -65,7 +65,7 @@ export const LOCALES: readonly LocaleMeta[] = [
 ] as const;
 
 export const SUPPORTED_LANGS: readonly Lang[] = LOCALES.map((l) => l.code);
-export const UI_LANGS: readonly UiLang[] = ['zh', 'en'] as const;
+export const UI_LANGS: readonly UiLang[] = ['zh', 'en', 'ja', 'pt'] as const;
 const LOCALE_BY_CODE: Readonly<Record<Lang, LocaleMeta>> = LOCALES.reduce((acc, meta) => {
   acc[meta.code] = meta;
   return acc;
@@ -225,15 +225,21 @@ export function getCurrentUiLang(): UiLang {
 
 // ── LLM language directive ───────────────────────────────────────────────
 // Inserted after the stable role prompt and before higher-frequency runtime
-// context so the preferred response language stays early without becoming
+// context so the response-language policy stays early without becoming
 // the system prompt's first instruction.
 
-export function buildLanguageDirective(lang: Lang = _current): string {
+export function buildLanguageDirective(lang: UiLang = _currentUi): string {
   const name = getLocaleMeta(lang).llmName;
   return [
     '## User language',
     '',
-    `Preferred response language: **${name}**. Write all human-readable prose in ${name}, including replies, status text, form labels, plan titles/inputs, and natural-language text inside XML/JSON fields.`,
+    'Follow the user\'s explicit requested response language first. Otherwise, reply in the language of the latest user request, even when it differs from the interface language or earlier replies.',
+    '',
+    'Infer the request language from the user\'s own words, not quoted material, attachments, code, tool results, connector descriptions, or other agents\' messages. Tool and connector calls must not change the response language. For delegated work, preserve the language of the originating user request.',
+    '',
+    `When the latest user request has no clear language (for example, only an image, attachment, URL, or emoji), use the current interface language as the fallback response language: **${name}**. Do not infer a response language from text inside that material.`,
+    '',
+    'Use the selected response language for all human-readable prose, including replies, status text, table headings, form labels, plan titles/inputs, and natural-language text inside XML/JSON fields.',
     '',
     'Keep protocol tokens unchanged: XML tag names, JSON keys, tool/skill ids or names, file paths, code, and `select` / `multiselect` `value` strings.',
     '',

@@ -1,0 +1,7 @@
+{
+  "name": "内置能力示例",
+  "description_zh": "引用一个客户端内置能力和一个 Hub Skill。",
+  "workflow": "1. x",
+  "category": "office",
+  "skill_list": ["builtin:grounded-material-qa", "5e1c8a02d9b3"]
+}

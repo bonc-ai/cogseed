@@ -18,7 +18,7 @@ describe('composer caret across picker focus round-trip in Chromium', () => {
     const result = spawnSync(require('electron'), [resolve(__dirname, 'fixtures/composer-caret-focus.cjs')], {
       env,
       encoding: 'utf8',
-      timeout: 60000,
+      timeout: 60000, killSignal: 'SIGKILL',
     });
     expect(result.status, `Chromium exited without a result: ${result.error || result.signal || ''}\n${result.stderr || ''}`).toBe(0);
     const output = String(result.stdout || '').trim().split('\n').filter(Boolean).pop() || '{}';

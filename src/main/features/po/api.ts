@@ -184,8 +184,12 @@ export async function poCreateField(
   const result = await editPoDoc(uid, (ctx) => {
     const group = ctx.touch(groupId);
     if (!group) return ctx.fail('group not found');
-    const section = opts?.section ? sanitizePoText(opts.section, 200) : group.kind === 'template' ? undefined : undefined;
+    const section = opts?.section ? sanitizePoText(opts.section, 200) : undefined;
     if (group.kind === 'template' && !section) return ctx.fail('template section required');
+    // 普通组无分节（model.ts 契约「普通组恒为 undefined」）：带 section 写成功
+    // 落盘后被渲染层跳过（view.ts）、原文保存整组替换时丢失——写侧直接拒。
+    // 判原始 opts?.section，防 sanitize 后空串边角漏网。
+    if (group.kind !== 'template' && opts?.section) return ctx.fail('section not allowed on user group');
     if (group.fields.some((f) => (f.section || '') === (section || '') && f.name === fieldName)) {
       return ctx.fail('field already exists');
     }
@@ -241,7 +245,9 @@ export async function poDeleteField(uid: string, groupId: string, fieldId: strin
     const group = ctx.touch(groupId);
     if (!group) return ctx.fail('group not found');
     const field = group.fields.find((f) => f.id === fieldId);
-    if (!field) return;
+    // 删除幂等口径统一：不存在 = 显式 not found（与 poDeleteEntry 同
+    // 口径），不再静默 ok——错 id 的删除让调用方如实看见，而不是假装成功。
+    if (!field) return ctx.fail('field not found');
     if (field.origin === 'schema') return ctx.fail('template field is read-only');
     if (group.values.some((v) => v.fieldId === fieldId && v.assetId)) {
       return ctx.fail('asset_projection_read_only');
@@ -268,6 +274,17 @@ export async function poSetFieldRelationFlag(uid: string, groupId: string, field
 
 // ── 值（id 寻址；一通道改全列）───────────────────────────────────────────
 
+/**
+ * asOf 时间锚输入校验：YYYY-MM 格式之外加窗口上界——2099-12 这类
+ * 远期时间锚无业务意义且污染时间线视图，此前格式对了就照单全收。允许到
+ * 次年年末，容忍近期规划；1900 起点维持既有口径。add/update/导入三口同尺。
+ */
+function isValidAsOfInput(v: string): boolean {
+  if (!/^(?:19|20)\d{2}-(?:0[1-9]|1[0-2])$/.test(v)) return false;
+  const year = Number(v.slice(0, 4));
+  return year <= new Date().getUTCFullYear() + 1;
+}
+
 export interface PoValueDraft {
   text: string;
   asOf?: string;
@@ -283,7 +300,7 @@ export async function poAddValue(
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const text = sanitizePoText(draft?.text, 2000);
   if (!text) return { ok: false, error: 'empty value' };
-  if (draft?.asOf !== undefined && draft.asOf !== '' && !/^(?:19|20)\d{2}-(?:0[1-9]|1[0-2])$/.test(draft.asOf)) {
+  if (draft?.asOf !== undefined && draft.asOf !== '' && !isValidAsOfInput(draft.asOf)) {
     return { ok: false, error: 'invalid asof' };
   }
   // 与 poUpdateValue(:338-341) 同口径的枚举门（r2 补齐）：否则非法 ruleKind
@@ -337,7 +354,7 @@ export async function poUpdateValue(
 ): Promise<{ ok: boolean; error?: string }> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   if (patch?.text !== undefined && !sanitizePoText(patch.text, 2000)) return { ok: false, error: 'empty value' };
-  if (patch?.asOf !== undefined && patch.asOf !== '' && !/^(?:19|20)\d{2}-(?:0[1-9]|1[0-2])$/.test(patch.asOf)) {
+  if (patch?.asOf !== undefined && patch.asOf !== '' && !isValidAsOfInput(patch.asOf)) {
     return { ok: false, error: 'invalid asof' };
   }
   if (patch?.asOf !== undefined && patch.asOf !== '' && patch.clearAsOf) return { ok: false, error: 'conflicting asof params' };
@@ -383,7 +400,9 @@ export async function poDeleteValue(uid: string, groupId: string, valueId: strin
     const group = ctx.touch(groupId);
     if (!group) return ctx.fail('group not found');
     const value = group.values.find((v) => v.id === valueId);
-    if (!value) return;
+    // 删除幂等口径统一：不存在 = 显式 not found，与 poDeleteEntry/
+    // poDeleteField 同口径，不再静默 ok。
+    if (!value) return ctx.fail('value not found');
     if (value.assetId) return ctx.fail('asset_projection_read_only');
     group.values = group.values.filter((v) => v.id !== valueId);
     group.updatedAt = nowIso();
@@ -431,6 +450,11 @@ export async function poPromoteEntry(uid: string, groupId: string, entryId: stri
     if (!field) {
       field = { id: genId12(), name, origin: 'user', section: entry.section, createdAt: nowIso() };
       group.fields.push(field);
+    }
+    // 升格走与 poAddValue 同一道同文本去重门：同字段同文本已存在值
+    // 时拒绝升格（流水保留不动），不再绕门落出第二条同文值。
+    if (group.values.some((v) => v.fieldId === field.id && v.text === entry.text)) {
+      return ctx.fail('duplicate value');
     }
     group.entries = group.entries.filter((e) => e.id !== entryId);
     group.values.push({
@@ -502,31 +526,63 @@ export interface PoImportPreviewItem {
 }
 
 /** 解析导入文本（与导出同格式；也容忍纯「- 条目」列表或「字段： 值」行）。
- *  导出里组内还有 `## 字段区` / `## 流水区` 两个保留标题——它们属于组正文，
- *  不切组，原样留给 parseGroupContent。 */
+ *  导出里组内还有 `## 字段区` / `## 流水区` 两个保留标题——它们通常属于组
+ *  正文，不切组，原样留给 parseGroupContent；但**就叫这两个名字的组**的
+ *  组头也是同款标题，按下述结构不变量判别，保留标题组不再丢/吞。 */
 export function poImportPreview(uid: string, text: string): { items: PoImportPreviewItem[]; error?: string } {
   const raw = String(text ?? '');
   if (!raw.trim()) return { items: [], error: 'empty content' };
   const doc = loadPoDocSync(uid);
   const titles = new Set(doc.groups.map((g) => g.title));
 
+  interface Chunk { title: string; lines: string[]; seenFieldZone: boolean; seenFlowZone: boolean }
   const chunks: Array<{ title: string; body: string }> = [];
-  let current: { title: string; lines: string[] } | null = null;
+  let current: Chunk | null = null;
+  const hasBodyContent = (chunk: Chunk): boolean => chunk.lines.some((l) => l.trim().length > 0);
+  const closeCurrent = (): void => {
+    if (current) chunks.push({ title: current.title, body: current.lines.join('\n') });
+    current = null;
+  };
+  const startGroup = (title: string): void => {
+    current = { title, lines: [], seenFieldZone: false, seenFlowZone: false };
+  };
   for (const line of raw.split('\n')) {
     const m = line.match(/^##\s+(.+)$/);
     if (m) {
       const title = m[1].trim();
-      if (title === '字段区' || title === '流水区') {
-        if (current) current.lines.push(line);
+      // 保留标题判别：方言结构不变量——组正文的分区头至多各一次、
+      // 固定「字段区→流水区」顺序、且字段区头紧随组头（之间无正文）；无字段
+      // 组的正文不含分区头（serializeGroupContent 只输出裸条目）。违反不变量
+      // 的保留标题行只能是**新组的组头**。旧实现一律当分区头：唯一组叫
+      // 「字段区」时组头被吞→整组消失；「流水区」组跟在别组后被前组吞并。
+      // 残余歧义（空体组后紧跟「字段区」组）无法从文本判别，按分区头处理。
+      if (title === '字段区') {
+        if (current && !current.seenFieldZone && !current.seenFlowZone && !hasBodyContent(current)) {
+          current.seenFieldZone = true;
+          current.lines.push(line);
+          continue;
+        }
+        closeCurrent();
+        startGroup(title);
         continue;
       }
-      if (current) chunks.push({ title: current.title, body: current.lines.join('\n') });
-      current = { title, lines: [] };
+      if (title === '流水区') {
+        if (current && current.seenFieldZone && !current.seenFlowZone) {
+          current.seenFlowZone = true;
+          current.lines.push(line);
+          continue;
+        }
+        closeCurrent();
+        startGroup(title);
+        continue;
+      }
+      closeCurrent();
+      startGroup(title);
       continue;
     }
     if (current) current.lines.push(line);
   }
-  if (current) chunks.push({ title: current.title, body: current.lines.join('\n') });
+  closeCurrent();
 
   const toPreviewValue = (v: FieldValue): PoImportPreviewValue => ({
     value: v.value,
@@ -580,7 +636,9 @@ export async function poImportApply(uid: string, items: PoImportPreviewItem[]): 
         const text = sanitizePoText(pv?.value, 2000);
         if (!text) continue;
         const result = await poAddValueToFieldByName(uid, groupId, fieldName, text, pv);
-        if (result.ok) {
+        // applied 只计实际写入：同文本去重跳过不计——重复导入回执
+        // 如实反映「0 条新写入」，不再虚高。
+        if (result.ok && result.written) {
           applied += 1;
           groupChanged = true;
         }
@@ -590,7 +648,7 @@ export async function poImportApply(uid: string, items: PoImportPreviewItem[]): 
       const text = sanitizePoText(entryText, 4000);
       if (!text) continue;
       const result = await poAddEntryIfNew(uid, groupId, text);
-      if (result.ok) {
+      if (result.ok && result.written) {
         applied += 1;
         groupChanged = true;
       }
@@ -603,8 +661,13 @@ export async function poImportApply(uid: string, items: PoImportPreviewItem[]): 
 
 import { editPoDoc as editDoc } from './store';
 
-async function poAddValueToFieldByName(uid: string, groupId: string, fieldName: string, text: string, meta?: PoImportPreviewValue) {
-  return editDoc(uid, (ctx) => {
+/** 导入写辅助的回执：ok 之外带 written——同文本去重跳过（未写）与真正落盘
+ *  区分开，poImportApply 的 applied 只计实际写入，重复导入不再虚高。 */
+async function poAddValueToFieldByName(
+  uid: string, groupId: string, fieldName: string, text: string, meta?: PoImportPreviewValue,
+): Promise<{ ok: boolean; written?: boolean; error?: string }> {
+  let written = false;
+  const outcome = await editDoc(uid, (ctx) => {
     const group = ctx.touch(groupId);
     if (!group) return ctx.fail('group not found');
     let field = group.fields.find((f) => !f.section && f.name === fieldName);
@@ -612,12 +675,14 @@ async function poAddValueToFieldByName(uid: string, groupId: string, fieldName: 
       field = { id: genId12(), name: fieldName, origin: 'user', createdAt: nowIso() };
       group.fields.push(field);
     }
-    if (group.values.some((v) => v.fieldId === field!.id && v.text === text)) return;
+    if (group.values.some((v) => v.fieldId === field!.id && v.text === text)) { written = false; return; }
     // meta 与手写通道同口径校验（对齐 poAddValue/poUpdateValue 的 asOf 正则、
     // ruleKind 枚举、verified 取值）：导入通道不因单条坏 meta 中止，非法字段
     // 剥离、合法部分照常落盘——否则外部构造的 items 能把 `asOf: '2026-09\nBOGUS'`
     // 之类非法结构写进单一事实源，撕裂方言 md 副本并造成写读不对称。
-    const asOf = typeof meta?.asOf === 'string' && isValidAsOfValue(meta.asOf) ? meta.asOf.trim() : undefined;
+    const asOf = typeof meta?.asOf === 'string' && isValidAsOfValue(meta.asOf) && isValidAsOfInput(meta.asOf.trim())
+      ? meta.asOf.trim()
+      : undefined;
     const ruleKind = meta?.ruleKind === 'operation' || meta?.ruleKind === 'preference' || meta?.ruleKind === 'constraint'
       ? meta.ruleKind
       : undefined;
@@ -635,15 +700,20 @@ async function poAddValueToFieldByName(uid: string, groupId: string, fieldName: 
       updatedAt: nowIso(),
     });
     group.updatedAt = nowIso();
+    written = true;
   });
+  return { ok: outcome.ok, written, error: outcome.error };
 }
 
-async function poAddEntryIfNew(uid: string, groupId: string, text: string) {
-  return editDoc(uid, (ctx) => {
+async function poAddEntryIfNew(uid: string, groupId: string, text: string): Promise<{ ok: boolean; written?: boolean; error?: string }> {
+  let written = false;
+  const outcome = await editDoc(uid, (ctx) => {
     const group = ctx.touch(groupId);
     if (!group) return ctx.fail('group not found');
-    if (group.entries.some((e) => e.text === text)) return;
+    if (group.entries.some((e) => e.text === text)) { written = false; return; }
     group.entries.push({ id: genId12(), text, createdAt: nowIso() });
     group.updatedAt = nowIso();
+    written = true;
   });
+  return { ok: outcome.ok, written, error: outcome.error };
 }

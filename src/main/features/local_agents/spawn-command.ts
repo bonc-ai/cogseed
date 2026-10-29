@@ -1,5 +1,7 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
+
+import { loginShellPathDirs } from '../../util/login-shell-env';
 import * as fs from 'node:fs';
 
 export type ResolvedCliCommand = {
@@ -62,6 +64,23 @@ function expandStarSegments(
  * launcher still cannot find Node. Keep the user's existing order, then add
  * the same conventional install roots used by CLI discovery.
  */
+/** 目标就是我们自己这个可执行文件吗？（Electron 宿主 + 同路径）
+ *
+ *  纯函数便于测试：`process.versions.electron` 在宿主里是只读的，
+ *  测试无法伪造宿主，只能直接验这个判断。 */
+export function shouldRestoreRunAsNode(
+  binPath: string,
+  opts: { execPath?: string; isElectron?: boolean } = {},
+): boolean {
+  const isElectron = opts.isElectron ?? Boolean(process.versions.electron);
+  if (!isElectron) return false;
+  try {
+    return path.resolve(binPath) === path.resolve(opts.execPath ?? process.execPath);
+  } catch {
+    return false;
+  }
+}
+
 export function buildCliSpawnEnv(
   binPath: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -69,11 +88,25 @@ export function buildCliSpawnEnv(
   home = os.homedir(),
 ): NodeJS.ProcessEnv {
   const out = { ...env };
+  // Electron 的进程控制变量是「我们的」，不是 CLI 的：CLI agent 会跑任意用户命令，
+  // 从它启动的任何 Electron 应用都会继承这两个变量——带 ELECTRON_RUN_AS_NODE 时
+  // 那个应用会以纯 Node 启动然后「秒退」，agent 于是把这**假失败**当真去 debug 好几轮
+  // （Orkas 复盘里有同款事故记录）。子进程该看到的是用户环境，不是我们的。
+  delete out.ELECTRON_RUN_AS_NODE;
+  delete out.ELECTRON_NO_ASAR;
+  // 例外：目标就是我们自己这个可执行文件时，它**需要** ELECTRON_RUN_AS_NODE 才会以
+  // Node 模式运行（打包版里我们自己拉起的 bridge/worker，以及 Electron-as-Node 测试宿主
+  // 都是这条路径——剥离它会让子进程以 GUI 形态启动然后一直不说话）。
+  // 只有我们自己会 spawn process.execPath，所以这个例外不会把标记泄漏给用户 CLI。
+  if (shouldRestoreRunAsNode(binPath)) out.ELECTRON_RUN_AS_NODE = '1';
   const delimiter = platform === 'win32' ? ';' : ':';
   const pathApi = platform === 'win32' ? path.win32 : path.posix;
   const rawPath = env.PATH || env.Path || '';
   const candidates = rawPath.split(delimiter).filter(Boolean);
   candidates.push(pathApi.dirname(binPath));
+  // 用户登录 shell 带来的真实 PATH（启动时探测一次并缓存；未探测过则为空）。
+  // 顺序：继承的环境 → 登录 shell → 我们的约定目录，用户自己的顺序优先。
+  if (platform !== 'win32') candidates.push(...loginShellPathDirs());
 
   if (platform === 'win32') {
     const localAppData = env.LOCALAPPDATA || (home ? path.win32.join(home, 'AppData', 'Local') : '');
@@ -146,6 +179,39 @@ function expandWindowsShimPath(value: string, shimDir: string): string | null {
   return path.win32.normalize(expanded);
 }
 
+/**
+ * npm / pnpm / yarn write their shim as `SET "VAR=%~dp0\…\cli.js"`, so the
+ * quoted token carries the **assignment prefix**, not a bare path. Feeding that
+ * whole string to `expandWindowsShimPath` produced
+ * `<shimDir>\NPM_CLI_JS=%~dp0\node_modules\npm\bin\npm-cli.js`, which never
+ * exists → the shim was declared unresolvable and every npm-family launch fell
+ * back to `cmd.exe` (i.e. the direct-Node path this function exists for was
+ * dead code for npm/pnpm/yarn). Stripping `NAME=` before path expansion is what
+ * makes the real-world shim resolvable; verified against a real Windows
+ * `npm.cmd` template.
+ */
+function stripShimAssignment(token: string): string {
+  const match = /^[A-Za-z_][A-Za-z0-9_]*=([\s\S]*)$/.exec(token);
+  return match ? match[1] : token;
+}
+
+/** Quoted tokens of a Windows shim, assignment prefixes stripped. */
+export function windowsShimTokens(source: string): string[] {
+  return [...String(source).matchAll(/"([^"\r\n]+)"/g)].map((match) => stripShimAssignment(match[1]));
+}
+
+/**
+ * The `.js`-family token a shim ultimately runs, or null. Exported so the
+ * real-world shim templates (npm / pnpm / yarn / bare-path) can be pinned by
+ * fixtures without needing Windows.
+ */
+export function selectWindowsShimScriptToken(source: string): string | null {
+  // Last match wins: npm's shim assigns the cli path twice and the later
+  // assignment (`%NPM_CLI_JS%` indirection) is a variable, not a literal path —
+  // reversing keeps the literal one first among resolvable candidates.
+  return windowsShimTokens(source).reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token)) ?? null;
+}
+
 function resolveWindowsCommandShim(binPath: string, args: string[]): ResolvedCliCommand | null {
   let source: string;
   try {
@@ -154,8 +220,8 @@ function resolveWindowsCommandShim(binPath: string, args: string[]): ResolvedCli
     return null;
   }
   const shimDir = path.win32.dirname(binPath);
-  const tokens = [...source.matchAll(/"([^"\r\n]+)"/g)].map((match) => match[1]);
-  const scriptToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token));
+  const tokens = windowsShimTokens(source);
+  const scriptToken = selectWindowsShimScriptToken(source);
   if (scriptToken) {
     const target = expandWindowsShimPath(scriptToken, shimDir);
     if (target) {

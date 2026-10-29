@@ -121,7 +121,15 @@ export interface CognitionAsset {
   invalidation?: CognitionInvalidation;
 }
 
-export interface CognitionAssetSummary {
+/**
+ * 认知记忆档（本文件 CognitionStore）的资产摘要行。
+ *
+ * 原名 `CognitionAssetSummary` 与 `./types` 里的正式资产摘要同名——本文件
+ * 的本地声明会静默遮蔽文末 `export * from './types'` 的新形状（星导出被同名
+ * 本地导出压住），从本模块导入该名的消费方拿到的是这份旧形状且无任何提示。
+ * 改名后 `CognitionAssetSummary` 一名唯一归属 ./types。
+ */
+export interface CognitionMemoryAssetSummary {
   id: string;
   title: string;
   summary: string;
@@ -135,7 +143,7 @@ export interface CognitionAssetSummary {
 }
 
 export interface CognitionAssetPage {
-  items: CognitionAssetSummary[];
+  items: CognitionMemoryAssetSummary[];
   page: number;
   pageSize: number;
   total: number;
@@ -747,7 +755,9 @@ function appendTransition(
     ? MAX_TRANSITIONS_PER_ASSET
     : MAX_NON_INVALIDATION_TRANSITIONS;
   if (asset.transitions.length >= maxTransitions) {
-    throw new Error(`cognition transition count exceeds ${MAX_TRANSITIONS_PER_ASSET}`);
+    // 非失效事件的上限是 MAX_NON_INVALIDATION_TRANSITIONS（=1200-1，给最终
+    // 失效事件留位）；文案必须报实际命中的那道闸（P-r1-39 附带修）。
+    throw new Error(`cognition transition count exceeds ${maxTransitions}`);
   }
   const transition: CognitionTransition = { id: newId('transition'), kind, at, ...details };
   asset.transitions.push(transition);
@@ -757,7 +767,7 @@ function appendTransition(
 function assertTransitionCapacity(asset: CognitionAsset, additional: number): void {
   if (!Number.isSafeInteger(additional) || additional < 0
       || asset.transitions.length + additional > MAX_NON_INVALIDATION_TRANSITIONS) {
-    throw new Error(`cognition transition count exceeds ${MAX_TRANSITIONS_PER_ASSET}`);
+    throw new Error(`cognition transition count exceeds ${MAX_NON_INVALIDATION_TRANSITIONS}`);
   }
 }
 
@@ -786,6 +796,34 @@ function reconcileAsset(
     // The intent may have been persisted before the final cognition write
     // failed. Reserve the completion event before touching the shared memory
     // file so recovery cannot leave an un-audited deferred state.
+    //
+    // P-r1-39：容量预检不再抛错挡读。transitions 已打满非失效上限的存量
+    // 资产，其 deferred 完成事件永远放不下——原样抛错会让该用户资产分页
+    // 永久不可用且盘上毒丸永不清除。降级顺序：
+    // ① 失效事件也放不下（=1200）或资产从未确认过（invalidated 终态要求
+    //    confirmedAt 在场，否则写盘校验会反过来炸）→ 跳过该资产的恢复
+    //    （隔离，读路径继续）；
+    // ② 否则先确认失效事件有位置，再照常取下共享记忆，把恢复落成带审计
+    //    轨迹的失效终态（reason='removed'：对应的长期记忆条目确实被本次
+    //    恢复取下）——恢复仍完成、毒丸被清出盘面。
+    if (asset.transitions.length + 1 > MAX_NON_INVALIDATION_TRANSITIONS) {
+      if (asset.transitions.length >= MAX_TRANSITIONS_PER_ASSET || !asset.confirmedAt) {
+        log.warn('cognition deactivate recovery skipped: transition history is full', {
+          asset_id: maskId(asset.id),
+        });
+        return false;
+      }
+      const detached = detachCognitionMemoryEntryLocked(userId, asset.id, transaction);
+      if (!detached.ok) {
+        if (detached.error === 'corrupt_metadata') {
+          invalidateAsset(asset, 'metadata_missing');
+          return true;
+        }
+        throw new Error(`cognition memory detach failed: ${detached.error || 'unknown error'}`);
+      }
+      invalidateAsset(asset, 'removed');
+      return true;
+    }
     assertTransitionCapacity(asset, 1);
     const detached = detachCognitionMemoryEntryLocked(userId, asset.id, transaction);
     if (!detached.ok) {
@@ -871,6 +909,9 @@ function sortedAssets(store: CognitionStore): CognitionAsset[] {
 }
 
 export async function listActiveCognitionSourceIds(userId: string): Promise<ReadonlySet<string>> {
+  // P-r1-41：事务入口也会校验 uid，但本域的错误口径（invalid cognition user
+  // id）是既有测试锁定的契约——在进事务前先用本域断言，保证报错时序不变。
+  assertUserId(userId);
   return withCognitionMemoryTransaction(userId, async (transaction) => {
     const store = await reconciledStore(userId, transaction);
     return new Set(store.assets
@@ -884,6 +925,8 @@ export async function listCognitionAssetPage(
   page = 1,
   pageSize = DEFAULT_COGNITION_PAGE_SIZE,
 ): Promise<CognitionAssetPage> {
+  // 同 listActiveCognitionSourceIds：本域 uid 口径先进，事务校验作纵深。
+  assertUserId(userId);
   if (!Number.isSafeInteger(page) || page < 1) throw new Error('invalid cognition page');
   if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > MAX_COGNITION_PAGE_SIZE) {
     throw new Error('invalid cognition page size');
@@ -917,6 +960,8 @@ export async function invalidateCognitionMemorySources(
   sourceIds: string[],
   reason: Extract<CognitionInvalidationReason, 'removed' | 'replaced'>,
 ): Promise<void> {
+  // 同 listCognitionAssetPage：本域 uid 口径先进，事务校验作纵深。
+  assertUserId(userId);
   return withCognitionMemoryTransaction(userId, (transaction) =>
     invalidateCognitionMemorySourcesLocked(userId, sourceIds, reason, transaction));
 }
@@ -950,15 +995,18 @@ export async function invalidateCognitionMemorySourcesLocked(
   if (changed) await writeStore(userId, store);
 }
 
-// ── develop 侧能力（candidates/receipts/dashboard/skill-summary 等）─────────
+// ── develop 侧能力（candidates/receipts/skill-summary 等）───────────────────
 export * from './types';
 export * from './gate';
 export * from './candidates-adapter';
 export * from './receipts-adapter';
 export * from './assets-adapter';
 export * from './inbox-adapter';
-export * from './version-diff-adapter';
-export * from './dashboard';
+// P-r1-23（2026-10-01 死代码真删批）：version-diff-adapter（资产版本 diff 读口）
+// 已删——其唯一出口是 cognition.assets.diff 通道，渲染层零调用（版本治理页的
+// 版本 diff 走 cognition.skills.diff），该读口还吞一切读错误伪装成「没有变更」。
+// recall 侧 buildAssetVersionDiffs 实现与其测试（formal-assets-version-diff）
+// 不受影响。
 // 「已处理历史」只需要这一个读口；决定的写入路径仍走 review-decision 自身，
 // 不从这里再导出写函数，避免它变成第二个可写入口。
 export { listRecentReviewDecisions } from './review-decision';

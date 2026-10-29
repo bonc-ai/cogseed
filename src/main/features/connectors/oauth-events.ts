@@ -21,16 +21,21 @@ export function broadcastOAuthConnectOutcome(outcome: OAuthConnectOutcome): void
   }
 }
 
-/** The authorization URL for a `local_cli` connect attempt.
+/** How to authorize a `local_cli` connect attempt.
  *
- *  Unlike the OAuth modes, this flow produces a URL on the PC rather than being driven by the
- *  Server or by a deep link, so the renderer needs it to be able to show a copyable link when
- *  opening a browser fails. Purely additive: the URL is not a credential (it is a one-time
- *  authorization request the user is expected to visit), and the connect outcome still arrives on
- *  `connectors:oauth-result` as usual. */
+ *  Unlike the OAuth modes, this flow is driven on the PC rather than by the Server or a deep link,
+ *  so the renderer needs the details to be able to show them when opening a browser fails. Purely
+ *  additive: neither field is a credential (a URL is a one-time authorization request the user is
+ *  expected to visit; a QR image is the same request rendered for scanning), and the connect
+ *  outcome still arrives on `connectors:oauth-result` as usual. */
 export interface AuthorizationUrlNotice {
   catalog_id: string;
+  /** Empty when the provider authorizes by QR scan and the CLI prints no URL. */
   url: string;
+  /** Local PNG holding the scannable QR, for providers that have no URL to open (WeCom). The main
+   *  process opens it with the OS viewer; carrying the path lets the renderer show it inline later
+   *  without another IPC channel. */
+  qrcode_path?: string;
 }
 
 export function broadcastAuthorizationUrl(notice: AuthorizationUrlNotice): void {

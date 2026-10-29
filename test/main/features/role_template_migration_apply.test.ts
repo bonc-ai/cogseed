@@ -193,6 +193,29 @@ describe('add-field migration › 补坑且只补坑', () => {
     // 备份不能进 restore 的发现路径
     expect(t.readTemplateArchive(UID, 'probe')).toBeNull();
   });
+
+  it('P-r1-100 结构迁移在历史里留改前快照（touch 前移：快照可回滚到迁移前）', async () => {
+    const { t, groupId } = await installV1WithUserData();
+    const store = await import('../../../src/main/features/po/store');
+    const beforeCount = store.listPoGroupHistory(UID, groupId).length;
+
+    CATALOG = catalogV2AddField();
+    const { applyRoleTemplateMigration } = await loadMig();
+    expect((await applyRoleTemplateMigration(UID, 'probe')).outcome).toBe('migrated');
+
+    // 迁移本身必须新增一份改前快照（touch 后移的旧顺序会把「改后」当
+    // 「改前」，store 恒等跳过 → 历史条数不增，快照弹窗回不到迁移前）。
+    const history = store.listPoGroupHistory(UID, groupId);
+    expect(history.length).toBe(beforeCount + 1);
+    const snap = store.readPoGroupSnapshot(UID, groupId, history[0].id);
+    expect(snap).toBeTruthy();
+    expect(snap!.templateVersion).toBe('1.0.0');
+    expect(snap!.fields.some((f) => f.name === '当前研究方向')).toBe(false);
+    expect(snap!.fields.some((f) => f.name === '专业')).toBe(true);
+    // 迁移后的活文档确实前进到 v2（快照 ≠ 现状，证明快照抓的是改前）。
+    const t2 = await loadFiles();
+    expect(t2.readGroups(UID).find((g) => g.template_id === 'probe')!.template_version).toBe('2.0.0');
+  });
 });
 
 describe('add-field migration › 幂等与拒绝', () => {

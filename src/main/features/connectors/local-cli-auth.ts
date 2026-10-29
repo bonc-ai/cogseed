@@ -29,7 +29,8 @@
 import { shell } from 'electron';
 
 import { createLogger } from '../../logger';
-import { applyTemplate } from './apply-template';
+import { scopeManagedCliTransport } from './cli-runtime';
+import { applyTemplate, scopeTencentMeetingTransport } from './apply-template';
 import { McpConnection } from './mcp-client';
 import { broadcastAuthorizationUrl } from './oauth-events';
 import type { CatalogEntry } from './types';
@@ -48,6 +49,10 @@ const AUTH_CONNECTION_ID = 'local-cli-auth';
 export interface LocalCliAuthStatus {
   logged_in: boolean;
   user_name?: string;
+  /** Set when the CLI itself reported why it cannot authorize (e.g. DingTalk answers
+   *  "您暂无 CLI 数据访问权限，请联系管理员开启"). The adapter reads it from the CLI's own login log,
+   *  so a connect attempt can fail immediately instead of polling out its five-minute deadline. */
+  blocked_reason?: string;
 }
 
 /** In-flight attempt. Cancellation is observed between polls rather than by aborting the connection,
@@ -124,7 +129,7 @@ async function _checkLogin(conn: McpConnection): Promise<LocalCliAuthStatus> {
  * Rejects with `err.code` in the same vocabulary `manager` maps to renderer-facing outcomes:
  * `user_cancelled`, `superseded`, `flow_timeout`, or an adapter/CLI error.
  */
-export async function ensureLocalCliAuthorized(entry: CatalogEntry): Promise<{ user_name: string }> {
+export async function ensureLocalCliAuthorized(userId: string, entry: CatalogEntry): Promise<{ user_name: string }> {
   if (entry.auth_mode !== 'local_cli') {
     throw new Error(`'${entry.id}' is not a local_cli connector`);
   }
@@ -138,7 +143,8 @@ export async function ensureLocalCliAuthorized(entry: CatalogEntry): Promise<{ u
     _pending.cancelled = _abortError('superseded by a new local CLI authorization', 'superseded');
   }
 
-  const transport = applyTemplate(entry, null);
+  const baseTransport = applyTemplate(entry, null);
+  const transport = entry.id === 'tencent-meeting' ? scopeTencentMeetingTransport(userId, baseTransport) : scopeManagedCliTransport(userId, entry.id, baseTransport);
   const conn = new McpConnection(AUTH_CONNECTION_ID, transport);
   const state: PendingAuth = { catalogId: entry.id, cancelled: null };
   let timer: NodeJS.Timeout | null = null;
@@ -151,6 +157,13 @@ export async function ensureLocalCliAuthorized(entry: CatalogEntry): Promise<{ u
       log.info('local CLI already authorized', { catalog_id: entry.id });
       return { user_name: before.user_name || '' };
     }
+    // The CLI already recorded a refusal (organisation policy, revoked app, …). Starting a browser
+    // flow cannot fix that, so report it now: the user gets the vendor's own sentence instead of
+    // watching a five-minute poll expire with no explanation.
+    if (before?.blocked_reason) {
+      log.warn('local CLI authorization is blocked', { catalog_id: entry.id });
+      throw Object.assign(new Error(before.blocked_reason), { code: 'authorization_blocked' });
+    }
 
     log.info('local CLI not authorized; starting login', { catalog_id: entry.id });
     _pending = state;
@@ -160,19 +173,36 @@ export async function ensureLocalCliAuthorized(entry: CatalogEntry): Promise<{ u
     }, FLOW_TIMEOUT_MS);
     timer.unref?.();
 
-    const started = _unwrapToolResult<{ authorization_url?: string }>(await conn.callTool('start_login', {}));
+    const started = _unwrapToolResult<{ authorization_url?: string; qrcode_path?: string }>(
+      await conn.callTool('start_login', {}),
+    );
     const url = String(started?.authorization_url || '');
-    if (!url) throw new Error('the authorization step returned no URL');
-
-    // Push before opening: if `openExternal` fails or the user has no default browser, the renderer
-    // still has everything it needs to show a copyable link.
-    broadcastAuthorizationUrl({ catalog_id: entry.id, url });
-    shell.openExternal(url).catch((err) => {
-      log.warn('failed to open the authorization URL in a browser', {
-        catalog_id: entry.id,
-        error: (err as Error).message,
+    const qrcodePath = String(started?.qrcode_path || '');
+    if (url) {
+      // Push before opening: if `openExternal` fails or the user has no default browser, the
+      // renderer still has everything it needs to show a copyable link.
+      broadcastAuthorizationUrl({ catalog_id: entry.id, url });
+      shell.openExternal(url).catch((err) => {
+        log.warn('failed to open the authorization URL in a browser', {
+          catalog_id: entry.id,
+          error: (err as Error).message,
+        });
       });
-    });
+    } else if (qrcodePath) {
+      // QR-only onboarding (WeCom authorizes by scanning; the CLI prints no URL at all). The CLI
+      // writes the QR to a PNG, so hand that to the OS image viewer rather than failing the connect
+      // — the status poll below is unchanged and completes as soon as the user scans.
+      log.info('local CLI authorization is QR-based; opening the image', { catalog_id: entry.id });
+      broadcastAuthorizationUrl({ catalog_id: entry.id, url: '', qrcode_path: qrcodePath });
+      shell.openPath(qrcodePath).catch((err) => {
+        log.warn('failed to open the authorization QR image', {
+          catalog_id: entry.id,
+          error: (err as Error).message,
+        });
+      });
+    } else {
+      throw new Error('the authorization step returned no URL');
+    }
 
     for (;;) {
       await _sleep(POLL_INTERVAL_MS);
@@ -181,6 +211,12 @@ export async function ensureLocalCliAuthorized(entry: CatalogEntry): Promise<{ u
       if (status?.logged_in) {
         log.info('local CLI authorization completed', { catalog_id: entry.id });
         return { user_name: status.user_name || '' };
+      }
+      // A mid-flow refusal (e.g. the provider rejects the device code on policy grounds) ends the
+      // attempt immediately rather than burning the remaining deadline.
+      if (status?.blocked_reason) {
+        log.warn('local CLI authorization was refused by the CLI', { catalog_id: entry.id });
+        throw Object.assign(new Error(status.blocked_reason), { code: 'authorization_blocked' });
       }
       // Re-check after the awaited poll so a cancel that arrives mid-call is honoured promptly
       // rather than after one more interval.

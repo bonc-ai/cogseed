@@ -708,9 +708,9 @@ describe('模型建议并入候选列表', () => {
     expect(src).toMatch(/kb-atc__badge--model/);
   });
 
-  it('应用后必须说出"词表被写了"——改了词表却不说，用户无从察觉', () => {
-    expect(src).toMatch(/apply_wrote_glossary/);
-    expect(src).toMatch(/glossaryWrites/);
+  it('应用后必须说出"词表被自动加入了"——改了词表却不说，用户无从察觉', () => {
+    expect(src).toMatch(/apply_learned/);
+    expect(src).toMatch(/result\?\.learned/);
   });
 });
 

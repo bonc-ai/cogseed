@@ -130,8 +130,11 @@ describe('P3394 Hermes → CogSeed → Hermes 反向闭环 (V-04)', () => {
     const executor = new P3394BridgeExecutor({
       bridge,
       runtime,
-      recordEpisode: (episode) => {
-        fs.writeFileSync(resultFile, JSON.stringify({ status: episode.status, session_id: episode.session_id, task_id: episode.task_id }));
+      onEvent: (sessionId, event) => {
+        // 终态证据改由 host 事件通道观测（executor 已无 episode 汇点）。
+        if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
+          fs.writeFileSync(resultFile, JSON.stringify({ status: event.kind, session_id: sessionId, task_id: event.task_id }));
+        }
       },
     });
     const channel = new P3394HttpChannel('cogseed-http', {
@@ -233,8 +236,11 @@ describe('P3394 Hermes → CogSeed → Hermes 反向闭环 (V-04)', () => {
     const executor = new P3394BridgeExecutor({
       bridge,
       runtime,
-      recordEpisode: (episode) => {
-        fs.writeFileSync(resultFile, JSON.stringify({ status: episode.status, session_id: episode.session_id, task_id: episode.task_id }));
+      onEvent: (sessionId, event) => {
+        // 终态证据改由 host 事件通道观测（executor 已无 episode 汇点）。
+        if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
+          fs.writeFileSync(resultFile, JSON.stringify({ status: event.kind, session_id: sessionId, task_id: event.task_id }));
+        }
       },
     });
     const channel = new P3394HttpChannel('cogseed-http', {

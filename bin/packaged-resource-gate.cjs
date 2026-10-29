@@ -16,6 +16,7 @@ const EXTRA_RESOURCES_CONTRACT = Object.freeze({
   'builtin-packages': 'builtin-package-seed-contract',
   'discovery-catalog': 'discovery-catalog-contract',
   officecli: 'officecli-release-gate',
+  'tencent-meeting': 'tencent-meeting-release-gate',
   guardrail: 'guardrail-scanner-contract',
   'sherpa-onnx': 'pinned-offline-resource',
   '.': 'mac-localized-metadata',

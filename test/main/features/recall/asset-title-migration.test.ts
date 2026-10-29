@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -16,7 +17,7 @@ describe('legacy ability-asset title migration', () => {
   it('rewrites legacy English titles and gap judgments, leaving others untouched', async () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
     // Seed: one legacy lesson title, one legacy gap title+judgment, one fine.
-    const legacyLesson = await assets.createSystemAbilityAsset('user-m', {
+    const legacyLesson = await seedStoredAbilityAsset('user-m', {
       schemaVersion: 2, ownerId: 'user-m', id: 'aa-legacy-lesson-000000000001', candidateId: 'cand-legacy-lesson-1',
       title: 'Reusable experience lesson (requirement-level)', type: 'rule', scope: 'general',
       statement: '处理“N 字资料”类请求时，在交付开头注明实际字数。', evidenceRefs: [{ kind: 'conversation', id: 'c1' }],
@@ -24,7 +25,7 @@ describe('legacy ability-asset title migration', () => {
       status: 'active', maturity: 'seed', version: '1',
       createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
     } as never, 'test');
-    const legacyGap = await assets.createSystemAbilityAsset('user-m', {
+    const legacyGap = await seedStoredAbilityAsset('user-m', {
       schemaVersion: 2, ownerId: 'user-m', id: 'aa-legacy-gap-00000000000001', candidateId: 'cand-legacy-gap-1',
       title: 'KSTAR rule gap candidate (requirement-level)', type: 'rule', scope: 'general',
       statement: 'For similar tasks, address this rule gap: 用户纠正格式要求后应清理旧文件。', evidenceRefs: [{ kind: 'conversation', id: 'c2' }],
@@ -32,7 +33,7 @@ describe('legacy ability-asset title migration', () => {
       status: 'active', maturity: 'seed', version: '1',
       createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
     } as never, 'test');
-    const fine = await assets.createSystemAbilityAsset('user-m', {
+    const fine = await seedStoredAbilityAsset('user-m', {
       schemaVersion: 2, ownerId: 'user-m', id: 'aa-fine-0000000000000000000001', candidateId: 'cand-fine-1',
       title: '只读审查方法', type: 'skill_method', scope: 'review',
       statement: '该审查方法可复用。', evidenceRefs: [{ kind: 'conversation', id: 'c3' }],
@@ -57,9 +58,9 @@ describe('legacy ability-asset title migration', () => {
     expect(await assets.migrateLegacyUserFacingTitles('user-m')).toBe(0);
   });
 
-  it('status 过滤（2026-09-28 红队补齐口径）：paused 被改写+bump，deleted/revoked 终态原样', async () => {
+  it('status 过滤：paused 被改写+bump，deleted/revoked 终态原样', async () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
-    const seed = (id: string, status: string) => assets.createSystemAbilityAsset('user-m', {
+    const seed = (id: string, status: string) => seedStoredAbilityAsset('user-m', {
       schemaVersion: 2, ownerId: 'user-m', id, candidateId: `cand-${id}`,
       title: 'Reusable experience lesson (requirement-level)', type: 'rule', scope: 'general',
       statement: '正文。', evidenceRefs: [{ kind: 'conversation', id: 'c-status' }],
@@ -90,7 +91,7 @@ describe('legacy ability-asset title migration', () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const { fileEditLock } = await import('../../../../src/main/util/locks');
     const { recallJsonRecordPath } = await import('../../../../src/main/features/recall/paths');
-    const seeded = await assets.createSystemAbilityAsset('user-m', {
+    const seeded = await seedStoredAbilityAsset('user-m', {
       schemaVersion: 2, ownerId: 'user-m', id: 'aa-title-race-000000000001', candidateId: 'cand-title-race-1',
       title: 'Reusable experience lesson (requirement-level)', type: 'rule', scope: 'general',
       statement: '正文。', evidenceRefs: [{ kind: 'conversation', id: 'c-race' }],
@@ -126,5 +127,38 @@ describe('legacy ability-asset title migration', () => {
     expect(after.status).toBe('deleted');
     expect(after.title).toBe('Reusable experience lesson (requirement-level)');
     expect(after.version).toBe('1');
+  });
+
+  it('迁移同步在用版指针：select 过旧版的资产迁移后 activeVersion 指向新快照', async () => {
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const seeded = await seedStoredAbilityAsset('user-m', {
+      schemaVersion: 2, ownerId: 'user-m', id: 'aa-title-activev-0000000001', candidateId: 'cand-title-activev',
+      title: 'Reusable experience lesson (requirement-level)', type: 'rule', scope: 'general',
+      statement: '旧版正文。', evidenceRefs: [{ kind: 'conversation', id: 'c-activev' }],
+      reviewDecisionId: 'legacy-untracked', lifecycleStatus: 'user_confirmed_unverified',
+      status: 'active', maturity: 'seed', version: '1',
+      createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
+    } as never, 'test');
+    // v2：内容更新（在用内容随之切到 v2 文本）。
+    await assets.updateAbilityAsset('user-m', seeded.id, { statement: '更新后的正文。', reason: 'probe', actor: 'user' });
+    // select 回 v1：在用版=1、version=2（select 不 bump 计数器）。
+    await assets.selectAbilityAssetVersion('user-m', seeded.id, '1', { actor: 'user', reason: 'probe select' });
+    const selected = await assets.readAbilityAsset('user-m', seeded.id);
+    expect(selected.version).toBe('2');
+    expect(selected.activeVersion).toBe('1');
+    expect(selected.statement).toBe('旧版正文。');
+
+    // 迁移 bump 到 v3 且 activeVersion 同步指向 v3——迁移改写的就是在用内容，
+    // 指针留在 select 过的 v1 会让按在用版注入的消费侧读到迁移前旧文。
+    expect(await assets.migrateLegacyUserFacingTitles('user-m')).toBe(1);
+    const migrated = await assets.readAbilityAsset('user-m', seeded.id);
+    expect(migrated.version).toBe('3');
+    expect(migrated.activeVersion).toBe('3');
+    expect(migrated.title).toBe('可复用经验（通用）');
+    // 在用版口径读到的快照=迁移后内容：与消费侧 pin activeVersion 闭环。
+    expect(assets.abilityAssetActiveVersion(migrated)).toBe('3');
+    const snapshot = await assets.readAbilityAssetVersionSnapshot('user-m', seeded.id, '3');
+    expect(snapshot?.title).toBe('可复用经验（通用）');
+    expect(snapshot?.statement).toBe('旧版正文。');
   });
 });

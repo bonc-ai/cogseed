@@ -25,6 +25,7 @@
  */
 import { scanRedFlags } from '../../quality/rules/red-flags';
 import { createLogger } from '../../logger';
+import { PROMPT_INJECTION_RULES, normalizeZeroWidthChars } from '../../util/cognition-sensitivity';
 import type { CognitionCandidateType, CognitionSecurityView } from './types';
 
 const log = createLogger('cognition-gate');
@@ -75,35 +76,24 @@ export interface CandidateContent {
 //
 // `memory.ts` already scans stored memories for these markers; precipitation
 // had no equivalent check, so the same payload could enter through this path.
-// Kept narrow and high-signal: instruction-override phrasing, role
-// redefinition, and system-prompt exfiltration attempts.
-const INJECTION_PATTERNS: ReadonlyArray<{ rule: string; pattern: RegExp; fix: string }> = [
-  {
-    rule: 'injection_instruction_override',
-    pattern: /\b(ignore|disregard|forget)\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier|system)\s+(instruction|prompt|rule|message|context)/i,
-    fix: 'Remove instruction-override phrasing before storing this as an asset.',
-  },
-  {
-    rule: 'injection_role_redefinition',
-    pattern: /\byou\s+are\s+now\s+(a|an|the)\b|\bfrom\s+now\s+on,?\s+you\s+(will|must|shall)\b|\bact\s+as\s+(if\s+you\s+are\s+)?(a|an|the)\s+\w+\s+(with|that\s+has)\s+no\s+(restriction|limit|rule)/i,
-    fix: 'Remove role-redefinition phrasing; a stored asset must not re-scope the agent.',
-  },
-  {
-    rule: 'injection_prompt_exfiltration',
-    pattern: /\b(reveal|print|output|repeat|show)\s+(your|the)\s+(system\s+prompt|initial\s+instruction|hidden\s+instruction)/i,
-    fix: 'Remove prompt-exfiltration phrasing before storing this as an asset.',
-  },
-];
+// The rule list is shared (single source) with the profile-prompt quarantine in
+// `util/cognition-sensitivity.ts` so the two layers cannot drift apart.
+const INJECTION_PATTERNS = PROMPT_INJECTION_RULES;
 
 function _excerpt(text: string, at: number): string {
   const start = Math.max(0, at - 40);
   return text.slice(start, start + 160).replace(/\s+/g, ' ').trim();
 }
 
+// Zero-width obfuscation normalization lives with the shared rule list in
+// `util/cognition-sensitivity.ts` (normalizeZeroWidthChars): Cf format
+// characters are not `\s`, so they could otherwise slip payloads past the
+// patterns — they are spaced out, not deleted (deleting merges tokens).
 function _scanInjection(text: string, field: string): CandidateFinding[] {
   const out: CandidateFinding[] = [];
+  const normalized = normalizeZeroWidthChars(text);
   for (const { rule, pattern, fix } of INJECTION_PATTERNS) {
-    const m = pattern.exec(text);
+    const m = pattern.exec(normalized);
     if (!m) continue;
     out.push({
       rule,
@@ -111,7 +101,7 @@ function _scanInjection(text: string, field: string): CandidateFinding[] {
       // replayed into a prompt. Treated as blocking.
       level: 'EXTREME',
       field,
-      snippet: _excerpt(text, m.index),
+      snippet: _excerpt(normalized, m.index),
       suggested_fix: fix,
       source: 'code',
     });

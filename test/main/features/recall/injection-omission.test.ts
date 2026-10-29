@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -31,7 +32,7 @@ async function seedPinnedAsset(assetId: string, statement: string) {
   const assets = await import('../../../../src/main/features/recall/asset-service');
   const projection = await import('../../../../src/main/features/recall/context-projection');
   const now = new Date().toISOString();
-  const asset = await assets.createAbilityAsset(UID, {
+  const asset = await seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id: assetId, candidateId: `cand-${assetId}`,
     sourceCandidateIds: [`cand-${assetId}`], reviewDecisionId: `rd_${assetId.slice(3)}padpadpad`,
     // 标题闸门（设计 3.2）：正文前缀当标题过不了闸门，取正文尾部片段做合规种子。

@@ -25,17 +25,17 @@ from pathlib import Path
 from typing import Any
 
 from . import (agentic_rules, baseline as baseline_mod, binary_rules, derived_views,
-               external_tools, hidden_content, obfuscation, structural, supply_chain,
-               text_rules)
+               external_tools, hidden_content, obfuscation, signatures, structural,
+               supply_chain, text_rules, vulnerability)
 from .mappings import framework_summary
 from .path_security import collect_evidence, locate_skill_roots, safe_extract
 from .context import build_contexts
 from .result_models import SEVERITY_ORDER, fingerprint_for, make_finding
-from .rule_loader import DEFAULT_RULESET_VERSION, load_rules
+from .rule_loader import DEFAULT_RULESET_VERSION, load_rules, ruleset_dir
 from .scoring import (classify_risk, compute_score_details, deployment_recommendation,
                       is_confirmed_critical, worst_recommendation)
 
-SCANNER_VERSION = "2.2.0"
+SCANNER_VERSION = "2.3.0"
 SCHEMA_VERSION = "2.0.0"
 
 #: 类别 → 是否属于「攻击面」三分类之一（供 UI 的分布图使用）。
@@ -57,7 +57,9 @@ def _severity_counts(findings: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _coverage(rules: dict[str, Any], docs: list[tuple[str, str]], files: set[str],
-              tool_status: dict[str, Any], contexts: dict[str, Any]) -> dict[str, Any]:
+              tool_status: dict[str, Any], contexts: dict[str, Any], *,
+              dependency_scan: dict[str, Any] | None = None,
+              signature_scan: dict[str, Any] | None = None) -> dict[str, Any]:
     """本次扫描的覆盖事实。
 
     ``rules_source`` 已经存在，但那只是一个字符串；这里把「多少条规则、
@@ -89,6 +91,11 @@ def _coverage(rules: dict[str, Any], docs: list[tuple[str, str]], files: set[str
             "osv_scanner": str(tool_status.get("osv_scanner", "SKIPPED")),
             "binary_strings": str(tool_status.get("binary_scan", "static-only")),
         },
+        # 原生检测后端的可用性。`external_tools` 只说明可选的增强工具，
+        # 不能回答「依赖漏洞扫描到底有没有跑」——那不在这三个键里。
+        "vulnerability_db": (dependency_scan or {}).get("db", {}),
+        "dependency_inventory": (dependency_scan or {}).get("inventory", {}),
+        "signature_pack": (signature_scan or {}).get("status", {}),
         "rules_source": str(rules.get("_rules_source") or ""),
         # 规则包是否按请求的版本解析成功。False 意味着实际跑的是内置最小规则集，
         # 报告的「全绿」并不代表完整规则集覆盖过——UI 必须能说出这一点。
@@ -183,6 +190,27 @@ def _as_derived(finding: dict[str, Any], view_name: str, line_ok: bool) -> dict[
     return out
 
 
+def _dedupe_signature_findings(existing: list[dict[str, Any]],
+                              candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """丢弃与既有 finding 落在同一行、同一类别的 YARA 命中。
+
+    两个检测器看见同一行上的同一条凭据路径是**一个问题**。保留两条不会增加
+    信息，只会按两条扣分——实测在 prose 语料上把 conformance 的 78 分改成 74，
+    而命中的内容与文本规则完全一致。只和「非 YARA」的既有命中比较：YARA 之间
+    的重复已经按 (规则, 文件) 去重过。
+    """
+    seen = {(item.get("file"), item.get("line"), item.get("category"))
+            for item in existing if item.get("source") != "yara"}
+    out: list[dict[str, Any]] = []
+    for item in candidates:
+        key = (item.get("file"), item.get("line"), item.get("category"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 def coverage_findings(rules: dict[str, Any], docs: list[tuple[str, str]],
                       files: set[str], tool_status: dict[str, Any]) -> list[dict[str, Any]]:
     """把「这次没扫到什么」也报成 finding。
@@ -224,16 +252,22 @@ def coverage_findings(rules: dict[str, Any], docs: list[tuple[str, str]],
             snippet=",".join(str(r.get("id")) for r in invalid[:5]),
         ))
     tools = {k: str(v) for k, v in (tool_status or {}).items()}
-    missing_tools = [k for k, v in tools.items() if v == "SKIPPED"]
+    # osv-scanner 不再计入「缺口」：依赖漏洞扫描已由内置快照原生实现，它只是
+    # 扩大覆盖面的可选增强（与 gitleaks 同一档）。把它算成缺口会让每台没装它的
+    # 机器都收到一条「有东西没扫」的提示，而真相是核心检测已经跑了。
+    # 原生后端的缺口由 vulnerability.py / signatures.py 各自产出更具体的覆盖项；
+    # 这里再报一次会得到「外部增强工具不可用：signature_pack」，把「签名包缺失」
+    # 说成一个可选工具没装。
+    _native_backends = {"osv_scanner", "vulnerability_db", "signature_pack"}
+    missing_tools = [k for k, v in tools.items()
+                     if v == "SKIPPED" and k not in _native_backends]
     if missing_tools:
         out.append(make_finding(
             "SR-COV", "scan_external_tools_missing", "info", "scan_coverage",
             "(tooling)", None,
             "外部增强工具不可用：" + "、".join(sorted(missing_tools))
-            + "。其中 osv-scanner 缺失会让依赖漏洞(CVE)查询整个不启用；"
-            "gitleaks 缺失只是密钥检测少一层增强，内置规则仍在跑",
-            "装 osv-scanner 可启用依赖漏洞(CVE)查询；装 gitleaks 可扩大密钥检测覆盖。"
-            "两者都不影响其余检查。",
+            + "。gitleaks 缺失只是密钥检测少一层增强，内置规则仍在跑",
+            "装 gitleaks 可扩大密钥检测覆盖；它不影响其余检查。",
             source="coverage", context="source", confidence="high",
             snippet=",".join(sorted(missing_tools)),
         ))
@@ -353,9 +387,14 @@ def build_report(skill_dir: Path, rel_name: str, rules: dict[str, Any],
             "不可见内容（零宽字符 / Unicode 标签块 / 双向控制符）不做上下文降权——"
             "它们不可见这一事实与所在目录无关",
             "置信度（confidence）反映规则本身的确定性，不反映命中内容是否真的有害",
-            "二进制扫描当前仅静态层（strings+指标），未接入动态沙箱，无法确认真实运行时行为",
-            "依赖漏洞(CVE)查询没有原生交付：未安装 osv-scanner 时该能力整个不启用"
-            "（上层状态为 needs_tool，不是 degraded）",
+            "二进制扫描为静态层（strings + 指标 + YARA 签名），未接入动态沙箱，"
+            "无法确认真实运行时行为",
+            "依赖漏洞(CVE)匹配使用随规则包发布的 OSV 快照（常见包 + 高风险公告），"
+            "不是完整 CVE 镜像；快照截止日期见 coverage.vulnerability_db.as_of。"
+            "清单中的版本范围（^1.2.3）不参与区间判定，只有锁文件里的确定版本参与",
+            "恶意特征匹配使用内置 YARA 子集引擎与签名包；不支持的 YARA 语法"
+            "（for 循环、pe/math 模块）会在 coverage.signature_pack.errors 中列出，"
+            "对应规则不参与匹配",
             "密钥检测以内置 70 条具名规则 + 通用高熵检测为交付物，gitleaks 只是增强；"
             "未安装它不计为能力降级",
             "框架编号（CWE / OWASP LLM / OWASP Agentic）是风险分类提示，不是合规认证结论",
@@ -390,13 +429,30 @@ def scan_one_skill(skill_dir: Path, rel_name: str,
     structural_result = structural.scan_structure(skill_dir)
     findings += structural_result["findings"]
 
+    # 原生检测后端：内置漏洞快照（依赖 CVE）与 YARA 签名包。两者都随规则包
+    # 版本化，因此 ruleset_version 升级时它们与文本规则同时生效/失效。
+    active_ruleset_dir = ruleset_dir(ruleset_version)
+    dependency_scan = vulnerability.scan_dependencies(skill_dir, active_ruleset_dir)
+    signature_scan = signatures.scan_signatures(skill_dir, contexts, active_ruleset_dir)
+
     tool_status: dict[str, Any] = {}
     gl = external_tools.enhance_with_gitleaks(skill_dir)
     tool_status["gitleaks"] = gl["status"]
     findings += gl.get("findings", [])
     dep = external_tools.enhance_with_dependency_audit(skill_dir)
+    # osv-scanner 是可选增强：内置快照已经覆盖了同样的包与版本，缺它不算缺口。
+    # 这里仍如实记录 SKIPPED（它确实没装），覆盖提示项与 UI 都把 osv_scanner
+    # 当作增强而不是缺口——把「没装可选工具」显示成告警正是 2.2.0 修过的题。
     tool_status["osv_scanner"] = dep["status"]
-    findings += dep.get("findings", [])
+    # 合并 osv-scanner 的结果，按 (公告 id, 文件) 去掉与内置库重复的条目——
+    # 同一个 CVE 从两个后端各报一次，分数会按两条扣。
+    native_keys = {(f.get("rule_id"), f.get("file")) for f in dependency_scan["findings"]}
+    findings += [item for item in dep.get("findings", [])
+                 if (item.get("rule_id"), item.get("file")) not in native_keys]
+    findings += dependency_scan["findings"]
+    findings += _dedupe_signature_findings(findings, signature_scan["findings"])
+    tool_status["vulnerability_db"] = str(dependency_scan["db"].get("status") or "MISSING")
+    tool_status["signature_pack"] = str(signature_scan["status"].get("status") or "MISSING")
 
     binary_result = binary_rules.scan_binaries(skill_dir)
     for bf in binary_result.get("findings", []):
@@ -409,6 +465,8 @@ def scan_one_skill(skill_dir: Path, rel_name: str,
     tool_status["binary_scan"] = "static-only"
 
     findings += coverage_findings(rules, docs, files, tool_status)
+    findings += dependency_scan["coverage_findings"]
+    findings += signature_scan["coverage_findings"]
 
     profile = text_rules.build_profile(files, docs, rules)
     sr_items = text_rules.evaluate_sr_items(profile, findings)
@@ -422,7 +480,16 @@ def scan_one_skill(skill_dir: Path, rel_name: str,
                           structural_result=structural_result,
                           manifests=supply["manifests"],
                           baseline_stats=baseline_stats)
-    coverage = _coverage(rules, docs, files, tool_status, contexts)
+    coverage = _coverage(rules, docs, files, tool_status, contexts,
+                         dependency_scan=dependency_scan, signature_scan=signature_scan)
+    report["dependency_scan"] = {
+        "db": dependency_scan["db"],
+        "inventory": dependency_scan["inventory"],
+        "matched_packages": dependency_scan["matched_packages"],
+        "unresolved_versions": dependency_scan["unresolved_versions"],
+        "truncated": dependency_scan["truncated"],
+    }
+    report["signature_scan"] = signature_scan["status"]
     coverage["derived_views"] = derived_stats.get("views", {})
     coverage["derived_findings"] = derived_stats.get("findings", 0)
     # 扫描档位：一次「静态」通过和一次「沙箱」通过不是同一个安全声明，

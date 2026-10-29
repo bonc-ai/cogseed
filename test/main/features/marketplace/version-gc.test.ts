@@ -343,7 +343,7 @@ describe('marketplace/version-gc', () => {
 
     it('卸载后触发一次，且与卸载解耦（不 await、失败不影响卸载）', () => {
       const code = readSrc('main/features/marketplace.ts');
-      expect(code).toContain('void runVersionGcAfterUninstall(uid);');
+      expect(code).toContain('void runVersionGcAfterUninstall(userId);');
       const helper = code.slice(
         code.indexOf('async function runVersionGcAfterUninstall'),
       ).slice(0, 800);

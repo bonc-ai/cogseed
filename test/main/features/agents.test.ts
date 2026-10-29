@@ -315,6 +315,58 @@ describe('agents › ordinary dispatch policy', () => {
   });
 });
 
+describe('agents › explicit user scope', () => {
+  it('records runtime stats for the queued user when the active user differs', async () => {
+    const agents = await loadAgents();
+    const secondUid = 'u2';
+    const agentId = 'same-agent-id';
+    const secondAgentDir = path.join(tmpDir, secondUid, 'cloud', 'agents', agentId);
+    fs.mkdirSync(secondAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(secondAgentDir, 'agent.json'), JSON.stringify({
+      agent_id: agentId, name: 'Second user agent', description: 'Second user agent', workflow: '',
+    }));
+    const result = await (agents.recordAgentRuntimeStats as any)(secondUid, agentId, {
+      duration_ms: 17, status: 'completed', aborted: false, errored: false,
+    });
+    expect(result.ok).toBe(true);
+    const statsPath = path.join(tmpDir, secondUid, 'cloud', 'agents', agentId, 'runtime_stats.json');
+    expect(fs.existsSync(statsPath)).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'cloud', 'agents', agentId, 'runtime_stats.json'))).toBe(false);
+  });
+
+  it('uses the requested user for project-directory and Agent chat operations', async () => {
+    const agents = await loadAgents();
+    const secondUid = 'u2';
+    const agentId = 'same-agent-id';
+    const secondAgentDir = path.join(tmpDir, secondUid, 'cloud', 'agents', agentId);
+    fs.mkdirSync(secondAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(secondAgentDir, 'agent.json'), JSON.stringify({
+      agent_id: agentId, name: 'Second coding agent', description: 'Second coding agent', workflow: '',
+      runtime: { kind: 'cli', cli: 'codex', model: 'default' },
+    }));
+    const projectDir = path.join(tmpDir, 'second-project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    expect((await agents.getAgentCliProjectDirInfo(secondUid, agentId))?.agent_id).toBe(agentId);
+    await agents.setAgentCliProjectDir(secondUid, agentId, projectDir);
+    expect((await agents.getAgentCliProjectDirInfo(secondUid, agentId))?.custom_path).toBe(projectDir);
+
+    const chatDir = path.join(tmpDir, secondUid, 'cloud', 'chats', 'agent', agentId);
+    fs.mkdirSync(chatDir, { recursive: true });
+    fs.writeFileSync(path.join(chatDir, 'chat.jsonl'), `${JSON.stringify({ role: 'user', content: 'private' })}\n`);
+    streamImpl.current = async function* () {
+      yield { type: 'final', text: '<agent><description_en>updated</description_en></agent>' };
+    };
+    const editEvents: any[] = [];
+    for await (const event of agents.streamSendToAgentEditChat(secondUid, agentId, 'edit this')) {
+      editEvents.push(event);
+    }
+    expect(editEvents.at(-1)).toMatchObject({ type: 'final' });
+    expect((await agents.getAgentChatMessages(secondUid, agentId)).length).toBeGreaterThan(0);
+    expect(await agents.clearAgentChat(secondUid, agentId)).toBe(true);
+    expect(fs.existsSync(path.join(chatDir, 'chat.jsonl'))).toBe(false);
+  });
+});
+
 describe('agents › normalizeAgent', () => {
   it('returns null for missing agent_id', async () => {
     const a = await loadAgents();
@@ -381,6 +433,15 @@ describe('agents › normalizeAgent', () => {
     expect(norm?.skill_list).toEqual([]);
   });
 
+  it('keeps well-formed builtin:<name> entries on load (safeId alone would drop them)', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({
+      agent_id: 'x', name: 'N',
+      skill_list: ['ok-one', 'builtin:coding', 'builtin:Bad', 'builtin:', 'builtin:a b', 'builtin:kb-mindmap'],
+    } as any, 'custom');
+    expect(norm?.skill_list).toEqual(['ok-one', 'builtin:coding', 'builtin:kb-mindmap']);
+  });
+
   it('filters non-string and non-safeId entries from skill_list', async () => {
     const a = await loadAgents();
     const norm = a.normalizeAgent({
@@ -397,6 +458,29 @@ describe('agents › normalizeAgent', () => {
       enabled_connectors: [' github ', '', '../evil', 42, 'notion'],
     } as any, 'custom');
     expect(norm?.enabled_connectors).toEqual(['github', 'notion']);
+  });
+
+  // 回归（fail-open）：此前 `if (filtered.length)` 会把空数组丢掉，于是
+  // "明确禁止全部连接器" 被规范化成 "未声明"，而运行时的未声明语义是
+  // "继承 commander 的可见性" —— 一个想收权的声明反而放开了全部。
+  // 空数组必须原样保留，`[]` 与 `undefined` 在连接器可见性上不同义。
+  it('keeps an explicitly empty enabled_connectors list', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({
+      agent_id: 'x', name: 'N',
+      enabled_connectors: [],
+    } as any, 'custom');
+    expect(norm?.enabled_connectors).toEqual([]);
+  });
+
+  it('drops enabled_connectors when all ids are invalid but the field was non-empty', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({
+      agent_id: 'x', name: 'N',
+      enabled_connectors: ['../evil', '', 42],
+    } as any, 'custom');
+    // 全是垃圾 id → 归零（拒绝全部），不得回退成 undefined（那会变成继承全部）
+    expect(norm?.enabled_connectors).toEqual([]);
   });
 
   it('normalizes rich profile fields and design aliases', async () => {
@@ -1328,14 +1412,14 @@ describe('agents › countP3394GatewayAgentsByCli (shared-gateway refcount)', ()
 describe('agents › createAgentFromBlocks', () => {
   it('backfills the default category when model-authored creates omit it', async () => {
     const a = await loadAgents();
-    const missing = await a.createAgentFromBlocks({
+    const missing = await a.createAgentFromBlocks(TEST_UID, {
       name: 'NoCategory',
       description_en: 'desc',
       workflow: 'Do the work.',
     });
     expect(missing?.category).toBe('general');
 
-    const created = await a.createAgentFromBlocks({
+    const created = await a.createAgentFromBlocks(TEST_UID, {
       name: 'DataAgent',
       description_en: 'desc',
       workflow: 'Analyze the data.',
@@ -1348,11 +1432,11 @@ describe('agents › createAgentFromBlocks', () => {
 
   it('rejects creates missing mandatory name or workflow', async () => {
     const a = await loadAgents();
-    await expect(a.createAgentFromBlocks({
+    await expect(a.createAgentFromBlocks(TEST_UID, {
       name: 'NoWorkflow',
       description_en: 'desc',
     })).resolves.toBeNull();
-    await expect(a.createAgentFromBlocks({
+    await expect(a.createAgentFromBlocks(TEST_UID, {
       workflow: 'Do the work.',
       description_en: 'desc',
     })).resolves.toBeNull();
@@ -1361,7 +1445,7 @@ describe('agents › createAgentFromBlocks', () => {
   it('persists optional skill allowlist, input schema and interactive flag', async () => {
     writeSkillOnDisk('known-skill');
     const a = await loadAgents();
-    const created = await a.createAgentFromBlocks({
+    const created = await a.createAgentFromBlocks(TEST_UID, {
       name: 'InteractiveHelper',
       description_en: 'desc',
       workflow: 'Ask for a topic, then use the selected skill.',
@@ -1386,7 +1470,7 @@ describe('agents › createAgentFromBlocks', () => {
 
   it('persists knowhow and standards as top-level agent fields', async () => {
     const a = await loadAgents();
-    const created = await a.createAgentFromBlocks({
+    const created = await a.createAgentFromBlocks(TEST_UID, {
       name: 'ProfiledHelper',
       description_en: 'desc',
       workflow: 'Read the task, then deliver.',
@@ -1403,9 +1487,63 @@ describe('agents › createAgentFromBlocks', () => {
     expect(raw.standards).toEqual(['Traceable output']);
     expect('profile' in raw).toBe(false);
   });
+
+  it('uses the explicit user id even when the active user changes', async () => {
+    const a = await loadAgents();
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('other-user');
+
+    const created = await a.createAgentFromBlocks(TEST_UID, {
+      name: 'ExplicitUserAgent',
+      description_en: 'desc',
+      workflow: 'Use the explicit user scope.',
+    });
+
+    expect(created).not.toBeNull();
+    expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'cloud', 'agents', created?.agent_id || '', 'agent.json'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'other-user', 'cloud', 'agents', created?.agent_id || '', 'agent.json'))).toBe(false);
+  });
 });
 
 describe('agents › listAgents', () => {
+  it('invalidates the requested user cache after an explicit-user mutation', async () => {
+    const a = await loadAgents();
+    const users = await import('../../../src/main/features/users');
+    const otherUid = 'u2';
+    const agentId = 'cached-agent';
+    const agentDir = path.join(tmpDir, otherUid, 'cloud', 'agents', agentId);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'agent.json'), JSON.stringify({
+      agent_id: agentId, name: 'Before', description: '', workflow: '',
+    }));
+
+    const before = await a.listAgentsForUser(otherUid);
+    expect(before.find((agent) => agent.agent_id === agentId)?.name).toBe('Before');
+    users.activateUser(TEST_UID);
+    await a.updateAgentSpecForUser(otherUid, agentId, { name: 'After' });
+
+    const after = await a.listAgentsForUser(otherUid);
+    expect(after.find((agent) => agent.agent_id === agentId)?.name).toBe('After');
+  });
+
+  it('lists explicit user summaries without using the active user', async () => {
+    writeCustomAgent('requested-agent', { name: 'Requested Agent' });
+    const otherUid = 'other-user';
+    const otherDir = path.join(tmpDir, otherUid, 'cloud', 'agents', 'active-agent');
+    fs.mkdirSync(otherDir, { recursive: true });
+    fs.writeFileSync(path.join(otherDir, 'agent.json'), JSON.stringify({
+      agent_id: 'active-agent', name: 'Active Agent', created_at: 't', updated_at: 't',
+    }));
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(otherUid);
+    const a = await loadAgents();
+
+    const summaries = await a.listAgentSummariesForUser(TEST_UID);
+
+    expect(summaries.map((agent) => agent.agent_id)).toContain('requested-agent');
+    expect(summaries.map((agent) => agent.agent_id)).not.toContain('active-agent');
+  });
+
   it('returns empty when both dirs are missing', async () => {
     const a = await loadAgents();
     expect(await a.listAgents()).toEqual([]);
@@ -1551,6 +1689,25 @@ describe('agents › updateCustomAgent', () => {
     expect(raw.description_zh).toBe('plain English while UI is zh');
     expect(raw.description_en).toBe('old English');
     expect(raw).not.toHaveProperty('description');
+  });
+
+  it('keeps open built-in capabilities on update, drops ones the client does not offer, and dedupes', async () => {
+    writeSkillOnDisk('efb0fe5d9664', 'skill-creator');
+    writeCustomAgent('abc', { name: 'Old', workflow: 'wf' });
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', {
+      skill_list: ['efb0fe5d9664', 'builtin:coding', 'builtin:coding', 'builtin:package-installer', 'builtin:Bad'],
+    } as any);
+    expect(updated?.skill_list).toEqual(['efb0fe5d9664', 'builtin:coding']);
+    const raw = JSON.parse(fs.readFileSync(path.join(customAgentsDir(), 'abc', 'agent.json'), 'utf8'));
+    expect(raw.skill_list).toEqual(['efb0fe5d9664', 'builtin:coding']);
+  });
+
+  it('a skill_list that only names a built-in capability is not the same as an empty list', async () => {
+    writeCustomAgent('abc', { name: 'Old', workflow: 'wf' });
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', { skill_list: ['builtin:grounded-material-qa'] } as any);
+    expect(updated?.skill_list).toEqual(['builtin:grounded-material-qa']);
   });
 
   it('normalizes workflow skill references on update', async () => {
@@ -1864,7 +2021,7 @@ describe('agents › appendAgentSkill', () => {
     // appendAgentSkill must NOT drop it the way updateCustomAgent would.
     writeCustomAgent('abc', { name: 'N', skill_list: ['existing'] });
     const a = await loadAgents();
-    const ok = await a.appendAgentSkill('abc', 'learned-via-reflection');
+    const ok = await a.appendAgentSkill(TEST_UID, 'abc', 'learned-via-reflection');
     expect(ok).toBe(true);
     const reread = await a.getAgent('abc');
     expect(reread?.skill_list).toEqual(['existing', 'learned-via-reflection']);
@@ -1873,7 +2030,7 @@ describe('agents › appendAgentSkill', () => {
   it('is a no-op when skill_list metadata is undefined', async () => {
     writeCustomAgent('abc', { name: 'N' }); // no skill_list
     const a = await loadAgents();
-    const ok = await a.appendAgentSkill('abc', 'new-skill');
+    const ok = await a.appendAgentSkill(TEST_UID, 'abc', 'new-skill');
     expect(ok).toBe(false);
     const reread = await a.getAgent('abc');
     expect(reread?.skill_list).toBeUndefined();
@@ -1882,20 +2039,39 @@ describe('agents › appendAgentSkill', () => {
   it('is a no-op when skill id is already present', async () => {
     writeCustomAgent('abc', { name: 'N', skill_list: ['dup'] });
     const a = await loadAgents();
-    const ok = await a.appendAgentSkill('abc', 'dup');
+    const ok = await a.appendAgentSkill(TEST_UID, 'abc', 'dup');
     expect(ok).toBe(false);
   });
 
   it('rejects invalid skill ids', async () => {
     writeCustomAgent('abc', { name: 'N', skill_list: [] });
     const a = await loadAgents();
-    expect(await a.appendAgentSkill('abc', '../escape')).toBe(false);
-    expect(await a.appendAgentSkill('abc', '')).toBe(false);
+    expect(await a.appendAgentSkill(TEST_UID, 'abc', '../escape')).toBe(false);
+    expect(await a.appendAgentSkill(TEST_UID, 'abc', '')).toBe(false);
   });
 
   it('returns false for missing agent', async () => {
     const a = await loadAgents();
-    expect(await a.appendAgentSkill('ghost', 'x')).toBe(false);
+    expect(await a.appendAgentSkill(TEST_UID, 'ghost', 'x')).toBe(false);
+  });
+
+  it('uses the explicit user scope even when the active user changes', async () => {
+    writeCustomAgent('abc', { name: 'User one', skill_list: ['existing'] });
+    const otherAgentDir = path.join(tmpDir, 'u2', 'cloud', 'agents', 'abc');
+    fs.mkdirSync(otherAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(otherAgentDir, 'agent.json'), JSON.stringify({
+      agent_id: 'abc', name: 'User two', description: 'Test agent', category: 'general', workflow: '',
+      skill_list: ['existing'], created_at: '2026-04-18T10:00:00', updated_at: '2026-04-18T10:00:00',
+    }));
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('u2');
+    const a = await loadAgents();
+
+    expect(await a.appendAgentSkill(TEST_UID, 'abc', 'learned-via-reflection')).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(customAgentsDir(), 'abc', 'agent.json'), 'utf8')).skill_list)
+      .toEqual(['existing', 'learned-via-reflection']);
+    expect(JSON.parse(fs.readFileSync(path.join(otherAgentDir, 'agent.json'), 'utf8')).skill_list)
+      .toEqual(['existing']);
   });
 });
 
@@ -2247,6 +2423,16 @@ describe('agents › deleteCustomAgent', () => {
 });
 
 describe('agents › buildAgentEditSystemPrompt', () => {
+  it('injects the live interface language as fallback independently of the legacy Agent language', async () => {
+    const { setLanguage, setUiLanguage } = await import('../../../src/main/features/config');
+    const a = await loadAgents();
+    setLanguage('en');
+    setUiLanguage('zh');
+    expect(a.buildAgentEditSystemPrompt({})).toContain('fallback response language: **Chinese (简体中文)**');
+    setUiLanguage('en');
+    expect(a.buildAgentEditSystemPrompt({})).toContain('fallback response language: **English**');
+  });
+
   it('substitutes agent fields and drops the removed skills_list placeholder', async () => {
     const a = await loadAgents();
     const sys = await a.buildAgentEditSystemPrompt({
@@ -2305,6 +2491,45 @@ describe('agents › list cache invalidation', () => {
 
     restarted.clearAgentListCache();
     expect(await restarted.listAgents()).toEqual([]);
+  });
+
+  it('does not treat runtime-data dirs without agent.json as malformed sources', async () => {
+    writeCustomAgent('persisted-agent', { name: 'Persisted Agent' });
+    // Using any agent creates cloud/agents/<id>/ with runtime stats only — no agent.json.
+    const runtimeDir = path.join(customAgentsDir(), 'used-hub-agent');
+    fs.mkdirSync(path.join(runtimeDir, 'meta'), { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, 'runtime_stats.json'), '{}');
+    const a = await loadAgents();
+    expect((await a.listAgents()).map((x) => x.name)).toEqual(['Persisted Agent']);
+
+    const hubDir = path.join(builtinAgentsDir(), 'hub-agent');
+    fs.mkdirSync(hubDir, { recursive: true });
+    fs.writeFileSync(path.join(hubDir, 'agent.json'), JSON.stringify({
+      agent_id: 'hub-agent', name: 'Hub Agent', description: '', workflow: '',
+    }));
+    const later = new Date(Date.now() + 60_000);
+    fs.utimesSync(builtinAgentsDir(), later, later);
+    expect((await a.listAgents()).map((x) => x.name).sort()).toEqual(['Hub Agent', 'Persisted Agent']);
+  });
+
+  it('Hub uninstall clears the list cache even while a malformed source keeps the snapshot', async () => {
+    writeCustomAgent('persisted-agent', { name: 'Persisted Agent' });
+    const hubDir = path.join(builtinAgentsDir(), 'hub-agent');
+    fs.mkdirSync(hubDir, { recursive: true });
+    fs.writeFileSync(path.join(hubDir, 'agent.json'), JSON.stringify({
+      agent_id: 'hub-agent', name: 'Hub Agent', description: '', workflow: '',
+    }));
+    const a = await loadAgents();
+    expect((await a.listAgents()).map((x) => x.name).sort()).toEqual(['Hub Agent', 'Persisted Agent']);
+
+    // A genuinely malformed source keeps the last known-good snapshot (cache contract above).
+    const brokenDir = path.join(customAgentsDir(), 'broken-agent');
+    fs.mkdirSync(brokenDir, { recursive: true });
+    fs.writeFileSync(path.join(brokenDir, 'agent.json'), '{not-json');
+
+    const marketplace = await import('../../../src/main/features/marketplace');
+    await marketplace.uninstallMarketplaceAgentForUser(TEST_UID, 'hub-agent');
+    expect((await a.listAgents()).map((x) => x.name)).toEqual(['Persisted Agent']);
   });
 
   it('picks up newly created agents on next listAgents', async () => {
@@ -2378,6 +2603,51 @@ describe('agents › list cache invalidation', () => {
     expect(found?.marketplace_published_at).toBe(1747066800000);
     expect(found?.marketplace_updated_at).toBe(1747067800000);
     expect(found?.default_install).toBe(true);
+  });
+
+  it('surfaces a failed update on an installed marketplace agent only while the local version is still behind', async () => {
+    const dir = path.join(builtinAgentsDir(), 'platform-agent');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify({ agent_id: 'platform-agent', name: 'Platform agent', description: '', workflow: '' }));
+    fs.writeFileSync(path.join(dir, '_install.json'), JSON.stringify({ version: '1.0.0' }));
+    const failuresFile = path.join(path.dirname(builtinAgentsDir()), '_agent_update_failures.json');
+    const a = await loadAgents();
+
+    fs.writeFileSync(failuresFile, JSON.stringify({ 'platform-agent': { target_version: '2.0.0', at: 1, reason: 'dependency_disabled' } }));
+    const behind = (await a.listAgents()).find((x) => x.agent_id === 'platform-agent');
+    expect(behind?.update_failure).toEqual({ target_version: '2.0.0', at: 1, reason: 'dependency_disabled' });
+    expect(behind?.version).toBe('1.0.0'); // the installed version is untouched and still the one in use
+
+    // The local version has caught up (e.g. installed by hand later): the note no longer applies.
+    fs.writeFileSync(failuresFile, JSON.stringify({ 'platform-agent': { target_version: '1.0.0', at: 1, reason: 'network' } }));
+    expect((await a.listAgents()).find((x) => x.agent_id === 'platform-agent')?.update_failure).toBeUndefined();
+
+    // No record at all, or a custom agent with the same id in the record: nothing is attached.
+    fs.rmSync(failuresFile, { force: true });
+    expect((await a.listAgents()).find((x) => x.agent_id === 'platform-agent')?.update_failure).toBeUndefined();
+  });
+
+  it('tells official from community agents by the install record author uid', async () => {
+    const write = (id: string, installMeta: Record<string, unknown> | null) => {
+      const dir = path.join(builtinAgentsDir(), id);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify({ agent_id: id, name: id, description: '', workflow: '' }));
+      if (installMeta) fs.writeFileSync(path.join(dir, '_install.json'), JSON.stringify({ version: '1.0.0', ...installMeta }));
+    };
+    write('official-agent', { create_uid: '0' });
+    write('community-agent', { create_uid: '8f3a21' });
+    write('blank-author-agent', { create_uid: '  ' });
+    write('no-author-agent', {});
+    write('no-install-record-agent', null);
+
+    const a = await loadAgents();
+    const byId = new Map((await a.listAgents()).map((x) => [x.agent_id, x]));
+    expect(byId.get('official-agent')?.author_tier).toBe('official');
+    expect(byId.get('community-agent')?.author_tier).toBe('community');
+    // No author information: do not guess either way.
+    expect(byId.get('blank-author-agent')?.author_tier).toBeUndefined();
+    expect(byId.get('no-author-agent')?.author_tier).toBeUndefined();
+    expect(byId.get('no-install-record-agent')?.author_tier).toBeUndefined();
   });
 });
 
@@ -2459,5 +2729,34 @@ describe('agents › default execution config (default_model / default_thinking)
     const agent = await a.getAgent('abc');
     expect(agent?.default_model).toBeUndefined();
     expect(agent?.default_thinking).toBeUndefined();
+  });
+});
+
+describe('agents › user-disabled dependencies (S4 FR-027)', () => {
+  it('marks an agent deps_blocked with reason user_disabled while a skill it uses is turned off', async () => {
+    writeCustomAgent('report-agent', { skill_list: ['invoice-extract', 'other'] });
+    const agents = await loadAgents();
+    const ce = await import('../../../src/main/features/component_enabled');
+    const find = async () => (await agents.listAgentsForUser(TEST_UID)).find((a) => a.agent_id === 'report-agent') as any;
+
+    expect((await find()).dependency_state).toBeUndefined();
+    ce.setSkillEnabled(TEST_UID, 'invoice-extract', false);
+    expect((await find()).dependency_state).toEqual({
+      status: 'deps_blocked', ids: ['invoice-extract'], reasons: { 'invoice-extract': 'user_disabled' },
+    });
+    ce.setSkillEnabled(TEST_UID, 'invoice-extract', true);
+    expect((await find()).dependency_state).toBeUndefined();
+  });
+
+  it('resolves a skill listed by name to its id (older agents write names)', async () => {
+    writeSkillOnDisk('invoice-extract', 'invoice-extractor');
+    writeCustomAgent('legacy-agent', { skill_list: ['invoice-extractor'] });
+    const agents = await loadAgents();
+    const ce = await import('../../../src/main/features/component_enabled');
+    ce.setSkillEnabled(TEST_UID, 'invoice-extract', false);
+    const agent = (await agents.listAgentsForUser(TEST_UID)).find((a) => a.agent_id === 'legacy-agent') as any;
+    expect(agent.dependency_state).toEqual({
+      status: 'deps_blocked', ids: ['invoice-extract'], reasons: { 'invoice-extract': 'user_disabled' },
+    });
   });
 });

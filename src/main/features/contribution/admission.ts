@@ -27,6 +27,7 @@ import { validateSkillDir, type Level, type ValidationReport, type Violation } f
 import { scanSkillDir, type SentryScanResult, type ScanOutcome } from '../security/sentry-adapter';
 import { createLogger } from '../../logger';
 import { gateDeclaration, type DeclarationGateResult, type DeclarationBlockReason } from './declaration';
+import { checkContributionIcon } from './icon-rules';
 import { contributionComponents, componentsReady, type ContributionComponents } from './components';
 import type { ContributionStaging } from './staging';
 
@@ -38,6 +39,7 @@ export type ContributionOutcome = 'pass' | 'blocked' | 'incomplete';
 /** 阻断原因。机器可读，UI 据此选引导文案。 */
 export type ContributionBlockReason =
   | 'local_red_lines'      // 本地 EXTREME 红线
+  | 'icon_invalid'        // 可选图标不合法（与 Hub 复检同一套规则，报告 HUB-2）
   | 'scan_refused'         // 深扫判定拒绝（blocked）
   | 'scan_restricted'      // CAUTION → restricted，贡献侧拦（R-1）
   | 'scan_unavailable'     // unknown：检查该跑而没跑成
@@ -167,6 +169,35 @@ export async function admitContribution(staging: ContributionStaging): Promise<C
         .map((v) => v.rule),
     });
     return _blocked('local_red_lines', report, null, components);
+  }
+
+  // ①.5 可选图标的**静态镜像**（报告 HUB-2）。
+  //
+  //    Hub 的提交复检会对图标跑 `icon.duplicate` / `icon.location` / `icon.format` /
+  //    `icon.size` / `icon.dimension`，而这里此前一步都没跑——贡献者看到「准入通过」
+  //    后，还会被服务端的 `PACKAGE_REJECTED` 拒绝。规则本身只看路径与头部字节，很便宜，
+  //    没有理由留到最后一步才发现。放在深扫之前：一份图标就写错的包不必先付一次完整扫描。
+  //
+  //    图标问题追加进**本地报告**：UI 与上行 `blocking[]` 都按 violations 呈现，
+  //    不在这里另拼一套文案（否则两端会各说各话）。
+  const icon = await checkContributionIcon(staging.dir);
+  if (icon.issues.length > 0) {
+    for (const issue of icon.issues) {
+      report.violations.push({
+        level: 'EXTREME',
+        rule: issue.rule,
+        field: issue.entry,
+        // 不含命中原文：图标问题本来就是「路径 + 规则」，snippet 留空。
+        snippet: '',
+        suggested_fix: issue.message,
+      });
+    }
+    report.ok = false;
+    log.warn('contribution blocked by icon rules', {
+      token: staging.token,
+      rules: icon.issues.map((issue) => issue.rule),
+    });
+    return _blocked('icon_invalid', report, null, components);
   }
 
   // ② 深扫 + 指令审计。`scanSkillDir` 永不抛错，失败一律落 `unknown`。

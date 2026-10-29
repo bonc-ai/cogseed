@@ -91,10 +91,17 @@ describe('CogSeed P3394 wake dispatcher', () => {
       task: 'Continue interactively',
       conversationId: 'cid-1',
       executionKind: 'cogseed-native',
+      workingDir: '/tmp/wake-conversation-workspace',
       allowedSkillIds: ['skill-one'],
-      context: [{ type: 'text', label: 'Formal Agent execution context', content: 'Follow the formal workflow.' }],
+      context: [
+        { type: 'text', label: 'Formal Agent execution context', content: 'Follow the formal workflow.' },
+        // Native wake runs derive tool roots only from file-typed context items,
+        // so the resolved working directory must ride along as one.
+        { type: 'file', path: '/tmp/wake-conversation-workspace', label: 'working directory' },
+      ],
     }));
     expect(startCogSeedTask.mock.calls[0]?.[1]).not.toHaveProperty('profileId');
+    expect(getConversationWorkspacePath).toHaveBeenCalledWith('user-1', 'cid-1');
   });
 
   it('runs a P3394 gateway Agent through the real local CLI adapter', async () => {

@@ -18,13 +18,17 @@ import type { RecallCandidateRisk, RecallCandidateStatus } from './candidate-ser
 import type { AbilityAssetType, RecallCandidateAction } from './candidate-service';
 import type { RecallCandidateClassificationReason } from './capture-value-screening';
 import { validatePromotionByAssetType, type PromotionBlockReason } from './formal-assets/promotion';
+import { hasReviewableCandidateEvidence } from './candidate-evidence';
 
 /** 用户可见的产品态。后端枚举不直接进 UI。 */
 export type RecallCandidateDisplayState =
+  | 'content_purged'
   | 'needs_review'
   | 'weak_evidence'
   | 'deferred'
   | 'confirmed'
+  | 'integrated'
+  | 'ontology_in_progress'
   | 'rejected'
   | 'ignored'
   | 'expired'
@@ -46,13 +50,16 @@ export type RecallCandidateEligibility = 'eligible' | 'soft_warning' | 'ineligib
 
 /** disabledReason / 批量拦截原因的稳定码。UI 负责翻译，不得直接展示。 */
 export type RecallCandidateBlockedReason =
+  | 'candidate_content_purged'
   | 'candidate_confirmed'
+  | 'candidate_integrated'
   | 'candidate_rejected'
   | 'candidate_ignored'
   | 'candidate_expired'
   | 'candidate_superseded'
   | 'candidate_evidence_insufficient'
   | 'candidate_state_unknown'
+  | 'candidate_ontology_needs_single_review'
   | 'candidate_high_risk_needs_single_review';
 
 /**
@@ -64,10 +71,20 @@ export type RecallCandidateBlockedReason =
  * （外部构造、老 DTO）仍然可用，缺内容时不收紧，见 `assessEligibility`。
  */
 export interface RecallCandidateCapabilityInput {
+  contentPurgedAt?: string;
+  proposalTarget?: string;
+  autoReview?: { eligible?: boolean };
+  processingDecisionActor?: 'user' | 'system';
+  automaticUndo?: unknown;
+  ontologyFormation?: { actions: readonly unknown[]; blockedReasons: readonly string[] };
   status: RecallCandidateStatus;
+  origin?: string;
+  contentOrganization?: { operationId: string };
+  stockOrganizationProvenance?: { kind: string; jobId: string };
   risk?: RecallCandidateRisk;
   sourceRefs?: readonly unknown[];
   evidenceRefs?: readonly unknown[];
+  ontologyHandoff?: { status?: 'in_progress' | 'integrated' };
   judgment?: string;
   value?: string;
   summary?: string;
@@ -85,13 +102,15 @@ export interface RecallCandidateCapabilityInput {
 }
 
 export interface RecallCandidateCapabilities {
+  canUndoAutomatic?: boolean;
   canView: boolean;
   canEdit: boolean;
   canConfirm: boolean;
   canPromote: boolean;
-  canReject: boolean;
   canDefer: boolean;
+  canReject: boolean;
   canRetry: boolean;
+  canContinueOntology: boolean;
   /** 能否进入批量入库勾选池。= canPromote 且不是必须单条复核的高风险候选。 */
   canBatchSelect: boolean;
   /** 还需要用户做决定。= canConfirm || canReject || canDefer || canRetry。 */
@@ -124,9 +143,10 @@ const ACTIONABLE = {
   canEdit: true,
   canConfirm: true,
   canPromote: true,
-  canReject: true,
   canDefer: true,
+  canReject: true,
   canRetry: false,
+  canContinueOntology: false,
   needsUserAction: true,
   countsAsPending: true,
   isSnoozed: false,
@@ -143,9 +163,10 @@ function terminal(
     canEdit: false,
     canConfirm: false,
     canPromote: false,
-    canReject: false,
     canDefer: false,
+    canReject: false,
     canRetry: false,
+    canContinueOntology: false,
     needsUserAction: false,
     countsAsPending: false,
     isSnoozed: false,
@@ -174,6 +195,7 @@ const BY_STATUS: Record<RecallCandidateStatus, BaseCapabilities> = {
   // 所以这里不能把它当只读。产品上的主动作是重试。
   failed: { ...ACTIONABLE, canRetry: true, displayState: 'failed' },
   confirmed: terminal('confirmed', 'candidate_confirmed'),
+  integrated: terminal('integrated', 'candidate_integrated'),
   rejected: terminal('rejected', 'candidate_rejected'),
   ignored: terminal('ignored', 'candidate_ignored'),
   expired: terminal('expired', 'candidate_expired'),
@@ -197,12 +219,7 @@ function blocksBatch(risk: RecallCandidateRisk | undefined): boolean {
  * 未提供 refs 时不额外收紧——真实记录一定带这两个字段。
  */
 function hasReviewableEvidence(candidate: RecallCandidateCapabilityInput): boolean {
-  const evidence = candidate.evidenceRefs ?? candidate.sourceRefs;
-  if (candidate.sourceRefs === undefined && evidence === undefined) return true;
-  // 只对**给到的**字段判空：调用方可能只带其中一个（inbox DTO 就是这样），
-  // 缺字段不等于"没有证据"。asCandidate 要求两者都非空，所以两者都要过。
-  return (candidate.sourceRefs === undefined || candidate.sourceRefs.length > 0)
-    && (evidence === undefined || evidence.length > 0);
+  return hasReviewableCandidateEvidence(candidate);
 }
 
 /**
@@ -221,6 +238,11 @@ function assessEligibility(candidate: RecallCandidateCapabilityInput): {
   ineligibleReasons: PromotionBlockReason[];
   advisories: RecallCandidateClassificationReason[];
 } {
+  if (candidate.contentOrganization || candidate.proposalTarget === 'ontology') {
+    // Eligibility here describes the explanation, not formal cognition. The
+    // actual plan/source/version gates repeat at the atomic ontology commit.
+    return { eligibility: 'eligible', ineligibleReasons: [], advisories: [] };
+  }
   const judgment = typeof candidate.judgment === 'string' ? candidate.judgment.trim() : '';
   if (!judgment || !candidate.suggestedType) {
     return { eligibility: 'eligible', ineligibleReasons: [], advisories: [] };
@@ -255,9 +277,18 @@ function assessEligibility(candidate: RecallCandidateCapabilityInput): {
 export function getRecallCandidateCapabilities(
   candidate: RecallCandidateCapabilityInput,
 ): RecallCandidateCapabilities {
+  if (candidate.contentPurgedAt) return {
+    ...terminal('content_purged', 'candidate_content_purged'), canBatchSelect: false,
+    eligibility: 'ineligible', ineligibleReasons: [], eligibilityAdvisories: [],
+  };
   let base = BY_STATUS[candidate.status];
   if (!base) throw new Error('unknown recall candidate status');
   const evidenceBound = candidate.status === 'observed' || candidate.status === 'weak_observation';
+  if (evidenceBound && candidate.origin === 'manual') {
+    // Older detail edits downgraded manual candidates. Their user provenance
+    // is still valid; expose review without rewriting historical records.
+    base = { ...base, displayState: 'needs_review' };
+  }
   if (evidenceBound && !hasReviewableEvidence(candidate)) {
     // 证据补齐前它连状态都迁不出去：UI 说"可以处理"就是假话。
     base = {
@@ -266,18 +297,21 @@ export function getRecallCandidateCapabilities(
       canConfirm: false,
       canPromote: false,
       canReject: false,
-      canDefer: false,
       canRetry: false,
       needsUserAction: false,
       countsAsPending: false,
       disabledReason: 'candidate_evidence_insufficient',
     };
   }
+  if (candidate.ontologyHandoff?.status === 'in_progress') {
+    base = { ...base, canEdit: false, canConfirm: false, canPromote: false, canReject: false, canRetry: false,
+      canContinueOntology: true, needsUserAction: true, countsAsPending: true, isTerminal: false, displayState: 'ontology_in_progress' };
+  }
   // 准入门槛：内容不够格时**必须**关掉确认与晋升。留着它就是假审批——
   // 用户点确认，promoteRecallCandidate 里的同一个 validatePromotionByAssetType
   // 会再拒一次，一次认真的审批白做。
   //
-  // 编辑、拒绝、稍后一律保留：方案 B 要求不合格候选仍然可见，且用户有
+  // 编辑、拒绝、稍后一律保留：不合格候选仍然可见，且用户有
   // "改到合格"与"直接否掉"两条出路。改完后 eligibility 会重新算（这一层是
   // 纯投影，不落盘），够格了确认按钮自己会回来。
   const eligibility = assessEligibility(candidate);
@@ -286,17 +320,20 @@ export function getRecallCandidateCapabilities(
       ...base,
       canConfirm: false,
       canPromote: false,
-      needsUserAction: base.canEdit || base.canReject || base.canDefer || base.canRetry,
+      needsUserAction: base.canEdit || base.canReject || base.canRetry || base.canContinueOntology,
     };
   }
   const batchBlocked = base.canPromote && blocksBatch(candidate.risk);
   return {
     ...base,
+    ...(candidate.processingDecisionActor === 'system' && !candidate.automaticUndo && ['confirmed', 'integrated'].includes(candidate.status) ? { canUndoAutomatic: true } : {}),
     eligibility: eligibility.eligibility,
     ineligibleReasons: eligibility.ineligibleReasons,
     eligibilityAdvisories: eligibility.advisories,
-    canBatchSelect: base.canPromote && !batchBlocked,
-    ...(batchBlocked ? { batchBlockedReason: 'candidate_high_risk_needs_single_review' as const } : {}),
+    canBatchSelect: !candidate.contentOrganization && base.canPromote && !batchBlocked && candidate.proposalTarget !== 'ontology',
+    ...(candidate.proposalTarget === 'ontology' && base.canPromote
+      ? { batchBlockedReason: 'candidate_ontology_needs_single_review' as const }
+      : batchBlocked ? { batchBlockedReason: 'candidate_high_risk_needs_single_review' as const } : {}),
   };
 }
 
@@ -340,7 +377,7 @@ export function withRecallCandidateCapabilities<T extends { status: string }>(
   };
 }
 
-/* ───────────── review-queue 视图投影（2026-09-29 第 3 批·读写面收敛） ─────────────
+/* ───────────── review-queue 视图投影 ─────────────
  * 认知面板的「待我处理」不再全量拉候选池：历史 confirmed/rejected/ignored 逐年
  * 累积、页面只显示处理记录 5 条 + 已失效 8 条。视图在服务端裁剪 + 字段白名单
  * 投影；不传 view 的调用方（会话抽屉按 sourceRefs 自过滤、需要含已确认项）
@@ -350,24 +387,24 @@ const REVIEW_QUEUE_TERMINAL_LIMIT = 8;
 const REVIEW_QUEUE_PROCESSED_LIMIT = 5;
 /** 渲染层零消费的记录级字段，review-queue 视图不出 IPC（全形状读口保留）。 */
 const REVIEW_QUEUE_OMIT_FIELDS = new Set([
-  'contentFormatVersion', 'taxonomyVersion', 'reviewDecisionId', 'decisionNote', 'spaceId',
+  'contentFormatVersion', 'taxonomyVersion', 'decisionNote', 'spaceId',
   'cooldownUntil', 'failureCode', 'failureMessage', 'failedAt', 'validationCount',
   'lastValidatedAt', 'consecutiveFailures', 'appliedValidationIds', 'userModifiedAt',
 ]);
 
 export function projectReviewQueueCandidates<
-  T extends { id: string; status: string; updatedAt?: string; createdAt?: string; capabilities?: RecallCandidateCapabilities },
->(candidates: readonly T[]): Array<Partial<T> & { id: string; status: string; capabilities?: RecallCandidateCapabilities }> {
+  T extends { id: string; status: string; contentPurgedAt?: string; updatedAt?: string; createdAt?: string; capabilities?: RecallCandidateCapabilities },
+>(candidates: readonly T[], activity = false): Array<Partial<T> & { id: string; status: string; capabilities?: RecallCandidateCapabilities }> {
   const byRecency = (a: T, b: T) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
-  const actionable = candidates.filter((c) => ['observed', 'weak_observation', 'pending_review', 'failed'].includes(String(c.status)));
+  const actionable = candidates.filter((c) => !c.contentPurgedAt && ['observed', 'weak_observation', 'pending_review', 'failed'].includes(String(c.status)));
   const actionableIds = new Set(actionable.map((c) => c.id));
   const snoozed = candidates.filter((c) => c.capabilities?.isSnoozed === true && !actionableIds.has(c.id));
   const terminal = candidates
-    .filter((c) => ['expired', 'superseded'].includes(String(c.status)))
-    .sort(byRecency).slice(0, REVIEW_QUEUE_TERMINAL_LIMIT);
+    .filter((c) => !c.contentPurgedAt && ['expired', 'superseded'].includes(String(c.status)))
+    .sort(byRecency).slice(0, activity ? candidates.length : REVIEW_QUEUE_TERMINAL_LIMIT);
   const processed = candidates
-    .filter((c) => ['confirmed', 'rejected', 'ignored'].includes(String(c.status)))
-    .sort(byRecency).slice(0, REVIEW_QUEUE_PROCESSED_LIMIT);
+    .filter((c) => (c.contentPurgedAt || ['confirmed', 'rejected', 'ignored'].includes(String(c.status)) || (activity && String(c.status) === 'integrated')))
+    .sort(byRecency).slice(0, activity ? candidates.length : REVIEW_QUEUE_PROCESSED_LIMIT);
   const queue = [...actionable, ...snoozed, ...terminal, ...processed];
   return queue.map((candidate) => {
     const projected: Record<string, unknown> = {};
@@ -399,12 +436,18 @@ export type RecallCandidateErrorCode =
   | 'recall_candidate_non_asset_decision'
   | 'recall_candidate_security_blocked'
   | 'recall_candidate_scope_policy_mismatch'
+  /** 存量正文超过存储契约；先缩短或拆分再保存，不能静默截断。 */
+  | 'recall_candidate_content_too_long'
   /** 编辑时新加的证据引用在来源目录里查不到——不接受用户自造的 id。 */
   | 'recall_candidate_unknown_source'
-  /** 版本组防分裂（2026-09-16）：create 候选与现有资产语义高度相似，等用户
+  /** 版本组防分裂：create 候选与现有资产语义高度相似，等用户
    *  决定"保存为新条目（forceCreateSimilar 重试）还是改为更新"。 */
   | 'recall_candidate_similar_asset'
+  /** 确认期间候选正文/范围/条件/证据或目标被另一入口改动；
+   *  必须重新展示当前内容再确认，不能沿用旧快照落库。 */
+  | 'recall_candidate_changed_during_confirmation'
   | 'recall_capture_not_review_ready'
+  | 'ontology_meaning_unresolved'
   | 'recall_capture_writing';
 
 /** 打码的候选错误。message 保持原样（日志/契约仍读它），code 供 UI 翻译。 */

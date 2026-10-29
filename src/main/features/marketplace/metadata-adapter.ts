@@ -198,12 +198,13 @@ class CatalogIndexSource implements MetadataSource {
 
   private async build(): Promise<Map<string, Record<string, unknown>>> {
     // 延迟取 postJson：`marketplace.ts` 会反过来依赖本模块，函数内取值避免装载期循环。
-    const { postJson } = await import('../marketplace');
+    const { postJson, currentAppVersion } = await import('../marketplace');
     const index = new Map<string, Record<string, unknown>>();
 
     try {
       for (let page = 1; page <= CATALOG_MAX_PAGES; page += 1) {
         const res = await postJson<{ list?: unknown; total?: number }>('/marketplace/skills/list', {
+          app_version: currentAppVersion(),
           category: null, status: null, q: null, page, size: CATALOG_PAGE_SIZE,
         });
         const list = Array.isArray(res.list) ? res.list : [];

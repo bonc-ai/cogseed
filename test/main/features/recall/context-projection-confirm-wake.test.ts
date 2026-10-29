@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -47,7 +48,7 @@ async function createConfirmedProjection() {
 
 async function createPreviewProjection() {
   const { projection, refs, candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate('user-a', {
+  const candidate = await createNightlyCandidateFixture('user-a', {
       spaceId: 'workspace-a',
     judgment: 'Keep decision logs for architecture changes.',
     summary: 'Use decision logs for architecture changes',

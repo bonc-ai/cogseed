@@ -88,6 +88,10 @@ function createTranslator(language: 'zh' | 'en' = 'zh') {
       'chat.welcome_carry_view_evidence': '查看依据',
       'chat.welcome_carry_scope': '只对目标任务生效',
       'chat.welcome_continue': '带着这些继续',
+      'chat.welcome_continue_with_request': '继续这项工作：{request}',
+      'chat.welcome_continue_with_plan': '继续。先按这个 Action Plan 执行，遇到冲突或需要扩大权限时再问我：\n{plan}',
+      'chat.welcome_continue_with_request_and_plan': '继续这项工作：{request}\n\n参考 Action Plan：\n{plan}',
+      'chat.welcome_continue_need_request': '请先在输入框告诉我这次要继续完成什么，再点「带着这些继续」。',
     },
     en: {
       'chat.welcome_carry_kind_personal': 'Personal info',
@@ -98,6 +102,10 @@ function createTranslator(language: 'zh' | 'en' = 'zh') {
       'chat.welcome_carry_view_evidence': 'View sources',
       'chat.welcome_carry_scope': 'Applies only to the target Task',
       'chat.welcome_continue': 'Continue with this context',
+      'chat.welcome_continue_with_request': 'Continue this work: {request}',
+      'chat.welcome_continue_with_plan': 'Continue. First execute this Action Plan, and ask me if there is a conflict or you need wider permissions:\n{plan}',
+      'chat.welcome_continue_with_request_and_plan': 'Continue this work: {request}\n\nReference Action Plan:\n{plan}',
+      'chat.welcome_continue_need_request': 'Tell me in the composer what you want to continue, then click “Continue with this”.',
     },
   } as const;
   return (key: keyof typeof tables.zh, vars?: Record<string, unknown>) => {
@@ -274,7 +282,7 @@ describe('imported-session welcome panel', () => {
     const submit = runWith(
       [extractFunction('_submitWelcomeContinue')],
       {
-        t: (key: string, fallback?: string) => fallback || key,
+        t: createTranslator('zh'),
         sendInConversation: async (cid: string, text: string) => { sent = { cid, text }; },
         window: {
           cogseed: {
@@ -288,6 +296,7 @@ describe('imported-session welcome panel', () => {
         Array,
         String,
         Number,
+        _convLog: { warn() {} },
       },
       '_submitWelcomeContinue',
     );
@@ -298,6 +307,124 @@ describe('imported-session welcome panel', () => {
     expect(sent!.text).toContain('1. 补齐主路径');
     expect(sent!.text).toContain('2. 输出评审问题');
     expect(invokeCalls).toEqual(['chats.markWelcomeSeen']);
+  });
+
+  it('sends the current request together with the Action Plan', async () => {
+    const block = {
+      dataset: {
+        welcomeResume: JSON.stringify({
+          plan: ['补齐主路径'],
+          currentRequest: '把这段工作内容整理成可汇报版本',
+        }),
+      },
+    };
+    const invokeCalls: string[] = [];
+    let sent: { cid: string; text: string } | null = null;
+    const submit = runWith(
+      [extractFunction('_submitWelcomeContinue')],
+      {
+        t: createTranslator('zh'),
+        sendInConversation: async (cid: string, text: string) => { sent = { cid, text }; },
+        window: { cogseed: { invoke: async (channel: string) => { invokeCalls.push(channel); return { ok: true }; } } },
+        JSON, Array, String, Number,
+        _convLog: { warn() {} },
+      },
+      '_submitWelcomeContinue',
+    );
+
+    await submit('c1', block, { disabled: false });
+
+    expect(sent).not.toBeNull();
+    expect(sent!.text).toContain('继续这项工作：把这段工作内容整理成可汇报版本');
+    expect(sent!.text).toContain('1. 补齐主路径');
+    expect(invokeCalls).toEqual(['chats.markWelcomeSeen']);
+  });
+
+  it('uses the current request when the Action Plan is empty', async () => {
+    const block = {
+      dataset: {
+        welcomeResume: JSON.stringify({
+          plan: [],
+          currentRequest: '把这段工作内容整理成可汇报版本',
+        }),
+      },
+    };
+    let sent: { cid: string; text: string } | null = null;
+    const submit = runWith(
+      [extractFunction('_submitWelcomeContinue')],
+      {
+        t: createTranslator('zh'),
+        sendInConversation: async (cid: string, text: string) => { sent = { cid, text }; },
+        window: { cogseed: { invoke: async () => ({ ok: true }) } },
+        JSON, Array, String, Number,
+        _convLog: { warn() {} },
+      },
+      '_submitWelcomeContinue',
+    );
+
+    await submit('c1', block, { disabled: false });
+
+    expect(sent?.text).toBe('继续这项工作：把这段工作内容整理成可汇报版本');
+  });
+
+  it('asks for a task instead of sending the generic sentence when nothing is available', async () => {
+    const btn = { disabled: true };
+    const invokeCalls: string[] = [];
+    const toasts: string[] = [];
+    let sent: { cid: string; text: string } | null = null;
+    const submit = runWith(
+      [extractFunction('_submitWelcomeContinue')],
+      {
+        t: createTranslator('zh'),
+        sendInConversation: async (cid: string, text: string) => { sent = { cid, text }; },
+        uiToast: (message: string) => { toasts.push(message); },
+        window: { cogseed: { invoke: async (channel: string) => { invokeCalls.push(channel); return { ok: true }; } } },
+        document: { getElementById: () => null },
+        JSON, Array, String, Number,
+        _convLog: { warn() {} },
+      },
+      '_submitWelcomeContinue',
+    );
+
+    await submit('c1', { dataset: { welcomeResume: JSON.stringify({ plan: [] }) } }, btn);
+
+    expect(sent).toBeNull();
+    expect(invokeCalls).toEqual([]);
+    expect(btn.disabled).toBe(false);
+    expect(toasts[0]).toContain('请先在输入框');
+  });
+
+  it('only intercepts pure handoff intents, never a message that carries a task', async () => {
+    const calls: Array<{ channel: string; payload: any }> = [];
+    const handoff = runWith(
+      [
+        extractFunction('_isPureHandoffIntent'),
+        extractFunction('_tryTemplateHandoffReply'),
+        '; _tryTemplateHandoffReply',
+      ],
+      {
+        window: {
+          cogseed: {
+            invoke: async (channel: string, payload: any) => {
+              calls.push({ channel, payload });
+              return { ok: true, text: '**项目**：…' };
+            },
+          },
+        },
+        loadConversationHistory: async () => {},
+        _convLog: { info() {}, warn() {} },
+        String,
+      },
+      '_tryTemplateHandoffReply',
+    );
+
+    expect(await handoff('c1', '继续这项工作')).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].payload.text).toBe('继续这项工作');
+
+    expect(await handoff('c1', '继续这项工作，把这段工作内容整理成可汇报版本')).toBe(false);
+    expect(await handoff('c1', '汇报进度时先给结论')).toBe(false);
+    expect(calls).toHaveLength(1);
   });
 
   it('skips rendering imported seed messages in chat history', () => {

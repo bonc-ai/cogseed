@@ -118,3 +118,64 @@ describe('marketplace/catalog-list（A-01 列表边界归一）', () => {
     });
   });
 });
+
+describe('marketplace/catalog-list 兼容状态标注（C5/N-06）', () => {
+  const SKIPPED_ID = '8a4f01c29d7e';
+  const COMPATIBLE_ID = 'compatible-skill';
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+    delete process.env.COGSEED_API_BASE_URL;
+  });
+
+  /** Hub 返回两条内容：一条会被版本门跳过，一条兼容。 */
+  function stubCatalog(): void {
+    process.env.COGSEED_API_BASE_URL = 'https://marketplace.test/api';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      code: 0,
+      msg: '',
+      total: 2,
+      list: [a01Row(), a01Row({ content_id: COMPATIBLE_ID, name: 'compatible-skill' })],
+    }))));
+  }
+
+  it('跳过项带上 appUpdateRequired / minAppVersion / currentAppVersion', async () => {
+    stubCatalog();
+    const marketplace = await loadMarketplace();
+    marketplace.recordAppIncompatibleSkip({ id: SKIPPED_ID }, 'skill', '9.0.0');
+
+    const res = await marketplace.listMarketplaceSkills({ page: 1, size: 100 });
+    const hit = res.list.find((row) => row.id === SKIPPED_ID);
+
+    expect(hit?.appUpdateRequired).toBe(true);
+    expect(hit?.minAppVersion).toBe('9.0.0');
+    expect(hit?.currentAppVersion).toBe(marketplace.currentAppVersion());
+  });
+
+  it('兼容条目不挂该状态（字段缺席，不是 false）', async () => {
+    stubCatalog();
+    const marketplace = await loadMarketplace();
+    marketplace.recordAppIncompatibleSkip({ id: SKIPPED_ID }, 'skill', '9.0.0');
+
+    const res = await marketplace.listMarketplaceSkills({ page: 1, size: 100 });
+    const other = res.list.find((row) => row.id === COMPATIBLE_ID);
+
+    expect(other).toBeTruthy();
+    expect(other).not.toHaveProperty('appUpdateRequired');
+    expect(other).not.toHaveProperty('currentAppVersion');
+  });
+
+  it('收集被清空后，同一条目不再带状态', async () => {
+    stubCatalog();
+    const marketplace = await loadMarketplace();
+    marketplace.recordAppIncompatibleSkip({ id: SKIPPED_ID }, 'skill', '9.0.0');
+    const before = await marketplace.listMarketplaceSkills({ page: 1, size: 100 });
+    expect(before.list.find((row) => row.id === SKIPPED_ID)?.appUpdateRequired).toBe(true);
+
+    marketplace.clearAppIncompatibleSkips();
+    const after = await marketplace.listMarketplaceSkills({ page: 1, size: 100 });
+
+    expect(after.list.find((row) => row.id === SKIPPED_ID)).not.toHaveProperty('appUpdateRequired');
+  });
+});

@@ -1,38 +1,39 @@
 /**
- * transcript_glossary — 转写纠错词表（本体驱动的转写词汇纠错表 · P0）
+ * transcript_glossary — 转写纠错词表（本体驱动的转写词汇纠错表）
  *
- * 规划依据（本仓库外的方案文档，2026-09-14 v0.2）：
+ * 数据约束：
  *   - 词条是 `wrong → correct` 的**用户确认过的**纠错对；LLM/本体只能产生"候选"，
  *     不得静默写回词表，更不得改写本体别名（Candidate ≠ Confirmed）。
- *   - 词条带**作用域**：一次会议里学到的变体不得自动升格为全局规则
- *     （真实事故：7 个姓氏变体被当全局规则加载数月，把无关稿件的"某老师"
- *     替换成他人姓名）。
+ *   - 词条带作用域：特定文档中确认的名称变体不得自动升格为全局规则。
  *   - 高危短词（`for` / `model` / `contact` / `redmi` 这类合法英文词）默认
  *     逐条人工确认，不允许"全部个人库"范围。
  *
  * 存储：`<uid>/cloud/cogseed/transcript/transcript-glossary.json`（见 paths.ts）。
  *   - 用户私有可复核资产 → cloud 域；目录**非隐藏**（隐藏目录会被 KB
  *     reconcile 的 walk 跳过 → 索引行在下次启动时被 prune）。
- *   - 写入是原子替换（tmp + rename），读损坏时降级为空表并告警，避免把
- *     整份词表搞丢。
+ *   - 写入是原子替换（tmp + rename）。读到坏档（坏 JSON / 非对象载荷）按
+ *     corrupt-guard 口径 copy 备份 + 登记 + 拒写 latch；读侧仍降级空表保兼容，
+ *     但下一次全量保存会被写侧门拒绝，不会把坏档静默覆盖成「空表+新条目」。
  *
  * 本模块只做"词表数据 + 归一化 + 风险分级 + 迁移"，不含扫描/替换
  * （见 transcript_auto_correct.ts）与产物/回滚（见 transcript_correction_runs.ts）。
  *
- * ── 关于"模型候选"（2026-09-20 起）────────────────────────────────────
- * 候选区（`candidates` 数组 / `adoptCandidate` 等）已**整体移除**：模型候选改为直接
- * 并入扫描候选列表，人勾选即确认；确认应用时经 `rememberConfirmedPairs` 以
- * `source: 'meeting_accept'` 记入词表（作用域收窄到当前文档）。
- * 于是词表里只剩一种东西：**人确认过的** `wrong → correct`。
+ * ── 关于"模型候选"──────────────────────────────────────────────────
+ * 模型建议只参与当前材料扫描和更正，不自动写入长期词表。
+ * 已有词表仍支持查询、作用域管理、人工编辑与替换记账。
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { userTranscriptGlossaryFile } from '../paths';
+import { userTranscriptGlossaryDir, userTranscriptGlossaryFile } from '../paths';
 import { createLogger } from '../logger';
+import { assertNotCorrupt, reportCorruptFile } from '../util/corrupt-guard';
 
 const log = createLogger('transcript_glossary');
+
+/** corrupt-guard 业务域（渲染层坏档清单/恢复通道寻址用）。 */
+export const GLOSSARY_CORRUPT_DOMAIN = 'transcript-glossary';
 
 // ── 类型 ────────────────────────────────────────────────────────────────
 
@@ -70,10 +71,10 @@ export interface GlossaryEntry {
   kind: GlossaryKind;
   riskLevel: RiskLevel;
   boundary: BoundaryMode;
-  /** 语境黑名单：命中窗口内出现任一词则拒绝替换（防 `傅平/扶贫办` 类误替换）。 */
+  /** 语境黑名单：命中窗口内出现任一词则拒绝替换，避免同音异义误替换。 */
   contextDeny: string[];
   /**
-   * 语境白名单（方案 §七「加白」）：窗口内出现任一词则**整条候选不产出**，
+   * 语境白名单（加白）：窗口内出现任一词则**整条候选不产出**，
    * 连待确认都不出现——用于"这个词在这个语境里是对的，别再提示我"。
    * 与 `contextDeny` 的区别：deny 只否决替换（仍上报为 denied），allow 直接静默。
    */
@@ -92,7 +93,7 @@ export interface GlossaryEntry {
   updatedAt: number;
   lastVerifiedAt: number;
   /**
-   * 忽略留痕（方案 §七「忽略（可逆，降权）」）：被忽略的次数与最近一次时间。
+   * 忽略留痕（可逆忽略与降权）：被忽略的次数与最近一次时间。
    * 忽略**不删词条**、不改台账，只用于降权排序与面板折叠；恢复时次数清零。
    */
   ignoredCount?: number;
@@ -106,7 +107,7 @@ export interface GlossaryFile {
   meta: {
     lastReconcileAt: number;
     ownerNote: string;
-    /** 检索前 query 同义改写开关（方案 §五 P2-3，默认关：用户要能预期检索行为）。 */
+    /** 检索前 query 同义改写开关（默认关闭）。 */
     queryRewrite?: boolean;
   };
 }
@@ -120,12 +121,17 @@ export interface UpsertEntryInput {
   boundary?: unknown;
   /** 允许调用方（人工复核后的导入）显式指定；缺省时按规则推导。 */
   riskLevel?: unknown;
+  /**
+   * 仅人工维护入口可置 true：用户明确选择的风险等级按原值保存，不再被派生下限抬高。
+   * 导入/自动学习不得使用，避免绕过安全下限。
+   */
+  riskOverride?: unknown;
   contextDeny?: unknown;
   contextAllow?: unknown;
   scope?: unknown;
   /**
    * 创建上下文：未显式给 `scope` 时用它决定默认作用域（本文档 / 本场景）。
-   * 不给就会被兜底成全局规则——那正是作用域机制要防的事故，所以调用方应当传。
+   * 不给就会被兜底成全局规则，因此调用方应当传入可用的创建上下文。
    */
   docId?: unknown;
   scenarioTags?: unknown;
@@ -181,16 +187,66 @@ export function isSingleSurnameHonorific(text: string): boolean {
   return /^[\u4e00-\u9fff](老师|总|哥|姐|先生|女士)$/.test(text.trim());
 }
 
+// ── 不可见/控制字符清洗 ──────────────────────────────────────────────────
+// 词条文本（wrong/correct/语境词）是**单词级**内容：C0/C1 控制（含 NUL、DEL）、
+// 零宽类（ZWSP/ZWNJ/ZWJ/词连接符）、双向控制（LRM/RLM/嵌入/覆盖/隔离）、行段
+// 分隔与 BOM 在词条里没有合法语义，只会造成视觉欺骗（RTL override 反转显示）
+// 或匹配/替换错位。写入与读入两侧统一剥除（存量文件读入时同样收敛，只读兼容：
+// 不改写盘上字节，条目在下次正常保存时自然落净）。字符集与 memory 通道的
+// invisible-unicode 分类（\u200B-\u200F\u2028-\u202F\u2060\uFEFF）对齐并补齐
+// C0/C1/DEL 与双向隔离（\u2066-\u2069）。
+const INVISIBLE_CHARS_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\u2060-\u2069\ufeff]/g;
+
+/** 剥除词条文本中的控制/不可见字符（NUL、RTL override、零宽、BOM 等）。 */
+export function stripInvisibleChars(text: string): string {
+  return text.replace(INVISIBLE_CHARS_RE, '');
+}
+
+/** 词条级字符串数组收敛：剥除不可见字符 → 丢弃空串 → 截断上限。 */
+function cleanTermList(v: unknown, max = 50): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((t): t is string => typeof t === 'string')
+    .map((t) => stripInvisibleChars(t).trim())
+    .filter((t) => !!t)
+    .slice(0, max);
+}
+
 // ── 风险分级 ────────────────────────────────────────────────────────────
 
 /**
- * 已知高危 token：合法英文词/介词/框架词，全局替换会写坏用户所有文档。
- * 来源：真实清理产物里出现过 `for→Foo`、`model→Moodle`、`contact→Context`、
- * `redmi→README` 这几条。
+ * 已知高危 token：合法英文词/介词/框架词，需要逐条确认，避免全局误替换。
  */
 const HIGH_RISK_TOKENS = new Set([
   'for', 'model', 'contact', 'redmi', 'readme', 'cloud', 'moodle', 'context',
   'code', 'data', 'test', 'all', 'new', 'open', 'name', 'type', 'list',
+  /**
+   * 2026-10-15 追加：`maas` / `mhc` / `msc`。
+   *
+   * 团队在这几个音上说的是 **MeshSeed**（见当次会议：`maas`/`mhc`/`msc`
+   * 都是它的误读），要写成词条。但**这三个同时都是真实存在的缩写**：
+   *
+   *   - `MaaS` = Model as a Service（模型即服务）
+   *   - `MHC`  = 主要组织相容性复合体（免疫学）
+   *   - `MSC`  = 移动交换中心 / 间充质干细胞
+   *
+   * 若不在这里钉成 high，它们会被派生为 `low` 并**无条件自动替换** ——
+   * 而"长度比 ≥4"那条启发式拦不住（`MeshSeed`.length 8 < 3×4），
+   * 实测三条全是 low、整句被自动改写。
+   *
+   * 放进这个集合 ⇒ `high` ⇒ **永不自动应用，必须逐条人工确认**。
+   * 这是"少数几个音的误读"与"真实缩写满天飞"之间必须付的代价，
+   * 宁可多问一次，也不要把正文里真实的 MaaS/MSC 改掉。
+   */
+  'maas', 'mhc', 'msc',
+  /**
+   * 谐音形同样钉 high（2026-10-15）：`magic c` / `mary c` 是同事说
+   * **MeshSeed** 时的转写结果（`mesh` 被听成 `magic`/`mary`，`seed` 听成 `C`）。
+   *
+   * 不钉 high 的话会被自动应用 —— 而"magic"/"mary"都是常见英文词，
+   * 正文里真出现时不该被改掉。
+   */
+  'magic c', 'mary c',
 ]);
 
 export interface RiskContext {
@@ -207,11 +263,54 @@ export function deriveRiskLevel(
   if (input.action === 'delete') return 'low';
   if (isSingleSurnameHonorific(input.wrong)) return 'high';
   if (foldedWrong.length <= 2) return 'high';
-  if (/^[a-z]+$/.test(foldedWrong) && HIGH_RISK_TOKENS.has(foldedWrong)) return 'high';
+  /**
+   * 命中"自我保护词表" ⇒ high。
+   *
+   * 去掉原先的 `^[a-z]+$` 守卫：那个正则的唯一作用是**挡掉含空格的条目**
+   * （`magic c` / `mary c` 折叠后带空格），而它们正是需要钉 high 的
+   * MeshSeed 谐音形。集合本身已经只有 ASCII，中文词不会命中，
+   * 所以那个守卫是冗余的 —— 留着只会让加进集合的条目静默失效，
+   * 表现为"明明写了保护名单，词条还是被自动应用"。
+   */
+  if (HIGH_RISK_TOKENS.has(foldedWrong)) return 'high';
   if (input.correct.length >= input.wrong.length * 4 && foldedWrong.length <= 3) return 'high';
   const others = (ctx.otherCorrects ?? []).map((c) => foldText(c).trim());
   if (others.length > 0 && !others.every((c) => c === foldText(input.correct).trim())) return 'high';
   return 'low';
+}
+
+/**
+ * 含 CJK 字符（判断"这是不是一个中文词"而不是"这是个编号"）。
+ * `K2`/`PID` 这类纯 ASCII 短词不在此列：它们是结构化代号，短不代表危险。
+ */
+function hasCjk(text: string): boolean {
+  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(text);
+}
+
+const RISK_ORDER: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2 };
+
+/**
+ * 风险定级：**派生值是不可下调的安全下限**，显式声明只能更严。
+ *
+ * 为什么需要这个下限：`deriveRiskLevel` 是引擎自己的护栏——`foldedWrong.length <= 2`
+ * 一律判 high，因为中文没有词间空格，两个字的错形几乎必然落在某个真实词内部。
+ * 但 `upsertEntry` 与贡献包导入都接受调用方显式传入的 riskLevel 并**直接覆盖**派生值，
+ * 于是 `{健全 → 鉴权, riskLevel: 'medium'}` 这种条目会被自动应用，把
+ * 「建立健全的机制」改成「建立鉴权的机制」（已实测复现）。
+ *
+ * 下限只对**含 CJK 的短词**生效，因为那正是 `<= 2` 这条规则要保护的形态；
+ * 纯 ASCII 代号（如 `K2 → KSTAR` 这类"部分形态、限本场景"的有意设计）仍尊重调用方声明。
+ * 调用方有正当理由要放宽时，应改用更窄的 boundary/scope/contextAllow，而不是降风险下限。
+ */
+export function effectiveRiskLevel(
+  input: { wrong: string; correct: string; action: GlossaryAction; partial?: boolean },
+  declared: RiskLevel | undefined | null,
+  ctx: RiskContext = {},
+): RiskLevel {
+  const derived = deriveRiskLevel(input, ctx);
+  if (!declared) return derived;
+  if (!hasCjk(input.wrong)) return declared;
+  return RISK_ORDER[declared] < RISK_ORDER[derived] ? derived : declared;
 }
 
 export function defaultBoundary(wrong: string, action: GlossaryAction): BoundaryMode {
@@ -239,7 +338,7 @@ interface V1Entry {
   ownerScope?: unknown; ontologyRef?: unknown; createdAt?: unknown; updatedAt?: unknown;
 }
 
-/** v1（2026-09-07 方案首版模型）→ v2：补 action / riskLevel / boundary /
+/** v1→ v2：补 action / riskLevel / boundary /
  *  contextDeny / scope / replacedIn / createdBy / lastVerifiedAt / uid。 */
 export function migrateGlossaryV1ToV2(raw: { entries?: unknown; meta?: unknown }, uid: string): GlossaryFile {
   const list = Array.isArray(raw?.entries) ? raw.entries : [];
@@ -310,6 +409,10 @@ function normalizeKind(v: unknown): GlossaryKind {
   return typeof v === 'string' && (allowed as string[]).includes(v) ? (v as GlossaryKind) : 'term';
 }
 
+function normalizeRisk(v: unknown): RiskLevel | null {
+  return v === 'low' || v === 'medium' || v === 'high' ? v : null;
+}
+
 function normalizeSource(v: unknown): EntrySource {
   const allowed: EntrySource[] = ['manual', 'meeting_accept', 'ontology_seed', 'import'];
   return typeof v === 'string' && (allowed as string[]).includes(v) ? (v as EntrySource) : 'manual';
@@ -321,6 +424,10 @@ export function emptyGlossary(uid: string): GlossaryFile {
   return { version: GLOSSARY_VERSION, uid, entries: [], meta: { lastReconcileAt: 0, ownerNote: '' } };
 }
 
+/** 坏档读侧契约：
+ * 坏 JSON / 非对象载荷 → copy 备份 + 登记 + 拒写 latch（saveGlossary 的
+ * assertNotCorrupt 抛 CorruptFileError），读侧**继续返回空表**保兼容——面板、
+ * 扫描、检索改写等读路径不因坏档抛错；只有真 ENOENT 才允许空初始化落盘。 */
 export function loadGlossary(userId: string): GlossaryFile {
   const file = userTranscriptGlossaryFile(userId);
   let raw: unknown;
@@ -328,12 +435,16 @@ export function loadGlossary(userId: string): GlossaryFile {
     raw = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code !== 'ENOENT') log.warn('glossary unreadable; starting from empty', { code });
+    if (code === 'ENOENT') return emptyGlossary(userId);
+    reportCorruptFile(file, `bad JSON: ${(err as Error).message}`, { domain: GLOSSARY_CORRUPT_DOMAIN });
+    log.warn('glossary unreadable; corrupt-guard engaged (read degrades to empty)', { code });
     return emptyGlossary(userId);
   }
   const record = raw as { version?: unknown; uid?: unknown } | null;
   if (!record || typeof record !== 'object') {
-    log.warn('glossary payload is not an object; starting from empty');
+    // 形状坏同样是坏档：登记 + 拒写，不当空表整写覆盖（同 pool 口径）。
+    reportCorruptFile(file, 'glossary payload is not an object', { domain: GLOSSARY_CORRUPT_DOMAIN });
+    log.warn('glossary payload is not an object; corrupt-guard engaged (read degrades to empty)');
     return emptyGlossary(userId);
   }
   // uid 落盘校验：文件里的 uid 与本会话属主不一致说明被拷错了位置，
@@ -369,8 +480,10 @@ function isEntry(e: GlossaryEntry | null): e is GlossaryEntry {
 function normalizeStoredEntry(input: unknown): GlossaryEntry | null {
   const e = input as Partial<GlossaryEntry> | null;
   if (!e || typeof e.wrong !== 'string' || typeof e.correct !== 'string') return null;
-  const wrong = e.wrong.trim();
-  const correct = e.correct.trim();
+  // 存量只读兼容：盘上残留的控制/不可见字符在读入时剥除（不改写盘上字节；
+  // 条目在下次正常保存时自然落净），替换链消费的 correct 由此外获得净文本。
+  const wrong = stripInvisibleChars(e.wrong).trim();
+  const correct = stripInvisibleChars(e.correct).trim();
   const action: GlossaryAction = e.action === 'delete' ? 'delete' : 'replace';
   // 删除类词条（口癖）**本来就没有 correct**：早先的校验把 `correct` 为空一律当脏数据
   // 丢掉，于是口癖词条能写进文件却读不回来（写一次覆盖一次，只剩最后一条）。
@@ -389,12 +502,8 @@ function normalizeStoredEntry(input: unknown): GlossaryEntry | null {
       ? e.riskLevel
       : deriveRiskLevel({ wrong, correct, action }),
     boundary: e.boundary === 'word' || e.boundary === 'substring' ? e.boundary : defaultBoundary(wrong, action),
-    contextDeny: Array.isArray(e.contextDeny)
-      ? e.contextDeny.filter((t): t is string => typeof t === 'string' && !!t.trim()).slice(0, 50)
-      : [],
-    contextAllow: Array.isArray(e.contextAllow)
-      ? e.contextAllow.filter((t): t is string => typeof t === 'string' && !!t.trim()).slice(0, 50)
-      : [],
+    contextDeny: cleanTermList(e.contextDeny),
+    contextAllow: cleanTermList(e.contextAllow),
     // 忽略留痕：可选字段，恢复时直接删键（避免在用户文件里留一堆 0）
     ...(typeof e.ignoredCount === 'number' && e.ignoredCount > 0
       ? { ignoredCount: Math.floor(e.ignoredCount) }
@@ -434,6 +543,8 @@ function normalizeScope(v: unknown): GlossaryScope {
 
 export function saveGlossary(userId: string, file: GlossaryFile): void {
   const target = userTranscriptGlossaryFile(userId);
+  // 坏档三件套·写侧门：登记在案即拒绝（备份被移走不影响判定；恢复/重置后才可写）。
+  assertNotCorrupt(target);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const payload: GlossaryFile = {
     version: GLOSSARY_VERSION,
@@ -471,71 +582,13 @@ export function findEntry(userId: string, id: string): GlossaryEntry | null {
   return loadGlossary(userId).entries.find((e) => e.id === id) ?? null;
 }
 
-/**
- * 把**已确认应用**的 `wrong → correct` 对记进词表（source: meeting_accept）。
- *
- * 为什么放在这里：'meeting_accept' 这个 source 一直是"词表里预留、但全仓库没人发过"
- * 的值（见 upsertEntry 里那段注释——它曾经因此让每个新词条都变成全局规则）。
- * 现在由"扫描里勾选并应用了模型候选"来发它：人点了勾、正文里真的换了，才算确认。
- *
- * 作用域刻意收窄到**当前文档**（传 `docId` ⇒ upsertEntry 走"仅本文档"分支）：
- * 一次会议里确认的写法不等于全局规则，这正是那份事故注释要防的事。
- */
-export function rememberConfirmedPairs(
-  userId: string,
-  pairs: Array<{ wrong: string; correct: string }>,
-  context: { docId?: string } = {},
-): { created: number; updated: number; skipped: number } {
-  let created = 0;
-  let updated = 0;
-  let skipped = 0;
-  const docId = typeof context.docId === 'string' ? context.docId.trim() : '';
-  // 作用域必须**显式给**。`upsertEntry` 里 `source === 'meeting_accept'` 只会把
-  // `global` 置为 false，却不动 `docIds`/`scenarioTags`——那样得到的条目
-  // `scopeAllows` 恒为 false，等于一条**永不命中的死规则**（这也正是
-  // 'meeting_accept' 这个 source 一直没有任何调用方的真正原因）。
-  if (!docId) {
-    // 没有文档作用域时宁可如实跳过，也不要写死条目。
-    return { created: 0, updated: 0, skipped: (pairs || []).length };
-  }
-  const scope = { docIds: [docId], scenarioTags: [] as string[], global: false };
-  const seen = new Set<string>();
-  for (const pair of pairs || []) {
-    const wrong = String(pair?.wrong ?? '').trim();
-    const correct = String(pair?.correct ?? '').trim();
-    if (!wrong || !correct) {
-      skipped += 1;
-      continue;
-    }
-    const key = `${foldText(wrong).trim()}|${foldText(correct).trim()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    try {
-      const result = upsertEntry(userId, {
-        wrong,
-        correct,
-        source: 'meeting_accept',
-        scope,
-      });
-      if (!result.entry) skipped += 1;
-      else if (result.created) created += 1;
-      else updated += 1;
-    } catch (error) {
-      // 单条不合法（超长/空）不该让整次应用失败：如实计入 skipped。
-      log.warn('remember confirmed pair failed', { error: (error as Error).message });
-      skipped += 1;
-    }
-  }
-  return { created, updated, skipped };
-}
-
-/** 作用域选择（面板「接受」动作的范围，方案 §七）。 */
+/** 作用域选择（面板「接受」动作的范围）。 */
 export type ScopeChoice = 'keep' | 'doc' | 'task' | 'global';
 
 export interface SetScopeResult {
   updated: number;
   /**
-   * 被拒的条目：**高危词条不允许"全部个人库"范围**（方案 §2.2 红线）。
+   * 被拒的条目：**高危词条不允许"全部个人库"范围**。
    * 拒绝时保持原作用域不变，并如实回报，绝不静默降级。
    */
   refused: Array<{ id: string; wrong: string; reason: 'high_risk_cannot_global' }>;
@@ -583,7 +636,7 @@ export function setScope(
 }
 
 /**
- * 忽略 / 恢复（方案 §七「忽略（可逆，降权）」）。
+ * 忽略 / 恢复（可逆忽略与降权）。
  * 忽略不删词条、不动台账：只累计次数与时间（面板据此折叠到末尾、默认不勾选）。
  */
 export function setIgnored(userId: string, ids: string[], ignored: boolean): number {
@@ -633,7 +686,7 @@ export function addContextAllow(userId: string, ids: string[], term: string): nu
 }
 
 /**
- * 检索前 query 同义改写开关（方案 §五 P2-3）。
+ * 检索前 query 同义改写开关。
  * 默认关：改检索词会改变用户看到的结果，必须由用户显式打开。
  */
 export function setQueryRewrite(userId: string, enabled: boolean): boolean {
@@ -643,13 +696,21 @@ export function setQueryRewrite(userId: string, enabled: boolean): boolean {
   return enabled === true;
 }
 
-/** 读取开关状态（缺省 false）。 */
+/** 读取开关状态（缺省 false）。词表坏档时按 false 降级——改写依赖词表，
+ *  词表不可用就不改写，不把坏档故障放大到检索路径。 */
 export function isQueryRewriteEnabled(userId: string): boolean {
-  return loadGlossary(userId).meta.queryRewrite === true;
+  try {
+    return loadGlossary(userId).meta.queryRewrite === true;
+  } catch (err) {
+    log.warn('glossary corrupt/unreadable; query rewrite disabled', {
+      error: (err as Error).message,
+    });
+    return false;
+  }
 }
 
 /**
- * 词表 owner 备注（方案 §2.1-11 / §七「每行显示 owner、最后维护时间、来源」的词表级部分）。
+ * 词表级维护者备注，供管理界面展示。
  * 只写 `meta.ownerNote`，不动词条。
  */
 export function setOwnerNote(userId: string, note: string): string {
@@ -711,8 +772,7 @@ export function retargetEntry(userId: string, id: string, correctInput: unknown)
   entry.correct = correct;
   /**
    * 删除型条目（口癖规则：`action: 'delete'`，correct 恒为空）被填上写法时，**必须同时把
-   * action 翻成 replace**：否则扫描/替换只看 action，`correct` 存了也永远不用——真机上就是
-   * "填了新写法、点了确定、列表里还是（删除）"，看着像没生效（2026-09-23 反馈）。
+   * action 翻成 replace**：否则扫描/替换只看 action，保存的 `correct` 不会被应用。
    * 语义变化因此是明确的：这条从"见到就删"变成"见到就替换成这个词"。
    * `kind` 保持不变（`product`/`term`/`filler` 只影响词表分组与查询改写范围，
    * 一旦用户给了写法，扫描侧就不再走 filler 规则分支——见 transcript_auto_correct 的分支条件）。
@@ -745,13 +805,15 @@ export function upsertEntry(userId: string, input: UpsertEntryInput): UpsertResu
     .filter((e) => e.status === 'active' && foldText(e.wrong).trim() === foldedWrong)
     .map((e) => e.correct);
   const explicitRisk = input.riskLevel;
-  const derived = deriveRiskLevel(
-    { wrong, correct, action, partial: input.partial === true },
-    { otherCorrects: others },
-  );
-  const riskLevel: RiskLevel = explicitRisk === 'high' || explicitRisk === 'medium' || explicitRisk === 'low'
-    ? explicitRisk
-    : derived;
+  // 显式风险等级只能更严，不能突破派生下限——见 effectiveRiskLevel 的说明。
+  const declaredRisk = explicitRisk === 'high' || explicitRisk === 'medium' || explicitRisk === 'low' ? explicitRisk : null;
+  const riskLevel: RiskLevel = input.riskOverride === true && declaredRisk
+    ? declaredRisk
+    : effectiveRiskLevel(
+      { wrong, correct, action, partial: input.partial === true },
+      declaredRisk,
+      { otherCorrects: others },
+    );
   const now = Date.now();
   const existingIndex = file.entries.findIndex(
     (e) => foldText(e.wrong).trim() === foldedWrong && foldText(e.correct).trim() === foldedCorrect,
@@ -766,11 +828,7 @@ export function upsertEntry(userId: string, input: UpsertEntryInput): UpsertResu
     } else {
       // 未显式给作用域时的兜底：有文档 → 仅本文档；有场景标签 → 仅本场景；
       // 两者都没有才退到全局。
-      //
-      // 此前这里判断 `source !== 'meeting_accept'`，但全仓库没有任何调用方发送过该
-      // source（面板发 'manual'、本体桥接发 'ontology_seed'）⇒ 判断恒真 ⇒ 每个新词条
-      // 都成了全局规则，等于把 transcript_auto_correct 记录的事故重新引入
-      // （一次会议学到的 7 个姓氏变体被当全局规则，改了无关稿件的"某老师"）。
+      // 作用域取决于创建上下文，不由 source 标签推断；不同入口共享同一约束。
       const contextDocId = typeof input.docId === 'string' && input.docId.trim() ? input.docId.trim() : '';
       const contextTags = Array.isArray(input.scenarioTags)
         ? input.scenarioTags.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, 50)
@@ -799,12 +857,8 @@ export function upsertEntry(userId: string, input: UpsertEntryInput): UpsertResu
     boundary: input.boundary === 'word' || input.boundary === 'substring'
       ? input.boundary
       : defaultBoundary(wrong, action),
-    contextDeny: Array.isArray(input.contextDeny)
-      ? input.contextDeny.filter((t): t is string => typeof t === 'string' && !!t.trim()).slice(0, 50)
-      : [],
-    contextAllow: Array.isArray(input.contextAllow)
-      ? input.contextAllow.filter((t): t is string => typeof t === 'string' && !!t.trim()).slice(0, 50)
-      : [],
+    contextDeny: cleanTermList(input.contextDeny),
+    contextAllow: cleanTermList(input.contextAllow),
     scope,
     freq: existingIndex >= 0 ? file.entries[existingIndex].freq : 0,
     source,
@@ -841,6 +895,122 @@ export function deleteEntry(userId: string, id: string): boolean {
   file.entries = next;
   saveGlossary(userId, file);
   return true;
+}
+
+export type UpdateEntryResult =
+  | { ok: true; entry: GlossaryEntry; replacedId: string | null }
+  | { ok: false; reason: 'not_found' | 'pure_digit_variant' | 'duplicate' | 'empty' | 'invalid_risk' };
+
+/**
+ * 编辑一条已有词条（方案 §七「词表管理」的人工维护入口）。
+ *
+ * 用户场景（2026-10-15 反馈）：「发现有个地方明显有问题，但其实不能改，那这个路径是不通的」。
+ * 此前 `correct` 只能走本体对齐改（`retargetEntry`），`wrong` 根本改不了。
+ *
+ * **为什么必须在主进程一次做完，而不是前端「先删后加」**：
+ *   词条的**身份是 `wrong + correct`**（见 `upsertEntry` 的 `existingIndex` 匹配）。
+ *   改了 `wrong` 就等于换了一条词条 —— 拆成 delete + upsert 两次调用，
+ *   中途失败（崩溃、IPC 中断、新写法被 `pure_digit_variant` 拒绝）会**直接丢掉词条**。
+ *   这里一次 `loadGlossary` + 一次 `saveGlossary`（tmp+rename 原子写），
+ *   编辑**要么全成、要么全不动**。
+ *
+ * 三条分支，严格按"改动语义最小"路由，避免破坏审计口径：
+ *
+ *   1. `wrong` 没变 → 委托 `retargetEntry`。它是既有的写法修正路径，
+ *      已经保证了"写法修正 ≠ 一次新确认"（不碰 `replacedIn` 台账与 `freq`）。
+ *      这里**绝不自己重算**，否则 `retargetEntry` 的语义会在编辑入口被绕过。
+ *   2. `wrong` 变了 → 换身份：用新身份生成新 `id`，替换掉旧行，并**继承**
+ *      `createdAt` / `freq` / `replacedIn` / `status`。用户是在"改这一条"，
+ *      不是"新建一条"，台账与统计必须跟着走，否则审计断链。
+ *      风险等级取 `max(原等级, 新派生等级)` —— 与 `effectiveRiskLevel`
+ *      同一条纪律：只能更严，不能因为编辑就把高危词降级。
+ *   3. `kind` 改了 → 与上面两支正交，单独落。
+ */
+export function updateEntry(
+  userId: string,
+  id: string,
+  changes: { wrong?: unknown; correct?: unknown; kind?: unknown; riskLevel?: unknown },
+): UpdateEntryResult {
+  const prev = findEntry(userId, id);
+  if (!prev) return { ok: false, reason: 'not_found' };
+
+  const hasWrong = changes.wrong !== undefined;
+  const hasCorrect = changes.correct !== undefined;
+  const hasKind = changes.kind !== undefined;
+  const hasRisk = changes.riskLevel !== undefined;
+  const riskChoice = hasRisk ? normalizeRisk(changes.riskLevel) : null;
+  if (hasRisk && !riskChoice) return { ok: false, reason: 'invalid_risk' };
+
+  const wrong = hasWrong ? bounded(changes.wrong, 'wrong', MAX_WRONG_LEN) : prev.wrong;
+  const correct = hasCorrect ? bounded(changes.correct, 'correct', MAX_CORRECT_LEN) : prev.correct;
+  if (!wrong || !correct) return { ok: false, reason: 'empty' };
+
+  const foldedWrong = foldText(wrong).trim();
+  const wrongChanged = foldedWrong !== foldText(prev.wrong).trim();
+  const correctChanged = foldText(correct).trim() !== foldText(prev.correct).trim();
+
+  // 纯数字变体是 upsert 的既有红线（无法与真实数字区分）；编辑入口不得绕过。
+  if (wrongChanged && isPureDigits(wrong)) return { ok: false, reason: 'pure_digit_variant' };
+
+  // ── 分支 1：身份没变 → 交给 retargetEntry（保住"写法修正 ≠ 新确认"的台账语义）──
+  if (!wrongChanged) {
+    if (correctChanged) {
+      const retargeted = retargetEntry(userId, id, correct);
+      if (!retargeted) return { ok: false, reason: 'not_found' };
+    }
+    if (hasKind || hasRisk) {
+      const file = loadGlossary(userId);
+      const entry = file.entries.find((e) => e.id === id);
+      if (!entry) return { ok: false, reason: 'not_found' };
+      if (hasKind) entry.kind = normalizeKind(changes.kind);
+      if (riskChoice) entry.riskLevel = riskChoice;
+      entry.updatedAt = Date.now();
+      saveGlossary(userId, file);
+    }
+    const entry = findEntry(userId, id);
+    if (!entry) return { ok: false, reason: 'not_found' };
+    return { ok: true, entry, replacedId: null };
+  }
+
+  // ── 分支 2：wrong 变了 → 换身份，一次读写完成替换 ──
+  const file = loadGlossary(userId);
+  const index = file.entries.findIndex((e) => e.id === id);
+  if (index < 0) return { ok: false, reason: 'not_found' };
+  const current = file.entries[index];
+
+  const foldedCorrect = foldText(correct).trim();
+  // 新身份撞上另一条已有词条 → 拒绝，让用户先处理那一条，不静默合并。
+  const clash = file.entries.some(
+    (e, i) => i !== index
+      && foldText(e.wrong).trim() === foldedWrong
+      && foldText(e.correct).trim() === foldedCorrect,
+  );
+  if (clash) return { ok: false, reason: 'duplicate' };
+
+  const action: GlossaryAction = current.action;
+  const others = file.entries
+    .filter((e, i) => i !== index && e.status === 'active' && foldText(e.wrong).trim() === foldedWrong)
+    .map((e) => e.correct);
+  // 未显式选择风险时，沿用“只能更严”的派生下限；用户显式选择则按用户判断。
+  const derived = effectiveRiskLevel({ wrong, correct, action }, current.riskLevel, { otherCorrects: others });
+  // 用户显式选择 → 按原值保存；否则沿用"只能更严"的派生下限。
+  const riskLevel: RiskLevel = riskChoice ?? (RISK_ORDER[derived] > RISK_ORDER[current.riskLevel] ? derived : current.riskLevel);
+
+  const entry: GlossaryEntry = {
+    ...current,
+    id: entryId(wrong, correct),
+    wrong,
+    correct,
+    kind: hasKind ? normalizeKind(changes.kind) : current.kind,
+    riskLevel,
+    boundary: defaultBoundary(wrong, action),
+    updatedAt: Date.now(),
+  };
+
+  const replacedId = current.id;
+  file.entries[index] = entry;
+  saveGlossary(userId, file);
+  return { ok: true, entry, replacedId };
 }
 
 export function markVerified(userId: string, id: string, at = Date.now()): GlossaryEntry | null {
@@ -912,6 +1082,10 @@ export function importGlossary(
   if (!Array.isArray(list)) throw new Error('transcript glossary: payload.entries must be an array');
   const mode = opts.mode === 'replace' ? 'replace' : 'merge';
   if (mode === 'replace') {
+    // 坏档三件套收口：replace 是词表唯一「先写后读」的路径（直接落空表），
+    // 先走一次 loadGlossary 探测——坏档时它会拒（备份+登记），下面的清空
+    // 保存随之被写侧门拒绝，不会把坏档静默覆盖成空表。
+    loadGlossary(userId);
     const empty = emptyGlossary(userId);
     saveGlossary(userId, empty);
   }
@@ -930,12 +1104,40 @@ export function importGlossary(
   return { imported, skipped };
 }
 
+/**
+ * 清空前先落一份完整备份（含人名），返回备份路径。
+ *
+ * 备份写在词表同目录的 `backups/` 下，纯本地文件，不走知识库；
+ * 写备份失败会抛错，调用方**不得**继续清空——先有备份，才允许清。
+ */
+export function backupGlossary(userId: string): { backupPath: string; entries: number } {
+  const file = loadGlossary(userId);
+  const dir = path.join(userTranscriptGlossaryDir(userId), 'backups');
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(dir, `transcript-glossary-${stamp}.json`);
+  // 原样复制词表文件：备份要能**完整还原**（含 replacedIn 台账、ownerNote、id），
+  // 所以不能用导出包——导出包为隐私会剥掉这些字段。
+  const source = userTranscriptGlossaryFile(userId);
+  if (fs.existsSync(source)) fs.copyFileSync(source, backupPath);
+  else fs.writeFileSync(backupPath, JSON.stringify(emptyGlossary(userId), null, 2), 'utf8');
+  return { backupPath, entries: file.entries.length };
+}
+
+/** 清空词表（个人级）。先备份；备份失败则不清空。 */
+export function clearGlossary(userId: string): { cleared: number; backupPath: string } {
+  const backup = backupGlossary(userId);
+  saveGlossary(userId, emptyGlossary(userId));
+  return { cleared: backup.entries, backupPath: backup.backupPath };
+}
+
 function bounded(value: unknown, field: string, max: number): string {
   if (typeof value !== 'string') {
     if (value === undefined || value === null) return '';
     throw new Error(`transcript glossary: ${field} must be a string`);
   }
-  const text = value.trim();
+  // 先剥不可见/控制字符（RTL override、NUL、零宽）再量长：剥完才超长的才算超长。
+  const text = stripInvisibleChars(value).trim();
   if (text.length > max) throw new Error(`transcript glossary: ${field} too long`);
   return text;
 }

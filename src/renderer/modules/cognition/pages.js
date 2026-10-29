@@ -303,9 +303,9 @@
       ? button({ label: text('cognition.action.cancel', '取消'), attrs: { 'data-cognition-capture-cancel': 'true' } })
       : button({ label: text('cognition.action.cancel', '取消'), attrs: { 'data-cognition-capture-cancel': 'true' } })
         + button({ label: text('cognition.capture.submit', '保存待确认认知'), role: 'primary', attrs: { 'data-cognition-capture-submit': 'true' } });
-    return `<form class="ui-modal ui-modal--md cognition-capture-modal" data-cognition-capture-form role="dialog" aria-modal="true" aria-busy="${loading ? 'true' : 'false'}">`
+    return `<form class="ui-modal ui-modal--md cognition-capture-modal" data-cognition-capture-form role="dialog" aria-modal="true" aria-labelledby="cognition-capture-title" aria-busy="${loading ? 'true' : 'false'}">`
       + '<header class="ui-modal__header cognition-capture-header"><div class="ui-modal__heading">'
-      + '<h2 class="ui-modal__title">' + escapeHtml(text('cognition.capture.title', '沉淀为认知')) + '</h2>'
+      + '<h2 class="ui-modal__title" id="cognition-capture-title">' + escapeHtml(text('cognition.capture.title', '沉淀为认知')) + '</h2>'
       + `<p class="ui-modal__description">${escapeHtml(loading ? text('cognition.capture.subtitle_generating', '正在生成候选草稿。') : text('cognition.capture.subtitle', '把这次有效做法保存为待确认候选。'))}</p>`
       + '</div>'
       + iconButton({ icon: 'x', label: text('common.close', 'Close'), className: 'cognition-capture-close', attrs: { 'data-cognition-capture-cancel': 'true' } })

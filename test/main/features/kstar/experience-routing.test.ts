@@ -14,15 +14,19 @@ vi.mock('../../../../src/main/features/recall/asset-title-suggestion', () => ({
 
 
 /**
- * specs/016 T010（US-801 / FR-001）——沉淀分流四条断言：
- *  ① create 线提案 → 产出**经验条目**（experiences 集合），candidateIds 为空、
- *     资产库零新增（create 线不落候选池、不自动晋升）；
+ * specs/016 T010（US-801 / FR-001）→ 2026-10-08 U09 改写——沉淀分流四条断言：
+ *  ① create 线提案 → 统一进候选池（pending_review，只作建议），经验库零
+ *     条目、资产库零新增（用户确认前不自动晋升）；
  *  ② mutating（asset_outdated 归因 + episode 恰引用一条资产）→ **仍产候选**且
  *     资产更新走原路（Epic 7 主链不能被分流误伤）；
  *  ③ keep_current / reject → 无经验无资产（原路只留决策档）；
  *  ④ preference_scan 线 → 既不是经验也不受影响（「关于我」仍走候选池晋升）。
  *
- * 实现前四条中涉及经验面的断言全红（现状 create 线产候选 + 资产）。
+ * 退役说明：原 ① 中 specs/016 T013 的经验字段映射断言（experienceType 走
+ * experienceTypeOf、标题走 userFacingSummary、verification 从 review 映射、
+ * source.taskType/taskStatus）随 create 线直写经验的删除一并退役——候选
+ * 输入没有这些字段；可迁移的字段构造（judgment/scope/learningSignal/
+ * evidenceRefs）改为候选输入断言保留。
  */
 
 // 语义查重不依赖真实 embedding 模型（95MB ONNX，测试环境无关性）：按文本
@@ -83,108 +87,6 @@ async function seedReview(episode: KstarEpisodeRecord, overrides: Record<string,
 }
 
 describe('KSTAR 沉淀分流（specs/016 T010）', () => {
-  it('① create 线提案产出经验条目：不落候选池、资产库零新增，重复沉淀幂等', async () => {
-    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
-    const episode = await buildEpisode('run-route-create');
-    const judgment = 'For similar report tasks, use the verified workflow: read_file → write_file.';
-    const proposal = {
-      judgment,
-      summary: 'Verified multi-tool workflow for report tasks',
-      suggestedType: 'skill_method',
-      suggestedScope: 'report',
-      sourceRefs: [{ kind: 'execution' as const, id: episode.id }],
-      learningSignal: {
-        expectedResult: 'A report is created.',
-        actualResult: 'The report was created with the verified workflow.',
-        deltaR: 0.3 as const,
-        deltaA: 0.1 as const,
-        outcome: 'better_than_expected' as const,
-        confidence: 0.9,
-        source: 'review' as const,
-      },
-    };
-
-    const first = await direct.precipitateDirectExperienceAssets('route-user', episode, [proposal]);
-
-    // 分流主断言：经验面有产出、候选池与资产库零产出。
-    expect(first.experienceIds).toHaveLength(1);
-    expect(first.candidateIds).toEqual([]);
-    expect(first.createdAssetIds).toEqual([]);
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    const stored = await experiences.listExperiences('route-user');
-    expect(stored).toHaveLength(1);
-    expect(stored[0].id.startsWith('exp-')).toBe(true);
-    expect(stored[0].body).toBe(judgment);
-    expect(stored[0].status).toBe('active');
-    // 字段映射：类型走 experienceTypeOf（skill_method 分支 → workflow），
-    // 标题走 userFacingSummary 既有口径，任务类型走 scopeForTask。
-    expect(stored[0].experienceType).toBe('workflow');
-    const { userFacingSummary } = await import('../../../../src/main/features/kstar/task-level-precipitation');
-    expect(stored[0].title).toBe(userFacingSummary('workflow', 'report', judgment));
-    expect(stored[0].source).toMatchObject({ episodeId: episode.id, taskType: 'report', taskStatus: 'completed' });
-    expect(stored[0].verification).toMatchObject({ outcome: 'better_than_expected', deltaR: 0.3, confidence: 0.9 });
-    expect(stored[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === episode.id)).toBe(true);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    expect(await assets.listAbilityAssets('route-user')).toHaveLength(0);
-    const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    expect(await candidates.listRecallCandidates('route-user')).toHaveLength(0);
-
-    // 幂等：同 episode 同提案重试不产生第二条经验（createExperience 同 id 返回既有）。
-    const second = await direct.precipitateDirectExperienceAssets('route-user', episode, [proposal]);
-    expect(second.experienceIds).toEqual(first.experienceIds);
-    expect(await experiences.listExperiences('route-user')).toHaveLength(1);
-  });
-
-  it('② mutating（asset_outdated + episode 恰引用一条资产）仍产候选且资产更新走原路', async () => {
-    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
-    const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    // 先放一条正式资产在库里，作为 episode 恰好引用的目标。
-    const originalCandidate = await candidates.saveRecallCandidate('route-user', {
-      judgment: 'Keep the report verification rule.',
-      value: 'Keep report verification consistent across runs.',
-      suggestedType: 'rule',
-      suggestedScope: 'report',
-      suggestedAction: 'create',
-      applicableWhen: ['处理报告类任务时'],
-      sourceRefs: [{ kind: 'execution', id: 'kse-run-route-target' }],
-    });
-    const original = await candidates.promoteRecallCandidate('route-user', originalCandidate.id, { actor: 'user' });
-
-    const episode = await buildEpisode('run-route-update', {
-      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [original.asset.id] },
-    });
-    await seedEpisode(episode);
-    // asset_outdated 归因：assetMutationFor 据此产出 update 提案的输入条件。
-    await seedReview(episode, {
-      attributionDetails: [{
-        category: 'asset_outdated',
-        confidence: 1,
-        evidenceRefs: episode.evidenceRefs,
-        source: 'deterministic',
-      }],
-    });
-
-    const result = await direct.precipitateDirectExperienceAssets('route-user', episode, [{
-      judgment: 'Update the report verification rule to require an acceptance check.',
-      summary: 'Updated report verification rule',
-      suggestedType: 'rule',
-      suggestedScope: 'report',
-      suggestedAction: 'update',
-      targetAssetId: original.asset.id,
-      applicableWhen: ['处理报告类任务时'],
-      sourceRefs: [{ kind: 'execution', id: episode.id }],
-    }]);
-
-    // 分流另一侧：mutating 线必须原样走候选池 → 审批/融合主链。
-    expect(result.candidateIds).toHaveLength(1);
-    expect(result.experienceIds).toEqual([]);
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    expect(await experiences.listExperiences('route-user')).toHaveLength(0);
-    const updated = await assets.readAbilityAsset('route-user', original.asset.id);
-    expect(updated).toMatchObject({ id: original.asset.id, version: '2' });
-    expect(String(updated!.statement)).toContain('acceptance check');
-  });
 
   it('③ keep_current / reject：无经验无资产（原路只留决策档）', async () => {
     const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
@@ -204,52 +106,13 @@ describe('KSTAR 沉淀分流（specs/016 T010）', () => {
       { ...base, suggestedAction: 'reject' as const },
     ]);
 
-    // 无经验无资产；仍走原路落候选（决策档），分流不吞掉它们。
+    // 兼容入口不写经验、资产或候选；任务决策留在KSTAR自己的记录中。
     expect(keep.experienceIds).toEqual([]);
     expect(reject.experienceIds).toEqual([]);
+    expect(keep.candidateIds).toEqual([]);
+    expect(reject.candidateIds).toEqual([]);
     const experiences = await import('../../../../src/main/features/recall/experience-service');
     expect(await experiences.listExperiences('route-user')).toHaveLength(0);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    expect(await assets.listAbilityAssets('route-user')).toHaveLength(0);
-  });
-
-  it('④ preference_scan 线：既不是经验也不受影响（「关于我」仍走候选池晋升）', async () => {
-    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
-    const episode = await buildEpisode('run-route-preference');
-    await seedEpisode(episode);
-    const admission = await direct.kstarPrecipitationAdmission('route-user', {
-      source: 'requirement_level',
-      episodes: [episode],
-      episodeId: episode.id,
-    });
-    // preference_scan 线的提案形状（personalStatementsToProposals 的产出）：
-    // create + 无 target，但 learningSignal.source = 'preference_scan'。
-    const result = await direct.precipitateDirectExperienceFromSource('route-user', { id: episode.id }, [{
-      judgment: '我以后的周报都要按固定板块组织。',
-      summary: '周报固定板块',
-      suggestedType: 'personal',
-      suggestedScope: 'personal',
-      suggestedAction: 'create',
-      sourceRefs: [{ kind: 'execution', id: episode.id }],
-      learningSignal: {
-        deltaR: 'unknown',
-        deltaA: 'unknown',
-        outcome: 'met_expected',
-        confidence: 0.9,
-        source: 'preference_scan',
-      },
-    }], admission, { taskGoal: '整理团队周报', taskStatus: 'completed' });
-
-    // 不是经验：偏好陈述仍属于「关于我」资产域，不进经验目录。
-    expect(result.experienceIds).toEqual([]);
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    expect(await experiences.listExperiences('route-user')).toHaveLength(0);
-    // 不受影响：行为指纹与分流引入前完全一致——create+无 target 的形状也
-    // 没有被改道（仍走候选池出口）。该提案被候选侧的 learningSignal 校验
-    // 拒收（candidate-service 现状只认 source==='review'，与本分流无关），
-    // 失败面照常记录：failureIds 恰一条证明它走的是原路而非被分流吞掉。
-    expect(result.candidateIds).toEqual([]);
-    expect(result.failureIds).toHaveLength(1);
     const assets = await import('../../../../src/main/features/recall/asset-service');
     expect(await assets.listAbilityAssets('route-user')).toHaveLength(0);
   });

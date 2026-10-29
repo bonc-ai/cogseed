@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { AgentTool, ToolContext } from '#core-agent';
-import { esticogseedToolResultTokens } from '../../util/tool-result-cap';
+import { esticogseedToolResultTokens, isGovernedCognitionResult } from '../../util/tool-result-cap';
 
 export const TOOL_RESULT_CHUNK_DEFAULT_TOKENS = 1_000;
 export const TOOL_RESULT_CHUNK_MAX_TOKENS = 2_000;
@@ -73,7 +73,7 @@ function createSearchTool(opts: ToolResultToolsOpts): AgentTool {
 function createReadChunkTool(opts: ToolResultToolsOpts): AgentTool {
   return {
     name: 'tool_result_read_chunk',
-    description: 'Read one exact bounded chunk from a persisted tool result. Requires a cursor; max 2K tokens. Continue with next_cursor only when exact bytes are necessary.',
+    description: 'Read one exact bounded chunk from a persisted tool result. Requires a cursor; max 2K tokens. The per-step read budget is 4K tokens: issue at most two chunk reads per step, never batch several in one message, and continue with next_cursor from the previous result.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -154,6 +154,14 @@ export function resolveToolResultRef(
   toolResultsDir: string,
   ref: string,
 ): { ok: true; path: string } | { ok: false; code: string; message: string } {
+  return resolveResultRef(toolResultsDir, ref, new Set());
+}
+function resolveResultRef(toolResultsDir: string, ref: string, seen: Set<string>): { ok: true; path: string } | { ok: false; code: string; message: string } {
+  const sourceRequired = () => ({ ok: false as const, code: 'E_RESULT_SOURCE_RECHECK_REQUIRED',
+    message: 'This historical cognition result requires a fresh domain read. Use cognition_ontology_query or read_ability_asset with the original task mode/query, or a currently authorized manage/inventory read. Current source permissions and version must be checked again; a historical ref does not grant management authority.' });
+  if (isGovernedCognitionResult(ref.split('.')[0])) return sourceRequired();
+  if (seen.has(ref) || seen.size >= 32) return sourceRequired();
+  seen.add(ref);
   // Accept legacy 64-bit refs plus the current full SHA-256 refs. New writes
   // always use 64 hex chars; compatibility here keeps existing conversations
   // and persisted markers readable after upgrade.
@@ -173,6 +181,18 @@ export function resolveToolResultRef(
     }
     if (!fs.statSync(real).isFile()) {
       return { ok: false, code: 'E_RESULT_REF_NOT_FILE', message: 'Tool-result ref is not a regular file.' };
+    }
+    // Older shared-budget spills may contain a chunk/search of a governed
+    // result. Follow only this requested ref's explicit wrapper ancestry,
+    // never scan or rewrite historical Result Stores.
+    if (/^tool_result_(?:read_chunk|search)\./.test(ref)) {
+      const fd = fs.openSync(real, 'r'), header = Buffer.alloc(2_048);
+      let size: number; try { size = fs.readSync(fd, header, 0, header.length, 0); } finally { fs.closeSync(fd); }
+      const parent = /^<tool-result-(?:chunk|search)\s+ref="([A-Za-z0-9_.-]+)"/.exec(header.subarray(0, size).toString('utf8'))?.[1];
+      if (parent) {
+        const lineage = resolveResultRef(toolResultsDir, parent, seen);
+        if (lineage.ok === false) return sourceRequired();
+      }
     }
     return { ok: true, path: real };
   } catch {
@@ -322,7 +342,7 @@ function commitRead(ledger: ToolResultReadLedger | null, key: string, usedTokens
 function budgetError(): ReturnType<typeof error> {
   return error(
     'E_RESULT_READ_BUDGET',
-    'The 4K-token persisted-result read budget for this model step is exhausted. Use the excerpts already loaded, continue with another task step, or synthesize the result before reading more.',
+    'The 4K-token persisted-result read budget for this model step is exhausted. Do not issue more chunk reads in this step; use the excerpts already loaded, or continue in the next step with one read.',
   );
 }
 

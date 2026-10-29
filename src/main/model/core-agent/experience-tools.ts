@@ -33,7 +33,7 @@ import {
   type ExperienceTaskType,
   type ExperienceType,
 } from '../../features/recall/experience-service';
-import { scopeForTask } from '../../features/kstar/extraction-service';
+import { scopeForTask } from '../../features/recall/experience-taxonomy';
 import type { AssetRuntimeContext } from '../../features/recall/formal-assets/runtime';
 import { recordInjectionReceipt, listInjectionReceipts } from '../../features/recall/injection-receipt';
 import { recordRecallUsage } from '../../features/recall/usage-service';
@@ -100,6 +100,7 @@ function metaLine(exp: ExperienceRecord): string {
   return [
     `类型:${EXPERIENCE_TYPE_LABELS[exp.experienceType] || exp.experienceType}`,
     `任务类型:${TASK_TYPE_LABELS[exp.source.taskType] || exp.source.taskType}`,
+    `核验状态:${exp.verification.state}`,
     `结果:${OUTCOME_LABELS[exp.verification.outcome] || exp.verification.outcome}`,
     `版本:v${experienceVersion(exp).slice(0, 10)}`,
     `来源:${catalogTruncate(String(exp.source.taskGoal || ''), 24)}`,
@@ -115,6 +116,7 @@ function browseEntry(exp: ExperienceRecord): ExperienceCatalogEntry {
     experienceType: exp.experienceType,
     taskType: exp.source.taskType,
     outcome: exp.verification.outcome,
+    verificationState: exp.verification.state,
     version: experienceVersion(exp),
     relevant: false,
     sourceTaskLabel: catalogTruncate(String(exp.source.taskGoal || ''), 24),
@@ -140,7 +142,7 @@ function experienceRuntimeContext(
     ...(opts.spaceId ? { workspaceId: opts.spaceId } : {}),
     ...((taskScope || taskText) ? { scope: taskScope || scopeForTask(taskText) } : {}),
     ...(taskText ? { taskText } : {}),
-    silentDefaultInjection: true,
+    operation: 'inspect',
   };
 }
 
@@ -261,7 +263,7 @@ function createListTaskExperiencesTool(opts: ExperienceToolsOpts): AgentTool {
           entries = all
             .filter((exp) => exp.status === 'active')
             .filter((exp) => evaluateExperienceRuntimeEligibility(userId, exp, runtimeContext)
-              .reasons.every((reason) => reason === 'not_applicable_context'))
+              .eligible)
             .filter((exp) => !taskTypeFilter || exp.source.taskType === taskTypeFilter)
             .map(browseEntry);
         }
@@ -342,7 +344,7 @@ function createReadTaskExperienceTool(opts: ExperienceToolsOpts): AgentTool {
         exp,
         experienceRuntimeContext(opts, opts.taskText || ''),
       );
-      const reasons = eligibility.reasons.filter((reason) => reason !== 'not_applicable_context');
+      const reasons = eligibility.reasons;
       if (reasons.length) {
         // 「被拦截不得计为成功」：isError 是平台自身的成功/失败信号，回执同时
         // 写明具体命中哪条规则——不静默当不存在，也不把正文交出去、不写账。

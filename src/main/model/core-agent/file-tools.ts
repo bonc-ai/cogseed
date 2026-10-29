@@ -23,6 +23,11 @@
  * first verify the target falls under the active workspace, chat attachments,
  * caller-provided extra roots, or the current session's read-only tool-results
  * directory.
+ * A trusted inbound A2A reception turn is the single-root exception: when
+ * `receptionRoot` is set, that canonical directory is the ONLY allowed root and
+ * it overrides the global local-access mode (all-files / auto-approve included).
+ * If the requested root cannot be proven to exist as a directory, the call is
+ * refused with E_RECEPTION_ROOT_UNAVAILABLE instead of falling back.
  * Paths outside that set return an explicit E_PATH_OUT_OF_SCOPE error.
  *
  * These tools do NOT require localExec permission — they only read from
@@ -50,7 +55,7 @@ import { ocrFile } from '../../features/ocr_runtime';
 import { userMarketplaceSkillsDir, userSkillsDir } from '../../paths';
 import { chatAttachmentDirForConversation } from '../../util/project-layout';
 import { getWorkspacePath } from '../../features/user_workspace';
-import { isPathAllowed } from '../../util/path-sandbox';
+import { canonicalizePath, isPathAllowed } from '../../util/path-sandbox';
 import { localAccessAllowsOutsideWorkspace, localAccessRequiresSensitiveApproval } from '../../features/permissions';
 import { sensitivePathReasons } from '../../features/local_access_policy';
 import { requestBashDecision } from './bash-permissions';
@@ -86,6 +91,13 @@ const GREP_EXTRACT_CONCURRENCY = 4;
 
 export interface FileToolsOpts {
   userId: string;
+  /** Single authorized root for a trusted inbound A2A reception turn. When set,
+   *  it replaces the union of workspace/attachment/extra roots and overrides the
+   *  global local-access mode. Ordinary local turns never set it. */
+  receptionRoot?: string;
+  /** Force file reads to stay within the explicitly resolved roots even when
+   *  the global local-access mode allows arbitrary filesystem paths. */
+  workspaceOnly?: boolean;
   /** Current conversation id. Scopes file tools to this cid's attachment
    *  dir (in addition to the user's active workspace). Omitted = no
    *  attachment scope (workspace-only). */
@@ -127,9 +139,62 @@ export interface FileToolsOpts {
   onSkillInvoked?: (skill_id: string, system: 'A.custom' | 'A.platform' | 'B', trigger: 'read_file') => void;
 }
 
+/**
+ * Fail-closed resolution of the trusted-reception ceiling.
+ *
+ * `absent` is an ordinary local turn (byte-for-byte unchanged behaviour).
+ * `unavailable` means a scope was requested but cannot be proven: callers must
+ * refuse the action, never fall back to the default workspace / allow-all mode.
+ */
+type ReceptionRootResolution =
+  | { kind: 'absent' }
+  | { kind: 'root'; root: string }
+  | { kind: 'unavailable'; error: string };
+
+function resolveReceptionRoot(raw: string | undefined): ReceptionRootResolution {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (!trimmed) return { kind: 'absent' };
+  if (!path.isAbsolute(trimmed)) {
+    return {
+      kind: 'unavailable',
+      error: errText(
+        'E_RECEPTION_ROOT_UNAVAILABLE',
+        `the trusted reception root is not an absolute path (${trimmed}); refusing instead of falling back to another scope.`,
+      ),
+    };
+  }
+  let st: fs.Stats;
+  try { st = fs.statSync(trimmed); }
+  catch (err) {
+    return {
+      kind: 'unavailable',
+      error: errText(
+        'E_RECEPTION_ROOT_UNAVAILABLE',
+        `the confirmed reception root does not exist or is not stat-able (${trimmed}): ${(err as Error).message}. Refusing; do not retry with another root.`,
+      ),
+    };
+  }
+  if (!st.isDirectory()) {
+    return {
+      kind: 'unavailable',
+      error: errText(
+        'E_RECEPTION_ROOT_UNAVAILABLE',
+        `the confirmed reception root is not a directory (${trimmed}). Refusing; do not retry with another root.`,
+      ),
+    };
+  }
+  return { kind: 'root', root: canonicalizePath(trimmed) };
+}
+
 /** Assemble the allowed-roots list for the current (uid, cid). File-tools
- *  read side: workspace + attachment + extraRoots + readOnlyExtraRoots. */
+ *  read side: workspace + attachment + extraRoots + readOnlyExtraRoots.
+ *  A trusted reception turn is the single-root exception: only `receptionRoot`
+ *  is visible, and every other root lane (workspace, attachment, extra roots,
+ *  read-only roots, tool-result spill) is ignored. */
 function allowedRoots(opts: FileToolsOpts): string[] {
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'root') return [reception.root];
+  if (reception.kind === 'unavailable') return [];
   const roots: string[] = [];
   try {
     const ws = getWorkspacePath(opts.userId, opts.projectId);
@@ -150,6 +215,26 @@ function allowedRoots(opts: FileToolsOpts): string[] {
 
 function resolveAbs(ctx: ToolContext, p: string): string {
   return path.resolve(ctx.workingDir ?? '.', p);
+}
+
+type ScanRoot = { root: string; source: 'attachment' | 'workspace' | 'extra' };
+
+/** Directory roots scanned by search_files / grep_files. A trusted reception
+ *  turn scans the confirmed root only; every ordinary lane stays unchanged. */
+function scanRoots(opts: FileToolsOpts): { roots: ScanRoot[]; error: string | null } {
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'unavailable') return { roots: [], error: reception.error };
+  if (reception.kind === 'root') return { roots: [{ root: reception.root, source: 'workspace' }], error: null };
+  const roots: ScanRoot[] = [];
+  try { roots.push({ root: getWorkspacePath(opts.userId, opts.projectId), source: 'workspace' }); }
+  catch { /* workspace unavailable → skip */ }
+  if (opts.cid) {
+    roots.push({ root: chatAttachmentDirForConversation(opts.userId, opts.cid), source: 'attachment' });
+  }
+  for (const root of [...(opts.extraRoots || []), ...(opts.readOnlyExtraRoots || [])]) {
+    if (root) roots.push({ root, source: 'extra' });
+  }
+  return { roots, error: null };
 }
 
 /** Prefix each line with its 1-based absolute line number + tab (compact
@@ -188,9 +273,21 @@ function permissionWaitProgress(ctx: ToolContext | undefined, operation: string)
 }
 
 function guardPath(opts: FileToolsOpts, abs: string): string | null {
+  const reception = resolveReceptionRoot(opts.receptionRoot);
+  if (reception.kind === 'unavailable') return reception.error;
+  if (reception.kind === 'root') {
+    // Single-root ceiling for a trusted reception turn: the global access mode
+    // (including all-files / auto-approve) cannot widen it, and an approval
+    // only answers "who agreed", never "may this path be touched".
+    if (isPathAllowed(abs, [reception.root])) return null;
+    return errText(
+      'E_PATH_OUT_OF_SCOPE',
+      `path is outside the confirmed reception root ${reception.root}: ${abs}. A trusted reception turn may only touch that single root.`,
+    );
+  }
   const roots = allowedRoots(opts);
   if (roots.length && isPathAllowed(abs, roots)) return null;
-  if (!localAccessAllowsOutsideWorkspace()) {
+  if (opts.workspaceOnly || !localAccessAllowsOutsideWorkspace()) {
     return errText(
       'E_PATH_OUT_OF_SCOPE',
       `path is outside the current workspace/attachment scope and the current access mode only allows workspace files: ${abs}.`,
@@ -653,21 +750,12 @@ function createSearchFilesTool(opts: FileToolsOpts): AgentTool {
     async execute(input) {
       const query = String(input.query ?? '');
       const matcher = compileMatcher(query);
-      const roots = allowedRoots(opts);
-      if (!roots.length) {
+      const scan = scanRoots(opts);
+      if (scan.error) return { content: scan.error, isError: true };
+      if (!scan.roots.length) {
         return { content: errText('E_NO_SCOPE', 'no visible roots for this conversation'), isError: true };
       }
-
-      const rootKinds: Array<{ root: string; source: 'attachment' | 'workspace' | 'extra' }> = [];
-      try {
-        rootKinds.push({ root: getWorkspacePath(opts.userId, opts.projectId), source: 'workspace' });
-      } catch { /* workspace unavailable → skip */ }
-      if (opts.cid) {
-        rootKinds.push({ root: chatAttachmentDirForConversation(opts.userId, opts.cid), source: 'attachment' });
-      }
-      for (const root of [...(opts.extraRoots || []), ...(opts.readOnlyExtraRoots || [])]) {
-        if (root) rootKinds.push({ root, source: 'extra' });
-      }
+      const rootKinds: Array<{ root: string; source: 'attachment' | 'workspace' | 'extra' }> = scan.roots;
 
       const hits: SearchHit[] = [];
       const skippedScans: string[] = [];
@@ -831,16 +919,12 @@ function createGrepFilesTool(opts: FileToolsOpts): AgentTool {
         input.output_mode === 'files' || input.output_mode === 'count' ? input.output_mode : 'content';
       const filesMode = mode === 'files';
 
-      const rootKinds: Array<{ root: string; source: 'attachment' | 'workspace' | 'extra' }> = [];
-      try { rootKinds.push({ root: getWorkspacePath(opts.userId, opts.projectId), source: 'workspace' }); }
-      catch { /* workspace unavailable */ }
-      if (opts.cid) rootKinds.push({ root: chatAttachmentDirForConversation(opts.userId, opts.cid), source: 'attachment' });
-      for (const root of [...(opts.extraRoots || []), ...(opts.readOnlyExtraRoots || [])]) {
-        if (root) rootKinds.push({ root, source: 'extra' });
-      }
-      if (!rootKinds.length) {
+      const scan = scanRoots(opts);
+      if (scan.error) return { content: scan.error, isError: true };
+      if (!scan.roots.length) {
         return { content: errText('E_NO_SCOPE', 'no visible roots for this conversation'), isError: true };
       }
+      const rootKinds: Array<{ root: string; source: 'attachment' | 'workspace' | 'extra' }> = scan.roots;
 
       const targets: Array<{ abs: string; source: 'attachment' | 'workspace' | 'extra'; root: string }> = [];
       const skippedScans: string[] = [];

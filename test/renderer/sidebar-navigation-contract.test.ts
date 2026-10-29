@@ -8,29 +8,44 @@ const style = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8')
 const tokens = fs.readFileSync(path.join(root, 'src/renderer/tokens.css'), 'utf8');
 const galleryHtml = fs.readFileSync(path.join(root, 'src/renderer/component-gallery.html'), 'utf8');
 const gallerySource = fs.readFileSync(path.join(root, 'src/renderer/component-gallery.js'), 'utf8');
+const rail = fs.readFileSync(path.join(root, 'src/renderer/modules/ui-app-rail.js'), 'utf8');
+const contactsSource = fs.readFileSync(path.join(root, 'src/renderer/modules/contacts.js'), 'utf8');
 const zh = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/zh.json'), 'utf8')) as Record<string, string>;
 const en = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/en.json'), 'utf8')) as Record<string, string>;
 
  describe('sidebar navigation contract', () => {
   it('keeps internal navigation ids while exposing the requested product labels', () => {
-    expect(html).toContain('id="new-chat-btn"');
+    // Top-level entries moved to the rail (specs/008-shell-rail-layout); the
+    // historical ids stay so click wiring and deep links keep working.
     expect(html).toContain('id="new-chat-btn"><span data-ui-icon="plus"');
     expect(html).toContain('data-i18n="sidebar.new_chat"');
+    expect(html).toMatch(/data-sidebar-for="task"[\s\S]*?id="new-chat-btn"/);
     expect(html).not.toContain('id="new-task-btn"');
-    expect(html).toContain('id="recall-btn"');
-    expect(html).toContain('data-i18n="sidebar.recall"');
-    expect(html).toContain('id="kb-btn"');
-    expect(html).not.toContain('sidebar.kb_new');
-    expect(html).not.toContain('kb-new-chip');
-    expect(html).toContain('id="connectors-btn"');
-    expect(html).toContain('data-i18n="sidebar.connections"');
-    expect(html).not.toContain('id="agents-btn"');
-    expect(html).not.toContain('id="skills-btn"');
-    expect(html).not.toContain('id="personal-ontology-btn"');
-    expect(html).not.toContain('id="contexts-btn"');
-    expect(html).not.toContain('id="evolution-btn"');
-    expect(html).not.toContain('id="topbar-evolution-toggle"');
-    expect(html).not.toContain('id="panel-evolution"');
+    for (const [id, key] of [
+      ['task-nav-btn', 'rail.task'],
+      ['workspace-btn', 'sidebar.workspace'],
+      ['kb-btn', 'sidebar.kb'],
+      ['recall-btn', 'sidebar.recall'],
+      ['auto-btn', 'sidebar.auto'],
+      ['connectors-btn', 'sidebar.connections'],
+      ['run-center-btn', 'sidebar.run_center'],
+    ]) {
+      expect(rail).toMatch(new RegExp(`id: '${id}', icon: '[a-z-]+', labelKey: '${key}'`));
+    }
+    expect(zh['rail.task']).toBe('任务');
+    expect(en['rail.task']).toBe('Tasks');
+    for (const removed of ['agents-btn', 'skills-btn', 'personal-ontology-btn', 'contexts-btn', 'evolution-btn', 'topbar-evolution-toggle', 'panel-evolution', 'sidebar-logo']) {
+      expect(html).not.toContain(`id="${removed}"`);
+      expect(rail).not.toContain(`'${removed}'`);
+    }
+    expect(html).not.toContain('class="sidebar-logo"');
+  });
+
+  it('renders the contacts navigation action through the shared button primitive', () => {
+    expect(html).toContain('id="contacts-nav-host"');
+    expect(html).not.toMatch(/<button\b[^>]*\bid="contacts-btn"/);
+    expect(contactsSource).toContain('window.uiButton({');
+    expect(contactsSource).toContain("attrs: { id: 'contacts-btn' }");
   });
 
   it('uses the consolidated 6-entry navigation labels', () => {
@@ -70,9 +85,8 @@ const en = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/en.j
     expect(tokens).toContain('--color-sidebar-bottom: #EDF3EF;');
     expect(tokens).toContain('--color-accent-wash: rgba(14, 159, 110, 0.09);');
     expect(style).toMatch(/\.sidebar\s*\{[\s\S]*?background:\s*var\(--color-sidebar-top\);/);
-    expect(style).toMatch(/\.logo-text\s*\{[\s\S]*?font-weight:\s*var\(--font-weight-semibold\);[\s\S]*?font-size:\s*var\(--font-size-title\);/);
     expect(style).toMatch(/\.sidebar-btn-icon\s*\{[\s\S]*?color:\s*currentColor;/);
-    expect(style).toMatch(/\.sidebar-btn > span:not\(\[data-ui-icon\]\):not\(\.sidebar-btn-icon\):not\(\.sidebar-btn-running-chip\)\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
+    expect(style).toMatch(/\.sidebar-btn > span:not\(\[data-ui-icon\]\):not\(\.sidebar-btn-icon\)\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
     expect(style).toMatch(/\.sidebar-btn\.active\s*\{[\s\S]*?background:\s*var\(--color-accent-wash\);[\s\S]*?font-weight:\s*var\(--font-weight-regular\);/);
     expect(style).toMatch(/\.conv-list-section-header\.conv-list-space-title\s*\{[\s\S]*?font-size:\s*var\(--font-size-caption\);[\s\S]*?font-weight:\s*var\(--font-weight-regular\);/);
     expect(style).toMatch(/\.hub-chip-name\s*\{[\s\S]*?font-weight:\s*var\(--font-weight-medium\);/);

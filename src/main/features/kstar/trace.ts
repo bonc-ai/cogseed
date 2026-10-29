@@ -79,7 +79,10 @@ export async function readKstarTrace(
   try { usageReceipts = await listAssetUsageReceipts(userId); } catch { usageLoadFailed = true; }
   if (state?.routingDecisions?.length) {
     for (const decision of state.routingDecisions.slice(-20)) nodes.push(node('routing', {
-      status: decision.isTask === false ? 'skipped' : 'ok', at: decision.at, primaryId: decision.sourceMessageId,
+      // `routing_failed` means the judge never answered, so the turn opened no
+      // task — that is a gap to see, not an ordinary skip.
+      status: decision.kind === 'routing_failed' ? 'failed' : (decision.isTask === false ? 'skipped' : 'ok'),
+      at: decision.at, primaryId: decision.sourceMessageId,
       source: decision.kind, summary: bounded(decision.reason),
     }));
   }

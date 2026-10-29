@@ -15,6 +15,7 @@ import type {
 } from './requirement-types';
 import type { KstarControlErrorCode, KstarControlOperation, KstarControlReceipt, KstarControlResult } from './control-types';
 import type { KstarProjectionDecisionMarker, KstarRoutingDecision } from './requirement-types';
+import { KSTAR_ROUTING_KINDS } from './requirement-types';
 
 const MAX_TITLE = 200;
 const MAX_GOAL = 4_000;
@@ -117,11 +118,17 @@ function normalizeProjectionDecisions(value: unknown, conversationId: string): K
   return out.slice(-MAX_PROJECTION_DECISIONS);
 }
 
+/** Membership test for the one kind list, so this file cannot drift from the type. */
+const ROUTING_KIND_SET: ReadonlySet<string> = new Set(KSTAR_ROUTING_KINDS);
+
 function normalizeRoutingDecisions(value: unknown): KstarRoutingDecision[] {
   if (!Array.isArray(value)) return [];
   return value.filter((raw): raw is KstarRoutingDecision => {
     if (!isPlainRecord(raw) || typeof raw.at !== 'string' || typeof raw.kind !== 'string' || typeof raw.isTask !== 'boolean') return false;
-    return ['closing_intent', 'trivial', 'model_judged', 'dispatch_auto'].includes(raw.kind)
+    // This filter runs on both write and read: a kind absent from
+    // KSTAR_ROUTING_KINDS is dropped on the way to disk and never reaches the
+    // trace. Deriving the check from that array keeps the two in step.
+    return ROUTING_KIND_SET.has(raw.kind)
       && (raw.continuation === undefined || typeof raw.continuation === 'boolean')
       && (raw.reason === undefined || typeof raw.reason === 'string')
       && (raw.sourceMessageId === undefined || (typeof raw.sourceMessageId === 'string' && safeId(raw.sourceMessageId)));
@@ -252,16 +259,6 @@ function validateState(userId: string, raw: Record<string, unknown>, conversatio
     (raw.lastRoutedUserMessageId !== undefined && (typeof raw.lastRoutedUserMessageId !== 'string' || !safeId(raw.lastRoutedUserMessageId))) ||
     typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string'
   ) throw new Error('malformed kstar conversation task state');
-  if (raw.pendingTaskStart !== undefined) {
-    const pending = raw.pendingTaskStart as Record<string, unknown>;
-    if (
-      typeof pending !== 'object' || pending === null ||
-      typeof pending.userMessageId !== 'string' || !safeId(pending.userMessageId) ||
-      typeof pending.text !== 'string' || !pending.text.trim() || pending.text.length > MAX_GOAL ||
-      (pending.workspaceId !== undefined && (typeof pending.workspaceId !== 'string' || !safeId(pending.workspaceId))) ||
-      pending.reason !== 'topic_switch'
-    ) throw new Error('malformed kstar pending task start');
-  }
   const projectionDecisions = raw.projectionDecisions === undefined
     ? undefined
     : normalizeProjectionDecisions(raw.projectionDecisions, conversationId);
@@ -349,13 +346,28 @@ export async function replaceConversationTaskState(userId: string, record: Kstar
   return replaceKstarJsonRecord(userId, 'task-states', validateState(userId, record as unknown as Record<string, unknown>, record.conversationId));
 }
 
+/**
+ * Append a routing decision to the conversation's task state.
+ *
+ * `requireExistingState` is for decisions that are *about* a non-task message
+ * (an answer-like confirmation). Those must never bring KStar state into
+ * existence: for a conversation that never engaged KStar, "no tracked task" is
+ * the absence of a record, not an empty one. When the conversation already has
+ * state — the interesting case, a confirmation sent mid-task — the decision is
+ * still appended, so the trace can label which gate decided.
+ *
+ * Returns null when the write was skipped.
+ */
 export async function recordKstarRoutingDecision(
   userId: string,
   conversationId: string,
   decision: KstarRoutingDecision,
-): Promise<KstarConversationTaskStateRecord> {
+  options: { requireExistingState?: boolean } = {},
+): Promise<KstarConversationTaskStateRecord | null> {
   if (!safeId(userId) || !safeId(conversationId)) throw new Error('invalid kstar routing reference');
-  const state = await readConversationTaskState(userId, conversationId) || createInitialConversationTaskState(userId, conversationId);
+  const existing = await readConversationTaskState(userId, conversationId);
+  if (!existing && options.requireExistingState) return null;
+  const state = existing || createInitialConversationTaskState(userId, conversationId);
   const routingDecisions = [...(state.routingDecisions || []), decision].slice(-MAX_ROUTING_DECISIONS);
   return replaceConversationTaskState(userId, { ...state, routingDecisions, updatedAt: nowIso() });
 }

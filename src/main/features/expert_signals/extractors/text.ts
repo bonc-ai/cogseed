@@ -66,9 +66,10 @@ export interface TextExtractInput {
   /** Message ids contextualizing this signal (typically [agent_msg_id, user_msg_id]). */
   msg_ids: string[];
   /** Pre-computed `detectUserCorrection` result. Pass through from the
-   *  bus turn-end hook so the same boolean drives both the `correction`
-   *  signal here AND the RunMetrics `userCorrections+=1` in runner.ts —
-   *  no double-judgment, no drift between the two. */
+   *  bus turn-end hook so the same boolean drives the `correction` signal
+   *  here. (A second consumer — the runner-side RunMetrics
+   *  `userCorrections+=1` counter — was removed with the reflection-trigger
+   *  subsystem; this signal is now the only consumer.) */
   correction_detected: boolean;
 }
 

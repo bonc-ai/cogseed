@@ -16,26 +16,72 @@ describe('public connector boundary', () => {
   //     credential lives in the user's own OS keychain (the `bin/` adapter child owns it) and
   //     never transits CogSeed, so nothing about it depends on a CogSeed-held secret.
   //
+  //   - `interactive_token` — the provider issues the credential to the user directly (its own
+  //     console, or a bespoke consent flow) and exposes an official remote MCP endpoint that takes
+  //     that credential as a bearer. CogSeed stores it in the instance's encrypted local
+  //     `secrets_enc` blob and pre-registers nothing. Still public: the user authorizes themselves
+  //     and can revoke in the provider's console.
+  //
   // What this test must keep preventing: an entry that only works because CogSeed holds a
   // private client secret, or that meters usage. Adding a mode is a deliberate widening — it is
   // not a licence to add non-public connectors under the new label.
-  const PUBLIC_AUTH_MODES = ['server_bridge', 'mcp_dcr', 'local_cli'];
+  const PUBLIC_AUTH_MODES = ['server_bridge', 'mcp_dcr', 'local_cli', 'credentials', 'provider_device', 'interactive_token'];
 
   it('keeps every catalog connector on a public authorization mode without credit metering', () => {
-    expect(CONNECTOR_CATALOG).toHaveLength(22);
+    expect(CONNECTOR_CATALOG).toHaveLength(31);
     expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'mcp_dcr')).toHaveLength(11);
     expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'server_bridge')).toHaveLength(10);
-    expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'local_cli')).toHaveLength(1);
+    expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'local_cli')).toHaveLength(4);
+    expect(CONNECTOR_CATALOG.filter(entry => entry.auth_mode === 'credentials').map(entry => entry.id)).toEqual(['email-qq', 'email-163', 'email-enterprise']);
+    expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'interactive_token')).toHaveLength(2);
     for (const entry of CONNECTOR_CATALOG) {
       expect(PUBLIC_AUTH_MODES).toContain(entry.auth_mode);
-      expect(entry.icon_svg).toMatch(/^<svg\b/);
+      if (entry.auth_mode === 'credentials') expect(entry.icon_name).toBe(entry.id === 'email-enterprise' ? 'mail' : `connector-${entry.id}`);
+      else if (entry.auth_mode === 'provider_device') {
+        expect(entry.id).toBe('tencent-survey');
+        expect(entry.icon_name).toBe('connector-tencent-survey');
+        expect(entry.oauth).toBeUndefined();
+        expect(entry.transport_template).toEqual({ kind: 'streamable-http', url: 'https://wj.qq.com/api/v2/mcp' });
+      }
+      else if (['tencent-meeting', 'feishu', 'wecom', 'dingtalk', 'tencent-docs', 'wps'].includes(entry.id)) {
+        expect(entry.icon_name).toBe(`connector-${entry.id}`);
+      }
+      else expect(entry.icon_svg).toMatch(/^<svg\b/);
       if (entry.auth_mode === 'mcp_dcr') {
         expect(entry.transport_template?.kind).toBe('streamable-http');
         expect(entry.transport_template && 'url' in entry.transport_template
           ? entry.transport_template.url
           : '').toMatch(/^https:\/\//);
       }
-      if (entry.auth_mode === 'local_cli') {
+      if (entry.auth_mode === 'interactive_token') {
+        // Same rigour as `local_cli` above: the mode is only public because the *user* obtains the
+        // credential, so the entry must not smuggle in a CogSeed-side app registration, and the
+        // credential must have a declared way for the user to supply it.
+        expect(entry.oauth).toBeUndefined();
+        expect(entry.required_oauth_scopes).toBeUndefined();
+        // Both variants must declare an https way for the user to authorize; which one they use is
+        // the entry's business, but "no endpoints at all" would leave the card unconnectable.
+        const auth = entry.interactive_auth;
+        expect(['paste', 'browser_poll']).toContain(auth?.kind);
+        if (auth?.kind === 'paste') {
+          expect(auth.token_url).toMatch(/^https:\/\//);
+        } else if (auth?.kind === 'browser_poll') {
+          expect(auth.authorize_url).toMatch(/^https:\/\//);
+          expect(auth.exchange_url).toMatch(/^https:\/\//);
+          // A poll without a deadline can hang a connect forever.
+          expect(auth.timeout_ms).toBeGreaterThan(0);
+        }
+        // It forwards the credential over the official remote MCP endpoint, so the template must be
+        // an https streamable-http target that names the bearer header.
+        expect(entry.transport_template?.kind).toBe('streamable-http');
+        const tpl = entry.transport_template as { url?: string; oauth_header_key?: string } | null;
+        expect(tpl?.url).toMatch(/^https:\/\//);
+        expect(tpl?.oauth_header_key).toBe('Authorization');
+        // And it must be marked non-`local_cli` in the one place that distinguishes "the child owns
+        // the credential" from "we forward it": there is no bundled adapter to spawn.
+        expect((entry.transport_template as { command?: string } | null)?.command).toBeUndefined();
+      }
+      if (entry.auth_mode === 'local_cli' || entry.auth_mode === 'credentials') {
         // `local_cli` must be credential-owning, not credential-forwarding: a stdio template that
         // carries no `oauth_env_key` and no `env_synthesizer` is what makes `applyTemplate` accept
         // a null grant. A `local_cli` entry that names either key would demand a token that no
@@ -79,11 +125,12 @@ describe('public connector boundary', () => {
     const main = read('src/main/index.ts');
     const pkg = JSON.parse(read('package.json'));
     const sourceLauncher = read('run.sh');
+    const identity = JSON.parse(read('src/resources/identity.json'));
 
     expect(main).toContain('registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });');
     expect(main).toContain('await consumeColdLaunchConnectorCallback();');
     expect(pkg.build.protocols).toEqual(expect.arrayContaining([
-      expect.objectContaining({ schemes: ['cogseed'] }),
+      expect.objectContaining({ schemes: [identity.protocolScheme] }),
     ]));
     expect(sourceLauncher).not.toContain('scripts/prepare-source-protocol.cjs');
   });

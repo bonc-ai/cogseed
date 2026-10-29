@@ -1,0 +1,3 @@
+cases:
+- id: smoke-geo-probe
+  kind: manual-smoke

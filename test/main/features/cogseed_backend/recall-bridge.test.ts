@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -66,7 +67,7 @@ describe('CogSeed Recall execution bridge', () => {
     const projection = await import('../../../../src/main/features/recall/context-projection');
     const proofs = await import('../../../../src/main/features/recall/proof-service');
 
-    const candidate = await candidates.saveRecallCandidate(USER, {
+    const candidate = await createNightlyCandidateFixture(USER, {
       judgment: 'Bring confirmed Mate task evidence into Recall.', summary: 'Mate evidence bridging',
       suggestedType: 'rule',
       suggestedScope: 'review',

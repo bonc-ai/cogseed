@@ -80,6 +80,41 @@ describe('KSTAR secondary attribution', () => {
     }], current.evidenceRefs)).toThrow(/evidence/);
   });
 
+
+  it('模型路径容错（2026-10-02 修复）：类目归一、坏条目丢弃不废整批、全废返回 undefined', async () => {
+    const attribution = await import('../../../../src/main/features/kstar/secondary-attribution');
+    const current = episode();
+    const ev = current.evidenceRefs;
+
+    // 近义/格式归一：大小写、空格连字符、无后缀前缀、显式别名
+    expect(attribution.parseModelKstarAttributionDetails([{ category: 'Asset Not Applied', confidence: 0.8, evidenceRefIds: ev.map((r: { kind: string; id: string }) => `${r.kind}:${r.id}`) }], ev)?.[0].category).toBe('asset_not_applied');
+    expect(attribution.parseModelKstarAttributionDetails([{ category: 'forecast', confidence: 0.9, evidenceRefIds: ev.map((r: { kind: string; id: string }) => `${r.kind}:${r.id}`) }], ev)?.[0].category).toBe('forecast_error');
+    expect(attribution.parseModelKstarAttributionDetails([{ category: 'Recall Failure', confidence: 0.7, evidenceRefIds: ev.map((r: { kind: string; id: string }) => `${r.kind}:${r.id}`) }], ev)?.[0].category).toBe('recall_miss');
+
+    // 一个坏类目 + 一个坏引用：只丢坏条目，好条目保留（旧版整批 throw）
+    const ids = ev.map((r: { kind: string; id: string }) => `${r.kind}:${r.id}`);
+    const mixed = attribution.parseModelKstarAttributionDetails([
+      { category: 'not_a_real_category', confidence: 0.9, evidenceRefIds: ids },
+      { category: 'execution_error', confidence: 1.5, evidenceRefIds: ids },
+      { category: 'permission_blocked', confidence: 0.9, evidenceRefIds: ['execution:no-such-run'] },
+      { category: 'insufficient_evidence', confidence: 0.5, evidenceRefIds: ids },
+    ], ev);
+    expect(mixed).toHaveLength(2);
+    expect(mixed?.map((d) => d.category).sort()).toEqual(['execution_error', 'insufficient_evidence']);
+    expect(mixed?.[0].confidence).toBeLessThanOrEqual(1);
+
+    // 全部无效 → undefined（评审本体保留）
+    expect(attribution.parseModelKstarAttributionDetails([
+      { category: 'garbage', confidence: 0.9, evidenceRefIds: ids },
+    ], ev)).toBeUndefined();
+    expect(attribution.parseModelKstarAttributionDetails(undefined, ev)).toBeUndefined();
+
+    // 提示词枚举：14 个类目全部在场（修复前只有 "approved secondary cause" 占位）
+    const enums = attribution.SECONDARY_ATTRIBUTION_PROMPT_ENUM.split('|');
+    expect(enums).toContain('task_interpretation_error');
+    expect(enums).toHaveLength(14);
+  });
+
   it('prefers deterministic forecast, permission, and usage facts over prose', async () => {
     const attribution = await import('../../../../src/main/features/kstar/secondary-attribution');
     const current = episode({

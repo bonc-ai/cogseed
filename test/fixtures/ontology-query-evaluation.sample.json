@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "caseId": "synthetic-001",
+      "query": "脱敏后的合成关系问题",
+      "scenarios": ["direct_relation"],
+      "expectedAssetIds": ["aa-expected"],
+      "blockedAssetIds": ["aa-blocked"],
+      "expectedIntent": {
+        "route": "ontology",
+        "relationKind": "depends_on",
+        "direction": "incoming",
+        "relationScope": "direct",
+        "maxHops": 1
+      }
+    }
+  ],
+  "runs": [
+    {
+      "caseId": "synthetic-001",
+      "route": "semantic",
+      "status": "none",
+      "selectedAssetIds": [],
+      "latencyMs": 20
+    },
+    {
+      "caseId": "synthetic-001",
+      "route": "ontology",
+      "status": "selected",
+      "selectedAssetIds": ["aa-expected"],
+      "intent": {
+        "route": "ontology",
+        "relationKind": "depends_on",
+        "direction": "incoming",
+        "relationScope": "direct",
+        "maxHops": 1
+      },
+      "evidenceComplete": true,
+      "relationDirectionCorrect": true,
+      "directnessCorrect": true,
+      "latencyMs": 30
+    },
+    {
+      "caseId": "synthetic-001",
+      "route": "ontology_jev",
+      "status": "fallback",
+      "selectedAssetIds": ["aa-expected"],
+      "intent": {
+        "route": "ontology",
+        "relationKind": "depends_on",
+        "direction": "incoming",
+        "relationScope": "direct",
+        "maxHops": 1
+      },
+      "evidenceComplete": true,
+      "relationDirectionCorrect": true,
+      "directnessCorrect": true,
+      "fallback": true,
+      "latencyMs": 31,
+      "jevCalls": 0,
+      "jevFallbacks": 0
+    }
+  ]
+}

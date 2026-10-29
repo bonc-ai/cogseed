@@ -1,0 +1,4 @@
+source_of_truth: ../evals/evals.json
+positive_cases: [create_complete, create_joint, exact_patch, full_preview, preview_only, fact_correction, dated_change, paused_management]
+negative_cases: [rewrite_misrouted_to_propose, mixed_body_representations, background_target, ambiguous_name, revoked_source, new_material, stale_version]
+expected_boundary: only actual host receipts establish a saved creation or edit

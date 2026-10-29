@@ -1,8 +1,5 @@
 import { listFormalAssets } from '../recall/formal-assets';
-import { readInstalledSkillForAsset, readRecallSkillDraft } from '../recall/skill-draft-service';
-import { refMatchesAsset, relationRef, titleFromText } from './normalize';
-import { listCognitionCandidates } from './candidates-adapter';
-import { listCognitionReuseReceipts } from './receipts-adapter';
+import { relationRef } from './normalize';
 import type { CognitionAssetSummary, CognitionAssetType } from './types';
 
 export interface ListCognitionAssetsFilter {
@@ -11,15 +8,11 @@ export interface ListCognitionAssetsFilter {
   limit?: number;
 }
 
-function baseAsset(input: Omit<CognitionAssetSummary, 'relationRefs' | 'candidateCount' | 'reuseCount' | 'workspaceRefs' | 'receiptRefs' | 'candidateRefs'> & Partial<Pick<CognitionAssetSummary, 'relationRefs' | 'candidateCount' | 'reuseCount' | 'workspaceRefs' | 'receiptRefs' | 'candidateRefs'>>): CognitionAssetSummary {
+function baseAsset(input: Omit<CognitionAssetSummary, 'relationRefs' | 'candidateRefs'> & Partial<Pick<CognitionAssetSummary, 'relationRefs' | 'candidateRefs'>>): CognitionAssetSummary {
   return {
     ...input,
     type: input.category,
     relationRefs: input.relationRefs || [],
-    candidateCount: input.candidateCount || 0,
-    reuseCount: input.reuseCount || 0,
-    workspaceRefs: input.workspaceRefs || [],
-    receiptRefs: input.receiptRefs || [],
     candidateRefs: input.candidateRefs || [],
   };
 }
@@ -32,23 +25,14 @@ export async function listCognitionAssets(
   const items: CognitionAssetSummary[] = [];
   // 唯一读口：canonical 层已经保证出来的每一条都是四类正式资产，
   // 这里只做形状转换，不再自己判断"哪些算资产"。
+  // P-r3-1（2026-10-01 死代码真删批）：这里曾为每个 skill_method 资产做
+  // readInstalledSkillForAsset + readRecallSkillDraft 共 3-7 次读盘（含懒迁移
+  // 写副作用），并为全列表做候选池/回执两次关联读（enrichAssetCounts）——
+  // 全部只为填零渲染消费字段（generatedSkillId/recallSkillDraft*/计数三件套/
+  // lifecycleStatus 透传），已随字段一并删除。
   const formalAssets = (await listFormalAssets(userId)).map((asset) => asset.record);
-  const generatedSkillIds = new Map(await Promise.all(formalAssets
-    .filter((asset) => asset.type === 'skill_method')
-    .map(async (asset) => {
-      try { return [asset.id, await readInstalledSkillForAsset(userId, asset.id)] as const; }
-      catch { return [asset.id, undefined] as const; }
-    })));
-  const skillDrafts = new Map(await Promise.all(formalAssets
-    .filter((asset) => asset.type === 'skill_method')
-    .map(async (asset) => {
-      try { return [asset.id, await readRecallSkillDraft(userId, asset.id)] as const; }
-      catch { return [asset.id, undefined] as const; }
-    })));
   for (const asset of formalAssets) {
     if (category && asset.type !== category) continue;
-    const skillDraft = skillDrafts.get(asset.id);
-    const currentSkillDraft = skillDraft?.sourceAssetVersion === asset.version ? skillDraft : undefined;
     items.push(baseAsset({
       id: asset.id,
       type: asset.type,
@@ -56,7 +40,6 @@ export async function listCognitionAssets(
       title: asset.title,
       summary: asset.statement,
       source: 'recall_ability_asset',
-      lifecycleStatus: asset.lifecycleStatus,
       version: asset.version,
       status: asset.status,
       maturity: asset.maturity,
@@ -66,39 +49,6 @@ export async function listCognitionAssets(
       ...(asset.recommendedAction ? { recommendedAction: asset.recommendedAction } : {}),
       ...(asset.recommendationReason ? { recommendationReason: asset.recommendationReason } : {}),
       ...(asset.recommendationAt ? { recommendationAt: asset.recommendationAt } : {}),
-      ...(generatedSkillIds.get(asset.id) ? { generatedSkillId: generatedSkillIds.get(asset.id) } : {}),
-      ...(currentSkillDraft?.status === 'draft' ? { recallSkillDraftStatus: 'draft' as const } : {}),
-      ...(currentSkillDraft?.status === 'draft' ? {
-        recallSkillDraft: {
-          draftHash: currentSkillDraft.draftHash,
-          fileCount: currentSkillDraft.files.length,
-          workflowSteps: currentSkillDraft.proposal?.workflowSteps || [],
-          validationOk: currentSkillDraft.validation.ok,
-          mode: currentSkillDraft.mode,
-          ...(currentSkillDraft.reviewDecision ? { reviewDecision: currentSkillDraft.reviewDecision } : {}),
-          targetSkillId: currentSkillDraft.targetSkillId,
-          ...(currentSkillDraft.baseRevisionId ? { baseRevisionId: currentSkillDraft.baseRevisionId } : {}),
-          ...(currentSkillDraft.baseManifestHash ? { baseManifestHash: currentSkillDraft.baseManifestHash } : {}),
-          ...(currentSkillDraft.diff ? {
-            diffSummary: {
-              added: currentSkillDraft.diff.added,
-              modified: currentSkillDraft.diff.modified,
-              deleted: currentSkillDraft.diff.deleted,
-              unchanged: currentSkillDraft.diff.unchanged,
-            },
-          } : {}),
-          ...(currentSkillDraft.recallContext ? {
-            recallContext: {
-              assetCount: currentSkillDraft.recallContext.assetIds.length,
-              sourceCount: currentSkillDraft.recallContext.sourceRefs.length,
-            },
-          } : {}),
-        },
-      } : {}),
-      ...(currentSkillDraft?.status === 'failed' ? {
-        recallSkillDraftStatus: 'failed' as const,
-        recallSkillDraftErrorCode: currentSkillDraft.errorCode,
-      } : {}),
       candidateRefs: [asset.candidateId],
       relationRefs: asset.evidenceRefs.map((ref) => relationRef(
         ref.kind === 'artifact_file'
@@ -129,33 +79,6 @@ export async function listCognitionAssets(
   // 分组的入口在「我的资产」的 personal 分类里（personal-ontology.js 展开），
   // 不需要在资产列表里重复出现一条。
 
-  await enrichAssetCounts(userId, items);
-
   const limit = Number(filter.limit || 0);
   return limit > 0 ? items.slice(0, Math.min(limit, 500)) : items;
-}
-
-async function enrichAssetCounts(userId: string, items: CognitionAssetSummary[]): Promise<void> {
-  if (!items.length) return;
-  const [candidatesSettled, receiptsSettled] = await Promise.allSettled([
-    listCognitionCandidates(userId),
-    listCognitionReuseReceipts(userId, { limit: 200 }),
-  ] as const);
-  const candidates = candidatesSettled.status === 'fulfilled' ? candidatesSettled.value : [];
-  const receipts = receiptsSettled.status === 'fulfilled' ? receiptsSettled.value : [];
-  for (const item of items) {
-    const linkedCandidateRefs = new Set(item.candidateRefs || []);
-    item.candidateCount = candidates.filter((candidate) => {
-      if (linkedCandidateRefs.has(`${candidate.source}:${candidate.sourceId}`)) return true;
-      if (item.baselineSkillRef && candidate.targetAssetId === item.baselineSkillRef) return true;
-      return candidate.sourceRefs.some((ref) => refMatchesAsset(ref, item.category, item.id))
-        || candidate.evidenceRefs.some((ref) => refMatchesAsset(ref, item.category, item.id));
-    }).length || item.candidateRefs.length;
-    const matchingReceipts = receipts.filter((receipt) => {
-      const refs = [...receipt.reusedRefs, ...receipt.omittedRefs, receipt.receiptId].filter(Boolean);
-      return refs.some((ref) => item.receiptRefs.includes(ref) || refMatchesAsset(ref, item.category, item.id));
-    });
-    item.reuseCount = matchingReceipts.length;
-    item.lastReusedAt = matchingReceipts[0]?.completedAt || matchingReceipts[0]?.createdAt;
-  }
 }

@@ -89,7 +89,7 @@ function loadWorkspace() {
     } else context.window.leaveWorkspace?.();
   });
   vm.createContext(context);
-  for (const name of ['ui-button', 'ui-form', 'ui-empty', 'ui-page-header', 'ui-segmented-control', 'workspace']) vm.runInContext(read(`src/renderer/modules/${name}.js`), context, { filename: `${name}.js` });
+  for (const name of ['ui-button', 'ui-status', 'ui-form', 'ui-empty', 'ui-page-header', 'ui-segmented-control', 'workspace']) vm.runInContext(read(`src/renderer/modules/${name}.js`), context, { filename: `${name}.js` });
   return {
     context, root, invoke, writes, answers, events, html: () => html, artifactHtml: () => artifactWindow.innerHTML,
     // Existing recovery tests explicitly refresh; visit models normal navigation.
@@ -229,6 +229,42 @@ describe('workspace navigation and asynchronous ownership', () => {
     expect(h.invoke.mock.calls.map(([channel]) => channel)).toEqual(['skills.list']);
     expect(h.html()).toContain('data-ws="save-instructions"');
     expect(h.html()).not.toContain('data-ws="retry-catalog"');
+  });
+
+  it('filters Space Skills by catalog category in the capability dialog', async () => {
+    const h = loadWorkspace();
+    h.answers.set('skills.list:', {
+      skills: [
+        { id: 'meeting-actions', name: 'Meeting actions', description_zh: '整理会议纪要和待办', category: 'office' },
+        { id: 'video-studio', name: 'Video studio', description_zh: '生成短视频', category: 'creation' },
+        { id: 'source-extraction', name: 'Source extraction', description_zh: '提取资料要点', category: 'data' },
+      ],
+    });
+    await h.enter(); await h.open('a'); await h.click('space-settings'); await flush();
+    await h.click('edit-ability', 'kind', 'skill');
+    expect(h.html()).toContain('data-ws="edit-skill-search"');
+    expect(h.html()).toContain('data-category="office"');
+    expect(h.html()).toContain('meeting-actions');
+    expect(h.html()).toContain('video-studio');
+    // 分类筛选走共享 uiChip：选中态是 is-selected + aria-pressed，计数走尾部槽。
+    expect(h.html()).toMatch(/class="ui-chip is-selected"[^>]*aria-pressed="true"[^>]*data-category=""/);
+    expect(h.html()).toMatch(/data-category="office"[\s\S]{0,200}<span class="ui-chip__count">\d+<\/span>/);
+
+    const search = h.control('edit-skill-search');
+    search.value = '视频';
+    search.fire('input');
+    await new Promise((resolve) => setTimeout(resolve, 140)); await flush();
+    expect(h.html()).toContain('video-studio');
+    expect(h.html()).not.toContain('meeting-actions');
+
+    search.value = '';
+    search.fire('input');
+    await new Promise((resolve) => setTimeout(resolve, 140)); await flush();
+    await h.click('edit-skill-category', 'category', 'office');
+    expect(h.html()).toMatch(/class="ui-chip is-selected"[^>]*aria-pressed="true"[^>]*data-category="office"/);
+    expect(h.html()).toContain('meeting-actions');
+    expect(h.html()).not.toContain('video-studio');
+    expect(h.html()).not.toContain('source-extraction');
   });
 
   it('does not reopen a canceled create dialog or repaint a hidden page when capabilities arrive late', async () => {
@@ -509,6 +545,11 @@ describe('workspace navigation and asynchronous ownership', () => {
     expect(css).toContain('.ws-view button:not(.ui-button):not(.ui-icon-button)');
     expect(css).not.toMatch(/\.ws-view button\s*{/);
     expect(css).toMatch(/@media \(max-width: 560px\)\s*{\s*\.ws-dialog-foot\s*{[^}]*flex-direction: column;/);
-    expect(read('src/renderer/style.css')).toMatch(/@media \(max-width:\s*720px\)[\s\S]*?body:has\(:is\(#panel-run-center, #panel-workspace\)\.active\) \.sidebar\s*{[^}]*width:\s*48px !important;/);
+    // Workspace has no contextual sidebar (specs/008): the main content takes the full width.
+    // 断言「workspace 不在侧栏模块集合里」，而不是钉死整份集合——集合会随新模块增长
+    // （run-center 已加入），只有 workspace 的部分才是这条用例的契约。
+    const shellSource = read('src/renderer/modules/app-shell.js');
+    expect(shellSource).toMatch(/SIDEBAR_MODULES = new Set\(\[[^\]]*\]\)/);
+    expect(shellSource).not.toMatch(/SIDEBAR_MODULES = new Set\(\[[^\]]*'workspace'/);
   });
 });

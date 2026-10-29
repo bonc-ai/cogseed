@@ -7,35 +7,28 @@ const autoSource = fs.readFileSync(path.join(root, 'src/renderer/modules/auto.js
 const rendererCss = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
 
 describe('automation task-card design-system integration', () => {
-  it('uses shared icon controls and Lucide metadata icons', () => {
-    expect(autoSource).toContain("icon: 'chevron-down'");
-    expect(autoSource).toContain("className: 'auto-row-expand'");
-    expect(autoSource).toContain("icon: 'more-horizontal'");
-    expect(autoSource).toContain("className: 'auto-row-more'");
-    expect(autoSource).toContain("window.uiIconHtml('paperclip', 'ui-icon')");
-    expect(autoSource).not.toContain('📎');
-    expect(rendererCss).toContain('.auto-row-more.ui-icon-button');
-    expect(rendererCss).toContain('.auto-row-expand.ui-icon-button');
+  it('uses the shared two-line resource card and anchored dropdown', () => {
+    expect(autoSource).toContain("layout: 'compact-row'");
+    expect(autoSource).toContain('uiResourceCard({');
+    expect(autoSource).toContain('uiDropdownMenu({');
+    expect(autoSource).not.toContain('function _ensureAutoMenu');
+    expect(autoSource).not.toContain('toggleExpand');
+    expect(rendererCss).not.toContain('.auto-row-menu');
+    expect(rendererCss).not.toContain('.auto-row-head');
   });
 
-  it('routes dropdown actions through shared buttons without changing action ids', () => {
-    expect(autoSource.match(/className: 'auto-row-menu-item'/g)).toHaveLength(3);
-    for (const action of ['toggle-enabled', 'edit', 'delete']) {
-      expect(autoSource).toContain(`'data-action': '${action}'`);
-    }
-    expect(autoSource).toContain("label: t('auto.delete_btn'), role: 'danger'");
-    expect(rendererCss).toMatch(/\.auto-row-menu-item\.ui-button\s*\{[^}]*width:\s*100%;[^}]*border:\s*0;[^}]*background:\s*transparent;[^}]*justify-content:\s*flex-start;/s);
+  it('keeps all task operations in the dropdown and separates delete', () => {
+    const menu = autoSource.slice(autoSource.indexOf('function _autoTaskMenuItems'), autoSource.indexOf('// ─── Empty-state templates'));
+    for (const action of ['toggle-enabled', 'edit', 'delete']) expect(menu).toContain(`'data-action': '${action}'`);
+    expect(menu).toContain("'data-act': 'run-now'");
+    expect(menu).toContain('danger: true, separatorBefore: true');
   });
 
-  it('shows explicit task status and keeps shared primitives in charge of card controls', () => {
-    expect(autoSource).toContain('class="auto-row-status${task.enabled ? \' is-enabled\' : \' is-disabled\'}"');
-    expect(autoSource).toContain("t(task.enabled ? 'common.enabled' : 'common.disabled')");
-    expect(rendererCss).toContain('.auto-row-status-dot');
-    expect(rendererCss).toContain('background: var(--color-success);');
-    expect(rendererCss).toContain('.auto-row.is-disabled { background: var(--surface-subtle); }');
-    expect(rendererCss).not.toContain('.auto-row.is-disabled { opacity: 0.55; }');
-    expect(rendererCss).not.toContain('.auto-row-expand.ui-icon-button:hover');
-    expect(rendererCss).not.toContain('.auto-row-more.ui-icon-button:hover');
+  it('keeps exceptional states in the metadata line', () => {
+    expect(autoSource).toContain("parts.push(t('auto.paused'))");
+    expect(autoSource).toContain("parts.push(t('auto.start_failed'))");
+    expect(autoSource).toContain("parts.push(t('auto.remote_device'");
+    expect(autoSource).toContain("parts.join(' · ')");
   });
 
   it('uses shared buttons and the icon registry in the time-adjust confirmation card', () => {

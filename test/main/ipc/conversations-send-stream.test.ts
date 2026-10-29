@@ -50,6 +50,15 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
 }));
 
+const engagementMock = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>> }));
+vi.mock('../../../src/main/features/marketplace/engagement-event', () => ({
+  recordAgentSessionStarts: vi.fn((input: Record<string, unknown>) => {
+    engagementMock.calls.push(input);
+  }),
+  recordSkillActivated: vi.fn(),
+  recordSkillEnabled: vi.fn(),
+}));
+
 vi.mock('../../../src/main/features/group_chat', () => ({
   subscribeBus: vi.fn((_userId: string, _cid: string, cb: (ev: unknown) => void) => {
     groupChatMock.subscribers.add(cb);
@@ -98,6 +107,7 @@ beforeEach(async () => {
   groupChatMock.sendResult = { ok: true };
   groupChatMock.retryCalls.length = 0;
   groupChatMock.editCalls.length = 0;
+  engagementMock.calls.length = 0;
   groupChatMock.sendStarted = new Promise<void>((resolve) => { groupChatMock.resolveSendStarted = resolve; });
   groupChatMock.sendFinished = new Promise<void>((resolve) => { groupChatMock.resolveSendFinished = resolve; });
   vi.resetModules();
@@ -241,6 +251,35 @@ describe('ipc › conversations.sendStream', () => {
     groupChatMock.quiescent = true;
     groupChatMock.releaseSend?.();
     await run;
+  });
+
+  it('reports agent session starts after an accepted send', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'agent-session-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: '@Codex 看这个',
+          member_agent_ids: ['agent-codex-1', 'agent-task-2'],
+          mention_agent_ids: ['agent-codex-1'],
+        },
+      },
+    );
+
+    await groupChatMock.sendStarted;
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+
+    expect(engagementMock.calls).toEqual([{
+      agentIds: ['agent-codex-1', 'agent-task-2'],
+      cid: 'c123abc',
+      userId: TEST_UID,
+    }]);
   });
 
   it('forwards a validated member / mention selection with per-source configs', async () => {

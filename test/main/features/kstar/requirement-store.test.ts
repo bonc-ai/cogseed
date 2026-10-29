@@ -20,11 +20,12 @@ afterEach(() => {
 });
 
 async function storeModules() {
-  const [store, paths] = await Promise.all([
+  const [store, paths, types] = await Promise.all([
     import('../../../../src/main/features/kstar/requirement-store'),
     import('../../../../src/main/features/kstar/paths'),
+    import('../../../../src/main/features/kstar/requirement-types'),
   ]);
-  return { store, paths };
+  return { store, paths, types };
 }
 
 async function writeRawRequirement(
@@ -304,4 +305,117 @@ describe('KSTAR Phase 2 requirement/task store', () => {
     expect(read?.controlReceipts?.[99].idempotencyKey).toBe('turn-104:create');
   });
 
+});
+
+describe('routing decisions do not materialise task state on their own', () => {
+  const decision = (reason: string) => ({
+    at: '2026-09-18T00:00:00.000Z',
+    kind: 'answer_confirmation' as const,
+    isTask: false,
+    reason,
+  });
+
+  it('skips the write entirely when no conversation state exists yet', async () => {
+    const { store, paths } = await storeModules();
+    const statePath = paths.kstarConversationTaskStatePath('user-a', 'cid-quiet');
+    expect(fs.existsSync(statePath)).toBe(false);
+
+    const result = await store.recordKstarRoutingDecision('user-a', 'cid-quiet', decision('selection'), {
+      requireExistingState: true,
+    });
+
+    expect(result).toBeNull();
+    // A non-task message on a conversation that never engaged KStar must not
+    // create state: "no tracked task" is the absence of a record, not an
+    // empty one.
+    expect(fs.existsSync(statePath)).toBe(false);
+    await expect(store.readConversationTaskState('user-a', 'cid-quiet')).resolves.toBeNull();
+  });
+
+  it('still records the decision once the conversation has state', async () => {
+    const { store } = await storeModules();
+    await store.recordKstarRoutingDecision('user-a', 'cid-open', {
+      at: '2026-09-18T00:00:00.000Z',
+      kind: 'model_judged',
+      isTask: true,
+      continuation: false,
+      reason: 'opened',
+    });
+
+    const result = await store.recordKstarRoutingDecision('user-a', 'cid-open', decision('selection'), {
+      requireExistingState: true,
+    });
+
+    // The trace reads routingDecisions to label its `routing` nodes, so an
+    // answer-like confirmation mid-task must still be attributable.
+    expect(result?.routingDecisions).toHaveLength(2);
+    expect(result?.routingDecisions?.[1]).toMatchObject({ kind: 'answer_confirmation', isTask: false });
+  });
+
+  it('materialises by default, preserving the existing call contract', async () => {
+    const { store, paths } = await storeModules();
+    const result = await store.recordKstarRoutingDecision('user-a', 'cid-default', decision('selection'));
+    expect(result).not.toBeNull();
+    expect(fs.existsSync(paths.kstarConversationTaskStatePath('user-a', 'cid-default'))).toBe(true);
+  });
+
+  it('keeps every kind the type allows, including a judge failure', async () => {
+    const { store, types } = await storeModules();
+    // The allowlist is derived from KSTAR_ROUTING_KINDS. If the two ever drift,
+    // the kind is stripped on the way to disk and the trace can never show it —
+    // which is exactly what happened to `answer_confirmation`.
+    const result = await store.recordKstarRoutingDecision('user-a', 'cid-failed', {
+      at: '2026-09-18T00:00:00.000Z',
+      kind: 'routing_failed',
+      isTask: false,
+      reason: 'routing judge unavailable (timeout)',
+    });
+    expect(result?.routingDecisions).toHaveLength(1);
+    expect(result?.routingDecisions?.[0]).toMatchObject({ kind: 'routing_failed', reason: 'routing judge unavailable (timeout)' });
+    expect(types.KSTAR_ROUTING_KINDS).toContain('routing_failed');
+  });
+
+  it('keeps the two formerly silent gates, so the distribution is countable', async () => {
+    const { store, types } = await storeModules();
+    // `obviously_trivial` short-circuited with no record and no log at all,
+    // and `routing_unavailable` was logged but never persisted — so the gate
+    // distribution could not be counted. Both now go through the same
+    // allowlist, which is why the store must keep them.
+    await store.recordKstarRoutingDecision('user-a', 'cid-gates', {
+      at: '2026-09-18T00:00:00.000Z',
+      kind: 'model_judged',
+      isTask: true,
+      continuation: false,
+      reason: 'opened',
+    });
+    const afterTrivial = await store.recordKstarRoutingDecision('user-a', 'cid-gates', {
+      at: '2026-09-18T00:00:01.000Z',
+      kind: 'obviously_trivial',
+      isTask: false,
+      reason: 'obviously trivial (greeting/status/emoji); no model call',
+    }, { requireExistingState: true });
+    const afterUnavailable = await store.recordKstarRoutingDecision('user-a', 'cid-gates', {
+      at: '2026-09-18T00:00:02.000Z',
+      kind: 'routing_unavailable',
+      isTask: false,
+      reason: 'no configured model; routing not possible',
+    }, { requireExistingState: true });
+
+    expect(afterTrivial?.routingDecisions).toHaveLength(2);
+    expect(afterUnavailable?.routingDecisions?.map((decision) => decision.kind))
+      .toEqual(['model_judged', 'obviously_trivial', 'routing_unavailable']);
+    expect(types.KSTAR_ROUTING_KINDS).toContain('obviously_trivial');
+    expect(types.KSTAR_ROUTING_KINDS).toContain('routing_unavailable');
+  });
+
+  it('drops a kind that is not in the type, so the list stays the source of truth', async () => {
+    const { store } = await storeModules();
+    const initial = store.createInitialConversationTaskState('user-a', 'cid-bogus');
+    await store.writeConversationTaskState('user-a', {
+      ...initial,
+      routingDecisions: [{ at: '2026-09-18T00:00:00.000Z', kind: 'not_a_kind', isTask: false } as never],
+    });
+    const read = await store.readConversationTaskState('user-a', 'cid-bogus');
+    expect(read?.routingDecisions ?? []).toHaveLength(0);
+  });
 });

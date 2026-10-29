@@ -1,3 +1,4 @@
+import { requireContentCategory } from '../features/recall/content-category';
 /**
  * IPC wiring — replaces `bridge/routes.py` for the Electron era.
  *
@@ -13,6 +14,8 @@
  * Handler tables below are the full router — add a new logical channel by
  * dropping it into `invokeHandlers` or `streamHandlers`.
  */
+import { outboxRequeueIsolated } from '../features/p3394_bridge/outbound-outbox';
+
 
 import { app, ipcMain, dialog, BrowserWindow, screen, type WebContents } from 'electron';
 
@@ -36,6 +39,16 @@ import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
+import * as contacts from '../features/contacts/store';
+import * as a2aConsultations from '../features/a2a/consultations';
+import { confirmReception, declineReception, expireStaleReceptions, listPendingReceptions, previewReceptionWorkspace } from '../features/a2a/reception-service';
+import { runReception, type ReceptionQuestion } from '../features/a2a/reception-run';
+import { cancelReceptionNudge } from '../features/a2a/reception-nudge';
+import { startRelayPump } from '../features/a2a/relay-pump';
+import * as outbound from '../features/a2a/outbound';
+import { listA2AConversationsForContact } from '../features/a2a/conversation-list';
+import { startPresenceHeartbeat } from '../features/contacts/presence';
+import * as contactsHub from '../features/contacts/hub-client';
 import * as confirmCards from '../features/group_chat/confirm-cards';
 import { GroupEventChatProjector } from '../features/chat_events/project-group-event';
 import {
@@ -54,6 +67,8 @@ import * as executionLog from '../features/execution_log';
 import * as workbench from '../features/workbench';
 import * as cognition from '../features/cognition';
 import * as recallCandidates from '../features/recall/candidate-service';
+import { deferRecallCandidate } from '../features/recall/candidate-defer';
+import { projectActivityCandidates, projectLegacyActivityCandidates } from '../features/recall/activity-projection';
 import { withRecallCandidateCapabilities, projectReviewQueueCandidates } from '../features/recall/candidate-capabilities';
 import * as recallAssets from '../features/recall/asset-service';
 import * as recallExperiences from '../features/recall/experience-service';
@@ -93,6 +108,7 @@ import * as effectivenessFeedback from '../features/recall/effectiveness-feedbac
 import * as recallSources from '../features/recall/source-catalog';
 import * as recallCaptures from '../features/recall/capture-service';
 import * as recallCaptureSettings from '../features/recall/capture-settings';
+import { readRecallCaptureStats } from '../features/recall/capture-stats';
 import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
@@ -109,6 +125,7 @@ import * as skills from '../features/skills';
 import * as skillReverify from '../features/skill_reverify';
 import * as skillTrust from '../features/skill_trust';
 import * as marketplace from '../features/marketplace';
+import { recordAgentSessionStarts } from '../features/marketplace/engagement-event';
 import * as notificationPermissions from '../features/notification_permissions';
 import * as marketplaceBiz from '../features/marketplace_biz';
 import * as marketplaceCache from '../features/marketplace_cache';
@@ -154,6 +171,7 @@ import * as stt from '../features/stt/stt-service';
 import { getRendererTables, isLang, isUiLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
+import { candidatePathsForHint } from '../features/workspace_path_hint';
 import { invokeHandlers as localAgentsHandlers } from './local_agents';
 import { p3394ExternalHandlers } from './p3394_external';
 import {
@@ -170,19 +188,30 @@ import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
 import { invokeHandlers as hubAccountHandlers } from './hub-account';
+import { invokeHandlers as a2aReceptionHandlers } from './a2a-reception';
 import { invokeHandlers as contributionHandlers } from './contribution';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as ontologyGraphHandlers } from './ontology-graph';
-import { invokeHandlers as cognitionHandlers } from './cognition';
+import { invokeHandlers as semanticaSettingsHandlers } from './semantica-settings';
+import { invokeHandlers as cognitionHandlers, ontologyErrorDetails } from './cognition';
 import { invokeHandlers as transcriptHandlers } from './transcript';
 import { invokeHandlers as meetingHandlers } from './meeting';
 import { invokeHandlers as updatesHandlers } from './updates';
+import { invokeHandlers as creatorHandlers } from './creator';
 import { genId12, readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
   markConfirmationVisible as markDeleteConfirmationVisible,
   resolveConfirmation as resolveDeleteConfirmation,
 } from '../model/core-agent/delete-file-confirm';
+// 转写纠错的高危候选确认卡片。**必须静态导入**：动态 `await import()` 与别处的
+// 静态 import 在 tsx/ESM 下会解析成两个模块实例，于是 IPC 翻的是 Map A、而工具
+// 读的是 Map B，token 永远停在 pending（delete-file-confirm 明确记录过这个坑）。
+import {
+  markGlossaryConfirmationVisible,
+  resolveGlossaryConfirmation,
+} from '../model/core-agent/glossary-confirm';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
@@ -199,6 +228,8 @@ import { logErrorRef } from '../util/log-redact';
 import { chatMediaLocalPathFromUrl } from '../util/chat-media-url';
 import { macosTccSensitivePath } from '../util/macos-tcc';
 import { normalizeAppError } from '../util/app-error';
+import { throttleLog } from '../util/log-throttle';
+import { isTerminalHubAuthCode } from '../features/hub_account/auth-flow';
 import {
   isTrustedIpcSender,
   parseInvokeEnvelope,
@@ -283,7 +314,7 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   const contextWindow = boundedInteger(raw.contextWindow, `${field}.contextWindow`, 16_777_216);
   const maxTokens = boundedInteger(raw.maxTokens, `${field}.maxTokens`, 1_048_576);
   if (maxTokens > contextWindow) throw new Error(`${field}.maxTokens must not exceed contextWindow`);
-  // 新配置字段（2026-09-13 统一模型配置表单）原样透传——严格校验在
+  // 模型能力字段原样透传——严格校验在
   // custom_providers.normalizeModel（单一口径，避免两处规则漂移）。
   return {
     id,
@@ -457,7 +488,7 @@ async function _resolveWorkspaceScope(
 
 // Resolve the cid-scoped attachment dir from a renderer payload, when present.
 // The file-tools' allowed-paths scope is "active workspace ∪ this cid's
-// attachment dir" (CLAUDE.md §5); reveal + preview must honour the same
+// attachment dir"; reveal + preview must honour the same
 // union so a user can preview an attachment they uploaded, not just files
 // the LLM wrote into the workspace.
 function _attachmentScopeForPayload(userId: string, payload: any): string | null {
@@ -551,7 +582,16 @@ async function _ipcFileSandboxAllowedRoots(userId: string, payload: any): Promis
   if (att) roots.push(att);
   const pf = _projectFileScopeForUser(userId, projectId);
   if (pf) roots.push(pf);
-  return roots;
+  if (payload && typeof payload.cid === 'string' && safeId(payload.cid)) {
+    try {
+      const { getConversationWorkspacePath } = await import('../features/group_chat/conv_workspace');
+      const conversationRoot = await getConversationWorkspacePath(userId, payload.cid);
+      if (conversationRoot && path.isAbsolute(conversationRoot)) roots.push(conversationRoot);
+    } catch {
+      // Fail closed: an unresolvable conversation workspace must not broaden scope.
+    }
+  }
+  return Array.from(new Set(roots));
 }
 
 /** Test-only export — see `test/main/ipc/{produced-readText,workspace-reveal}.test.ts`. */
@@ -573,6 +613,8 @@ async function _isConversationRecordedFile(userId: string, cid: string, absPath:
 
   return false;
 }
+
+const MAX_PATH_HINTS_PER_CALL = 50;
 
 async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
   if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
@@ -708,22 +750,11 @@ export const _libraryWriteTextForTest = _writeTextToLibrary;
 export const _libraryImportProducedForTest = _importProducedToLibrary;
 
 /**
- * 把一段文本导出到**用户本机文件夹**（「另存到本地文件夹…」）。
- *
- * 为什么「另存到知识库」不够：库里的文件是从用户磁盘**复制**进来的，产物写回库内目录后，
- * 用户去自己放原稿的文件夹里翻不到（2026-09-23 真机反馈："在文件夹中显示能看到清理版，
- * 本地原文件夹却没有"）。两个落点服务两件事：库内那份喂检索/问答，本机那份给用户自己用。
- *
- * 两条路径（都看 `features/local_file_links` 里那份机器私有的对应关系台账）：
- *   - 有线索（导入来源 = 原文所在文件夹 / 用户上次亲手选过的落点）且目录还在 →
- *     直接写回那个文件夹：用户点这个按钮的意思就是"存回我这儿"，再来一个对话框只是多一次点击；
- *   - 无线索（新建/同步/剪藏来的文档）或目录已失效（换机器、删掉文件夹）→ 弹系统保存框
- *     （默认落在下载目录），让用户自己挑位置——总比只回一句"失败"强。
- *   用户挑完把选择记进台账：同一份文档下次不用再导航一遍。
- *
- * 注意与 `_writeTextToLibrary` 的分工：这里的 payload 里带的是**导出用**的字段
- * （`fileName` 纯文件名 + `sourcePath` 库内相对路径，仅用来反查本机落点），
- * 没有 `targetPath` 那种"库内目标路径"语义。
+ * 把文本导出到用户本机文件夹；知识库副本由 `_writeTextToLibrary` 管理。
+ * `features/local_file_links` 记录导入来源和用户选择过的本机落点：目录仍有效时
+ * 直接导出；无映射或目录失效时打开系统保存框，默认下载目录，并记住成功的选择。
+ * payload 的 `fileName` 是纯文件名，`sourcePath` 是用来反查本机落点的库内相对路径；
+ * 不使用库内目标路径 `targetPath`。
  */
 async function _writeTextToLocal(payload: any, ctx: IpcContext): Promise<any> {
   const content = typeof payload?.content === 'string' ? payload.content : '';
@@ -871,26 +902,11 @@ async function ensureKstarWakeProjectionConfirmed(
   return null;
 }
 
-/** 整理记录批量入口的公共校验：id 数组、逐条 safeId、上限 100。 */
-function batchRecallCaptures(
-  ctx: { userId: string },
-  captureIds: unknown,
-  run: (userId: string, ids: string[]) => Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }>,
-): Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }> {
-  if (!Array.isArray(captureIds)
-    || captureIds.length < 1
-    || captureIds.length > 100
-    || captureIds.some((id) => typeof id !== 'string' || !safeId(id))) {
-    throw new Error('invalid recall capture ids');
-  }
-  return run(ctx.userId, captureIds);
-}
-
 function _isRecipientOrigin(value: unknown): value is 'user_selection' | 'cli_fallback' | 'active_floor' {
   return value === 'user_selection' || value === 'cli_fallback' || value === 'active_floor';
 }
 
-// ── 经验目录通道的载荷投影（specs/016 契约 E1~E6）──────────────────────────
+// ── 经验目录通道的载荷投影──────────────────────────
 // 列表行是目录行：**不含 body、不含 evidenceRefs 明细**（受限正文边界）；
 // 排序不在这里做——listExperiences 已按 updatedAt 倒序给出。
 function recallExperienceListItem(exp: recallExperiences.ExperienceRecord) {
@@ -913,7 +929,7 @@ function recallExperienceListItem(exp: recallExperiences.ExperienceRecord) {
   };
 }
 
-// 详情侧（E2）：正文给（单条 ≤4000 在写入侧已硬校验），证据只回 kind/id/title
+// 详情侧：正文给（单条 ≤4000 在写入侧已硬校验），证据只回 kind/id/title
 // 且过滤绝对路径标题（可读名解析是渲染层 resolveSourceRef 的职责）；mergedFrom
 // 只回 id/title/mergedAt——source/evidenceRefs 快照留在主进程，不随详情外溢。
 function recallExperienceDetail(exp: recallExperiences.ExperienceRecord) {
@@ -936,8 +952,24 @@ function recallExperienceDetail(exp: recallExperiences.ExperienceRecord) {
   };
 }
 
+// 旧个人本体直写通道已关闭：po.* 写通道曾留给兼容层，但唯一
+// 渲染消费方（旧 personal-ontology 页）已退役（深链归一化到 recall），新本体工作台是唯一
+// 入口且把旧记录当只读投影＋送审候选。为防止绕过共同本体命令服务直改旧文档，
+// 与 po.candidates.confirm 同口径：结构化写通道一律拒绝并指向治理入口。
+// features 层函数不动——主进程内部合法流程（候选管道、语义审查等）照常直调。
+function legacyPoWriteClosed(): Promise<never> {
+  return Promise.reject(new Error('legacy personal ontology writes are closed; edit through the governed ontology workbench commands instead'));
+}
+
+/** `expectedMessageId` 是用户看到的 pending 身份：缺省表示旧调用方不绑定；
+ *  其它任何值都必须是可比较的非空字符串，类型不对就拒绝，而不是猜一个 id。 */
+function _invalidExpectedMessageId(value: unknown): boolean {
+  return value !== undefined && (typeof value !== 'string' || !value.trim());
+}
+
 const invokeHandlers: Record<string, InvokeHandler> = {
-  // conv-core M2：双向交互（审批/提问）的渲染层回复入口。晚到/未知 id
+  ...creatorHandlers,
+  // 双向交互（审批/提问）的渲染层回复入口。晚到/未知 id
   // 由 hub 幂等吞掉（返回 handled:false，不抛错）。
   'chat.interaction.reply': async (payload, _ctx) => {
     const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
@@ -985,6 +1017,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
   'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),
   'cogseed.agent.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.agents(ctx.userId),
+  // 消费；dashboard/decideCognitionCandidate 的服务文件已随通道退役删除。
   'cogseed.dashboard.diagnostics': async (_payload, ctx) => cogseedBackend.cogseedIpcService.diagnostics(ctx.userId),
   'cogseed.worktree.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.worktrees(ctx.userId),
   'cogseed.worktree.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.createWorktree(ctx.userId, payload),
@@ -1026,11 +1059,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // persisted fields stay authoritative, the join is display-only.
     const annotate = async <T extends { conversation_id: string; channel_platform?: string }>(rows: readonly T[]): Promise<T[]> => {
       if (!rows.length) return [...rows];
-      const [bindings, instances] = await Promise.all([
+      const [bindings, instances, waitingApproval] = await Promise.all([
         messagingBindings.listBindings(ctx.userId).catch(() => []),
         messagingRegistry.listInstances(ctx.userId).catch(() => []),
+        // 唤醒状态只读索引（TTL 缓存）：侧栏据此给**每一行**打"等待你批准"标记。
+        // 必须随列表下发——陈旧会话不会被轮询，光靠 /runtime 永远标不出来。
+        import('../features/p3394/wake-store')
+          .then((module) => module.pendingApprovalIndex(ctx.userId))
+          .catch(() => ({ conversations: new Set<string>(), runs: new Set<string>() })),
       ]);
-      return annotateChannelConversations(rows, bindings, instances);
+      return annotateChannelConversations(rows, bindings, instances).map((row) => ({
+        ...row,
+        waiting_approval: waitingApproval.conversations.has(row.conversation_id),
+      }));
     };
     if (mode === 'startup') {
       const expandedProjectIds = String(expanded_projects || '')
@@ -1081,7 +1122,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { counts: await chats.countAutoTaskConversations(ctx.userId, ids) };
   },
 
-  // 批量取会话标题（2026-09-25 验收修复 US-603）：证据来源解析要把 cid 翻成
+  // 批量取会话标题：证据来源解析要把 cid 翻成
   // 可读标题。只返回 title——不带正文、不带项目/成员信息；查无的 cid 不返回
   // 条目（渲染层据此显示「来源记录不可用」，而不是裸 id）。
   'conversations.titles': async ({ cids } = {}, ctx) => {
@@ -1090,6 +1131,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     return { ok: true, titles: await chats.listConversationTitles(ctx.userId, cids) };
   },
+  'conversations.waitingApproval': async (_args, ctx) => {
+    // 只回会话 id 列表（一次索引读，文件戳失效）：渲染层据此对**全部已知行**做
+    // 绝对同步——只增不减的话，用户批准/中止之后标签会一直挂在那儿。
+    const index = await import('../features/p3394/wake-store')
+      .then((module) => module.pendingApprovalIndex(ctx.userId))
+      .catch(() => ({ conversations: new Set<string>(), runs: new Set<string>() }));
+    return { conversations: [...index.conversations].sort() };
+  },
+
   'conversations.get': async (args, ctx) => {
     const { cid } = args;
     if (!safeId(cid)) throw new Error('invalid cid');
@@ -1097,26 +1147,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!conv) throw new Error('conversation not found');
     // Same channel annotation as the list endpoints — a freshly hydrated
     // sidebar row (e.g. external inbound to a brand-new conversation) must
-    // land in its channel group immediately.
+    // land in its channel group immediately. 单条也要带 waiting_approval：
+    // 渲染层按行打标时若这里缺字段，刚 hydrate 的那行标记会被误清。
+    const withApproval = async <T extends { conversation_id: string }>(row: T): Promise<T & { waiting_approval: boolean }> => {
+      const index = await import('../features/p3394/wake-store')
+        .then((module) => module.pendingApprovalIndex(ctx.userId))
+        .catch(() => ({ conversations: new Set<string>(), runs: new Set<string>() }));
+      return { ...row, waiting_approval: index.conversations.has(row.conversation_id) };
+    };
     if (!conv.channel_platform) {
       const [bindings, instances] = await Promise.all([
         messagingBindings.listBindings(ctx.userId).catch(() => []),
         messagingRegistry.listInstances(ctx.userId).catch(() => []),
       ]);
       const [annotated] = annotateChannelConversations([conv], bindings, instances);
-      return { conversation: annotated || conv };
+      return { conversation: await withApproval(annotated || conv) };
     }
     const [instances] = await Promise.all([
       messagingRegistry.listInstances(ctx.userId).catch(() => []),
     ]);
     const [annotated] = annotateChannelConversations([conv], [], instances);
-    return { conversation: annotated || conv };
+    return { conversation: await withApproval(annotated || conv) };
   },
 
   'conversations.setPermissionMode': async (args, ctx) => {
     const { cid, permission_mode } = args;
     if (!safeId(cid)) throw new Error('invalid cid');
-    if (permission_mode !== 'full' && permission_mode !== 'auto_approve' && permission_mode !== 'ask') {
+    if (permission_mode !== 'full' && permission_mode !== 'auto_approve' && permission_mode !== 'ask' && permission_mode !== 'danger_full_access') {
       throw new Error('invalid permission mode');
     }
     const conv = await chats.updateConversation(ctx.userId, cid, { permission_mode }, conversationProjectHint(args));
@@ -1161,8 +1218,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  // 确认卡片专用通道（2026-09-14 Bug3）：幂等 + 直达总线，绕过渲染层发送队列；
-  // action: 'confirm' | 'cancel'（评审补强：取消同通道、同步落盘 cancelled）。
+  // 确认卡片专用通道：幂等并直达总线，绕过渲染层发送队列；
+  // action: 'confirm' | 'cancel'，取消也在本通道同步落盘 cancelled。
   'groupChat.sendConfirm': async ({ cid, artifactId, op, payload, action }, ctx) => {
     return confirmCards.sendConfirmAndMark({
       userId: ctx.userId,
@@ -1300,7 +1357,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { conversation: conv };
   },
 
-  // ── 把已有会话绑定到空间（问题 A：只有新建时能绑，这里补「移入/移出」）──
+  // ── 把已有会话移入或移出空间 ──
   // spaceId 合法且属于该用户 → 绑定；空/缺失 → 解绑（移出空间回到普通列表）。
   'conversations.setSpace': async (args, ctx) => {
     const { cid, spaceId } = args;
@@ -1434,10 +1491,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // Reference-only catalog for the workspace picker. Runtime skill loading has
   // its own trust gate; this route must not block first paint on deep rescans.
-  'spaces.resources.catalog': async () => {
+  'spaces.resources.catalog': async (_args, ctx) => {
     const [skillRows, agentRows] = await Promise.all([
-      skills.listSkillCatalog(),
-      agents.listAgents(),
+      skills.listSkillCatalogForUser(ctx.userId),
+      agents.listAgentsForUser(ctx.userId),
     ]);
 
     // 引导未完成时，过滤掉所有 CLI Agent
@@ -1455,8 +1512,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skills: skillRows, agents: filteredAgents };
   },
 
-  'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions });
+  'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions, projectDir } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions, projectDir });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1520,8 +1577,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // 在系统文件管理器中打开空间文件夹（macOS 访达 / Windows 资源管理器）。
   // 路径由主进程从 spaceId 解析，渲染端不提供任意路径。
+  //
+  // 空间绑定了本地项目目录时打开**用户自己的项目目录**：那才是这个空间干活的
+  // 地方，打开 CogSeed 家里的内部目录对用户毫无意义（历史空间未绑定 → 行为不变）。
   'spaces.openInFinder': async ({ spaceId }, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    try {
+      const space = await spaces.getSpace(ctx.userId, spaceId);
+      const bound = space?.project_dir;
+      if (bound && fs.statSync(bound).isDirectory()) {
+        const boundErr = await shell.openPath(bound);
+        if (boundErr) throw new Error(boundErr);
+        return { ok: true, path: bound };
+      }
+    } catch (err) {
+      // 绑定目录已消失（外接盘未挂载等）→ 回落到空间内部目录，不要让按钮变成哑的
+      if (err instanceof Error && !/ENOENT|ENOTDIR/.test(err.message)) {
+        log.warn(`spaces.openInFinder project_dir failed sid=${spaceId}: ${err.message}`);
+      }
+    }
     const { spaceContentDir } = await import('../paths');
     const target = spaceContentDir(ctx.userId, spaceId);
     try {
@@ -1560,8 +1634,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.resources.pruneInvalid': async ({ spaceId } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const [sAgents, sSkills] = await Promise.all([
-      agents.listAgents().catch(() => []),
-      skills.listSkillCatalog().catch(() => []),
+      agents.listAgentsForUser(ctx.userId).catch(() => []),
+      skills.listSkillCatalogForUser(ctx.userId).catch(() => []),
     ]);
 
     // 引导未完成时，过滤掉所有 CLI Agent
@@ -1598,7 +1672,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { scenarios: contract.listRoleScenarios() };
   },
 
-  // ── 空间三 tab 数据源（空间化重构阶段 1）──────────────────────────────
+  // ── 空间三个页签的数据源 ───────────────────────────────────────────
   'spaces.conversations.list': async ({ spaceId } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     return { conversations: await chats.listSpaceConversations(ctx.userId, spaceId) };
@@ -1651,8 +1725,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, path: victim };
   },
 
-  // 本地文件夹导入：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
+  // 本地文件夹导入（复制进空间内容目录 imports/，保留目录结构）。
   // 进度经 broadcastToRenderer 推送 'workspace-import:progress'（preload PUSH_EVENT_PREFIXES 白名单内）。
+  //
+  // ⚠️ 新建空间弹窗**不再调用**它：那里的"本地文件夹"现在表示"绑定项目目录、
+  // 就地干活"（spaces.create 的 projectDir）。这里保留的是复制式导入能力本身
+  // ——老空间 `imports/` 的数据仍要能扫、能打开（见 spaces_artifacts.scanImportedFiles
+  // 与 _isAllowedFileActionPath 的空间内容目录放行），将来做显式的「导入资料」
+  // 入口时也直接复用，不必重写一遍带限额/跳过清单/进度回调的实现。
   'workspace.importFolder': async ({ spaceId, sourceDir } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof sourceDir !== 'string' || !path.isAbsolute(sourceDir)) throw new Error('invalid sourceDir');
@@ -1662,7 +1742,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──
-  // 语义与 runner 一致（S1）：空间缺失/空配置/全失效 → scope=null（全局可见不过滤）。
+  // 语义与 runner 一致：空间缺失/空配置/全失效 → scope=null（全局可见不过滤）。
   'spaces.scope.resolve': async ({ spaceId } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('invalid spaceId');
@@ -1670,7 +1750,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { scope }; // null = 全局；否则 { skills: string[]; agents: string[] }
   },
 
-  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
+  // ── 项目 ↔ 空间绑定 ───────────────────────────────────────────────────
   'spaces.instructions.get': async ({ spaceId }, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.readSpaceInstructions(ctx.userId, spaceId);
@@ -1897,12 +1977,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, name };
   },
 
-  // ── Project bindings (the strict scope of agents/skills visible inside
-  // a project conversation; see CLAUDE.md §6 outer-intersection rule) ──
-  // `bindings.list` returns the bound ids JOINED with name/description so
-  // the renderer can paint the detail page in one round-trip. Unknown ids
-  // (referent deleted) are pruned here so stale bindings never become user
-  // cleanup work.
   'autoTasks.list': async ({ projectId } = {}, ctx) => {
     const opts: { projectId?: string | null } = {};
     if (projectId === null) opts.projectId = null;
@@ -2076,6 +2150,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { task: result.task };
   },
 
+  'autoTasks.runNow': async ({ taskId } = {}, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    return autoTasks.runTaskNow(ctx.userId, taskId);
+  },
+
   // ── Group chat (replaces legacy conversations.send / .stream / .markFormSubmitted) ──
   // 任务级引用合并（@ 产物/资产 → task_references）已下沉到 groupChat.send() 核心——
   // conversations.sendStream（标准 composer 实际走的流式路径）与 groupChat.send 都汇聚
@@ -2092,13 +2171,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         || !_isRecipientOrigin(recipient_origin))) {
       throw new Error('invalid recipient route');
     }
-    return groupChat.send({
+    const sent = await groupChat.send({
       userId: ctx.userId, cid, text,
       ...(atts.length ? { attachments: atts } : {}),
       ...(useSelections.length ? { use_selections: useSelections } : {}),
       ...(refs.length ? { references: refs } : {}),
       ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
     });
+    if (sent.ok && recipient_agent_id) {
+      void recordAgentSessionStarts({ agentIds: [recipient_agent_id], cid, userId: ctx.userId });
+    }
+    return sent;
   },
 
   'companionRepro.getState': async ({ cid }, ctx) => {
@@ -2200,7 +2283,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, receipt: await p3394.readReceipt(ctx.userId, executionId) };
   },
 
-  // P3394 Bridge inbound port (Phase 3). The renderer may initiate an
+  // P3394 Bridge inbound port. The renderer may initiate an
   // operation, but the sender identity is always rewritten to the local
   // agent by P3394IpcChannel.handleInbound — a renderer can never declare an
   // Agent identity or capability.
@@ -2215,7 +2298,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, accepted: true, channel_id: p3394BridgeIpcPort.channel_id };
   },
 
-  // ── Workbench: complex-delivery Workspace (US-20) ─────────────────────
+  // ── Workbench: complex-delivery Workspace ─────────────────────
   // The gate decides whether the renderer may paint the Workspace body at
   // all ("未达Gate不得展示空Workspace"). The skill tree is resolved here from
   // the installed skill roots rather than accepted from the renderer, so a
@@ -2293,7 +2376,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'p3394.listWakeRequests': async ({ cid }, ctx) => {
-    // 控制中心（T3）：cid 可选——不传返回全量（跨会话待审批聚合），
+    // 控制中心：cid 可选——不传返回全量（跨会话待审批聚合），
     // 传了按会话过滤（会话内审批卡原行为）。
     if (cid !== undefined && !safeId(cid)) throw new Error('invalid cid');
     return { ok: true, requests: await p3394.listWakeRequests(ctx.userId, cid) };
@@ -2318,6 +2401,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return result;
   },
 
+  // 运维：把被隔离的 outbox 记录放回重放集（隔离可逆，不必手改 JSONL）。
+  'p3394.requeueIsolatedOutbox': async ({ messageId }, _ctx) => {
+    if (typeof messageId !== 'string' || !messageId) throw new Error('invalid messageId');
+    return { requeued: outboxRequeueIsolated(messageId) };
+  },
+
   'p3394.listProtocolEvents': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     return { ok: true, protocol_events: await p3394.listP3394ProtocolEvents(ctx.userId, cid) };
@@ -2326,7 +2415,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // 候选出 IPC 一律带 capability：渲染层不再自己解释 raw status。能力是 DTO
   // 投影，不写回存储（落盘记录仍是纯候选记录）。
-  // 2026-09-29 第 3 批·读写面收敛：`view:'review-queue'`（认知面板专用）——
+  // 候选读模型：`view:'review-queue'`（认知面板专用）——
   // 服务端裁成待处理队列（可操作候选全量 + 已稍后处理全量 + 终态/处理记录
   // 限量），并对记录做视图白名单投影（16 个零消费字段不出 IPC；capabilities
   // 整体保留——会话抽屉等不传 view 的调用方仍是全量全形状）。粗滤口径只须
@@ -2334,12 +2423,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // 细分（broken/weak/ready）仍由渲染层按 capabilities 做。
   'recall.candidates.list': async ({ view } = {}, ctx) => ({
     ok: true,
+    ...(view === 'activity-queue' ? { assetApprovals: await recallAssetApproval.listAssetChangeProposals(ctx.userId) } : {}),
     candidates: await (async () => {
       const all = await recallCandidates.listRecallCandidates(ctx.userId);
       // 冲突是跨候选判断，只有全量读口算得出来。不传的话列表会说"能确认"，
       // 而晋升闸门按同一批数据判冲突并拒绝——又是一次假审批。
       const conflicts = recallCandidates.recallCandidateConflictingTypes(all);
-      const withCaps = all.map((candidate) => withRecallCandidateCapabilities(candidate, conflicts.get(candidate.id)));
+      const withDetails = await Promise.all(all.map(candidate => recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, candidate)));
+      const withCaps = withDetails.map((candidate) => withRecallCandidateCapabilities(candidate, conflicts.get(candidate.id)));
+      if (view === 'activity-queue') return projectReviewQueueCandidates(projectActivityCandidates(withCaps, await recallAssets.listAbilityAssets(ctx.userId)), true);
       if (view === 'review-queue') return projectReviewQueueCandidates(withCaps);
       return withCaps;
     })(),
@@ -2491,145 +2583,90 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, context: await recallCaptures.readRecallCaptureContext(ctx.userId, captureId) };
   },
 
-  'recall.captures.retry': async ({ captureId } = {}, ctx) => {
-    if (!safeId(captureId)) throw new Error('invalid recall capture id');
-    return { ok: true, capture: await recallCaptures.retryRecallCapture(ctx.userId, captureId) };
-  },
-
-  'recall.captures.pause': async ({ captureId } = {}, ctx) => {
-    if (!safeId(captureId)) throw new Error('invalid recall capture id');
-    return { ok: true, capture: await recallCaptures.pauseRecallCapture(ctx.userId, captureId) };
-  },
-
-  'recall.captures.resume': async ({ captureId } = {}, ctx) => {
-    if (!safeId(captureId)) throw new Error('invalid recall capture id');
-    return { ok: true, capture: await recallCaptures.resumeRecallCapture(ctx.userId, captureId) };
-  },
-
-  'recall.captures.cancel': async ({ captureId } = {}, ctx) => {
-    if (!safeId(captureId)) throw new Error('invalid recall capture id');
-    return { ok: true, capture: await recallCaptures.cancelRecallCapture(ctx.userId, captureId) };
-  },
-
-  'recall.captures.runNow': async ({ captureId } = {}, ctx) => {
-    if (!safeId(captureId)) throw new Error('invalid recall capture id');
-    return { ok: true, capture: await recallCaptures.runRecallCaptureNow(ctx.userId, captureId) };
-  },
-
-  'recall.captures.batchRetry': async ({ captureIds } = {}, ctx) => {
-    return { ok: true, result: await batchRecallCaptures(ctx, captureIds, recallCaptures.retryRecallCapturesBatch) };
-  },
-
-  'recall.captures.batchRunNow': async ({ captureIds } = {}, ctx) => {
-    // 每条都是一次模型额度消耗：入口只收 id 列表，条数确认由前端弹窗负责
-    //（写死具体数字），这里不再二次拦截。
-    return { ok: true, result: await batchRecallCaptures(ctx, captureIds, recallCaptures.runRecallCapturesNowBatch) };
-  },
-
-  'recall.captures.manualCreate': async ({ conversationId } = {}, ctx) => {
-    if (!safeId(conversationId)) throw new Error('invalid conversation id');
-    return {
-      ok: true,
-      capture: await recallCaptures.queueManualRecallCaptureFromConversation(ctx.userId, conversationId),
-    };
-  },
-
-  'recall.captures.historicalAutoStart': async ({ conversationId } = {}, ctx) => {
-    if (!safeId(conversationId)) throw new Error('invalid conversation id');
-    return {
-      ok: true,
-      capture: await recallCaptures.startHistoricalRecallCapture(ctx.userId, conversationId),
-    };
-  },
-
-  // 存量记忆迁移：dryRun 只读盘点；真实迁移必须带用户逐条确认的内容 hash
-  // 与预览时源文件指纹。没有显式选择不执行；启动阶段不再自动迁移。
-  // 族改名（2026-09-22 快赢·族可命名）：锚资产起按 same_family 连通分量批量写。
+  // 族改名：从锚资产起按 same_family 连通分量批量写。
   'recall.families.rename': async ({ anchorAssetId, name } = {}, ctx) => {
     if (typeof anchorAssetId !== 'string' || !anchorAssetId.trim()) throw new Error('invalid family anchor asset id');
     const { renameAssetFamily } = await import('../features/recall/family');
     const updated = await renameAssetFamily(ctx.userId, anchorAssetId.trim(), String(name ?? ''));
     return { ok: true, updated };
   },
-  'recall.memory.migrate': async (payload = {}, ctx) => {
-    if (payload?.dryRun === true) {
-      const { previewLegacyMemoryMigration } = await import('../features/recall/memory-migration');
-      return previewLegacyMemoryMigration(ctx.userId);
-    }
-    const { selectedEntries, expectedFingerprints } = payload;
-    if (!Array.isArray(selectedEntries) || selectedEntries.length === 0) {
-      throw new Error('explicit migration selection is required');
-    }
-    const { migrateLegacyMemoryToAssets } = await import('../features/recall/memory-migration');
-    return migrateLegacyMemoryToAssets(ctx.userId, { selectedEntries, expectedFingerprints });
-  },
-  'recall.scopedMemoryMigration.preview': async (_payload, ctx) => {
-    const { previewLegacyScopedMemoryMigration } = await import('../features/recall/scoped-memory-migration');
-    return previewLegacyScopedMemoryMigration(ctx.userId);
-  },
-  'recall.scopedMemoryMigration.run': async ({ selectedEntries, expectedFingerprints } = {}, ctx) => {
-    if (!Array.isArray(selectedEntries) || selectedEntries.length === 0) {
-      throw new Error('explicit scoped memory migration selection is required');
-    }
-    const { migrateLegacyScopedMemoryToAssets } = await import('../features/recall/scoped-memory-migration');
-    return migrateLegacyScopedMemoryToAssets(ctx.userId, { selectedEntries, expectedFingerprints });
-  },
   'recall.captures.settings.get': async (_input, ctx) => {
-    const [settings, model] = await Promise.all([
+    await recallCaptureSettings.migrateUnifiedDiscoverySettings(ctx.userId);
+    const [settings, model, runtime] = await Promise.all([
       recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
-      auth.getConfig(),
+      auth.getConfigForUser(ctx.userId),
+      recallCaptures.readRecallCaptureModelRuntime(ctx.userId),
     ]);
+    const { readRecallCaptureModelSelection } = await import('../features/recall/capture-model-selection');
     return {
       ok: true,
       settings,
+      modelSelection: await readRecallCaptureModelSelection(ctx.userId, settings.modelCandidates),
+      capabilities: { autoApproval: true },
       model: {
         ...model,
-        configured: auth.hasConfiguredModel().configured,
-        authorizationRequired: Boolean(auth.getConfiguredModelOAuthExpiredMessage()),
+        configured: runtime.apiConfigured,
+        ...runtime,
       },
     };
   },
+
+  // 夜间筛选统计：聚合计数与原因码，不含任何原文。
+  'recall.captures.stats': async (_input, ctx) => {
+    const [totals, sweep, budget, settings] = await Promise.all([
+      readRecallCaptureStats(ctx.userId),
+      recallCaptures.readRecallNightlySweep(ctx.userId),
+      (await import('../features/recall/capture-model-budget')).readCaptureModelBudget(ctx.userId),
+      recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
+    ]);
+    const runtime = recallCaptures.readRecallNightlySweepRuntime(ctx.userId);
+    return { ok: true, totals, sweep, budget, runtime,
+      window: recallCaptures.captureWindowStatus(settings, sweep, runtime, budget?.failureGuard?.held === true) };
+  },
+
+  // 手动触发立即返回；扫描在后台跑，进度经 sweep 集合的写通知推给渲染层。
+  'recall.captures.sweep.run': async (_input, ctx) => {
+    if (recallCaptures.readRecallNightlySweepRuntime(ctx.userId).running) {
+      return { ok: true, ran: false, reason: 'sweep_in_flight' };
+    }
+    void recallCaptures.runManualCaptureSweep(ctx.userId).catch((error) => {
+      log.warn('manual recall capture sweep failed', { error: (error as Error).message });
+    });
+    return { ok: true, ran: true };
+  },
+
+  'recall.captures.sweep.stop': async (_input, ctx) => ({ ok: true, ...await recallCaptures.stopRecallCaptureSweep(ctx.userId) }),
 
   'recall.captures.settings.update': async (input = {}, ctx) => {
     const settings = await recallCaptureSettings.updateRecallCaptureSettings(ctx.userId, input);
     return { ok: true, settings };
   },
 
-  'recall.candidates.importPersonalOntology': async ({ candidateId } = {}, ctx) => {
-    if (!safeId(candidateId)) throw new Error('invalid personal ontology candidate id');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.importPersonalOntologyCandidate(ctx.userId, candidateId)) };
-  },
-
   'recall.candidates.read': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.readRecallCandidate(ctx.userId, candidateId)) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, await recallCandidates.readRecallCandidate(ctx.userId, candidateId))) };
   },
 
-  'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, targetVersionUsed, spaceId, scopePolicy, applicableWhen, forbiddenWhen, manual } = {}, ctx) => {
-    if (typeof judgment !== 'string' || judgment.length > 4_000) throw new Error('invalid recall candidate judgment');
-    if (manual !== undefined && typeof manual !== 'boolean') throw new Error('invalid recall candidate manual flag');
-    if (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) throw new Error('invalid recall candidate summary');
-    if (value !== undefined && (typeof value !== 'string' || value.length > 4_000)) throw new Error('invalid recall candidate value');
-    if (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) throw new Error('invalid recall candidate uncertainty');
-    if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method' && suggestedType !== 'fact') throw new Error('invalid recall candidate type');
-    if (typeof suggestedScope !== 'string' || suggestedScope.length > 500) throw new Error('invalid recall candidate scope');
-    if (!Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate source refs');
-    if (spaceId !== undefined && !safeId(spaceId)) throw new Error('invalid space id');
-    if (scopePolicy !== undefined && (!scopePolicy || typeof scopePolicy !== 'object' || Array.isArray(scopePolicy))) throw new Error('invalid recall candidate scope policy');
-    if (evidenceRefs !== undefined && (!Array.isArray(evidenceRefs) || evidenceRefs.length > 100)) throw new Error('invalid recall candidate evidence refs');
-    if (suggestedAction !== undefined && !['create', 'update', 'limit_scope', 'pause', 'keep_current', 'reject'].includes(suggestedAction)) throw new Error('invalid recall candidate action');
-    if (targetVersionUsed !== undefined && (typeof targetVersionUsed !== 'string' || !/^[0-9]{1,9}$/.test(targetVersionUsed))) throw new Error('invalid recall candidate target version');
-    if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) throw new Error('invalid recall candidate risk');
-    if (expiresAt !== undefined && (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) throw new Error('invalid recall candidate expiry');
-    if (taskRunId !== undefined && !safeId(taskRunId)) throw new Error('invalid recall candidate task run id');
-    if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid recall candidate target asset id');
-    if (applicableWhen !== undefined && (!Array.isArray(applicableWhen) || applicableWhen.length > 32)) throw new Error('invalid recall candidate applicable range');
-    if (forbiddenWhen !== undefined && (!Array.isArray(forbiddenWhen) || forbiddenWhen.length > 32)) throw new Error('invalid recall candidate forbidden range');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(targetVersionUsed !== undefined ? { targetVersionUsed } : {}), ...(spaceId ? { spaceId } : {}), ...(scopePolicy !== undefined ? { scopePolicy } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}), ...(manual !== undefined ? { manual } : {}) })) };
+  // 逐条历史按当前用户和已存在候选寻址，不接受任意账本 target_ref。
+  'recall.reviewEvidence.read': async ({ candidateId, assetId } = {}, ctx) => {
+    const { readReviewEvidence } = await import('../features/recall/review-evidence');
+    return { ok: true, items: await readReviewEvidence(ctx.userId, { candidateId, assetId }) };
   },
 
-  'recall.candidates.update': async ({ candidateId, judgment, value, evidenceSummary, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, scopePolicy, applicableWhen, forbiddenWhen } = {}, ctx) => {
-    if (!safeId(candidateId) || typeof judgment !== 'string' || judgment.length > 4_000 || (value !== undefined && (typeof value !== 'string' || value.length > 4_000)) || (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) || (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) || (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method' && suggestedType !== 'fact') || typeof suggestedScope !== 'string' || suggestedScope.length > 500 || !Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate update');
+  'recall.candidates.history': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    await recallCandidates.readRecallCandidate(ctx.userId, candidateId);
+    const { listReviewDecisions } = await import('../features/cognition/review-decision');
+    const decisions = await listReviewDecisions(ctx.userId, `recall_candidate:${candidateId}`);
+    return { ok: true, items: decisions.map(item => ({
+      decision_id: item.decision_id, decision_type: item.decision_type,
+      actor: item.actor, timestamp: item.timestamp, reason: item.reason,
+      outcome: item.outcome, asset_id: item.asset_id,
+    })) };
+  },
+
+  'recall.candidates.update': async ({ candidateId, judgment, value, evidenceSummary, summary, uncertainty, contentCategory, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, scopePolicy, applicableWhen, forbiddenWhen } = {}, ctx) => {
+    if (!safeId(candidateId) || typeof judgment !== 'string' || judgment.length > 4_000 || (value !== undefined && (typeof value !== 'string' || value.length > 4_000)) || (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) || (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) || (suggestedType !== 'cognition' && suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method' && suggestedType !== 'fact') || typeof suggestedScope !== 'string' || suggestedScope.length > 500 || !Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate update');
     if (evidenceRefs !== undefined && (!Array.isArray(evidenceRefs) || evidenceRefs.length > 100)) throw new Error('invalid recall candidate evidence refs');
     if (evidenceSummary !== undefined && (typeof evidenceSummary !== 'string' || evidenceSummary.length > 4_000)) throw new Error('invalid recall candidate evidence summary');
     if (scopePolicy !== undefined && (!scopePolicy || typeof scopePolicy !== 'object' || Array.isArray(scopePolicy))) throw new Error('invalid recall candidate scope policy');
@@ -2640,36 +2677,67 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid recall candidate target asset id');
     if (applicableWhen !== undefined && (!Array.isArray(applicableWhen) || applicableWhen.length > 32)) throw new Error('invalid recall candidate applicable range');
     if (forbiddenWhen !== undefined && (!Array.isArray(forbiddenWhen) || forbiddenWhen.length > 32)) throw new Error('invalid recall candidate forbidden range');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.updateRecallCandidate(ctx.userId, candidateId, { judgment, ...(value !== undefined ? { value } : {}), ...(evidenceSummary !== undefined ? { evidenceSummary } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(scopePolicy !== undefined ? { scopePolicy } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) })) };
+    if (contentCategory !== undefined) requireContentCategory(contentCategory);
+    const updatedCandidate = await recallCandidates.updateRecallCandidate(ctx.userId, candidateId, { judgment, ...(contentCategory !== undefined ? { contentCategory } : {}), ...(value !== undefined ? { value } : {}), ...(evidenceSummary !== undefined ? { evidenceSummary } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(scopePolicy !== undefined ? { scopePolicy } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) });
+    const conflicts = recallCandidates.recallCandidateConflictingTypes(await recallCandidates.listRecallCandidates(ctx.userId));
+    return { ok: true, candidate: withRecallCandidateCapabilities(updatedCandidate, conflicts.get(updatedCandidate.id)) };
   },
 
-  'recall.candidates.defer': async ({ candidateId, note } = {}, ctx) => {
-    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
-    if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.deferRecallCandidate(ctx.userId, candidateId, note)) };
-  },
 
-  'recall.candidates.resume': async ({ candidateId } = {}, ctx) => {
+
+  'recall.candidates.recheckOntologyFormation': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.resumeRecallCandidate(ctx.userId, candidateId)) };
+    const { recheckOntologyFormation } = await import('../features/recall/ontology-formation-recheck');
+    const candidate = await recheckOntologyFormation(ctx.userId, candidateId);
+    const conflicts = recallCandidates.recallCandidateConflictingTypes(await recallCandidates.listRecallCandidates(ctx.userId));
+    return { ok: true, candidate: withRecallCandidateCapabilities(candidate, conflicts.get(candidate.id)) };
   },
 
   'recall.candidates.reject': async ({ candidateId, note } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.rejectRecallCandidate(ctx.userId, candidateId, note)) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, await recallCandidates.rejectRecallCandidate(ctx.userId, candidateId, note))) };
   },
 
   'recall.candidates.ignore': async ({ candidateId, note } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.ignoreRecallCandidate(ctx.userId, candidateId, note)) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, await recallCandidates.ignoreRecallCandidate(ctx.userId, candidateId, note))) };
+  },
+
+  'recall.candidates.defer': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    return { ok: true, candidate: withRecallCandidateCapabilities(await deferRecallCandidate(ctx.userId, candidateId)) };
   },
 
   'recall.candidates.keepCurrent': async ({ candidateId, note } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.keepCurrentRecallCandidate(ctx.userId, candidateId, note)) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, await recallCandidates.keepCurrentRecallCandidate(ctx.userId, candidateId, note))) };
+  },
+
+  'recall.candidates.organization.update': async ({ candidateId, outputs } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid candidate');
+    return { ok: true, candidate: withRecallCandidateCapabilities(await (await import('../features/recall/content-organization')).updateContentOrganization(ctx.userId, candidateId, outputs)) };
+  },
+  'recall.candidates.organization.undoPreview': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid candidate');
+    return { ok: true, preview: await (await import('../features/recall/content-organization')).previewContentOrganizationUndo(ctx.userId, candidateId) };
+  },
+  'recall.candidates.organization.undo': async ({ candidateId, previewToken } = {}, ctx) => {
+    if (!safeId(candidateId) || typeof previewToken !== 'string') throw new Error('invalid undo');
+    return { ok: true, ...(await (await import('../features/recall/content-organization')).undoContentOrganization(ctx.userId, candidateId, previewToken)) };
+  },
+
+  'recall.candidates.undoAutomaticPreview': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    const service = await import('../features/recall/automatic-formation-undo');
+    return { ok: true, preview: await service.previewAutomaticFormationUndo(ctx.userId, candidateId) };
+  },
+  'recall.candidates.undoAutomatic': async ({ candidateId, previewToken } = {}, ctx) => {
+    if (!safeId(candidateId) || typeof previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(previewToken)) throw new Error('invalid automatic undo request');
+    const service = await import('../features/recall/automatic-formation-undo');
+    return { ok: true, ...(await service.undoAutomaticFormation(ctx.userId, candidateId, previewToken)) };
   },
 
   'recall.candidates.promoteBatch': async ({ candidateIds } = {}, ctx) => {
@@ -2677,12 +2745,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallCandidates.batchPromoteRecallCandidates(ctx.userId, candidateIds)) };
   },
 
-  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget, forceCreateSimilar, confirmBaselineVersion } = {}, ctx) => {
+  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget, forceCreateSimilar, confirmBaselineVersion, organizationOutputs } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    const organization = await recallCandidates.readRecallCandidate(ctx.userId, candidateId);
+    if (organization.contentOrganization) {
+      if (profileTarget || forceCreateSimilar || confirmBaselineVersion) throw new Error(t('cognition.organization.permission_overrides'));
+      if (!Array.isArray(organizationOutputs)) throw new Error(t('cognition.organization.review_all'));
+      return { ok: true, ...(await (await import('../features/recall/content-organization')).confirmContentOrganization(ctx.userId, candidateId, 'user', organizationOutputs)) };
+    }
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
     if (forceCreateSimilar !== undefined && typeof forceCreateSimilar !== 'boolean') throw new Error('invalid force-create flag');
-    // 版本冲突后的显式重锚（specs/015 US-702，`contracts/ipc.md` §二
-    // 「实现期补充」）：形状与 `recall.candidates.save` 的 targetVersionUsed
+    // 版本冲突后的显式重锚：形状与 `recall.candidates.save` 的 targetVersionUsed
     // 同一口径（/^[0-9]{1,9}$/）。这里只校验形状与长度——"这个版本是不是当前
     // 在用版"由主进程在 updateAbilityAsset **锁内**判，IPC 层不重判版本。
     if (confirmBaselineVersion !== undefined
@@ -2701,7 +2774,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         throw new Error('invalid personal profile target');
       }
     }
-    // 版本重检不一致（specs/015 D6~D9，`contracts/ipc.md` §二）：候选确认时
+    // 版本重检不一致：候选确认时
     // 资产已被改动 → 返回结构化冲突，**候选不落终态、资产零改动**（比对发生在
     // `updateAbilityAsset` 锁内，这里只转形状，不做任何版本判定）。
     // 用户看过"对当前版差异"后带 `confirmBaselineVersion` 再确认 = 显式重锚：
@@ -2727,7 +2800,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       if (!versionConflict) throw error;
       return {
         ok: false,
-        // 与 specs/008 的审批卡同一状态名（待处理），不是候选内部状态名。
+        // 与审批卡同一状态名（待处理），不是候选内部状态名。
         state: 'pending',
         versionConflict,
         message: `这条资产在你确认之前被改过（候选基于 v${versionConflict.baselineVersion}，现在是用 v${versionConflict.currentVersion}），所以这次没有生效。请按最新在用版重新看一眼差异再确认。`,
@@ -2739,6 +2812,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // 渲染层不需要再自己辨真假。返回底层记录形状以保持读兼容。
   'recall.assets.list': async (_args, ctx) => ({
     ok: true,
+    capabilities: { versionedUpdate: true },
     assets: (await formalAssets.listFormalAssets(ctx.userId)).map((asset) => asset.record),
   }),
   'recall.assets.listForSpace': async ({ spaceId } = {}, ctx) => {
@@ -2752,16 +2826,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
     const asset = await formalAssets.getFormalAsset(ctx.userId, assetId);
     if (!asset) throw new Error('recall ability asset not found');
-    return { ok: true, asset: asset.record };
+    return { ok: true, asset: asset.record, payload: asset.payload };
   },
-  'recall.assets.update': async ({ assetId, title, statement, scope, scopePolicy, type, evidenceRefs, ontologyRefs, relations, derivedFrom, applicableWhen, forbiddenWhen, reason, acknowledgeRecommendation, tags } = {}, ctx) => {
+  'recall.assets.update': async ({ assetId, title, statement, value, scope, scopePolicy, type, contentCategory, evidenceRefs, ontologyRefs, relations, derivedFrom, applicableWhen, forbiddenWhen, reason, acknowledgeRecommendation, tags, expectedVersion, expectedActiveVersion, reviewedDetails } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
     const note = boundedText(reason, 'recall asset update reason', 1_000);
+    for (const version of [expectedVersion, expectedActiveVersion]) {
+      if (version !== undefined && (typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version))) throw new Error('invalid recall asset expected version');
+    }
+    if (contentCategory !== undefined) requireContentCategory(contentCategory);
     if (title !== undefined && (typeof title !== 'string' || title.length > 120)) throw new Error('invalid recall asset title');
     if (statement !== undefined && (typeof statement !== 'string' || statement.length > 4_000)) throw new Error('invalid recall asset statement');
+    if (value !== undefined && (typeof value !== 'string' || value.length > 4_000)) throw new Error('invalid recall asset value');
     if (scope !== undefined && (typeof scope !== 'string' || scope.length > 500)) throw new Error('invalid recall asset scope');
     if (scopePolicy !== undefined && (!scopePolicy || typeof scopePolicy !== 'object' || Array.isArray(scopePolicy))) throw new Error('invalid recall asset scope policy');
-    if (type !== undefined && !['personal', 'rule', 'template', 'skill_method', 'fact'].includes(type)) throw new Error('invalid recall asset type');
+    if (type !== undefined && !['cognition', 'personal', 'rule', 'template', 'skill_method', 'fact'].includes(type)) throw new Error('invalid recall asset type');
     if (evidenceRefs !== undefined && !Array.isArray(evidenceRefs)) throw new Error('invalid recall asset evidence');
     if (ontologyRefs !== undefined && !Array.isArray(ontologyRefs)) throw new Error('invalid recall asset ontology refs');
     if (relations !== undefined && !Array.isArray(relations)) throw new Error('invalid recall asset relations');
@@ -2769,18 +2848,29 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (applicableWhen !== undefined && (!Array.isArray(applicableWhen) || applicableWhen.length > 32)) throw new Error('invalid recall asset applicable range');
     if (forbiddenWhen !== undefined && (!Array.isArray(forbiddenWhen) || forbiddenWhen.length > 32)) throw new Error('invalid recall asset forbidden range');
     if (acknowledgeRecommendation !== undefined && typeof acknowledgeRecommendation !== 'boolean') throw new Error('invalid recall asset recommendation acknowledgment');
-    // 标签（specs/012 T009，contracts/ipc.md §四）：只做形状闸（数组 + 每条
+    if (reviewedDetails !== undefined && typeof reviewedDetails !== 'boolean') throw new Error('invalid recall asset details review');
+    if (reviewedDetails === true && (typeof statement !== 'string' || !Array.isArray(applicableWhen) || !Array.isArray(forbiddenWhen) || expectedVersion === undefined || expectedActiveVersion === undefined)) {
+      throw new Error('reviewed recall asset details require complete content, conditions and both expected versions');
+    }
+    // 标签：只做形状闸（数组 + 每条
     // 字符串 + ≤12 条），逐条 trim/长度/去重由 ability-tag-service 的规范化
     // 唯一处判定；不传 = 不改标签（省略不是清空）。
     if (tags !== undefined && (!Array.isArray(tags) || tags.some((entry) => typeof entry !== 'string') || tags.length > abilityTags.ABILITY_ASSET_TAGS_MAX)) throw new Error('invalid recall asset tags');
-    return { ok: true, asset: await recallAssets.updateAbilityAsset(ctx.userId, assetId, { ...(title !== undefined ? { title } : {}), ...(statement !== undefined ? { statement } : {}), ...(scope !== undefined ? { scope } : {}), ...(scopePolicy !== undefined ? { scopePolicy } : {}), ...(type !== undefined ? { type } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(ontologyRefs !== undefined ? { ontologyRefs } : {}), ...(relations !== undefined ? { relations } : {}), ...(derivedFrom !== undefined ? { derivedFrom } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}), ...(tags !== undefined ? { tags } : {}), reason: note, actor: 'user', ...(acknowledgeRecommendation !== undefined ? { acknowledgeRecommendation } : {}) }) };
+    const update: recallAssets.UpdateAbilityAssetInput = { ...(contentCategory !== undefined ? { contentCategory } : {}), ...(title !== undefined ? { title } : {}), ...(statement !== undefined ? { statement } : {}), ...(value !== undefined ? { value } : {}), ...(scope !== undefined ? { scope } : {}), ...(scopePolicy !== undefined ? { scopePolicy } : {}), ...(type !== undefined ? { type } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(ontologyRefs !== undefined ? { ontologyRefs } : {}), ...(relations !== undefined ? { relations } : {}), ...(derivedFrom !== undefined ? { derivedFrom } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}), ...(tags !== undefined ? { tags } : {}), reason: note, actor: 'user', ...(expectedVersion !== undefined ? { expectedVersion } : {}), ...(expectedActiveVersion !== undefined ? { expectedActiveVersion } : {}), ...(acknowledgeRecommendation !== undefined ? { acknowledgeRecommendation } : {}) };
+    // Only the complete details-save entry point can attest to a newly reviewed
+    // body. The feature still checks the real locked baseline and semantic diff;
+    // a renderer flag or a generic actor/reason cannot create that authority.
+    const asset = reviewedDetails === true
+      ? await recallAssets.saveUserStandingPreferenceDetails(ctx.userId, assetId, { ...update, statement, applicableWhen, forbiddenWhen, expectedVersion, expectedActiveVersion, reason: note })
+      : await recallAssets.updateAbilityAsset(ctx.userId, assetId, update);
+    return { ok: true, asset };
   },
   'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user pause' }) }; },
   'recall.assets.resume': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset resume'); return { ok: true, asset: await recallAssets.resumeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user resume' }) }; },
   'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user revoke' }) }; },
   'recall.assets.recommend': async ({ assetId, action, reason } = {}, ctx) => { if (!safeId(assetId) || (action !== 'pause' && action !== 'rework')) throw new Error('invalid recall asset recommendation'); return { ok: true, asset: await recallAssets.recommendAbilityAssetAction(ctx.userId, assetId, { actor: 'system', action, reason: boundedText(reason, 'recall asset recommendation reason', 1_000) }) }; },
   'recall.assets.versions': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, versions: await recallAssets.listAbilityAssetVersions(ctx.userId, assetId), audit: await recallAssets.listAbilityAssetAudit(ctx.userId, assetId) }; },
-  // 规范 22.1 的其余治理动作。彻底清除不可逆，恢复受保留期约束，两者的判断都在
+  // 彻底清除不可逆，恢复受保留期约束，两者的判断都在
   // feature 层——这里只做参数校验。
   'recall.assets.archive': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset archive'); return { ok: true, asset: await recallAssets.archiveAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user archive' }) }; },
   'recall.assets.delete': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset delete'); return { ok: true, asset: await recallAssets.deleteAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user delete' }) }; },
@@ -2788,7 +2878,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.assets.restore': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset restore'); return { ok: true, asset: await recallAssets.restoreAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user restore' }) }; },
   'recall.assets.rollback': async ({ assetId, version, note } = {}, ctx) => { if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset rollback'); return { ok: true, asset: await recallAssets.rollbackAbilityAsset(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user rollback to v${version}` }) }; },
 
-  // ── 标签系统（specs/012 US-201，T009）────────────────────────────────────
+  // ── 标签系统────────────────────────────────────
   // IPC 只校验形状并转调 ability-tag-service（唯一业务判定处）；返回体只含
   // 标签名/id/计数/时间与逐项报告（标题），不含资产正文。批量上限在服务层
   // 收口（≤200/次），这里先挡形状。
@@ -2838,7 +2928,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     return { ok: true, report: await abilityTags.batchAssetTags(ctx.userId, assetIds, op) };
   },
-  // 「为什么排前」只读口（specs/012 T019，contracts/ipc.md §3.3）：读注入回执
+  // 「为什么排前」只读口：读注入回执
   // 的 ranking 字段；旧回执没有该字段 → explainable:false（如实说，不编造）。
   'recall.catalog.ranking': async ({ taskRunId, assetId, limit } = {}, ctx) => {
     if (!safeId(taskRunId)) throw new Error('invalid catalog ranking task run id');
@@ -2866,7 +2956,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  // 排序权重（specs/012 T020）：读侧带 source/invalidReason/defaults（盘上非法时
+  // 排序权重：读侧带 source/invalidReason/defaults（盘上非法时
   // 如实告知"你的配置没生效"），写侧校验全部在服务层（非法抛错、原值保持）。
   'recall.catalog.weights.get': async (_payload, ctx) => {
     return { ok: true, ...(await rankingWeights.getRankingWeights(ctx.userId)) };
@@ -2876,12 +2966,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await rankingWeights.getRankingWeights(ctx.userId)) };
   },
 
-  // 版本组（2026-09-16）：versions.list 供资产详情版本链；versions.select 切
+  // 版本组：versions.list 供资产详情版本链；versions.select 切
   // 「在用」指针（内容同步、不 bump——与 rollback 的生成新版语义互补）。
   'recall.assets.versions.list': async ({ assetId } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
-    // 一并带上 audit：资产详情的「生命周期记录」读的就是它（2026-09-25 真机发现
-    // 这个口只回了 versions+usage，渲染层拿不到台账，整块审计区是死的）。
+    // audit 提供资产详情的生命周期记录。
     // chain 里的 frozen（按版本的冻结引用计数）同时透传：它是「已有更新的版本」
     // 标记的唯一判据（`...chain` 展开，勿在此重命名）。
     const [chain, audit] = await Promise.all([
@@ -2894,7 +2983,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version selection');
     return { ok: true, asset: await recallAssets.selectAbilityAssetVersion(ctx.userId, assetId, version, { actor: 'user', reason: note ?? `user selected v${version}` }) };
   },
-  // 版本真删（2026-09-17）：物理移除该版本记录；删除前把快照冻结进引用它的
+  // 版本真删：物理移除该版本记录；删除前把快照冻结进引用它的
   // 已确认投影（注入按副本继续）。在用版本不可删。
   'recall.assets.versions.delete': async ({ assetId, version, note } = {}, ctx) => {
     if (!safeId(assetId) || typeof version !== 'string' || !/^[0-9]{1,9}$/.test(version) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset version deletion');
@@ -2902,14 +2991,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true };
   },
 
-  // 存量治理（2026-09-16）：同义资产归并为一个版本组（source 版本链并入
+  // 存量治理：同义资产归并为一个版本组（source 版本链并入
   // target，source 归档并记录去向）。
   'recall.assets.merge': async ({ sourceAssetId, targetAssetId, note } = {}, ctx) => {
     if (!safeId(sourceAssetId) || !safeId(targetAssetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset merge');
     return { ok: true, asset: await recallAssets.mergeAbilityAssets(ctx.userId, sourceAssetId, targetAssetId, { actor: 'user', reason: note ?? 'user merge' }) };
   },
 
-  // 「已删除」列表（specs/008 US-306 交付项，验收归 specs/010）。保留期剩余天数
+  // 「已删除」列表。保留期剩余天数
   // 与"能不能恢复/能不能立即彻底删除"三个判断全在 feature 层现算，IPC 只分页。
   'recall.assets.deleted.list': async ({ offset, limit } = {}, ctx) => {
     if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) throw new Error('invalid recall deleted offset');
@@ -2930,7 +3019,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, asset: await recallAssets.purgeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: 'user purged from the deleted list' }) };
   },
 
-  // 审批提议（specs/008 US-406）：读状态 + 三态处置。
+  // 审批提议：读状态 + 三态处置。
   // 读状态是必须的——卡片消息在历史里是静态载荷，不查一次的话重载后
   // 已处置的卡片会又变回"待处理"，让用户以为自己没点过。
   'recall.assets.approval.read': async ({ proposalId } = {}, ctx) => {
@@ -2943,14 +3032,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(proposalId)) throw new Error('invalid asset change proposal id');
     if (!['confirm', 'defer', 'reject'].includes(String(decision))) throw new Error('invalid asset approval decision');
     if (payload !== undefined && (!payload || typeof payload !== 'object' || Array.isArray(payload))) throw new Error('invalid asset approval payload');
-    return { ok: true, ...(await recallAssetApproval.decideAssetChangeProposal(ctx.userId, proposalId, decision, {
+    // ok 由 decideAssetChangeProposal 的返回自带
+    // （versionConflict/已处置时为 false），此前写死 { ok:true, ...spread } 纯靠
+    // spread 顺序把 false 覆盖回来——服务层改形状即把失败伪装成成功且零护栏。
+    // 现在直接透传 AssetApprovalDecisionResult，回执键集由
+    // test/main/ipc/asset-approval-channels.test.ts 钉住。
+    return await recallAssetApproval.decideAssetChangeProposal(ctx.userId, proposalId, decision, {
       ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {}),
-    })) };
+    });
   },
 
-  // ── 经验目录（specs/016 契约 E1~E6）：与 recall.assets.* 平级的独立段，
+  // ── 经验目录：与 recall.assets.* 平级的独立段，
   // 但**零调用**任何资产写函数（隔离边界）——读写全走 experience-service。
-  // E1 · 列表（只读）：目录行不含正文/证据；status 缺省 active（归档/合并后
+  // 列表（只读）：目录行不含正文/证据；status 缺省 active（归档/合并后
   // 自然零出现），'all' 才给全量；limit 上限 200、offset 只做分页不影响 total。
   'recall.experiences.list': async ({ type, taskType, status, offset, limit } = {}, ctx) => {
     if (type !== undefined && !['lesson', 'workflow', 'gap', 'uncategorized'].includes(type)) throw new Error('invalid recall experience type');
@@ -2969,28 +3063,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const page = filtered.slice(start, start + (limit ?? 50));
     return { ok: true, total: filtered.length, experiences: page.map(recallExperienceListItem) };
   },
-  // E2 · 详情（只读）：不存在 → ok:false 带 not found 语义（不返回空壳）。
+  // 详情（只读）：不存在 → ok:false 带 not found 语义（不返回空壳）。
   'recall.experiences.read': async ({ experienceId } = {}, ctx) => {
     if (typeof experienceId !== 'string' || !safeId(experienceId) || !experienceId.startsWith('exp-')) throw new Error('invalid recall experience id');
     const exp = await recallExperiences.readExperience(ctx.userId, experienceId);
     if (!exp) throw new Error('experience not found');
     return { ok: true, experience: recallExperienceDetail(exp) };
   },
-  // E3 · 开关（写）：pause/resume + 台账；终态拒绝在 feature 层（错误即语义）。
+  // 开关（写）：pause/resume + 台账；终态拒绝在 feature 层（错误即语义）。
   'recall.experiences.setStatus': async ({ experienceId, action, note } = {}, ctx) => {
     if (typeof experienceId !== 'string' || !safeId(experienceId) || !experienceId.startsWith('exp-')
       || (action !== 'pause' && action !== 'resume')
       || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall experience status action');
     return { ok: true, experience: recallExperienceListItem(await recallExperiences.setExperienceStatus(ctx.userId, experienceId, action, note)) };
   },
-  // E4 · 类型调整（写）：uncategorized 是合法目标；台账留 from/to。
+  // 类型调整（写）：uncategorized 是合法目标；台账留 from/to。
   'recall.experiences.setType': async ({ experienceId, experienceType, note } = {}, ctx) => {
     if (typeof experienceId !== 'string' || !safeId(experienceId) || !experienceId.startsWith('exp-')
       || !['lesson', 'workflow', 'gap', 'uncategorized'].includes(experienceType)
       || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall experience type');
     return { ok: true, experience: recallExperienceListItem(await recallExperiences.setExperienceType(ctx.userId, experienceId, experienceType, note)) };
   },
-  // E5 · 同类合并（写）：同类型拒绝跨并、source 置 merged 不删；回 target
+  // 同类合并（写）：同类型拒绝跨并、source 置 merged 不删；回 target
   // （含 mergedFrom——合并后来源可见）与 source 的 {id, status}。
   'recall.experiences.merge': async ({ sourceExperienceId, targetExperienceId, note } = {}, ctx) => {
     for (const id of [sourceExperienceId, targetExperienceId]) {
@@ -3007,23 +3101,23 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       source: { id: merged.source.id, status: merged.source.status },
     };
   },
-  // E6 · 归档（写）：reason 必填（≤1000 字）——「清理=有口径可追溯」，不是删数据。
+  // 归档（写）：reason 必填（≤1000 字）——「清理=有口径可追溯」，不是删数据。
   'recall.experiences.archive': async ({ experienceId, reason } = {}, ctx) => {
     if (typeof experienceId !== 'string' || !safeId(experienceId) || !experienceId.startsWith('exp-')
       || typeof reason !== 'string' || !reason.trim() || reason.length > 1_000) throw new Error('invalid recall experience archive');
     return { ok: true, experience: recallExperienceListItem(await recallExperiences.archiveExperience(ctx.userId, experienceId, reason)) };
   },
 
-  // ── 存量迁移（specs/016 契约 E7/E8）：存量 KSTAR 经验类资产迁入经验目录。
+  // ── 存量迁移：存量 KSTAR 经验类资产迁入经验目录。
   // run 必须显式传 assetIds（≤200）——禁止隐式「一键全迁」：迁移是用户数据
   // 形态变化，批量和范围都由用户在预览清单上逐条勾选后显式给出。
-  // 通道本身只做入参校验与转调（宪法 II）；顺序保证（冻结→写经验→迁出→
+  // 通道本身只做入参校验与转调；顺序保证（冻结→写经验→迁出→
   // 台账）全部在 experience-migration.ts，这里不复制任何迁移逻辑。
-  // E7 · preview（只读）：稳定跳过理由码（界面按码翻人话），不改盘。
+  // preview（只读）：稳定跳过理由码（界面按码翻人话），不改盘。
   'recall.experiences.migration.preview': async (_payload, ctx) => {
     return { ok: true, ...(await recallExperienceMigration.previewExperienceMigration(ctx.userId)) };
   },
-  // E7 · run（写）：显式 assetIds、≤200、逐条 safeId；不传/空/超限一律 invalid。
+  // run（写）：显式 assetIds、≤200、逐条 safeId；不传/空/超限一律 invalid。
   'recall.experiences.migration.run': async ({ assetIds } = {}, ctx) => {
     if (!Array.isArray(assetIds) || assetIds.length === 0
       || assetIds.length > recallExperienceMigration.EXPERIENCE_MIGRATION_MAX_ASSETS
@@ -3032,16 +3126,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     return { ok: true, ...(await recallExperienceMigration.runExperienceMigration(ctx.userId, assetIds)) };
   },
-  // E8 · status（只读）：最近一次迁移的结果与失败明细；从未跑过 → migrationId:null。
+  // status（只读）：最近一次迁移的结果与失败明细；从未跑过 → migrationId:null。
   'recall.experiences.migration.status': async (_payload, ctx) => {
     return { ok: true, ...(await recallExperienceMigration.latestExperienceMigrationStatus(ctx.userId)) };
   },
 
-  // ── 经验集引用（specs/016 契约 E9~E10 / US-802 AC2）：@ 历史任务带入其经验集。
+  // ── 经验集引用：@ 历史任务带入其经验集。
   // 通道只做入参校验与转调；准入、快照冻结、防双注入的保证全部在
   // experience-reference.ts，这里不复制任何判定。撤销复用既有
   // conversations.taskRefs.remove，不新增撤销通道。
-  // E9 · sourceTasks（只读）：episode 维度聚合（只列有经验的来源任务，非全部
+  // sourceTasks（只读）：episode 维度聚合（只列有经验的来源任务，非全部
   // 会话）；载荷不含正文；limit ≤100、缺省 50。
   'recall.experiences.sourceTasks': async ({ query, limit } = {}, ctx) => {
     if (query !== undefined && (typeof query !== 'string' || query.length > 200)) throw new Error('invalid recall experience source task query');
@@ -3053,7 +3147,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(limit !== undefined ? { limit } : {}),
     })) };
   },
-  // E9 · attachToTask（写）：准入在主进程跑；通过者写 task_references
+  // attachToTask（写）：准入在主进程跑；通过者写 task_references
   // （kind:'experience_set'，含快照）；全被拦 → ok:false + 稳定码 + 逐条规则名。
   // agentId 可选（接收方已知时一并送进准入，目标 Agent 白名单当场生效）。
   'recall.experiences.attachToTask': async ({ conversationId, episodeId, agentId } = {}, ctx) => {
@@ -3064,7 +3158,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(agentId ? { agentId } : {}),
     });
   },
-  // E10 · omissions（只读）：已挂载但最近一轮被准入拦下的经验——只回标题与
+  // omissions（只读）：已挂载但最近一轮被准入拦下的经验——只回标题与
   // 规则码（无正文）；未挂载经验集的会话返回空数组。
   'recall.experiences.omissions': async ({ cid, limit } = {}, ctx) => {
     if (typeof cid !== 'string' || !safeId(cid)) throw new Error('invalid cid');
@@ -3074,11 +3168,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, omissions: await recallExperienceReference.listExperienceOmissions(ctx.userId, cid, limit ?? recallExperienceReference.EXPERIENCE_OMISSIONS_LIMIT_DEFAULT) };
   },
 
-  // 大扫除与整理报告（specs/008 US-403）。run 是用户发起的批量整理；
+  // 大扫除与整理报告。run 是用户发起的批量整理；
   // report/list 是读口——报告要能被逐项核对，所以读口与实体同批落地。
   'recall.cleanup.run': async ({ trigger, scope, round } = {}, ctx) => {
     if (trigger !== undefined && trigger !== 'user' && trigger !== 'inspection') throw new Error('invalid cleanup trigger');
-    // 三轮合一（2026-09-29 拍板）：round 省略＝完整整理（规则轮→标题重起→
+    // 完整整理：round 省略＝完整整理（规则轮→标题重起→
     // 正文改写，round:'full' 一份合并报告；分轮照常落盘，列表按 supersededBy
     // 隐藏）。显式 round 仍可单跑专项轮；'candidate_statement_regen'＝候选池
     // 正文改写轮（存量统一处理批，内部链路，渲染层不触达）。
@@ -3121,19 +3215,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, report };
   },
 
-  // 后台巡检（specs/008 US-405）：只报不改。run 是手动触发（用户自己要的，
+  // 后台巡检：只报不改。run 是手动触发（用户自己要的，
   // 与开关无关）；settings 承载开关，关掉之后只是不再自动运行。
   'recall.inspection.run': async (_args, ctx) => ({
     ok: true,
     run: await recallInspection.runAssetInspection(ctx.userId, { trigger: 'manual' }),
   }),
 
-  // 集成维护入口（2026-09-29 子安拍板「合并成一个集成功能」）：一次跑全套
-  // = 检查资产库（只报告）+ 完整清理（规范标题/合并重复/补标签/重写啰嗦正文，
-  // 含候选池正文——full 轮 2026-09-29 补齐）。两个动作各自落自己的报告
-  // （inspection runs / cleanup-reports），前端一个按钮触发、分别展示结果；
-  // 夜间线维持「整理对话+检查+机械规则轮」，LLM 改写只在用户手动触发时跑
-  // （「睡着时改资产」未拍板）。
+  // 用户手动触发检查与完整整理，分别返回 inspection runs 和 cleanup-reports。
+  // 夜间仅执行对话整理、检查与机械规则；LLM 正文改写保留在手动入口。
   'recall.maintenance.run': async (_args, ctx) => {
     const inspection = await recallInspection.runAssetInspection(ctx.userId, { trigger: 'manual' });
     const cleanup = await recallCleanup.runAssetFullCleanup(ctx.userId, { trigger: 'user' });
@@ -3152,7 +3242,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, settings: await recallInspection.setInspectionEnabled(ctx.userId, enabled) };
   },
 
-  // 资产侧 KSTAR 溯源（2026-09-17）：证据区 kse 引用的批量摘要与单条复盘
+  // 资产侧 KSTAR 溯源：证据区 kse 引用的批量摘要与单条复盘
   // 详情——此前 KSTAR 血统只在候选卡可见，确认后沉回数据层。
   'recall.kstar.episodes.summaries': async ({ ids } = {}, ctx) => {
     if (!Array.isArray(ids) || !ids.length || ids.length > 50 || ids.some((id) => typeof id !== 'string' || !safeId(id))) throw new Error('invalid kstar episode ids');
@@ -3254,17 +3344,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.projections.retryForecast': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection retry'); return { ok: true, ...(await kstarProjectionDecision.retryProjectionInCommander(ctx.userId, { projectionId, cid })) }; },
   'recall.projections.revise': async ({ projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection revision'); return { ok: true, projection: await recallProjection.reviseContextProjection(ctx.userId, projectionId, { ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }) }; },
   'recall.projections.revoke': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.revokeModelSelectedProjection(ctx.userId, projectionId) }; },
-  // 用户 @ 钉住的资产走独立撤销口（US-601 AC3：引用回执可撤销）。与模型自选线
+  // 用户 @ 钉住的资产走独立撤销口。与模型自选线
   // 分开是为了两条授权语义各自可审计，且既有"用户确认的语义投影不可一键撤销"
   // 的边界不被放宽。
   'recall.projections.revokePinned': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.revokeUserPinnedProjection(ctx.userId, projectionId) }; },
-  // 用户 @ 钉住的资产（2026-09-25 US-601）：composer 引用条据此显示「名称 · vN」
+  // 用户 @ 钉住的资产：composer 引用条据此显示「名称 · vN」
   // 并支持撤销。只返回 projectionId/assetId/title/version，不含正文。
   'recall.projections.pinnedAssets': async ({ cid } = {}, ctx) => {
     if (!safeId(cid)) throw new Error('invalid conversation id');
     return { ok: true, items: await recallProjection.listUserPinnedAssets(ctx.userId, cid) };
   },
-  // 用户引用被拦的留痕（2026-09-25 US-604 AC4/AC7）：发送前重检不再静默——回执卡
+  // 用户引用被拦的留痕：发送前重检不再静默——回执卡
   // 据此说明"最近一轮为什么没带上、是哪条规则"。只返回标题 + 规则标识，不含正文。
   'recall.injections.omissions': async ({ cid, limit } = {}, ctx) => {
     if (!safeId(cid)) throw new Error('invalid conversation id');
@@ -3382,9 +3472,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })) }; },
   'recall.projections.previewAndPostForNextTask': async ({ cid, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || (workspaceId !== undefined && !safeId(workspaceId)) || (purpose !== undefined && typeof purpose !== 'string') || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCardForNextTask(ctx.userId, { cid, ...(workspaceId !== undefined ? { workspaceId } : {}), ...(purpose !== undefined ? { purpose } : {}), ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })), }; },
   'recall.projections.reviseAndPostCard': async ({ cid, projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.reviseAndPostProjectionCard(ctx.userId, { cid, projectionId, ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId, authorization: payload.card.authorization, presentation: 'sidecar' } })).msg?.id || '' }) })) }; },
-  // 用户主动使用（2026-09-19）：把用户钉住的资产以 confirmed 投影挂到指定会话
-  //  并发投影卡——下一轮起注入命中，卡上可撤销。显式资产模式（绕语义门、
-  //  过状态硬门），authorization=user_confirmed（IPC 白名单内）。
+  // 会话输入框的 @资产 共用此挂载接口；认知资产页已移除挂载入口。
+  // 保留已确认版本快照与会话卡，供下一轮注入及用户撤销。
   'recall.projections.attachToConversation': async ({ assetId, conversationId, agentId } = {}, ctx) => {
     if (!safeId(assetId) || !safeId(conversationId)) throw new Error('invalid recall projection attach');
     if (agentId !== undefined && !safeId(agentId)) throw new Error('invalid recall projection attach agent');
@@ -3399,7 +3488,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
     return {
       ok: true,
-      // assetVersions = 本次挂载冻结的在用版（US-601 AC2/AC3：引用 chip 与回执
+      // assetVersions = 本次挂载冻结的在用版（引用 chip 与回执
       // 要显示"名称 · vN"，且界面所见即注入所用）。
       projection: {
         id: projection.id,
@@ -3418,8 +3507,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.proofs.effectiveness.feedback': async ({ transferProofId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(transferProofId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, proof: await effectivenessFeedback.recordEffectivenessFeedback(ctx.userId, { transferProofId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) }) }; },
   'recall.proofs.effectiveness.feedbackForTask': async ({ taskRunId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(taskRunId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, ...(await effectivenessFeedback.recordTaskEffectivenessFeedback(ctx.userId, { taskRunId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) })) }; },
-  // 跨作用域使用的确认与撤回。规范 10.2 要求「确认」，这里是确认真正发生的地方
-  // ——没有它，confirm 档只会永远停在等待里。撤回后立刻回到需要确认的状态。
+  // 跨作用域使用的确认与撤回；撤回后立刻回到需要确认的状态。
   'recall.assets.crossScope': async ({ assetId, confirmed, reason } = {}, ctx) => {
     if (!safeId(assetId) || typeof confirmed !== 'boolean') throw new Error('invalid cross-scope confirmation');
     return {
@@ -3449,9 +3537,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
 
-  // 「非资产分流」的读通道。接续快照是**非资产**对象（v0.2 §7.3）：任务状态被
-  // 带到新会话，但不进四类资产、不长认知树叶片。此前只有按会话单读的
-  // `readContinuationSnapshot`，没有面向界面的列表口，那一页只能摆空壳。
+  // 接续快照把任务状态带到新会话，但不作为资产或认知树叶片。
   //
   // `total` 与 `items.length` 分开返回：limit 截断的是显示条数，不是事实条数。
   'recall.continuation.list': async ({ limit } = {}, ctx) => {
@@ -3478,7 +3564,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return {
       ok: true,
       items: await formalAssets.listFormalAssetTimeline(ctx.userId, assetId),
-      // 单一白名单随载荷下发（2026-09-25 US-602 FR-004/FR-011）：列表与详情共用
+      // 单一白名单随载荷下发：列表与详情共用
       // 同一份定义，下游也引用它——不在渲染层再写一份（那正是缺陷本体）。
       realUsageKinds: [...REAL_USAGE_KINDS],
     };
@@ -3495,7 +3581,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  // 采用回执明细（2026-09-25 US-602 AC5/AC6）：「实际采用」的唯一权威来源。
+  // 采用回执明细：「实际采用」的唯一权威来源。
   // 只返回版本 / 同次任务 / 证据类型 / 证据 ref（kind·id·title）——不含正文，
   // 可读名由渲染层唯一解析器负责。
   'recall.assets.adoptionReceipts': async ({ assetId, limit } = {}, ctx) => {
@@ -3508,45 +3594,22 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       receipts: await listAssetUsageReceiptViews(ctx.userId, assetId, limit === undefined ? 50 : limit),
     };
   },
-  'recall.usage.feedback': async ({ cid, messageId, feedback } = {}, ctx) => {
+  'recall.usage.feedback': async ({ cid, messageId, feedback, assetId } = {}, ctx) => {
     if (!safeId(cid) || !safeId(messageId) || (feedback !== 'positive' && feedback !== 'negative')) {
       throw new Error('invalid Recall usage feedback');
     }
+    if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid Recall usage feedback asset');
     return {
       ok: true,
-      result: await recallUsageFeedback.recordRecallMessageFeedback(ctx.userId, { cid, messageId, feedback }),
+      result: await recallUsageFeedback.recordRecallMessageFeedback(ctx.userId, {
+        cid, messageId, feedback, ...(assetId ? { assetId } : {}),
+      }),
     };
   },
 
-  // 2026-09-29 第 5 批·退役：cognition.dashboard.read / cognition.candidates.list /
-  // cognition.candidates.decide 三条通道移除——渲染层零调用（09-27 审计与 09-29
-  // 探索双证），且 decide 的 accept 分支即时晋升、绕过「待我处理」确认闸，
-  // 与 recall.candidates.importPersonalOntology（转待确认）语义相反（B4）。
-  // 服务函数保留：listCognitionCandidates 仍被 skill-summary/assets-adapter 内部
-  // 消费；dashboard/decideCognitionCandidate 的服务文件随「通道退役大批」处置。
-
-  'cognition.receipts.list': async ({ status, agentId, conversationId, skillId, limit } = {}, ctx) => {
-    if (status !== undefined && status !== 'prepared' && status !== 'succeeded' && status !== 'degraded' && status !== 'rejected') throw new Error('invalid cognition receipt status');
-    if (agentId !== undefined && !safeId(agentId)) throw new Error('invalid agent id');
-    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
-    if (skillId !== undefined && !safeId(skillId)) throw new Error('invalid skill id');
-    const n = limit === undefined ? undefined : Number(limit);
-    return { ok: true, receipts: await cognition.listCognitionReuseReceipts(ctx.userId, {
-      ...(status !== undefined ? { status } : {}),
-      ...(agentId !== undefined ? { agentId } : {}),
-      ...(conversationId !== undefined ? { conversationId } : {}),
-      ...(skillId !== undefined ? { skillId } : {}),
-      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 200) } : {}),
-    }) };
-  },
-
-  'cognition.receipts.read': async ({ executionId } = {}, ctx) => {
-    if (!safeId(executionId)) throw new Error('invalid execution id');
-    return { ok: true, receipt: await cognition.readCognitionReuseReceipt(ctx.userId, executionId) };
-  },
-
+  // Cognition asset APIs below expose the canonical formal-asset types.
   'cognition.assets.list': async ({ type, limit } = {}, ctx) => {
-    // N-6: 类型枚举必须与 `CognitionAssetType`（= 四类正式资产）一致。
+    // 类型枚举必须与 `CognitionAssetType`（= 四类正式资产）一致。
     // 此前这里收的是上一代分类 skill/knowledge/ontology/evaluation，与适配器
     // 过滤用的 personal/rule/template/skill_method **完全不相交**——传合法类型
     // 抛错、传能通过校验的类型恒返回空列表。渲染层当时不传该参数，所以一直潜伏。
@@ -3569,13 +3632,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // 待办读口本身不截断，所以 total 恒等于 items.length；仍显式返回，
     // 让「items + total」在认知资产各读口上是同一个契约，渲染层不必按页
     // 记住哪个口有 total、哪个没有。
-    const items = await cognition.listCognitionInbox(ctx.userId);
-    // 治理分组（specs/010 T012）：加法返回。旧渲染层/读失败侧拿不到 groups
+    const [items, resolvedInspectionFindings] = await Promise.all([
+      cognition.listCognitionInbox(ctx.userId),
+      cognition.listResolvedInspectionFindings(ctx.userId).catch((error) => {
+        log.warn('resolved inspection inbox read degraded', { userId: ctx.userId, error: (error as Error).message });
+        return [];
+      }),
+    ]);
+    // 治理分组：加法返回。旧渲染层/读失败侧拿不到 groups
     // 时按 items 平铺——降级路径在渲染层有测试钉着。
-    return { ok: true, items, total: items.length, groups: cognition.groupCognitionInbox(items) };
+    return { ok: true, items, total: items.length, groups: cognition.groupCognitionInbox(items), resolvedInspectionFindings };
   },
 
-  // 待办处置通道（specs/008 T007；specs/010 入参加法扩展）：入参 id 就是
+  // 待办处置通道：入参 id 就是
   // `cognition.inbox.list` 返回的 items[].id。分发与"哪些类没有一键动作"的判断在
   // features/cognition/inbox-adapter，这里只校验形状。没有动作可做的类别回
   // ok:false + code，**不计为成功**。
@@ -3583,7 +3652,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof id !== 'string' || !id) throw new Error('invalid cognition inbox item id');
     if (typeof action !== 'string' || !action) throw new Error('invalid cognition inbox action');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid cognition inbox note');
-    // specs/010 的新参数全部可选：不传时既有行为逐字不变。
+    // 新增参数全部可选：不传时既有行为逐字不变。
     const asConditionList = (value: unknown, label: string): string[] | undefined => {
       if (value === undefined) return undefined;
       if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) throw new Error(`invalid ${label}`);
@@ -3602,40 +3671,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  // 「已处理历史」：跨全部候选列出真实落账的审查决定，按处理时间倒序。
-  // 决定账本此前只有按 targetRef 的单读口（存储就是一个 targetRef 一个 jsonl），
-  // 回答不了"我一共处理过什么"，那一段历史在界面上完全看不到。
-  //
-  // 只读既有权威存储，不新增模型、不改候选状态机；`items + total` 与认知资产
-  // 其余读口同一契约。
-  'cognition.reviewDecisions.list': async ({ limit } = {}, ctx) => {
-    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
-      throw new Error('invalid review decision limit');
-    }
-    return {
-      ok: true,
-      ...(await cognition.listRecentReviewDecisions(ctx.userId, {
-        ...(limit !== undefined ? { limit } : {}),
-      })),
-    };
-  },
-
-  // 「版本与治理」问的是"这一版改了什么"。版本快照本来就存着全量内容，这里
-  // 只做比对，不新增持久化。没有 diff 的话，"回滚到此版本"对用户就是盲赌。
-  'cognition.assets.diff': async ({ assetId } = {}, ctx) => {
-    if (!safeId(assetId)) throw new Error('invalid cognition asset id');
-    return { ok: true, diffs: await cognition.listCognitionAssetDiffs(ctx.userId, assetId) };
-  },
-
   'cognition.skills.summary': async ({ skillId } = {}, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skill id');
     return { ok: true, summary: await cognition.getSkillCognitionSummary(ctx.userId, skillId) };
   },
-
-  'cognition.skills.audit': async (_args, ctx) => ({
-    ok: true,
-    audit: await cognition.getSkillVersionMigrationAudit(ctx.userId),
-  }),
 
   'cognition.skills.diff': async ({ skillId, fromVersion, toVersion } = {}, ctx) => {
     if (!safeId(skillId) || typeof fromVersion !== 'string' || !fromVersion.trim()
@@ -3713,6 +3752,156 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     return groupChat.listMembers(ctx.userId, cid, conv.project_id ?? null);
   },
+
+  // ── A2A 通讯录（MVP）────────────────────────────────────────────
+  // 关系权威在 Hub（D-1），本机 store 只做缓存/申请/往来记录；接口形状与 Hub
+  // 一致，接 Hub 时只替换 store 内部实现（D-11 先用本地栈）。
+  // 注意：IPC 结果按 preload 约定加 `ok`，数组必须包在字段里返回，否则会被展开。
+  'contacts.list': async (_args, ctx) => (
+    { contacts: await contacts.listContacts(ctx.userId) }
+  ),
+  'contacts.lookupByPhone': async ({ phone }, ctx) => (
+    { lookup: await contacts.lookupPhone(ctx.userId, String(phone || '')) }
+  ),
+  'contacts.requests': async (_args, ctx) => (
+    { requests: await contacts.listRequests(ctx.userId) }
+  ),
+  'contacts.requestAdd': async ({ phone, note, peerUserId, peerName }, ctx) => (
+    {
+      request: await contacts.requestAdd(ctx.userId, {
+        phone: String(phone || ''),
+        ...(note ? { note: String(note).slice(0, 200) } : {}),
+        // 本地栈阶段（D-11）没有 Hub 目录可用，允许直接指定对方账号，便于同机双实例
+        // 演示；接入 Hub 后由手机号查找解析，这两个入参会被忽略。
+        ...(peerUserId ? { peerUserId: String(peerUserId) } : {}),
+        ...(peerName ? { peerName: String(peerName) } : {}),
+      }),
+    }
+  ),
+  'contacts.acceptRequest': async ({ id }, ctx) => (
+    { request: await contacts.acceptRequest(ctx.userId, String(id || '')) }
+  ),
+  'contacts.rejectRequest': async ({ id }, ctx) => (
+    { request: await contacts.rejectRequest(ctx.userId, String(id || '')) }
+  ),
+  // 删除联系人（AC-10）：关系结束，双方在本机的 A2A 会话也一起收尾。
+  'contacts.remove': async ({ userId }, ctx) => {
+    return contacts.deleteContact(ctx.userId, String(userId || ''));
+  },
+  'contacts.setDefaultScope': async ({ userId, agentId, workspace }, ctx) => (
+    {
+      contact: await contacts.setDefaultScope(ctx.userId, String(userId || ''), {
+        // 传空串表示「按接待时选择」：必须原样透传，否则清不掉默认值。
+        ...(agentId !== undefined ? { agentId: String(agentId) } : {}),
+        ...(workspace !== undefined ? { workspace: String(workspace) } : {}),
+      }),
+    }
+  ),
+  'contacts.history': async ({ userId }, ctx) => (
+    { history: await contacts.listHistory(ctx.userId, userId ? String(userId) : undefined) }
+  ),
+
+  // ── A2A 请示（D-7）─────────────────────────────────────────────
+  // 接收方本人对助理拟回复的裁决；只在本机，永不过 Hub（D-10）。
+  'a2a.consultations.list': async ({ conversationId, state } = {}, ctx) => ({
+    consultations: await a2aConsultations.listConsultations(ctx.userId, {
+      ...(conversationId ? { conversationId: String(conversationId) } : {}),
+      ...(state ? { state: String(state) as never } : {}),
+    }),
+  }),
+  'a2a.consultations.create': async ({ conversationId, peerUserId, peerName, question, proposedReply }, ctx) => ({
+    consultation: await a2aConsultations.createConsultation(ctx.userId, {
+      conversationId: String(conversationId || ''),
+      peerUserId: String(peerUserId || ''),
+      ...(peerName ? { peerName: String(peerName) } : {}),
+      question: String(question || ''),
+      proposedReply: String(proposedReply || ''),
+    }),
+  }),
+  // 接收方确认接待（D-04）：waiting → active，然后按这次确认的范围开跑。
+  'a2a.reception.preview': async ({ conversationId, workspace, spaceId } = {}, ctx) => {
+    if (typeof conversationId !== 'string' || !safeId(conversationId)) return { error: 'conversation id is required' };
+    return previewReceptionWorkspace(ctx.userId, { conversationId, workspace, spaceId });
+  },
+  'a2a.reception.confirm': async ({ conversationId, workspace, spaceId, assistantAgentId, expectedPreview, expectedMessageId }, ctx) => {
+    if (typeof conversationId !== 'string' || !safeId(conversationId)) return { confirmed: false, error: 'conversation id is required' };
+    // 绑定的是渲染层显示的那条 pending；不带=旧调用方兼容，带了就必须是合法字符串。
+    if (_invalidExpectedMessageId(expectedMessageId)) return { confirmed: false, error: 'invalid expected message id' };
+    const confirmed = await confirmReception(ctx.userId, {
+      conversationId,
+      expectedPreview,
+      workspace,
+      ...(spaceId !== undefined ? { spaceId } : {}),
+      ...(assistantAgentId !== undefined ? { assistantAgentId } : {}),
+      ...(expectedMessageId !== undefined ? { expectedMessageId } : {}),
+    });
+    if ('error' in confirmed) return { confirmed: false, ...confirmed };
+    cancelReceptionNudge(ctx.userId, String(conversationId || ''));
+    _startA2AReceptionAnswer(ctx.userId, confirmed.question);
+    return { confirmed: true, started: true, marker: confirmed.marker };
+  },
+  // 重启后仍在等本人确认的来访：收件箱本身是渲染层内存，重启即失，主进程这边
+  // 按 marker + 会话记录重建，界面才有「确认接待」可点。
+  // 读投影前先在写路径收敛过期暂存，避免把已过 TTL 的原文继续留在会话里。
+  'a2a.reception.pending': async (_payload, ctx) => {
+    await expireStaleReceptions(ctx.userId).catch((error) => {
+      // 清理失败不阻断投影：listPendingReceptions 自身按截止时间过滤。
+      log.warn('a2a pending reception cleanup failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return { pending: await listPendingReceptions(ctx.userId) };
+  },
+  // 接收方拒绝这次来访（不回答，也不替本人编话）。
+  'a2a.reception.decline': async ({ conversationId, expectedMessageId }, ctx) => {
+    if (_invalidExpectedMessageId(expectedMessageId)) return { declined: false, error: 'invalid expected message id' };
+    const declined = await declineReception(ctx.userId, String(conversationId || ''), {
+      ...(expectedMessageId !== undefined ? { expectedMessageId } : {}),
+    });
+    if ('error' in declined) return { declined: false, error: declined.error };
+    cancelReceptionNudge(ctx.userId, String(conversationId || ''));
+    return { declined: true, marker: declined.marker };
+  },
+  'a2a.conversations.listForContact': async ({ contactUserId }, ctx) => ({
+    conversations: await listA2AConversationsForContact(ctx.userId, String(contactUserId || '')),
+  }),
+  'a2a.conversation.prepare': async ({ contactUserId }, ctx) => (
+    outbound.prepareA2AQuestion(ctx.userId, String(contactUserId || ''))
+  ),
+  // A2A 发送侧（AC-04）：输入框点名联系人 → 建/复用发起方会话并走 relay。
+  'a2a.question.send': async ({ contactUserId, text, mode, requestId, conversationId }, ctx) => {
+    if (mode !== undefined && mode !== 'new' && mode !== 'continue') {
+      throw new Error('invalid a2a question mode');
+    }
+    return outbound.sendA2AQuestion(ctx.userId, {
+      contactUserId: String(contactUserId || ''),
+      text: String(text || ''),
+      ...(mode ? { mode } : {}),
+      ...(requestId ? { requestId: String(requestId) } : {}),
+      ...(conversationId ? { conversationId: String(conversationId) } : {}),
+    });
+  },
+  // 注意：没有 `a2a.relay.poll`。relay 投递即删，轮询只能有一个消费者，那就是
+  // 主进程的 relay 泵（`a2a/relay-pump.ts`）；渲染层收 `a2a:relay` 推送。
+  // 会话的 A2A 标识（前端据此显示「确认中」等状态；关系权威仍在 Hub）。
+  'a2a.conversationMarker': async ({ conversationId } = {}, ctx) => {
+    const cid = String(conversationId || '');
+    if (!cid) return { marker: null };
+    const conversation = await chats.getConversation(ctx.userId, cid).catch(() => null);
+    return { marker: conversation?.a2a ?? null };
+  },
+  // 5 分钟提示（D-23）：把仍待决且超过窗口的请示标记一次，供发起方显示「稍后回复」。
+  'a2a.consultations.nudge': async (_args, ctx) => ({
+    nudged: await a2aConsultations.nudgePendingConsultations(ctx.userId),
+  }),
+  'a2a.consultations.answer': async ({ id, decision, text }, ctx) => ({
+    consultation: await a2aConsultations.answerConsultation(
+      ctx.userId,
+      String(id || ''),
+      String(decision || '') as never,
+      text ? String(text) : undefined,
+    ),
+  }),
 
   'groupChat.runtimeStatus': async (args, ctx) => {
     const { cid } = args;
@@ -3860,6 +4049,22 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { items, failed };
   },
 
+  'conversations.attachments.pickAndUploadDir': async ({ cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = parent
+      ? await dialog.showOpenDialog(parent, { title: 'Choose folder', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ title: 'Choose folder', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths?.length) return { items: [], failed: [], canceled: true };
+
+    const sourcePath = res.filePaths[0];
+    const result = await chatAttachments.importFolderAttachment(ctx.userId, cid, sourcePath);
+    if (!result.ok) {
+      return { items: [], failed: [{ name: path.basename(sourcePath), error: (result as { error: string }).error }] };
+    }
+    return { items: [{ displayName: result.info.displayName || result.info.name, info: result.info }], failed: [] };
+  },
+
   'conversations.attachments.import': async (payload, ctx) => {
     const cid = payload?.cid;
     const sourcePath = payload?.path;
@@ -3879,7 +4084,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'conversations.attachments.delete': async ({ cid, name }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     await chatAttachments.warmConversationSpace(ctx.userId, cid);
-    if (!chatAttachments.isDraftAttachmentCid(cid)) {
+    if (!chatAttachments.isDraftAttachmentCid(cid) && !chatAttachments.isFolderAttachmentReference(name || '')) {
       await recycleBin.createAppRecycleBatchForCloudEntry(
         ctx.userId,
         chatAttachmentRelPath(ctx.userId, cid, name || '', null, chatAttachments.cachedConversationSpace(ctx.userId, cid)),
@@ -3944,7 +4149,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return chatArtifacts.inspectArtifactIndex(ctx.userId, String(cid), String(artifactId || ''));
   },
   // ── Agents ──
-  'agents.list': async ({ summary } = {}) => {
+  'agents.list': async ({ summary } = {}, ctx) => {
     // P3394 local peers and AI team Agents share one directory. Reconcile
     // online peers before every directory read so a live external node cannot
     // remain invisible merely because its projection callback was missed.
@@ -3960,8 +4165,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // marketplace reconcile and sync already invalidate the main cache at
     // their write boundary.
     let agentList = summary === true || summary === '1'
-      ? await agents.listAgentSummaries()
-      : await agents.listAgents();
+      ? await agents.listAgentSummariesForUser(ctx.userId)
+      : await agents.listAgentsForUser(ctx.userId);
 
     // 引导未完成时，过滤掉所有 CLI Agent（claude/codex/opencode/workbuddy）
     // 只有用户在引导中主动"连接"后，这些 Agent 才可见可用
@@ -3979,9 +4184,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { agents: agentList };
   },
 
-  'agents.get': async ({ agent_id }) => {
+  'agents.get': async ({ agent_id }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    const agent = await agents.getAgent(agent_id);
+    const agent = await agents.getAgentForUser(ctx.userId, agent_id);
     if (!agent) throw new Error('agent not found');
     return { agent };
   },
@@ -3994,14 +4199,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, inheritance: await readAgentInheritance(ctx.userId, agent_id) };
   },
 
-  'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}) => {
-    return { agent: await agents.createCustomAgent({ name, description, description_zh, description_en, workflow, icon, color, runtime, category, output_format }) };
+  'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}, ctx) => {
+    return { agent: await agents.createCustomAgentForUser(ctx.userId, { name, description, description_zh, description_en, workflow, icon, color, runtime, category, output_format }) };
   },
 
 
-  'agents.update': async ({ agent_id, updates }) => {
+  'agents.update': async ({ agent_id, updates }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    const data = await agents.updateCustomAgent(agent_id, updates || {});
+    const data = await agents.updateCustomAgentForUser(ctx.userId, agent_id, updates || {});
     if (!data) throw new Error('agent not found or read-only');
     return { agent: data };
   },
@@ -4015,10 +4220,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // 同 CLI 允许多个外接 agent 共享同一个受管网关：只有该 CLI 不再被任何
     // 剩余 agent 引用时才允许停进程与投影抑制，否则删一个会连累另一个。
     try {
-      const target = await agents.getAgent(agent_id);
+      const target = await agents.getAgentForUser(ctx.userId, agent_id);
       const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
       if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
-        const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+        const remaining = await agents.countP3394GatewayAgentsByCliForUser(ctx.userId, rt.cli, { excludeAgentId: agent_id });
         if (remaining === 0) {
           const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
           await stopExternalGateway(rt.cli);
@@ -4036,7 +4241,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       log.warn('P3394 gateway stop on agent delete failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
     }
     await recycleBin.createAppRecycleBatchForAgent(ctx.userId, agent_id);
-    const deleted = await agents.deleteCustomAgent(agent_id);
+    const deleted = await agents.deleteCustomAgentForUser(ctx.userId, agent_id);
     return { ok: true, deleted };
   },
 
@@ -4044,7 +4249,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // builtin and custom agents are toggleable (it's a personal preference,
   // not a spec mutation). Returns the resolved state for the renderer to
   // confirm the new value.
-  'agents.setEnabled': async ({ agent_id, enabled }) => {
+  'agents.setEnabled': async ({ agent_id, enabled }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
     if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
     // P3394 外接智能体停用联动：禁用即停托管网关（否则网关心跳继续、
@@ -4052,13 +4257,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // （下一次 turn 的 runP3394GatewayTurn 会自动拉起）。
     if (!enabled) {
       try {
-        const target = await agents.getAgent(agent_id);
+        const target = await agents.getAgentForUser(ctx.userId, agent_id);
         const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
         if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
           // 同 CLI 允许多个外接 agent 共享网关：停用其中一个时，只有该
           // CLI 不再被任何剩余 agent 引用才停进程（否则禁用一个会把仍在
           // 使用的共享网关一并关掉）。
-          const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+          const remaining = await agents.countP3394GatewayAgentsByCliForUser(ctx.userId, rt.cli, { excludeAgentId: agent_id });
           if (remaining === 0) {
             const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
             await stopExternalGateway(rt.cli);
@@ -4068,7 +4273,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         log.warn('P3394 gateway stop on agent disable failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
       }
     }
-    agents.setAgentEnabledForActiveUser(agent_id, enabled);
+    agents.setAgentEnabledForUser(ctx.userId, agent_id, enabled);
     return { ok: true, enabled };
   },
 
@@ -4089,7 +4294,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'agents.chat.history': async ({ agent_id, limit = 500 }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    if (!(await agents.getAgent(agent_id))) throw new Error('agent not found');
+    if (!(await agents.getAgentForUser(ctx.userId, agent_id))) throw new Error('agent not found');
     return { messages: await agents.getAgentChatMessages(ctx.userId, agent_id, limit) };
   },
 
@@ -4156,55 +4361,32 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { entries: await contract.listOntologyEntries(ctx.userId) };
   },
 
-  // 可写入的角色模板字段落点（已安装 ∩ T-box）。targets[].fieldRef 是 opaque
-  // 写入句柄，调用方只回传它；label 已拼好，渲染层不重组显示名。
-  'personalOntology.templates.fieldTargets': async (_payload, ctx) => {
-    const contract = await import('../features/personal_ontology_contract');
-    return { targets: await contract.listRoleTemplateFieldTargets(ctx.userId) };
-  },
+  // Personal ontology services retain their feature-level callers; IPC exposes
+  // only the active routes below.
 
   // ── Personal Ontology Role Templates (角色模板) ──
   'personalOntology.templates.list': async (_payload, ctx) => {
     return { templates: await personalOntologyTemplateFiles.listTemplateStatus(ctx.userId) };
   },
-  'personalOntology.profile.syncRecall': async (_payload, ctx) => {
-    return { ok: true, ...(await recallProfileSync.schedulePersonalProfileSync(ctx.userId)) };
-  },
-  // 冲突台账（2026-09-20 本体界面）：读取自带自愈——值已被用户删除的
+  // 冲突台账：读取自带自愈——值已被用户删除的
   // 冲突行顺手清除，返回的每一条都仍然成立。
   'personalOntology.conflicts.list': async ({ groupId } = {}, ctx) => {
     const { listConflicts } = await import('../features/recall/ontology-conflicts');
     const conflicts = await listConflicts(ctx.userId, typeof groupId === 'string' && groupId ? groupId : undefined);
     return { ok: true, conflicts };
   },
-  // ── 本体候选池（2026-09-20 首次暴露）：此前只有写入方（转写桥/onboarding/
-  // 资产回流），读取与确认零暴露零 UI——回流闭环的确认端在这里补齐。 ──
-  'personalOntology.candidates.list': async (_payload, ctx) => {
+  // ── 旧个人本体候选只作为过渡队列展示；接受必须先转入 Recall 共同审核，不能直写 USER.md / MEMORY.md。 ──
+  'personalOntology.candidates.list': async ({ view } = {}, ctx) => {
     const data = await personalOntologyCandidates.listCandidates(ctx.userId);
-    return { ok: true, candidates: data.candidate_updates || [] };
+    // corrupt（读侧结构化错误）：池文件坏档时如实带回，渲染层据此
+    // 出「从备份恢复/重置」入口；写侧此时已被 corrupt-guard 拒绝。
+    // 同时保留 candidates 与 candidate_updates，兼容两种消费方的字段名。
+    const list = view === 'activity-queue' ? projectLegacyActivityCandidates(data.candidate_updates || []) : data.candidate_updates || [];
+    return { ok: true, candidates: list, candidate_updates: list, ...(data.corrupt ? { corrupt: data.corrupt } : {}) };
   },
-  'personalOntology.candidates.confirm': async ({ candidateId, dest, acknowledgeConflict } = {}, ctx) => {
-    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    // 冲突门越过标记（specs/014 T014）：布尔校验后透传；命中冲突时返回体带
-    // conflicts[]（渲染层弹「仍然写入」对话用）。
-    if (acknowledgeConflict !== undefined && typeof acknowledgeConflict !== 'boolean') {
-      throw new Error('invalid acknowledgeConflict');
-    }
-    return personalOntologyCandidates.confirmCandidate(
-      ctx.userId,
-      candidateId,
-      dest && typeof dest === 'object' ? dest : {},
-      acknowledgeConflict === true ? { acknowledgeConflict: true } : {},
-    );
-  },
-  'personalOntology.candidates.reject': async ({ candidateId, reason } = {}, ctx) => {
-    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    return personalOntologyCandidates.rejectCandidate(
-      ctx.userId,
-      candidateId,
-      typeof reason === 'string' ? reason : undefined,
-    );
-  },
+  // 旧版 personalOntology.candidates.confirm/reject 批量入口已退役；过渡候选
+  // 通过 transferToRecall 进入 Recall 共同审核，之后由统一资产/本体流程处理。
+
   'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
     if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
     return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId, restoreData === true);
@@ -4222,15 +4404,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── Personal Ontology Group Fields (挖空表单字段，兼容复合 id) ──
-  'personalOntology.groups.fields.list': async ({ groupId }, ctx) => {
-    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    return personalOntologyTemplateFiles.listFieldsByRef(ctx.userId, groupId);
-  },
+  // groups.fields.list 与 groups.fields.remove 两条老通道
+  // 已删——渲染层零调用；fields.list 的服务面 listFieldsByRef 仍被
+  // ontology-conflicts 与候选确认消费。
   'personalOntology.groups.fields.append': async ({ groupId, fieldName, value, source, asOf, clearAsOf }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
     if (typeof value !== 'string') throw new Error('missing value');
-    // 时间锚三态（specs/014 T007）：只做类型校验，语义校验在 features 的
+    // 时间锚三态：只做类型校验，语义校验在 features 的
     // resolveAsOfControl 唯一处（错误码原样回渲染层）。
     if (asOf !== undefined && typeof asOf !== 'string') throw new Error('invalid asOf');
     if (clearAsOf !== undefined && typeof clearAsOf !== 'boolean') throw new Error('invalid clearAsOf');
@@ -4252,7 +4433,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       asOf === undefined && clearAsOf === undefined ? undefined : { asOf, clearAsOf },
     );
   },
-  // 断言核实档（2026-09-20；spec 007 升两档）：标记/取消一条值的核实状态。
+  // 断言核实档：标记/取消一条值的核实状态。
   // verified: false 取消 / true 有来源支持 / 'independent' 独立核实过。
   'personalOntology.groups.fields.verify': async ({ groupId, fieldName, value, verified }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
@@ -4263,29 +4444,23 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ctx.userId, groupId, fieldName, value, level,
     );
   },
-  // 规则分类循环（spec 007 T301）：无 → operation → preference → constraint → 无。
+  // 规则分类循环：无 → operation → preference → constraint → 无。
   'personalOntology.groups.fields.cycleRuleKind': async ({ groupId, fieldName, value }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
     if (typeof value !== 'string') throw new Error('invalid value');
     return personalOntologyGroups.cycleFieldValueRuleKind(ctx.userId, groupId, fieldName, value);
   },
-  // 组变更历史（spec 007 T304）：快照列表与恢复。
-  'personalOntology.groups.history.list': async ({ groupId }, ctx) => {
-    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    return { ok: true, history: personalOntologyGroups.listGroupHistory(ctx.userId, groupId) };
-  },
-  'personalOntology.groups.history.restore': async ({ groupId, snapshotId }, ctx) => {
-    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    if (!snapshotId || typeof snapshotId !== 'string') throw new Error('missing snapshotId');
-    return personalOntologyGroups.restoreGroupSnapshot(ctx.userId, groupId, snapshotId);
-  },
-  // 已删除分组列表（spec 009 D5b / T026，待总控确认第 7 条·选项②）：无参，
-  // 只校验转调 features（Constitution II）；恢复复用上面的 history.restore。
+  // 已删除分组列表：无参，只校验转调 features
+  // 恢复复用上面的 history.restore。
+  // Keep the deleted-group query available to protocol callers.
   'personalOntology.groups.deleted.list': async (_payload, ctx) => {
     return { ok: true, deleted: personalOntologyGroups.listDeletedGroups(ctx.userId) };
   },
-  // 敏感性（spec 007 T302）：restricted 不进任务自动注入与世界模型。
+  // 组变更历史两条老通道已删（history.list /
+  // history.restore）——渲染层 v2 面走 po.history.list /
+  // po.history.restore（deleted 随 po.snapshot 下发）。
+  // 敏感性：restricted 不进任务自动注入与世界模型。
   'personalOntology.groups.fields.sensitivity': async ({ groupId, fieldName, value, restricted }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
@@ -4299,11 +4474,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
     if (typeof value !== 'string') throw new Error('missing value');
     return personalOntologyTemplateFiles.removeFieldValueToRef(ctx.userId, groupId, fieldName, value);
-  },
-  'personalOntology.groups.fields.remove': async ({ groupId, fieldName }, ctx) => {
-    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
-    return personalOntologyTemplateFiles.removeFieldToRef(ctx.userId, groupId, fieldName);
   },
 
   // ── Personal Ontology Group Entries (流水区，兼容复合 id) ──
@@ -4319,102 +4489,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return personalOntologyTemplateFiles.promoteEntryToRef(ctx.userId, groupId, entryText, fieldName);
   },
 
-  // ── 个人本体 v2（2026-09-29 重构）：po.* 干净通道。JSON 单文档存储上的
+  // ── 个人本体 v2：po.* 干净通道。JSON 单文档存储上的
   //  全 id 寻址业务 API（src/main/features/po/api.ts）；旧 personalOntology.*
   //  通道保留（contract / @ 引用 / 候选管道等老消费方在用）。──
   'po.snapshot': async (_payload, ctx) => poApi.getPoSnapshot(ctx.userId),
 
-  'po.groups.create': async ({ title }, ctx) => {
-    if (typeof title !== 'string' || !title.trim()) throw new Error('missing title');
-    return poApi.poCreateGroup(ctx.userId, title);
-  },
-  'po.groups.rename': async ({ groupId, title }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (typeof title !== 'string' || !title.trim()) throw new Error('missing title');
-    return poApi.poRenameGroup(ctx.userId, groupId, title);
-  },
-  'po.groups.delete': async ({ groupId }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    return poApi.poDeleteGroup(ctx.userId, groupId);
-  },
-  'po.groups.restore': async ({ groupId }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    return poApi.poRestoreDeletedGroup(ctx.userId, groupId);
-  },
+  'po.groups.create': legacyPoWriteClosed,
+  'po.groups.rename': legacyPoWriteClosed,
+  'po.groups.delete': legacyPoWriteClosed,
+  'po.groups.restore': legacyPoWriteClosed,
   'po.deleted.list': async (_payload, ctx) => ({ deleted: poApi.poListDeletedGroups(ctx.userId) }),
 
-  'po.fields.create': async ({ groupId, name, isRelation, section }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    return poApi.poCreateField(ctx.userId, groupId, name, {
-      isRelation: isRelation === true,
-      ...(typeof section === 'string' && section ? { section } : {}),
-    });
-  },
-  'po.fields.rename': async ({ groupId, fieldId, name }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (!safeId(fieldId)) throw new Error('missing fieldId');
-    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    return poApi.poRenameField(ctx.userId, groupId, fieldId, name);
-  },
-  'po.fields.delete': async ({ groupId, fieldId }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (!safeId(fieldId)) throw new Error('missing fieldId');
-    return poApi.poDeleteField(ctx.userId, groupId, fieldId);
-  },
-  'po.fields.setRelation': async ({ groupId, fieldId, isRelation }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (!safeId(fieldId)) throw new Error('missing fieldId');
-    return poApi.poSetFieldRelationFlag(ctx.userId, groupId, fieldId, isRelation === true);
-  },
+  'po.fields.create': legacyPoWriteClosed,
+  'po.fields.rename': legacyPoWriteClosed,
+  'po.fields.delete': legacyPoWriteClosed,
+  'po.fields.setRelation': legacyPoWriteClosed,
 
-  'po.values.add': async ({ groupId, fieldId, text, asOf, ruleKind }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (!safeId(fieldId)) throw new Error('missing fieldId');
-    if (typeof text !== 'string' || !text.trim()) throw new Error('missing text');
-    if (ruleKind !== undefined && ruleKind !== null && ruleKind !== 'operation' && ruleKind !== 'preference' && ruleKind !== 'constraint') {
-      throw new Error('invalid ruleKind');
-    }
-    return poApi.poAddValue(ctx.userId, groupId, fieldId, { text, ...(typeof asOf === 'string' && asOf ? { asOf } : {}), ...(ruleKind ? { ruleKind } : {}) });
-  },
-  'po.values.update': async ({ groupId, valueId, patch }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (!safeId(valueId)) throw new Error('missing valueId');
-    if (!patch || typeof patch !== 'object') throw new Error('missing patch');
-    return poApi.poUpdateValue(ctx.userId, groupId, valueId, patch);
-  },
-  'po.values.delete': async ({ groupId, valueId }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (!safeId(valueId)) throw new Error('missing valueId');
-    return poApi.poDeleteValue(ctx.userId, groupId, valueId);
-  },
+  'po.values.add': legacyPoWriteClosed,
+  'po.values.update': legacyPoWriteClosed,
+  'po.values.delete': legacyPoWriteClosed,
 
-  'po.entries.add': async ({ groupId, text, section }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (typeof text !== 'string' || !text.trim()) throw new Error('missing text');
-    return poApi.poAddEntry(ctx.userId, groupId, text, { ...(typeof section === 'string' && section ? { section } : {}) });
-  },
-  'po.entries.delete': async ({ groupId, entryId }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (!safeId(entryId)) throw new Error('missing entryId');
-    return poApi.poDeleteEntry(ctx.userId, groupId, entryId);
-  },
-  'po.entries.promote': async ({ groupId, entryId, fieldName }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (!safeId(entryId)) throw new Error('missing entryId');
-    if (typeof fieldName !== 'string' || !fieldName.trim()) throw new Error('missing fieldName');
-    return poApi.poPromoteEntry(ctx.userId, groupId, entryId, fieldName);
-  },
+  'po.entries.add': legacyPoWriteClosed,
+  'po.entries.delete': legacyPoWriteClosed,
+  'po.entries.promote': legacyPoWriteClosed,
 
   'po.templates.status': async (_payload, ctx) => ({ templates: await poApi.poListTemplateStatus(ctx.userId) }),
-  'po.templates.install': async ({ templateId, restoreData }, ctx) => {
-    if (typeof templateId !== 'string' || !safeId(templateId)) throw new Error('missing templateId');
-    return poApi.poInstallTemplate(ctx.userId, templateId, restoreData === true);
-  },
-  'po.templates.uninstall': async ({ templateId, archiveMemory }, ctx) => {
-    if (typeof templateId !== 'string' || !safeId(templateId)) throw new Error('missing templateId');
-    return poApi.poUninstallTemplate(ctx.userId, templateId, archiveMemory === true);
-  },
+  'po.templates.install': legacyPoWriteClosed,
+  'po.templates.uninstall': legacyPoWriteClosed,
   'po.templates.archiveInfo': async ({ templateId }, ctx) => {
     if (typeof templateId !== 'string' || !safeId(templateId)) throw new Error('missing templateId');
     return poApi.poTemplateArchiveInfo(ctx.userId, templateId);
@@ -4424,16 +4525,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(groupId)) throw new Error('missing groupId');
     return { history: poApi.poListHistory(ctx.userId, groupId) };
   },
-  'po.history.restore': async ({ groupId, snapshotId }, ctx) => {
-    if (!safeId(groupId)) throw new Error('missing groupId');
-    if (typeof snapshotId !== 'string' || !snapshotId) throw new Error('missing snapshotId');
-    const { restoreGroupSnapshot } = await import('../features/personal_ontology_groups');
-    return restoreGroupSnapshot(ctx.userId, groupId, snapshotId);
-  },
+  'po.history.restore': legacyPoWriteClosed,
 
   'po.candidates.confirm': async ({ candidateId, dest, acknowledgeConflict }, ctx) => {
-    if (typeof candidateId !== 'string' || !candidateId) throw new Error('missing candidateId');
-    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { acknowledgeConflict: acknowledgeConflict === true });
+    void candidateId; void dest; void acknowledgeConflict; void ctx;
+    throw new Error('legacy personal ontology candidate confirmation is disabled; transfer it to the common Recall review first');
   },
   'po.candidates.reject': async ({ candidateId }, ctx) => {
     if (typeof candidateId !== 'string' || !candidateId) throw new Error('missing candidateId');
@@ -4445,21 +4541,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof text !== 'string') throw new Error('missing text');
     return poApi.poImportPreview(ctx.userId, text);
   },
-  'po.data.importApply': async ({ items }, ctx) => {
-    if (!Array.isArray(items)) throw new Error('missing items');
-    return poApi.poImportApply(ctx.userId, items);
-  },
+  'po.data.importApply': legacyPoWriteClosed,
 
   // ── 桥接注册：renderer 引用但漏注册的通道（纯转发到现成能力，
   //  零逻辑变更；功能等同 renderer 期望语义）。──
   'agents.builtin.delete': async ({ agent_id }, ctx) => {
     if (!agent_id || typeof agent_id !== 'string') throw new Error('missing agent_id');
-    return marketplace.uninstallMarketplaceAgent(agent_id);
+    return marketplace.uninstallMarketplaceAgentForUser(ctx.userId, agent_id);
   },
 
   'skills.builtin.delete': async ({ id }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('missing id');
-    return marketplace.uninstallMarketplaceSkill(id);
+    return marketplace.uninstallMarketplaceSkillForUser(ctx.userId, id);
   },
 
   'spaces.files.officeHtml': async ({ spaceId, name }, ctx) => {
@@ -4484,20 +4577,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true };
   },
 
-  'skills.list': async ({ force } = {}) => {
-    if (force === true || force === '1') skills.clearSkillListCache();
-    return { skills: await skills.listSkills() };
+  'skills.list': async ({ force } = {}, ctx) => {
+    if (force === true || force === '1') skills.clearSkillListCacheForUser(ctx.userId);
+    return { skills: await skills.listSkillsForUser(ctx.userId) };
   },
 
-  'skills.read': async ({ source, id, file = 'SKILL.md' }) => {
+  'skills.read': async ({ source, id, file = 'SKILL.md' }, ctx) => {
     if (source !== 'marketplace' && source !== 'builtin' && source !== 'custom') throw new Error('invalid source');
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    return skills.readSkillFile(source, id, file);
+    return skills.readSkillFileForUser(ctx.userId, source, id, file);
   },
 
   'skills.checkDeclaration': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    const found = await skills.getSkillForEdit(id);
+    const found = await skills.getSkillForEditForUser(ctx.userId, id);
     if (!found || found.source !== 'custom') throw new Error('only custom skills can be pre-checked');
     const declarationCheck = await skillReverify.checkDeclaration(found.dir, id);
     return { declarationCheck };
@@ -4512,6 +4605,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { result: await skillReverify.reverifySkillDeep(ctx.userId, skillId) };
   },
 
+  /** Cancel an in-flight deep re-verify for one skill. A cancelled scan writes
+   *  no receipt: "we stopped" must never become a verdict. */
+  'skills.trust.cancel': async ({ skillId } = {}, ctx) => {
+    if (!skills.isScannableSkillId(skillId)) throw new Error('invalid skill id');
+    return { canceled: skillReverify.cancelReverify(ctx.userId, skillId) };
+  },
+
   /** Receipts on record, for a trust/audit surface. */
   'skills.trust.list': async (_args, ctx) => {
     // Display projection: the panel shows a security verdict, so it needs
@@ -4520,7 +4620,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { receipts: skillTrust.listReceiptsForDisplay(ctx.userId) };
   },
 
-  /** W5/W6: run the generation admission gate on one custom skill and return
+  /** Run the generation admission gate on one custom skill and return
    *  a renderer-safe verdict for the unified import-check popup. Source-
    *  preserving: no shape escalation, no refusal receipt — the caller decides
    *  what to do with the verdict (the import paths already rolled back or
@@ -4565,10 +4665,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
    *  path on demand (the install path deliberately does not carry findings)
    *  and returns a renderer-safe shape. Read-only: it never changes a verdict.
    */
-  'skills.security.report': async ({ skillId } = {}) => {
+  'skills.security.report': async ({ skillId } = {}, ctx) => {
     if (!skills.isScannableSkillId(skillId)) throw new Error('invalid skill id');
     const { reportForSkill } = await import('../features/security/security-report');
-    return reportForSkill(skillId);
+    return reportForSkill(ctx.userId, skillId);
   },
 
   /** Accept one finding's risk, with a reason and an expiry. */
@@ -4594,10 +4694,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   /** Risk acceptances on record for one skill. */
-  'skills.security.acceptances': async ({ skillId } = {}) => {
+  'skills.security.acceptances': async ({ skillId } = {}, ctx) => {
     if (!skills.isScannableSkillId(skillId)) throw new Error('invalid skill id');
     const { listAcceptances } = await import('../features/security/security-report');
-    return { acceptances: listAcceptances(skillId) };
+    return { acceptances: listAcceptances(ctx.userId, skillId) };
   },
 
   /** Serialize one skill's report for download (json / sarif / csv / markdown).
@@ -4606,34 +4706,34 @@ const invokeHandlers: Record<string, InvokeHandler> = {
    *  via a Blob, and adding a second file-writing surface in main for an
    *  export button would widen the paths that can write to disk for no gain.
    */
-  'skills.security.export': async ({ skillId, format } = {}) => {
+  'skills.security.export': async ({ skillId, format } = {}, ctx) => {
     if (!skills.isValidSkillId(skillId)) throw new Error('invalid skill id');
     const wanted = String(format || 'json');
     if (!['json', 'sarif', 'csv', 'markdown'].includes(wanted)) throw new Error('invalid format');
     const { reportForSkill, serializeReport } = await import('../features/security/security-report');
-    const result = await reportForSkill(skillId);
+    const result = await reportForSkill(ctx.userId, skillId);
     if (!result.ok || !result.evidence) return { ok: false, reason: result.reason || 'scan_failed' };
     return { ok: true, ...serializeReport(result.evidence, wanted as 'json') };
   },
 
-  'skills.writeFile': async ({ id, file, content }) => {
+  'skills.writeFile': async ({ id, file, content }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     if (!file) throw new Error('missing file');
     // Routes to custom in normal mode; in dev, built-in writes are accepted
     // and dual-write (src + data) via the dev module.
-    const ok = await skills.writeSkillFileForEdit(id, file, content || '');
+    const ok = await skills.writeSkillFileForEditForUser(ctx.userId, id, file, content || '');
     if (!ok) throw new Error(t('errors.skill_write_failed'));
     return { written: true };
   },
 
-  'skills.tree': async ({ source, id }) => {
+  'skills.tree': async ({ source, id }, ctx) => {
     if (source !== 'marketplace' && source !== 'builtin' && source !== 'custom') throw new Error('invalid source');
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    return skills.listSkillTree(source, id);
+    return skills.listSkillTreeForUser(ctx.userId, source, id);
   },
 
-  'skills.create': async ({ name, description, category }) => {
-    return { skill: await skills.createCustomSkill(name, description || '', category || '') };
+  'skills.create': async ({ name, description, category }, ctx) => {
+    return { skill: await skills.createCustomSkillForUser(ctx.userId, name, description || '', category || '') };
   },
 
   'skills.pickImportDir': async () => {
@@ -4651,14 +4751,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { cancelled: false, path: res.filePaths[0] };
   },
 
-  'skills.createFromUrl': async ({ name, description, url }) => {
-    const r = await skills.createFromUrl(name ?? null, description ?? null, String(url || ''));
+  'skills.createFromUrl': async ({ name, description, url }, ctx) => {
+    const r = await skills.createFromUrlForUser(ctx.userId, name ?? null, description ?? null, String(url || ''));
     if (!r.ok) return r;
     return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
   },
 
-  'skills.createFromDir': async ({ name, description, srcDir, force }) => {
-    const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
+  'skills.createFromDir': async ({ name, description, srcDir, force }, ctx) => {
+    const r = await skills.createFromDirForUser(ctx.userId, name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
     if (!r.ok) return r;
     // Forward the scan evidence on success too: the unified import-check
     // popup shows the verdict for folder imports, and a pass with no visible
@@ -4672,21 +4772,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'skills.discardImportDraft': async ({ id }) => {
+  'skills.discardImportDraft': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    return { discarded: await skills.discardImportDraftIfPristine(id) };
+    return { discarded: await skills.discardImportDraftIfPristineForUser(ctx.userId, id) };
   },
 
-  'skills.update': async ({ id, updates, skipRename }) => {
+  'skills.update': async ({ id, updates, skipRename }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    const data = await skills.updateCustomSkill(id, updates || {}, { skipRename: !!skipRename });
+    const data = await skills.updateCustomSkillForUser(ctx.userId, id, updates || {}, { skipRename: !!skipRename });
     if (!data) throw new Error('skill not found');
     return { skill: data };
   },
 
-  'skills.updateForEdit': async ({ id, updates }) => {
+  'skills.updateForEdit': async ({ id, updates }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    const data = await skills.applySkillMetadataForEdit(id, updates || {});
+    const data = await skills.applySkillMetadataForEditForUser(ctx.userId, id, updates || {});
     if (!data.ok) {
       return {
         ok: false,
@@ -4704,30 +4804,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'skills.delete': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     await recycleBin.createAppRecycleBatchForSkill(ctx.userId, id);
-    return { deleted: await skills.deleteCustomSkill(id) };
+    return { deleted: await skills.deleteCustomSkillForUser(ctx.userId, id) };
   },
 
   // Per-user enable/disable toggle. Builtin and custom both toggleable (it's
   // a personal preference, not a spec mutation). Wrapper handles the
   // _invalidateSkillListCache + invalidateCoreAgentSkills chain so the next
   // runner build re-renders the skills system-prompt block.
-  'skills.setEnabled': async ({ id, enabled }) => {
+  'skills.setEnabled': async ({ id, enabled }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
-    skills.setSkillEnabledForActiveUser(id, enabled);
+    skills.setSkillEnabledForUser(ctx.userId, id, enabled);
     return { ok: true, enabled };
   },
 
-  'skills.get': async ({ id }) => {
+  'skills.get': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    const skill = await skills.getCustomSkill(id);
+    const skill = await skills.getCustomSkillForUser(ctx.userId, id);
     if (!skill) throw new Error('skill not found');
     return { skill };
   },
 
   'skills.chat.history': async ({ id, limit = 500 }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    if (!(await skills.getSkillForEdit(id))) throw new Error('skill not found');
+    if (!(await skills.getSkillForEditForUser(ctx.userId, id))) throw new Error('skill not found');
     return { messages: await skills.getSkillChatMessages(ctx.userId, id, limit) };
   },
 
@@ -4768,12 +4868,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Detail endpoints (cache-first) — used by the marketplace panel's detail view to render
   // full content. Caller passes the list-row's (version, freshness timestamp) so we can short-circuit
   // on a hot cache. Sweep is invoked once per openMarketplace at the entry point.
-  'marketplace.detailAgent': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }) => {
+  'marketplace.detailAgent': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
     }
-    return marketplace.getAgentDetail(id, {
+    return marketplace.getAgentDetailForUser(ctx.userId, id, {
       version, published_at,
       ...(typeof updated_at === 'number' ? { updated_at } : {}),
       ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
@@ -4785,12 +4885,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  'marketplace.detailSkill': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }) => {
+  'marketplace.detailSkill': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
     }
-    return marketplace.getSkillDetail(id, {
+    return marketplace.getSkillDetailForUser(ctx.userId, id, {
       version, published_at,
       ...(typeof updated_at === 'number' ? { updated_at } : {}),
       ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
@@ -4802,12 +4902,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  'marketplace.installAgent': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }) => {
+  'marketplace.installAgent': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
     }
-    return marketplace.installMarketplaceAgent(id, {
+    return marketplace.installMarketplaceAgentForUser(ctx.userId, id, {
       version, published_at,
       ...(typeof updated_at === 'number' ? { updated_at } : {}),
       ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
@@ -4819,12 +4919,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }, { force: force === true, name: typeof name === 'string' ? name : undefined, acceptSecurityRisk: acceptSecurityRisk === true });
   },
 
-  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }) => {
+  /** "将同时安装"确认框的只读预览；与安装共用同一份依赖规划。 */
+  'marketplace.agentInstallPlan': async ({ id, version, published_at, updated_at, min_app_version }) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
     }
-    return marketplace.installMarketplaceSkill(id, {
+    return marketplace.previewAgentInstallPlan(id, {
+      version, published_at,
+      ...(typeof updated_at === 'number' ? { updated_at } : {}),
+      ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
+    });
+  },
+
+  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }, ctx) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    if (typeof version !== 'string' || typeof published_at !== 'number') {
+      throw new Error('version + published_at required');
+    }
+    return marketplace.installMarketplaceSkillForUser(ctx.userId, id, {
       version, published_at,
       ...(typeof updated_at === 'number' ? { updated_at } : {}),
       ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
@@ -4838,57 +4951,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // Uninstall is non-dev: wipes the local install copy + manifest entry. Does NOT touch the
   // server row (`marketplace_dev.deleteMarketplace*` does that, dev-only).
-  'marketplace.uninstallAgent': async ({ id }) => {
+  'marketplace.uninstallAgent': async ({ id }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
-    return marketplace.uninstallMarketplaceAgent(id);
+    return marketplace.uninstallMarketplaceAgentForUser(ctx.userId, id);
   },
 
-  'marketplace.uninstallSkill': async ({ id }) => {
+  'marketplace.uninstallSkill': async ({ id }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
-    return marketplace.uninstallMarketplaceSkill(id);
+    return marketplace.uninstallMarketplaceSkillForUser(ctx.userId, id);
   },
 
   // Entry-point housekeeping for the marketplace panel: sweep stale + over-sized cache entries.
   // Cheap (O(N entries) stat), so it's safe to call once per openMarketplace from the renderer.
-  'marketplace.sweepCache': async () => ({ bytes_freed: await marketplaceCache.sweepIfNeeded() }),
+  'marketplace.sweepCache': async (_args, ctx) => ({ bytes_freed: await marketplaceCache.sweepIfNeededForUser(ctx.userId) }),
 
   // Renderer queries this once at startup to learn the current reconcile state, then subscribes
   // to push-events `marketplace:reconcile-status` for in-flight progress. See main/index.ts
   // boot wiring + features/marketplace_reconcile.ts::subscribeReconcileStatus.
   'marketplace.reconcileStatus': async () => marketplaceReconcile.getReconcileStatus(),
 
-  // specs/010 FR-034 `[FROZEN]`：「用户打开目录页时」也是一个检查触发时机。
+  // 用户打开目录页时触发更新检查。
   // 只转达时机，不带任何参数——频率闸门（6 小时）仍在 `checkServerUpdatesForInstalls` 里，
-  // 本通道不能用来绕过它。不回检查结果：检查不打断用户（T107：只加必需通道）。
+  // 本通道不能用来绕过它。不回检查结果：检查不打断用户。
   'marketplace.requestCheck': async () => marketplaceReconcile.requestInstallReconcile('catalog-opened'),
 
   // Persistent listing-grid cache so cold starts don't show a blank panel. Renderer hydrates
   // from this on `openMarketplace` and writes back after every fresh /list response. See
   // `marketplace_cache.ts::{getListingsCache,setListingsCache}`.
-  'marketplace.getListingsCache': async () => marketplaceCache.getListingsCache(),
+  'marketplace.getListingsCache': async (_args, ctx) => marketplaceCache.getListingsCacheForUser(ctx.userId),
 
-  'marketplace.setListingsCache': async ({ entries }) => {
+  'marketplace.setListingsCache': async ({ entries }, ctx) => {
     if (!entries || typeof entries !== 'object') throw new Error('entries required');
-    await marketplaceCache.setListingsCache(entries);
+    await marketplaceCache.setListingsCacheForUser(ctx.userId, entries);
     return { ok: true as const };
   },
 
-  'marketplace.mergeListingsCache': async ({ entries }) => {
+  'marketplace.mergeListingsCache': async ({ entries }, ctx) => {
     if (!entries || typeof entries !== 'object') throw new Error('entries required');
-    await marketplaceCache.mergeListingsCache(entries);
+    await marketplaceCache.mergeListingsCacheForUser(ctx.userId, entries);
     return { ok: true as const };
   },
 
   // Detail-page file viewer (skill kind only — agent payload is fully in the detail response).
-  'marketplace.cacheSkillFiles': async ({ id }) => {
+  'marketplace.cacheSkillFiles': async ({ id }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
-    return { list: await marketplaceCache.listSkillCacheFiles(id) };
+    return { list: await marketplaceCache.listSkillCacheFilesForUser(ctx.userId, id) };
   },
 
-  'marketplace.cacheSkillRead': async ({ id, file }) => {
+  'marketplace.cacheSkillRead': async ({ id, file }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (!file || typeof file !== 'string') throw new Error('file required');
-    const content = await marketplaceCache.readSkillCacheFile(id, file);
+    const content = await marketplaceCache.readSkillCacheFileForUser(ctx.userId, id, file);
     return { content: content || '' };
   },
 
@@ -5105,7 +5218,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return _writeTextToLocal(payload, ctx);
   },
 
-  // KB library summary (知识库模块 S3)：逐文档要点 + 一句话总结 + 脑图骨架。
+  // KB library summary：逐文档要点 + 一句话总结 + 脑图骨架。
   // 懒生成 + 库指纹缓存（features/kb_summary）；失败降级为文件清单。
   // dir=个人库；spaceId=空间库（共享知识库）。
   'kb.summary': async ({ dir, spaceId }, ctx) => {
@@ -5368,7 +5481,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
   },
 
-  // KB 分享到飞书（方案 A/B：空间 → 飞书 wiki 公网链接）。
+  // KB 分享到飞书：空间 → 飞书 wiki 公网链接。
   // 复制链接/管理面板共用；need_reauthorize → 渲染层引导用 FEISHU_SHARE_SCOPES 重新授权。
   'kb.share.toFeishu': async ({ spaceId, access, force } = {}, ctx) => {
     if (typeof spaceId !== 'string' || !safeId(spaceId) || !await spaces.spaceExists(ctx.userId, spaceId)) {
@@ -5391,24 +5504,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof spaceId !== 'string' || !safeId(spaceId)) return { state: null };
     return { state: await shareFeishu.getFeishuShare(ctx.userId, spaceId) };
   },
-  'kb.share.needsUpdate': async ({ spaceId } = {}, ctx) => {
-    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { needed: false };
-    return shareFeishu.shareNeedsUpdate(ctx.userId, spaceId);
-  },
   // 分享应用配置（独立于消息机器人）：appId/appSecret 存本机，供分享 OAuth 使用。
-  'kb.share.appConfig.get': async (_payload, ctx) => {
-    const cfg = await personalContextManager.getFeishuShareAppConfig(ctx.userId);
-    return { configured: cfg !== null, ...(cfg ? { appId: cfg.appId } : {}) }; // 不回传 appSecret
-  },
   'kb.share.appConfig.set': async ({ appId, appSecret } = {}, ctx) => {
     const aid = typeof appId === 'string' ? appId.trim() : '';
     const secret = typeof appSecret === 'string' ? appSecret.trim() : '';
     if (!aid || !secret) return { ok: false, error: '请填写 App ID 与 App Secret' };
     await personalContextManager.setFeishuShareAppConfig(ctx.userId, { appId: aid, appSecret: secret });
-    return { ok: true };
-  },
-  'kb.share.appConfig.clear': async (_payload, ctx) => {
-    await personalContextManager.setFeishuShareAppConfig(ctx.userId, null);
     return { ok: true };
   },
   // 分享授权：用分享专用应用凭据（或回退机器人凭据）发起写权限 OAuth
@@ -5422,7 +5523,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
   },
 
-  // ── CogSeed 共享服务（方案 C）：发布到 cogseed-share 后端，权限弹窗设置真实生效 ──
+  // ── CogSeed 共享服务：发布到 cogseed-share 后端，权限弹窗设置真实生效 ──
   'kb.share.cogseed.publish': async ({ spaceId, force } = {}, ctx) => {
     if (typeof spaceId !== 'string' || !safeId(spaceId) || !await spaces.spaceExists(ctx.userId, spaceId)) {
       return { ok: false, code: 'publish_failed', error: 'invalid spaceId' };
@@ -5437,17 +5538,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       description: sp?.description,
     }, { force: force === true });
   },
-  'kb.share.cogseed.update': async ({ spaceId } = {}, ctx) => {
-    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, code: 'publish_failed', error: 'invalid spaceId' };
-    const sp = await spaces.getSpace(ctx.userId, spaceId);
-    if (!sp) return { ok: false, code: 'publish_failed', error: 'space not found' };
-    return shareCogseed.publishSpaceToCogseedShare(ctx.userId, spaceId, {
-      name: sp.name || spaceId,
-      joinMode: sp.join_mode ?? 'direct',
-      memberPermission: sp.member_permission ?? 'view_export',
-      description: sp.description,
-    }, { force: true });
-  },
   'kb.share.cogseed.syncPolicy': async ({ spaceId } = {}, ctx) => {
     if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
     const sp = await spaces.getSpace(ctx.userId, spaceId);
@@ -5461,14 +5551,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
     return shareCogseed.revokeCogseedShare(ctx.userId, spaceId);
   },
-  'kb.share.cogseed.list': async (_payload, ctx) => ({ items: await shareCogseed.listCogseedShares(ctx.userId) }),
   'kb.share.cogseed.get': async ({ spaceId } = {}, ctx) => {
     if (typeof spaceId !== 'string' || !safeId(spaceId)) return { state: null };
     return { state: await shareCogseed.getCogseedShare(ctx.userId, spaceId) };
-  },
-  'kb.share.cogseed.config.get': async (_payload, ctx) => {
-    const cfg = await shareCogseed.getCogseedShareConfig(ctx.userId);
-    return { configured: cfg !== null, ...(cfg ? { baseUrl: cfg.baseUrl } : {}) }; // 不回传 apiKey
   },
   'kb.share.cogseed.config.set': async ({ baseUrl, apiKey } = {}, ctx) => {
     const url = typeof baseUrl === 'string' ? baseUrl.trim() : '';
@@ -5614,6 +5699,35 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       const err = await shell.openPath(resolvedKb.abs);
       if (err) return { ok: false, error: err };
       return { ok: true };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: code === 'ENOENT' || msg.includes('not found:') ? 'file not found' : msg };
+    }
+  },
+
+  // 将知识库中的产物复制到用户选择的本机位置。路径解析沿用 kb.openFile，
+  // 因此个人库和共享库都经过同一套越界校验，不把绝对路径暴露给渲染层。
+  'kb.download': async ({ spaceId, path: relPath, fileName } = {}, ctx) => {
+    const p = typeof relPath === 'string' ? relPath.trim() : '';
+    if (!p) return { ok: false, error: 'missing path' };
+    try {
+      const resolvedKb = await resolveKbFileAbsPath(ctx.userId, spaceId, p);
+      if (!fs.existsSync(resolvedKb.abs) || !fs.statSync(resolvedKb.abs).isFile()) {
+        return { ok: false, error: 'file not found' };
+      }
+      const name = path.basename(String(fileName || resolvedKb.abs));
+      const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const options = {
+        title: '下载知识库产物',
+        defaultPath: path.join(app.getPath('downloads'), name),
+      };
+      const result = parent
+        ? await dialog.showSaveDialog(parent, options)
+        : await dialog.showSaveDialog(options);
+      if (result.canceled || !result.filePath) return { ok: true, canceled: true };
+      await fs.promises.copyFile(resolvedKb.abs, result.filePath);
+      return { ok: true, canceled: false, filePath: result.filePath };
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code;
       const msg = err instanceof Error ? err.message : String(err);
@@ -5826,6 +5940,44 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // 关闭窗口时最小化到托盘（后台运行）。行为判定在
   // src/main/features/background_run.ts；这里只做入参校验 + 转发。
+  // A2A 设置（FR-33）：服务端权威在 consent_records（H-11/H-12），本机只是缓存。
+  // 配了 Hub 就以服务端为准（缺记录＝没关过，与 Hub 同口径）；没配 Hub 才用本机偏好。
+  'prefs.getA2A': async () => {
+    // 服务端权威按当前身份的正常会话读取（T2.2）；未登录时读不到，走本机偏好。
+    const uid = _activeUserIdForPicker();
+    const remote = uid ? await contactsHub.hubGetConsents(uid).catch(() => null) : null;
+    if (remote) {
+      // 缺记录＝没开过（默认关，与 Hub 的 consentGranted 同口径）。
+      const discoverable = contactsHub.consentState(remote, contactsHub.A2A_CONSENT_SCOPES.discoverable);
+      const assistantQuestions = contactsHub.consentState(remote, contactsHub.A2A_CONSENT_SCOPES.assistantQuestions);
+      appConfig.setContactsDiscoverable(discoverable);
+      appConfig.setContactsAssistantQuestions(assistantQuestions);
+      return { discoverable, assistantQuestions, source: 'hub' };
+    }
+    return {
+      discoverable: appConfig.getContactsDiscoverable(),
+      assistantQuestions: appConfig.getContactsAssistantQuestions(),
+      source: 'local',
+    };
+  },
+  'prefs.setA2A': async ({ key, enabled }: { key?: string; enabled?: boolean }) => {
+    const scope = key === 'discoverable'
+      ? contactsHub.A2A_CONSENT_SCOPES.discoverable
+      : key === 'assistantQuestions'
+        ? contactsHub.A2A_CONSENT_SCOPES.assistantQuestions
+        : '';
+    if (!scope) return { ok: false, error: 'unknown a2a setting' };
+    const uid = _activeUserIdForPicker();
+    if (uid && contactsHub.hubConfigured(uid)) {
+      // 服务端没接受就不改本机缓存：开关显示必须和真正生效的授权一致。
+      const synced = await contactsHub.hubSetConsent(uid, scope, !!enabled);
+      if (!synced) return { ok: false, error: 'consent_sync_failed' };
+    }
+    const applied = key === 'discoverable'
+      ? appConfig.setContactsDiscoverable(!!enabled)
+      : appConfig.setContactsAssistantQuestions(!!enabled);
+    return { ok: true, enabled: applied };
+  },
   'prefs.getCloseToTray': async () => ({
     enabled: appConfig.getCloseToTrayEnabled(),
   }),
@@ -5841,6 +5993,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Thinking strength (reasoning effort) for chat model calls.
   'prefs.getThinkingLevel': async () => ({ level: appConfig.getThinkingLevel() }),
   'prefs.setThinkingLevel': async ({ level }) => ({ level: appConfig.setThinkingLevel(level) }),
+  // Per-model thinking strength: the explicit tier belongs to the model
+  // it was chosen for, so switching models falls back to Auto by construction.
+  'prefs.getModelThinkingLevels': async () => {
+    const stored = appConfig.readPreferences().model_thinking_levels;
+    return { levels: stored && typeof stored === 'object' ? { ...stored } : {} };
+  },
+  'prefs.setModelThinkingLevel': async ({ provider, model, level }) => ({
+    level: appConfig.setModelThinkingLevel(provider, model, level),
+  }),
 
   // First-run onboarding marker (machine-local, NOT cloud-synced — stored
   // under WS_ROOT/onboarding-state.json, shared across uids). The renderer's
@@ -5883,7 +6044,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Whether ANY usable API-key model is configured (sync, cheap). The
   // renderer uses this before every commander send to decide whether to
   // fall back to the signed-in CLI agent.
-  'model.hasConfigured': async () => auth.hasConfiguredModel(),
+  'model.hasConfigured': async (_args, ctx) => auth.hasConfiguredModelForUser(ctx.userId),
   'chat.executionCapability': async () => chatExecutionCapability.getChatExecutionCapability(),
 
   // ── Cognition extraction from sessions (onboarding) ──
@@ -5907,46 +6068,46 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── Auth / model config (settings page) ──
-  'auth.listProviders': async () => auth.listProviders(),
-  'auth.listModels': async ({ provider }) => auth.listModels(provider),
-  'auth.addApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }) => auth.addApiKey(provider, apiKey, label, {
+  'auth.listProviders': async (_args, ctx) => auth.listProvidersForUser(ctx.userId),
+  'auth.listModels': async ({ provider }, ctx) => auth.listModelsForUser(ctx.userId, provider),
+  'auth.addApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }, ctx) => auth.addApiKeyForUser(ctx.userId, provider, apiKey, label, {
     ...(baseUrl ? { baseUrl } : {}),
     ...(maxOutputTokens !== undefined && maxOutputTokens !== null ? { maxOutputTokens } : {}),
   }),
   // Legacy alias; renderer migrated to auth.addApiKey.
-  'auth.saveApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }) => auth.saveApiKey(provider, apiKey, label, {
+  'auth.saveApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }, ctx) => auth.addApiKeyForUser(ctx.userId, provider, apiKey, label, {
     ...(baseUrl ? { baseUrl } : {}),
     ...(maxOutputTokens !== undefined && maxOutputTokens !== null ? { maxOutputTokens } : {}),
   }),
-  'auth.renameProfile': async ({ profileId, label }) => auth.renameProfile(profileId, label),
-  'auth.removeCredential': async ({ profileId }) => auth.removeCredential(profileId),
-  'auth.testConnection': async ({ provider, model, profileId }) => auth.testConnection(provider, model, profileId),
-  'auth.getConfig': async () => auth.getConfig(),
-  'auth.hasConfiguredModel': async () => auth.hasConfiguredModel(),
-  'auth.getProfilesStoreStatus': async () => auth.getProfilesStoreStatus(),
-  'auth.resetProfilesStoreAfterDecryptFailure': async () => auth.resetProfilesStoreAfterDecryptFailure(),
+  'auth.renameProfile': async ({ profileId, label }, ctx) => auth.renameProfileForUser(ctx.userId, profileId, label),
+  'auth.removeCredential': async ({ profileId }, ctx) => auth.removeCredentialForUser(ctx.userId, profileId),
+  'auth.testConnection': async ({ provider, model, profileId }, ctx) => auth.testConnectionForUser(ctx.userId, provider, model, profileId),
+  'auth.getConfig': async (_args, ctx) => auth.getConfigForUser(ctx.userId),
+  'auth.hasConfiguredModel': async (_args, ctx) => auth.hasConfiguredModelForUser(ctx.userId),
+  'auth.getProfilesStoreStatus': async (_args, ctx) => auth.getProfilesStoreStatusForUser(ctx.userId),
+  'auth.resetProfilesStoreAfterDecryptFailure': async (_args, ctx) => auth.resetProfilesStoreAfterDecryptFailureForUser(ctx.userId),
   // OAuth flow — startOAuth kicks off a background login; renderer polls
   // via pollOAuthFlow, feeds prompt answers via submitOAuthInput.
-  'auth.startOAuth':       async ({ provider, label }) => auth.startOAuth(provider, label),
-  'auth.pollOAuthFlow':    async ({ flowId }) => auth.pollOAuthFlow(flowId),
-  'auth.submitOAuthInput': async ({ flowId, value }) => auth.submitOAuthInput(flowId, value),
-  'auth.cancelOAuthFlow':  async ({ flowId }) => auth.cancelOAuthFlow(flowId),
+  'auth.startOAuth':       async ({ provider, label }, ctx) => auth.startOAuth(ctx.userId, provider, label),
+  'auth.pollOAuthFlow':    async ({ flowId }, ctx) => auth.pollOAuthFlow(ctx.userId, flowId),
+  'auth.submitOAuthInput': async ({ flowId, value }, ctx) => auth.submitOAuthInput(ctx.userId, flowId, value),
+  'auth.cancelOAuthFlow':  async ({ flowId }, ctx) => auth.cancelOAuthFlow(ctx.userId, flowId),
   // Open a URL in the user's default browser (OAuth flow uses this so the
   // consent page renders where the user is already logged in).
   'auth.openExternal':     async ({ url }) => auth.openExternalUrl(url),
   // Priority list (entries) — ordered (provider, model, profile) tuples.
-  'auth.listEntries':     async ({ includeUnavailable } = {}) => {
+  'auth.listEntries':     async ({ includeUnavailable } = {}, ctx) => {
     if (includeUnavailable !== undefined && typeof includeUnavailable !== 'boolean') {
       throw new Error('includeUnavailable must be boolean');
     }
-    return auth.listEntries({ includeUnavailable: includeUnavailable === true });
+    return auth.listEntriesForUser(ctx.userId, { includeUnavailable: includeUnavailable === true });
   },
-  'auth.addEntry':        async ({ provider, model, profileId }) => auth.addEntry({ provider, model, profileId }),
-  'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
-  'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
-  'auth.updateEntryModel':async ({ entryId, model }) => auth.updateEntryModel(entryId, model),
-  'auth.revealApiKey':   async ({ profileId }) => auth.revealApiKey(profileId),
-  'auth.updateApiKey':   async ({ profileId, apiKey }) => auth.updateApiKey(profileId, apiKey),
+  'auth.addEntry':        async ({ provider, model, profileId }, ctx) => auth.addEntryForUser(ctx.userId, { provider, model, profileId }),
+  'auth.removeEntry':     async ({ entryId }, ctx) => auth.removeEntryForUser(ctx.userId, entryId),
+  'auth.reorderEntries':  async ({ orderedIds }, ctx) => auth.reorderEntriesForUser(ctx.userId, orderedIds || []),
+  'auth.updateEntryModel':async ({ entryId, model }, ctx) => auth.updateEntryModelForUser(ctx.userId, entryId, model),
+  'auth.revealApiKey':   async ({ profileId }, ctx) => auth.revealApiKeyForUser(ctx.userId, profileId),
+  'auth.updateApiKey':   async ({ profileId, apiKey }, ctx) => auth.updateApiKeyForUser(ctx.userId, profileId, apiKey),
 
   // ── Unified model authorization workflow ──
   'modelAuthorizations.list': async (_args, ctx) =>
@@ -6172,7 +6333,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.modelId, 'modelId', 200),
     boundedCustomProviderModel(args.model, 'model'),
   ),
-  // 模型级开关（S2）：关闭 = 选择器隐藏 + 阻止新绑定 + 已绑定条目跳过兜底；
+  // 模型级开关：关闭 = 选择器隐藏 + 阻止新绑定 + 已绑定条目跳过兜底；
   // 配置与绑定都保留，随时可拨回。
   'customProviders.model.setEnabled': async (args, ctx) => {
     if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
@@ -6469,7 +6630,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return actionApproval.respondActionApproval(request_id, decision);
   },
 
-  // ── User-granted folder access (plan §B2) ──────────────────────────────
+  // ── User-granted folder access ─────────────────────────────────────────
   // Extra directories the file/bash tools may touch beyond workspace +
   // attachments. Grant goes through a native folder picker; the feature
   // enforces the deny-list (credential/system dirs) + realpath.
@@ -6495,7 +6656,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true as const, removed: granted.revokeRoot(ctx.userId, payload.path) };
   },
 
-  // ── External packages management (plan §A; UI is read + manage only) ────
+  // ── External packages management (UI is read + manage only) ────────────
   // Install stays on the commander/CLI path (it needs the clone + dependency
   // consent flow). The registry's single-writer is bin/cogseed-pkg.cjs.
   'packages.list': async (_payload: unknown, ctx: { userId: string }) => {
@@ -6524,7 +6685,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
     return result;
   },
-  // ── Plugin-provided UI (plan §B) ────────────────────────────────────────
+  // ── Plugin-provided UI ─────────────────────────────────────────────────
   // The iframe-hosted plugin page talks to the renderer via postMessage; the
   // renderer forwards through these handlers. Only allowlisted methods exist
   // (see features/plugin_ui.ts); api keys are injected main-side and never
@@ -6554,6 +6715,73 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const ui = await import('../features/plugin_ui');
     return ui.savePluginRuntimeConfig(ctx.userId, payload.name, payload.config);
   },
+  // ── Plugin platform authorization (module A) ────────────────────────────
+  // Replaces the pasted-API-key onboarding with "log in, then authorize".
+  // The renderer only ever sees masked state; tokens live in main and are
+  // injected into the plugin child process at command time.
+  'packages.auth.status': async (payload: { name?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const flow = await import('../features/plugin_oauth_flow');
+    const ui = await import('../features/plugin_ui');
+    const config = ui.readPluginRuntimeConfig(ctx.userId, payload.name);
+    return flow.getPluginAuthStatus(ctx.userId, payload.name, {
+      apiKey: config.api_key,
+      serverUrl: config.server_url,
+    });
+  },
+  'packages.auth.start': async (payload: { name?: unknown; serverUrl?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const flow = await import('../features/plugin_oauth_flow');
+    const ui = await import('../features/plugin_ui');
+    const packages = await import('../features/packages');
+    // 只允许给**已安装**的包发起授权：否则会写下一个永远不会被回调匹配到的
+    // 待处理流程（用户看到"去浏览器确认"，却永远回不来）。
+    const installed = packages.readPackagesRegistry(ctx.userId).packages.some((p) => p.name === payload.name);
+    if (!installed) return { ok: false, error: 'PACKAGE_NOT_INSTALLED', message: '插件未安装，无法发起授权' };
+    const config = ui.readPluginRuntimeConfig(ctx.userId, payload.name);
+    // 🔴 平台地址**只取已存的配置**，不再接受渲染层传参（安全审计 2026-09-21）。
+    //
+    //    原实现是 `payload.serverUrl ?? config.server_url`，而 `serverUrl` 会一路拼进
+    //    `…/api/oauth/authorize?…&hub_token=<Hub 访问令牌>` 并由 `shell.openExternal` 打开 ——
+    //    也就是说**渲染层内任意一段 JS** 只要调一次 IPC，就能把用户的 Hub 令牌送到任意主机
+    //    （`platformApiBase` 只校验协议与"无账号密码"，任何主机都过）。
+    //    renderer 是作者自己定义的"最不可信面"，而它本来只看得到掩码令牌 ——
+    //    这条链路等于把"渲染层 XSS"升级成"Hub 账号级失陷"。
+    //
+    //    现在只信 `config.server_url`（用户通过界面显式设置、已落盘的值）；
+    //    没有配置时由 `startPluginAuthorization` 走构建通道默认值。
+    //    我们自己的渲染层本来就只传 `{ name }`（plugins.js），所以功能零影响。
+    const serverUrl = config.server_url;
+    const started = await flow.startPluginAuthorization(ctx.userId, payload.name, { serverUrl });
+    if (started.ok === false || !started.authorizeUrl) return started;
+    // Opening the browser is the shell's job, not the flow module's — that
+    // keeps the flow fully testable offline. `shell.openExternal` runs here.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+      const { shell } = require('electron') as typeof import('electron');
+      await shell.openExternal(started.authorizeUrl);
+    } catch (err) {
+      // 🔴 只回 message，**不回 authorizeUrl**（安全审计 2026-09-21）。
+      //    那个 URL 带 `hub_token`，而紧跟其后的注释自己就写着"Never return the URL to the
+      //    renderer" —— 原实现在这一行自相矛盾地把令牌交给了最不可信的面。
+      return { ok: false, error: 'OPEN_BROWSER_FAILED', message: `无法打开浏览器：${(err as Error).message}` };
+    }
+    // Never return the URL to the renderer: it carries `hub_token`, and the
+    // renderer is the least trusted surface in the app.
+    return { ok: true };
+  },
+  'packages.auth.disconnect': async (payload: { name?: unknown; revokeAll?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const flow = await import('../features/plugin_oauth_flow');
+    return flow.disconnectPluginAuthorization(ctx.userId, payload.name, { revokeAll: payload.revokeAll === true });
+  },
+  'packages.auth.callback': async (payload: { url?: unknown }, ctx: { userId: string }) => {
+    // Test/dev affordance: lets a harness feed a callback URL without OS deep
+    // links. Validation inside the flow is identical to the real path.
+    if (typeof payload?.url !== 'string') throw new Error('invalid url');
+    const flow = await import('../features/plugin_oauth_flow');
+    return flow.handlePluginAuthorizeCallbackUrl(payload.url, { uid: ctx.userId });
+  },
   // Open-tier skills (external packages + global folders) for the read-only
   // "From packages & global folders" group in the skills panel. External and
   // global are listed independently (no cross-tier display-name dedupe) so a
@@ -6561,6 +6789,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // each provenance. Disabled ids are NOT filtered here — the panel renders the
   // toggle state itself. (enable/disable is keyed by id, so a same-id skill in
   // both tiers shares one toggle state.)
+  // 「我的技能」顶部的全局技能文件夹总开关（~/.claude、~/.codex 等）。只读写偏好；写后使技能缓存失效，
+  // 下次列技能 / 构建 runner 时按新值扫描。不改任何文件夹里的文件。
+  'skills.getGlobalRootsEnabled': async () => ({ enabled: appConfig.getGlobalSkillRootsEnabled() }),
+  'skills.setGlobalRootsEnabled': async (payload: { enabled?: unknown }) => {
+    if (typeof payload?.enabled !== 'boolean') throw new Error('enabled must be boolean');
+    const enabled = appConfig.setGlobalSkillRootsEnabled(payload.enabled);
+    try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
+    return { ok: true as const, enabled };
+  },
   'skills.listOpen': async (_payload: unknown, ctx: { userId: string }) => {
     const reg = await import('../model/core-agent/skill-registry');
     const componentEnabled = await import('../features/component_enabled');
@@ -6597,6 +6834,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'delete_file.visible': async ({ confirm_id }: { confirm_id: string }) => {
     const ok = markDeleteConfirmationVisible(String(confirm_id || ''));
+    return { ok };
+  },
+
+  // ── 转写纠错：高危候选确认卡片 ────────────────────────────────────────
+  // 卡片由 `transcript_glossary_apply` 工具发出（广播
+  // `transcript_glossary.confirmation_required`），用户在卡片上勾选后回到这里。
+  // 这里只落"用户勾了哪些 entryRef"，不碰正文——正文与应用的唯一入口仍是那个工具，
+  // 所以渲染层无法绕过 `pendingTotal` 那道闸（见 glossary-confirm.ts 的不变量）。
+  'transcript_glossary.pending': async ({ cid }: { cid: string }, ctx) => {
+    const { listPendingGlossaryConfirmations } = await import('../features/transcript-confirmation');
+    return { confirmations: listPendingGlossaryConfirmations(ctx.userId, String(cid || '')) };
+  },
+  'transcript_glossary.confirm': async ({ confirm_id, accepted, accept_all }: {
+    confirm_id: string; accepted?: string[]; accept_all?: boolean;
+  }, ctx) => {
+    const { submitGlossaryConfirmation } = await import('../features/transcript-confirmation');
+    return submitGlossaryConfirmation(ctx.userId, String(confirm_id || ''),
+      Array.isArray(accepted) ? accepted.map(String) : [], accept_all === true);
+  },
+
+  // 渲染层回执：卡片**确实挂载到可见容器**后才允许调用。工具会短暂等待这个回执，
+  // 以便如实告诉模型"卡片已经给用户看了"还是"没显示出来，改用文字问"。
+  'transcript_glossary.visible': async ({ confirm_id }: { confirm_id: string }) => {
+    const ok = markGlossaryConfirmationVisible(String(confirm_id || ''));
     return { ok };
   },
 
@@ -6716,6 +6977,52 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const openErr = await shell.openPath(norm);
     if (openErr) throw new Error(openErr);
     return { ok: true, path: norm };
+  },
+
+  // Resolve file names / paths an agent cited in its reply (bare names, or
+  // shortened to `.../<dir>/<file>`) so the renderer links only real files.
+  // Read-only and batched per message: every hit passes the same sandbox as
+  // statPath; misses map to null instead of throwing.
+  'workspace.resolvePathHints': async (payload, ctx) => {
+    const raw: unknown[] = Array.isArray(payload?.hints) ? payload.hints : [];
+    const hints = [...new Set(raw
+      .filter((h): h is string => typeof h === 'string')
+      .map((h) => h.trim())
+      .filter(Boolean))].slice(0, MAX_PATH_HINTS_PER_CALL);
+    const results: Record<string, string | null> = {};
+    if (!hints.length) return { results };
+    const cid = typeof payload?.cid === 'string' && safeId(payload.cid) ? payload.cid : '';
+    const bases = await _ipcFileSandboxAllowedRoots(ctx.userId, payload);
+    const recordedPaths: string[] = [];
+    if (cid) {
+      try {
+        const state = await readGroupChatState(ctx.userId, cid);
+        if (state.workspace_dir && bases[0]) bases.unshift(path.join(bases[0], state.workspace_dir));
+      } catch { /* conversation dir is a convenience base only */ }
+      try {
+        const messages = await chats.getMessages(ctx.userId, cid, 2000);
+        for (const msg of messages as any[]) {
+          for (const p of Array.isArray(msg?.produced) ? msg.produced : []) {
+            if (typeof p === 'string' && p) recordedPaths.push(p);
+          }
+        }
+      } catch { /* recorded paths only sharpen the match */ }
+    }
+    const hintCtx = { homeDir: os.homedir(), bases, recordedPaths };
+    for (const hint of hints) {
+      results[hint] = null;
+      for (const candidate of candidatePathsForHint(hint, hintCtx)) {
+        // Stat first: most candidates don't exist, and the sandbox gate may
+        // scan conversation history.
+        let isFile = false;
+        try { isFile = fs.statSync(candidate).isFile(); } catch { /* missing */ }
+        if (!isFile) continue;
+        if (!await _isAllowedFileActionPath(ctx.userId, payload, candidate)) continue;
+        results[hint] = candidate;
+        break;
+      }
+    }
+    return { results };
   },
 
   // Lightweight existence check for renderer previews. Same scope as
@@ -7020,6 +7327,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // CogSeed Hub account — desktop-side account management against the Hub
   // account service. Tokens never cross this table; renderer-safe status DTOs only.
   ...hubAccountHandlers,
+  ...a2aReceptionHandlers,
 
   // Client-side Skill contribution preparation. All content inspection remains
   // in main; renderer receives only bounded, renderer-safe projections.
@@ -7031,13 +7339,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // User-authored ontology categories, entities and relationships. Personal
   // profile facts and formal assets remain in their existing source stores.
   ...ontologyGraphHandlers,
+  ...semanticaSettingsHandlers,
 
   // Evidence-backed cognition assets. Confirmation reuses the canonical
   // memory write path; these handlers own only longitudinal evidence, review,
   // reuse, and growth state.
   ...(cognitionHandlers as Record<string, unknown>),
 
-  // 转写纠错词表与清理产物（方案 v0.2 P0）。词表是用户确认过的
+  // 转写纠错词表与清理产物。词表是用户确认过的
   // wrong→correct 纠错对；扫描只产候选，替换必须显式接受，原文永不就地改写
   // （apply 只产出清理版 + run 快照，见 features/transcript_correction_runs）。
   ...transcriptHandlers,
@@ -7051,7 +7360,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // The runtime ensures a terminal `{ type: 'done' }` is always sent, even on
 // unexpected throws.
 
-// conv-core M2：活跃会话流注册表。interaction-hub 的广播按 `${uid}:${cid}`
+// 活跃会话流注册表。interaction-hub 的广播按 `${uid}:${cid}`
 // 找到当前活跃的 sendStream，把交互事件塞进它的队列（同会话并发流以后到
 // 者为准——会话串行，正常只有一条活跃流）。
 const _activeChatInteractionStreams = new Map<string, (event: unknown) => void>();
@@ -7059,6 +7368,34 @@ setInteractionBroadcast((uid, event) => {
   const push = _activeChatInteractionStreams.get(`${uid}:${(event as { cid?: string }).cid}`);
   if (push) push(event);
 });
+
+/**
+ * 后台跑一次接待：IPC 不等结果，结果经 `a2a:relay` 推回渲染层。
+ *
+ * 失败不重试——relay 投递即删，没有可重放的消息；台账已经把这条记成 failed，
+ * 对端在运行侧也会收到一句失败说明（不会挂着）。
+ */
+function _startA2AReceptionAnswer(userId: string, question: ReceptionQuestion): void {
+  void (async () => {
+    let status = 'failed';
+    try {
+      const result = await runReception(userId, question);
+      status = result.status;
+    } catch (error) {
+      log.warn('a2a reception run crashed', {
+        conversationId: question.conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    // 与 `relay-pump` 用同一个事件通道：渲染层只认 `a2a:relay`。
+    broadcastToRenderer('a2a:relay', {
+      type: 'reception-result',
+      conversationId: question.conversationId,
+      messageId: question.messageId,
+      status,
+    });
+  })();
+}
 
 /** 多 Agent 名单的形状检查：`undefined` → 缺省；非法项 → null（调用方拒绝整条）。 */
 function _safeAgentIdList(raw: unknown): string[] | null {
@@ -7118,7 +7455,7 @@ const streamHandlers: Record<string, StreamHandler> = {
         projectHint: conv.project_id ?? null,
         boundAgentId: conv.agent_id || null,
       }, {
-        getAgent: (id: string) => agents.getAgent(id) as any,
+        getAgent: (id: string) => agents.getAgentForUser(ctx.userId, id) as any,
         isAgentEnabled: (id: string) => isAgentEnabled(ctx.userId, id),
         stream: (opts) => modelClient.streamChatWithModel({
           userId: opts.userId,
@@ -7143,7 +7480,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
   },
 
-  // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
+  // KB grounded Q&A：ask_materials 证据边界内流式回答。
   // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
   'kbqa.askStream': async function* ({ space_id, dir, question, k, attach_paths, history, model }, ctx, signal) {
     const q = String(question ?? '').trim();
@@ -7175,10 +7512,9 @@ const streamHandlers: Record<string, StreamHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
-          // 单问无状态：kb-qa 的证据边界随目录/空间变化，持久 aside 会话会把
-          // 之前其它范围的检索内容"记忆"进来，导致回答引用越界内容（如本次
-          // 引用上轮别处检索到的 AST.pdf#chunk 61）。多轮上下文已由渲染层通过
-          // history 文本参数显式提供，不需要模型侧会话记忆。
+          // 单问无状态：持久会话可能带入先前目录或空间的检索内容，破坏当前
+          // 证据边界。多轮上下文由渲染层通过 history 文本参数显式提供，
+          // 不复用模型侧会话记忆。
           ephemeralSession: true,
           // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
           skillList: [],
@@ -7236,7 +7572,7 @@ const streamHandlers: Record<string, StreamHandler> = {
         return;
       }
     }
-    // 多 Agent（PRD FR-016）：只有形状在这里检查；「已启用 + 可派发」的逐个核验
+    // 多 Agent：只有形状在这里检查；「已启用 + 可派发」的逐个核验
     // 在 group-chat facade 内完成（任一失效即整条拒绝，不静默降级）。
     const memberIds = _safeAgentIdList(member_agent_ids);
     const mentionIds = _safeAgentIdList(mention_agent_ids);
@@ -7250,7 +7586,7 @@ const streamHandlers: Record<string, StreamHandler> = {
       yield { type: 'error', text: 'invalid execution configs' };
       return;
     }
-    // 提交幂等键（EC-07）：只做形状检查，语义在 group-chat facade。
+    // 提交幂等键：只做形状检查，语义在 group-chat facade。
     if (submit_request_id !== undefined
       && (typeof submit_request_id !== 'string' || !safeId(submit_request_id)
         || submit_request_id.length > 64)) {
@@ -7271,10 +7607,10 @@ const streamHandlers: Record<string, StreamHandler> = {
     // state, since on-disk state.json briefly shows 'idle' in the gap
     // between an actor finishing and the next one's wake.
     const buf: GroupEvent[] = [];
-    // chat.* 结构化事件（conv-core 事件契约）：与老 stream:'group' 并行下发，
+    // chat.* 结构化事件：与老 stream:'group' 并行下发，
     // 渲染层 chat-stream 组件群消费；老消费方不受影响。
     const chatProjector = new GroupEventChatProjector();
-    // 双向交互（M2）：interaction-hub 的 requested/closed 事件经活跃流
+    // 双向交互：interaction-hub 的 requested/closed 事件经活跃流
     // 注册表路由进本会话流（uid+cid 匹配），与投影事件同通道下发。
     const interactionBuf: unknown[] = [];
     const interactionStreamKey = `${ctx.userId}:${cid}`;
@@ -7342,6 +7678,20 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(execution_configs ? { execution_configs } : {}),
                 ...(submit_request_id ? { submit_request_id } : {}),
               });
+        // 新会话里第一次把 Hub Agent 纳入成员/点名/接收者时计一次会话启动。
+        // 重试/编辑不重复计；标记文件保证同一会话同一 Agent 只发一次。
+        if (!retryMessageId && !editMessageId
+          && (sendRes as { ok?: boolean } | null)?.ok === true) {
+          void recordAgentSessionStarts({
+            agentIds: Array.from(new Set([
+              ...(memberIds ?? []),
+              ...(mentionIds ?? []),
+              ...(recipient_agent_id ? [recipient_agent_id] : []),
+            ])),
+            cid,
+            userId: ctx.userId,
+          });
+        }
       } catch (err) {
         sendErr = err;
       } finally {
@@ -7350,6 +7700,14 @@ const streamHandlers: Record<string, StreamHandler> = {
       }
     })();
     void sendPromise;
+    // A2A 接访会话里「不点名」的话是给本方助理的口径（FR-32/AC-14）：记下来供后续
+    // 接待运行使用。只是旁路记录，发送本身已经照常走了本地流程。
+    if (!retry_message_id && !edit_message_id) {
+      const named = Array.isArray(mentionIds) && mentionIds.length > 0;
+      void import('../features/a2a/instructions')
+        .then((mod) => mod.rememberReceiverInstruction(ctx.userId, cid, text, named))
+        .catch(() => null);
+    }
     try {
       drainLoop: while (!cancelled) {
         while (interactionBuf.length) {
@@ -7401,9 +7759,7 @@ const streamHandlers: Record<string, StreamHandler> = {
           if (groupChat.busIsQuiescent(ctx.userId, cid)) break drainLoop;
         }
         if (cancelled) break;
-        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
-        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
-        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        // 无事件时每 2s 唤醒，让循环重新检查 quiescence/cancelled 并关闭已结束的流。
         await new Promise<void>((resolve) => {
           let done = false;
           wake = () => { if (done) return; done = true; resolve(); };
@@ -7522,9 +7878,7 @@ const streamHandlers: Record<string, StreamHandler> = {
             }
           }
           if (cancelled) break;
-          // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
-        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
-        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+          // 无事件时每 2s 唤醒，让循环重新检查 quiescence/cancelled 并关闭已结束的流。
         await new Promise<void>((resolve) => {
           let done = false;
           wake = () => { if (done) return; done = true; resolve(); };
@@ -7565,9 +7919,7 @@ const streamHandlers: Record<string, StreamHandler> = {
           yield { type: 'event', event: ev };
         }
         if (cancelled) break;
-        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
-        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
-        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        // 无事件时每 2s 唤醒，让循环重新检查取消状态。
         await new Promise<void>((resolve) => {
           let done = false;
           wake = () => { if (done) return; done = true; resolve(); };
@@ -7602,9 +7954,7 @@ const streamHandlers: Record<string, StreamHandler> = {
           yield { type: 'event', event: ev };
         }
         if (cancelled) break;
-        // 自唤醒泊车（2026-09-14 Bug3 修复）：原裸 await 在总线无新事件时
-        // 永不返回，流不关闭 → 渲染层 busy 标记永不清、发送队列卡死。
-        // 2s 定时兜底唤醒，让循环重新检查 quiescence/cancelled。
+        // 无事件时每 2s 唤醒，让循环重新检查取消状态。
         await new Promise<void>((resolve) => {
           let done = false;
           wake = () => { if (done) return; done = true; resolve(); };
@@ -7630,7 +7980,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
     const modelText = typeof model_text === 'string' ? model_text.trim() : '';
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
-    // conv-core M3.4：skills 聊天流并行下发 chat.* 结构化事件（与主会话
+    // skills 聊天流并行下发 chat.* 结构化事件（与主会话
     // 同契约），渲染层 chat-stream 面板统一消费。
     const projector = createChatEventProjectorState({ turnId: `skill-${id}-${Date.now()}`, cid: id, actorId: id });
     for await (const ev of skills.streamSendToSkillChat(ctx.userId, id, text, {
@@ -7657,7 +8007,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
     const modelText = typeof model_text === 'string' ? model_text.trim() : '';
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
-    // conv-core M3.4：agents 聊天流同上。
+    // agents 聊天流同上。
     const projector = createChatEventProjectorState({ turnId: `agent-${id}-${Date.now()}`, cid: id, actorId: id });
     for await (const ev of agents.streamSendToAgentEditChat(ctx.userId, id, text, {
       abortSignal: signal,
@@ -7817,7 +8167,7 @@ export function broadcastToRenderer(channel: string, payload: unknown): void {
   }
 }
 
-/** P3394 Bridge IPC port (Phase 3): renderer-initiated inbound port with
+/** P3394 Bridge IPC port: renderer-initiated inbound port with
  *  sender identity pinned to the local agent, and main→renderer pushes on the
  *  `p3394.bridge.push` channel. */
 export const p3394BridgeIpcPort = new P3394IpcChannel('ipc', {
@@ -7825,6 +8175,29 @@ export const p3394BridgeIpcPort = new P3394IpcChannel('ipc', {
 });
 
 export function register(): void {
+  // A2A 在线心跳（D-3/FR-25）：没心跳所有人都离线，而离线联系人在 @ 面板里不可选
+  // （AC-03），所以发送侧必须先让自己「在线」。
+  try {
+    startPresenceHeartbeat(_activeUserIdForPicker());
+  } catch (error) {
+    log.warn('a2a presence heartbeat failed to start', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // A2A relay 泵：relay 投递即删，主进程是唯一消费者，渲染层只收 `a2a:relay`
+  // 推送（AC-04/05 的接待不依赖用户正开在某个会话里）。
+  try {
+    startRelayPump({
+      activeUserId: () => users.getActiveUserId(),
+      onEvent: (event) => broadcastToRenderer('a2a:relay', event),
+    });
+  } catch (error) {
+    log.warn('a2a relay pump failed to start', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   // Desktop live-refresh rail: every persisted group-chat message (external
   // channel inbound included — nothing in the renderer holds a stream for
   // those conversations) is pushed to all windows so the sidebar and the
@@ -7833,7 +8206,7 @@ export function register(): void {
     broadcastToRenderer('conversations:updated', info);
   });
 
-  // Cognition change rail (2026-09-27 rewrite): every cognition/recall store
+  // Cognition change rail: every cognition/recall store
   // write broadcasts a lightweight {collection, generation} notice on
   // `cognition:changed`; renderer panels subscribe and re-read only affected
   // blocks (generation is diagnostic; debounce may coalesce sequence values).
@@ -7867,6 +8240,21 @@ export function register(): void {
           : (typeof rawCode === 'string' && rawCode ? rawCode : normalized.code));
       if (channel.startsWith('stt.')) {
         log.error(`invoke ${channel} failed`, { stage: 'invoke', code });
+      } else if (typeof code === 'string' && isTerminalHubAuthCode(code)) {
+        // A dead Hub session is discovered by several parallel calls at once (the
+        // settings page fans out), so the same failure repeats within the same
+        // second. Key on the code, not the channel: folding every hub channel into
+        // one line is the point. Warn rather than error — this needs a re-login,
+        // it is not a broken invariant.
+        const { emit, suppressed } = throttleLog(`invoke-terminal-auth:${code}`, 60_000);
+        if (emit) {
+          log.warn('hub invoke failed: session is terminal, further hub failures folded into this line', {
+            channel,
+            error: normalized.error,
+            code,
+            suppressed,
+          });
+        }
       } else {
         log.error(`invoke ${channel} failed`, { error: normalized.error, code });
       }
@@ -7884,6 +8272,7 @@ export function register(): void {
         qualityReport?: unknown;
         promotionReasons?: string[];
         blockRule?: string;
+        details?: Record<string, unknown>;
         securityBlocked?: boolean;
         securityUnavailable?: boolean;
         securityOverridable?: boolean;
@@ -7902,10 +8291,12 @@ export function register(): void {
       if (Array.isArray(promotionReasons) && promotionReasons.every((reason) => typeof reason === 'string')) {
         out.promotionReasons = promotionReasons as string[];
       }
-      // 资产准入的具体规则标识（2026-09-25 验收修复 US-604 AC1）：code 只够分类，
+      // 资产准入的具体规则标识：code 只够分类，
       // 界面要能说出"到底哪条规则拦的"。只透传标识串，不透传原因码原文与正文。
       const blockRule = (err as { blockRule?: unknown }).blockRule;
       if (typeof blockRule === 'string' && blockRule) out.blockRule = blockRule;
+      const ontologyDetails = ontologyErrorDetails(channel, err);
+      if (ontologyDetails) out.details = ontologyDetails;
       const installInfo = marketplace.getMarketplaceInstallErrorInfo(err);
       if (installInfo.kind) {
         out.marketplaceKind = installInfo.kind;

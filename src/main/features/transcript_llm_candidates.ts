@@ -1,15 +1,13 @@
 /**
- * transcript_llm_candidates — 模型纠错候选（方案 v0.2 §五 P2-1）
+ * transcript_llm_candidates — 模型纠错候选
  *
- * 为什么要有这一层：字面匹配救不了 `roadmap` 这种"音不近、形不近"的错写
- * （09-14 对照里它其实指 `SpeakerA`）。做法是 **让模型读正文找错写**：
+ * 字面匹配无法识别所有错写，因此让模型结合正文提出建议：
  *   - 把转写正文分段交给模型，让它自己指出"疑似写错 → 建议写法"；
- *   - 产出**只是候选**：只落进词表文件的候选区、只能被"标待核"，要变成扫描规则
- *     必须由人显式确认（见 transcript_glossary.adoptCandidate）。
+ *   - 产出只是当前材料的候选，应用前须人工勾选，不自动形成长期词表规则。
  *
  * 为什么不再"先猜疑似专名、只问那几处"：那条路要求先由 `detectSuspectEntities`
  * 用词形判据（含内部大写的拉丁串 / 4 字母以上全大写）挑出可疑位置，挑不出就
- * **根本不发请求**。实测后果是中文会议转写几乎必然 0 命中（`roadmap`、`coxyx`
+ * 根本不发请求。中文转写可能没有符合该词形的片段（`roadmap`、`coxyx`
  * 这类小写英文、以及 `SpeakerA`（正则少认一个尾随大写）都命中不了），面板只会
  * 显示「没有发现疑似专名，不需要问模型」——用户看到的是"模型给不出候选"，
  * 实际是模型**没被问到**。词形判据现在降级为**重点线索**（优先看这些位置），
@@ -36,6 +34,13 @@ const log = createLogger('transcript-llm-candidates');
 export const LLM_CANDIDATE_MIN_CONFIDENCE = 0.7;
 /** 重点线索上限（词形可疑的位置，只作为提示，不再是准入条件）。 */
 export const LLM_CANDIDATE_MAX_HINTS = 30;
+/**
+ * 注入提示词的「错写对照」条数上限。
+ *
+ * 45 条词表实测约 1.2k 字符，可接受；设 200 是防词表长大后把提示词撑爆
+ * （对照表按 freq/风险排序由调用方决定，这里只做硬上限）。
+ */
+export const LLM_CANDIDATE_MAX_PAIRS = 200;
 /** 优先参考名单上限（提示词长度要可控）。 */
 export const LLM_CANDIDATE_MAX_ALLOWED = 200;
 /** 每段正文的字符数（太小会丢上下文，太大模型容易漏）。 */
@@ -76,6 +81,9 @@ export interface LlmCandidate {
 }
 
 export interface LlmCandidateResult {
+  /** Source spans with a parseable structured review, including explicit [].
+   * A model call returning prose is not evidence that a span needs no change. */
+  reviewedRanges?: Array<{ start: number; end: number }>;
   candidates: LlmCandidate[];
   /** 被丢掉的模型输出（可观测：模型编了什么）。 */
   rejected: Array<{ wrong: string; correct: string; why: string }>;
@@ -91,13 +99,11 @@ export interface LlmCandidateResult {
   /** 没产出候选的原因（未配置模型 / 正文为空 / 所有段都失败）。 */
   skipped?: 'no_model' | 'empty_text' | 'model_failed';
   /**
-   * 【加法，specs/013 T004】本次复核消耗的 token 用量（各成功段累加）。
+   * 本次复核消耗的 token 用量（各成功段累加）。
    * 形态对齐 `RecallCaptureModelUsage`（`recall/capture-service.ts`）。
-   * 键名与量纲（2026-09-25 已核实）：`runner.run()` 的 `result.meta.usage`
+   * `runner.run()` 的 `result.meta.usage`
    * 为 `{ inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?,
-   * totalTokens }`，单位 = token 个数、整轮累加口径
-   * （`src/core-agent/src/shared/types.ts:66-72`；主进程转发见
-   * `model/core-agent/event-mapper.ts:600-620`）。
+   * totalTokens }`，单位 = token 个数、整轮累加口径。
    * **测不到就缺失**：模型不可用 / 全段失败 / 注入方不回报时该字段
    * 整个不存在——不写 0 假装测到（cache 字段不在此口径内）。
    */
@@ -108,13 +114,22 @@ export const REVIEW_SYSTEM_PROMPT = [
   '你在做会议转写的"错写复核"。',
   '下面给你一段转写正文。请找出其中**看起来是语音识别写错**的地方。',
   '重点看：同音字/近音字写错、人名或术语被写成了另一个常见词、英文术语被拼错。',
-  // 这一句是防御性说明：产出不会自动生效，模型不必"为了完成任务"硬凑。
-  '你的输出只作为**给人复核的候选**，不会被自动采纳，也不会直接生效。',
+  '',
+  '**最重要的依据是「团队已确认的错写对照」**：那是团队自己攒下来的'
+    + '"这个错形其实是那个正确写法"的记录，出现同类错写时**优先按它改**。',
+  '「已知写法」列表是团队在用的规范词（人名/产品名/术语），用来判断正文里'
+    + '某个词是不是本该写成其中一个。',
+  '两者结合用：对照表告诉你"大家一般怎么读错"，已知写法告诉你"正确的词长什么样"。',
+  '',
+  // 这一句必须与实现一致：高置信且指向已知写法的会自动生效。
+  '你的输出多数会**先给人复核**；但**指向已确认写法的建议可能被直接采纳**。',
+  '所以：拿不准就不要给，宁可少给也不要猜。',
   '规则：',
   '1. wrong 字段必须**逐字**出现在给定正文里（程序会按字符串查找定位，找不到整条作废），'
     + '只给最小的那个错写片段，不要带整句；',
-  '2. correct 给出你认为正确的写法；「已知写法」列表里的词是优先参考，'
-    + '列表里没有合适的、你有把握时也可以写你自己的判断；',
+  '2. correct 给出你认为正确的写法。**如果正文里的错形与「错写对照」里某条相近，'
+    + '就用那条的正确写法**；否则用「已知写法」列表里的词；'
+    + '列表里确实没有合适的、你又有把握时，才写你自己的判断；',
   '3. 不要改标点、语序、口语词，不要做润色或风格改写——只找"写错了"；',
   '4. 拿不准就不要给（不要为了凑数瞎猜）；',
   '5. 每条给出 0~1 的置信度与一句理由；',
@@ -160,14 +175,43 @@ export function buildReviewRequest(
   chunkText: string,
   knownTargets: string[],
   hints: SuspectHint[] = [],
+  correctionPairs: Array<{ wrong: string; correct: string }> = [],
 ): { systemPrompt: string; message: string; allowed: string[] } {
   const allowed = [...new Set((knownTargets || []).map((t) => String(t || '').trim()).filter(Boolean))]
     .slice(0, LLM_CANDIDATE_MAX_ALLOWED);
   const useHints = (hints || []).slice(0, LLM_CANDIDATE_MAX_HINTS);
+  /**
+   * **错写对照表**（`错形 → 正确写法`）。
+   *
+   * 为什么必须给：词表的核心就是这张对照表，但此前只把"正确写法"那一列
+   * （`knownTargets`）平铺给模型，**错形那一列完全没给**。后果是模型只能靠
+   * "这个词长得像哪个已知写法"去猜读音，猜不准就编：
+   * 实测 `maas → MaaS`（团队实际指的是 MeshSeed）、`msc → MSC`。
+   *
+   * 给了对照表之后，模型能直接沿用团队已确认的对应关系，
+   * 也可以据此推广到**相近的**新错形（这正是"泛化"该有的形态：
+   * 沿已确认的读音关系外推，而不是凭空发明写法）。
+   *
+   * 上限保护：条数与单条长度都设限，避免提示词无限膨胀。
+   */
+  const pairs = (correctionPairs || [])
+    .map((p) => ({ wrong: String(p?.wrong ?? '').trim(), correct: String(p?.correct ?? '').trim() }))
+    .filter((p) => p.wrong && p.correct && p.wrong !== p.correct
+      && p.wrong.length <= 40 && p.correct.length <= 40)
+    .slice(0, LLM_CANDIDATE_MAX_PAIRS);
+  const pairLines = pairs.map((p) => `- 「${p.wrong}」→「${p.correct}」`);
   const message = [
-    '已知写法（优先参考，可以不限在这些里）：',
+    '已知写法（团队在用的规范词，可以不限在这些里）：',
     allowed.length ? allowed.join('、') : '（无）',
     '',
+    ...(pairLines.length
+      ? [
+        '团队已确认的错写对照（**这是最可靠的依据**：正文里出现相同或读音相近的错形，'
+        + '就用右边这个正确写法；也可以据此推广到**读音相近的**新错形）：',
+        ...pairLines,
+        '',
+      ]
+      : []),
     ...(useHints.length
       ? ['重点线索（这些位置的词形可疑，优先看看，但不限于这些）：', useHints.map((h) => h.text).join('、'), '']
       : []),
@@ -245,6 +289,12 @@ export function parseReviewResponse(
       rejected.push({ wrong, correct, why: 'identical_pair' });
       continue;
     }
+    // 「xrd → ?」: the model admits it does not know the right form. A target
+    // without any letter, digit or CJK character is never a correction.
+    if (!/[\p{L}\p{N}]/u.test(correct)) {
+      rejected.push({ wrong, correct, why: 'placeholder_target' });
+      continue;
+    }
     // 按折叠串定位（大小写/全角差异不该让候选作废；定位不到就没有 span）
     const hits = locateAll(chunkText, wrong);
     if (hits.length === 0) {
@@ -283,7 +333,7 @@ export function parseReviewResponse(
   return { candidates: sorted, rejected };
 }
 
-/** 单次调用的 token 用量（`runner.run()` 的 `result.meta.usage` 子集，T004）。 */
+/** 单次调用的 token 用量（`runner.run()` 的 `result.meta.usage` 子集）。 */
 export interface ReviewModelUsage {
   inputTokens?: number;
   outputTokens?: number;
@@ -305,12 +355,19 @@ function addUsage(total: ReviewModelUsage | undefined, incoming: ReviewModelUsag
 export interface GenerateReviewOptions {
   /** 优先参考名单（词表正确写法 + 本体分组字段值）。 */
   knownTargets?: string[];
+  /**
+   * **错写对照表**（`错形 → 正确写法`），来自用户的纠错词表。
+   *
+   * 这是本模块**最可靠的依据**：团队自己确认过"这个错形其实是那个正确写法"。
+   * 不给它，模型就只能靠"长得像哪个已知写法"猜读音，猜不准就编
+   * （实测 `maas → MaaS`，团队实际指的是 MeshSeed）。
+   */
+  correctionPairs?: Array<{ wrong: string; correct: string }>;
   /** 词形判据找出的可疑位置：只作为提示。 */
   hints?: SuspectHint[];
   /**
    * 测试注入：给定提示词返回模型文本。返回纯字符串 = 不带用量；
-   * 返回 `{ text, usage? }` = 连同该段 token 用量一起回报（T004，加法——
-   * 旧注入方返回字符串的写法完全兼容）。
+   * 返回 `{ text, usage? }` = 连同该段 token 用量一起回报；仍兼容只返回字符串的注入方。
    */
   runModel?: (
     input: { systemPrompt: string; message: string },
@@ -334,6 +391,7 @@ export async function generateReviewCandidates(
   options: GenerateReviewOptions = {},
 ): Promise<LlmCandidateResult> {
   const base = {
+    reviewedRanges: [] as Array<{ start: number; end: number }>,
     candidates: [] as LlmCandidate[],
     rejected: [] as Array<{ wrong: string; correct: string; why: string }>,
     outsideAllowlist: 0,
@@ -360,7 +418,7 @@ export async function generateReviewCandidates(
   const merged = new Map<string, LlmCandidate>();
   const rejectedAll: Array<{ wrong: string; correct: string; why: string }> = [];
   let failedChunks = 0;
-  // token 用量只累计**成功段**（T004）：失败段没有可信读数，缺失比编 0 诚实。
+  // token 用量只累计成功段：失败段没有可信读数，缺失比编 0 诚实。
   let usageTotal: ReviewModelUsage | undefined;
 
   for (const chunk of chunks) {
@@ -368,7 +426,7 @@ export async function generateReviewCandidates(
     const hints = (options.hints ?? []).filter(
       (h) => h.start >= chunk.start && h.start < chunk.end,
     );
-    const request = buildReviewRequest(chunk.text, knownTargets, hints);
+    const request = buildReviewRequest(chunk.text, knownTargets, hints, options.correctionPairs ?? []);
     let raw = '';
     try {
       if (options.runModel) {
@@ -408,6 +466,12 @@ export async function generateReviewCandidates(
       continue;
     }
 
+    const reviewRows = extractJsonArray(raw);
+    if (reviewRows && reviewRows.every(row => row && typeof row === 'object'
+      && 'wrong' in row && typeof row.wrong === 'string' && row.wrong.trim()
+      && 'correct' in row && typeof row.correct === 'string' && row.correct.trim())) {
+      base.reviewedRanges.push({ start: chunk.start, end: chunk.end });
+    }
     const parsed = parseReviewResponse(raw, chunk.text, chunk.start, knownTargets);
     rejectedAll.push(...parsed.rejected);
     base.chunksScanned += 1;
@@ -446,7 +510,7 @@ export async function generateReviewCandidates(
     failedChunks,
   };
   // 测不到就整个缺失：一次用量都没读到（模型不可用/全段失败/注入方不回报）
-  // 时不出 usage 字段，更不写 0 假装测到（specs/013 T004 验收点）。
+  // 时不出 usage 字段，更不写 0 假装测到。
   if (usageTotal) result.usage = usageTotal;
   if (base.chunksScanned === 0 && failedChunks > 0) result.skipped = 'model_failed';
   return result;

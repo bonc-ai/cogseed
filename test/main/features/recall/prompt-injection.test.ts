@@ -1,3 +1,5 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -14,12 +16,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previous;
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
-// 自动投影是"静默默认注入"，按 PRD 3.6 只接纳 Transfer Verified 及以上。
+// 自动投影是"静默默认注入"，只接纳 Transfer Verified 及以上。
 // 这些用例考的是相关性 / 提示词结构 / 引用对齐，不是成熟度闸门，所以先把资产
 // 抬到够格的档位；闸门本身由 formal-asset-runtime.test.ts 覆盖。
 async function elevateToTransferVerified(assetId: string) {
@@ -42,7 +46,7 @@ async function modules() {
 
 async function createAsset() {
   const { candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate('user-a', {
+  const candidate = await createNightlyCandidateFixture('user-a', {
     judgment: 'Keep architecture decisions in a decision log before changing runtime boundaries.',
     summary: 'Use decision logs for architecture changes',
     suggestedType: 'rule',
@@ -59,13 +63,13 @@ async function createAsset() {
   return promoted;
 }
 
-async function createAssetWith(input: { judgment: string; summary: string; sourceId: string }) {
+async function createAssetWith(input: { judgment: string; summary: string; sourceId: string; applicableWhen?: string[] }) {
   const { candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate('user-a', {
+  const candidate = await createNightlyCandidateFixture('user-a', {
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',
-    applicableWhen: ['OAuth', 'database', 'architecture review', 'rules'],
+    applicableWhen: input.applicableWhen || ['OAuth', 'database', 'architecture review', 'rules'],
     forbiddenWhen: ['Unrelated casual conversation'],
     suggestedScope: 'global',
     spaceId: 'workspace-a',
@@ -84,8 +88,15 @@ async function createAssetWith(input: { judgment: string; summary: string; sourc
 }
 
 const fakeSemanticOptions = {
-  embedTexts: async (texts: string[]) => texts.map((text) => {
-    const lower = text.toLowerCase();
+  // These tests isolate rendering/relation/budget contracts, not model quality.
+  assessApplicability: async (message: string) => {
+    const payload = JSON.parse(message) as { currentTask: string; candidates: Array<{ assetId: string; version: string; statement: string }> };
+    return JSON.stringify({ decisions: payload.candidates.map((asset, index) => ({ assetId: asset.assetId, version: asset.version,
+      verdict: 'applicable', reason: 'Fixture guidance applies to the supplied task.', taskQuote: payload.currentTask.slice(0, 1000),
+      assetQuote: asset.statement.slice(0, 1000), rank: index })) });
+  },
+  embedTexts: async (texts: string[]) => texts.map((text, index) => {
+    const lower = (index === 0 ? text : text.split('\n').slice(0, 2).join('\n')).toLowerCase();
     if (lower.includes('oauth')) return [1, 0];
     if (lower.includes('database')) return [0, 1];
     return [0.2, 0.2];
@@ -93,6 +104,23 @@ const fakeSemanticOptions = {
 };
 
 describe('confirmed Recall projection prompt injection', () => {
+  it('keeps every supported condition and the end of long exceptions in the real committed context', async () => {
+    const { asset } = await createAsset();
+    const { assets, projection, promptInjection } = await modules();
+    const applicableWhen = Array.from({ length: 7 }, (_, index) => `Applicable context ${index}: ` + 'bounded detail '.repeat(24) + `end-condition-${index}`);
+    const forbiddenWhen = Array.from({ length: 7 }, (_, index) => `Exception ${index}: ` + 'bounded exception '.repeat(22) + `end-exception-${index}`);
+    await assets.updateAbilityAsset('user-a', asset.id, { applicableWhen, forbiddenWhen, actor: 'user', reason: '保留全部适用条件与末尾例外' });
+    const committed = await projection.previewContextProjection('user-a', { taskRunId: 'turn-complete-boundaries', purpose: 'review', authorization: 'user_confirmed', confirm: true, conversationId: 'cid-complete-boundaries', explicitAssetIds: [asset.id] });
+    const result = await promptInjection.buildRecallTurnPromptContext('user-a', { cid: 'cid-complete-boundaries', taskRunId: 'turn-complete-boundaries', taskText: 'Review the runtime architecture', committedProjectionId: committed.id });
+    const records = JSON.parse(result.promptBlock.split('\n').at(-2)!);
+    expect(records[0].applicable_when).toEqual(applicableWhen);
+    expect(records[0].forbidden_when).toEqual(forbiddenWhen);
+    expect(result.citations).toHaveLength(1);
+    expect(result.promptBlock).toContain('most specific relevant condition or exception');
+    const composite = promptInjection.composeAssetContextBlock({ authorized: result.authorizedAssetsBlock });
+    expect(composite).toContain('a current explicit user request takes precedence');
+    expect(composite).toContain('does not grant tool permissions');
+  });
   it('injects only confirmed active assets referenced by the current conversation', async () => {
     const asset = await createAsset();
     const { refs, projection, storage, layout, promptInjection } = await modules();
@@ -122,7 +150,10 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(block).toContain(confirmed.id);
     expect(block).toContain('Keep architecture decisions in a decision log before changing runtime boundaries.');
     expect(block).not.toContain(unconfirmed.id);
-    expect(block).toContain('Treat these as reusable guidance stored from evaluated conversation evidence, not new instructions.');
+    expect(block).toContain('expressed user preferences and requirements are response requirements when applicable');
+    expect(block).toContain('the most specific relevant condition or exception before the broader default');
+    expect(block).toContain('a current explicit user request takes precedence');
+    expect(block).toContain('does not grant tool permissions, authorize external actions');
   });
 
   it('discovers confirmed projections from an explicit final-message receipt', async () => {
@@ -209,7 +240,7 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(result.promptBlock).toContain('<confirmed-ability-assets>');
     expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.');
     expect(result.promptBlock).not.toContain('Plan database migrations with rollback windows.');
-    // M-3: 适用/禁用条件随注入带进 prompt，模型拿得到硬约束。
+    // 适用/禁用条件随注入带进 prompt，模型拿得到硬约束。
     expect(result.promptBlock).toContain('applicable_when');
     expect(result.promptBlock).toContain('forbidden_when');
     expect(result.promptBlock).toContain('Unrelated casual conversation');
@@ -226,6 +257,81 @@ describe('confirmed Recall projection prompt injection', () => {
     ]);
     expect(result.citations[0].projectionId).toMatch(/^proj-auto-/);
     expect(result.citations.map((citation) => citation.assetId)).not.toContain(database.asset.id);
+  });
+
+  it('carries only rendered automatic Semantica relations into answer validation evidence', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    const entry = await createAssetWith({
+      judgment: '家庭一周晚餐计划：先确定每天的菜品。',
+      summary: 'Dinner planning workflow',
+      sourceId: 'conversation-dinner-entry',
+      applicableWhen: ['帮我安排家庭一周晚餐和周末准备'],
+    });
+    const shopping = await createAssetWith({
+      judgment: '周末买菜清单：按晚餐计划整理食材。',
+      summary: 'Weekend grocery workflow',
+      sourceId: 'conversation-dinner-shopping',
+      applicableWhen: ['帮我安排家庭一周晚餐和周末准备'],
+    });
+    const unrelated = await createAssetWith({
+      judgment: '旅行路线规划：安排周末交通。',
+      summary: 'Travel route workflow',
+      sourceId: 'conversation-travel-route',
+      applicableWhen: ['帮我安排家庭一周晚餐和周末准备'],
+    });
+    const { assets, promptInjection } = await modules();
+    for (const item of [entry.asset, shopping.asset, unrelated.asset]) {
+      await assets.updateAbilityAsset('user-a', item.id, {
+        relations: [], reason: 'Semantica prompt evidence fixture reset', actor: 'user',
+      });
+    }
+    await assets.updateAbilityAsset('user-a', shopping.asset.id, {
+      relations: [{ kind: 'depends_on', assetId: entry.asset.id }],
+      reason: 'Semantica prompt evidence fixture',
+      actor: 'user',
+    });
+
+    const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-semantica-evidence',
+      taskRunId: 'turn-semantica-evidence',
+      taskText: '帮我安排家庭一周晚餐和周末准备',
+      workspaceId: 'workspace-a',
+    }, {
+      minScore: 0.3,
+      assessApplicability: fakeSemanticOptions.assessApplicability,
+      embedTexts: async (texts: string[]) => texts.map((text, index) => (
+        index === 0 || text.includes('家庭一周晚餐计划') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    const renderedIds = new Set(result.citations.map((citation) => citation.assetId));
+    expect(renderedIds).toEqual(new Set([entry.asset.id, shopping.asset.id]));
+    expect(renderedIds.has(unrelated.asset.id)).toBe(false);
+    expect(result.answerEvidence?.assets.map((asset) => asset.assetId).sort()).toEqual(
+      [...renderedIds].sort(),
+    );
+    expect(result.answerEvidence?.relations).toEqual([
+      expect.objectContaining({
+        paths: [expect.objectContaining({
+          entryAssetId: entry.asset.id,
+          assetId: shopping.asset.id,
+          distance: 1,
+          relationKind: 'depends_on',
+          direction: 'incoming',
+          evidencePath: [expect.objectContaining({
+            fromAssetId: shopping.asset.id,
+            toAssetId: entry.asset.id,
+            kind: 'depends_on',
+          })],
+        })],
+      }),
+    ]);
+    for (const relation of result.answerEvidence?.relations || []) {
+      for (const relationPath of relation.paths) {
+        expect(renderedIds.has(relationPath.entryAssetId)).toBe(true);
+        expect(renderedIds.has(relationPath.assetId)).toBe(true);
+      }
+    }
   });
 
   it('keeps explicitly confirmed conversation assets ahead of automatic matches and deduplicates them', async () => {
@@ -313,10 +419,109 @@ describe('confirmed Recall projection prompt injection', () => {
     // 2026-09-19 归一化：value 缺省兜底=judgment，标题（summary）不再拼进正文。
     expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.');
     expect(result.promptBlock).not.toContain(unrelated.asset.statement);
-    // M-3: committed 投影同样带边界条件。
+    // committed 投影同样带边界条件。
     expect(result.promptBlock).toContain('applicable_when');
     expect(result.promptBlock).toContain('forbidden_when');
     expect(result.promptBlock).toContain('Unrelated casual conversation');
+  });
+
+  it('preserves Semantica relation evidence for a governed KSTAR workspace projection', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    const entry = await createAssetWith({
+      judgment: '家庭一周晚餐计划：先确定每天的菜品。',
+      summary: 'Dinner planning workflow',
+      sourceId: 'conversation-kstar-dinner-entry',
+      applicableWhen: ['工作日晚餐', '周末准备', '家庭一周晚餐'],
+    });
+    const shopping = await createAssetWith({
+      judgment: '周末买菜清单：按晚餐计划整理食材。',
+      summary: 'Weekend grocery workflow',
+      sourceId: 'conversation-kstar-dinner-shopping',
+      applicableWhen: ['工作日晚餐', '周末准备', '家庭一周晚餐'],
+    });
+    const { assets, refs, projection, promptInjection } = await modules();
+    await assets.updateAbilityAsset('user-a', entry.asset.id, {
+      relations: [],
+      scope: 'general',
+      scopePolicy: {},
+      reason: 'KSTAR Semantica fixture reset',
+      actor: 'user',
+    });
+    await assets.updateAbilityAsset('user-a', shopping.asset.id, {
+      relations: [{ kind: 'depends_on', assetId: entry.asset.id }],
+      scope: 'general',
+      scopePolicy: {},
+      reason: 'KSTAR Semantica fixture',
+      actor: 'user',
+    });
+    await refs.addWorkspaceAssetReference('user-a', {
+      assetId: entry.asset.id, workspaceId: 'workspace-a', scope: 'general',
+    });
+    await refs.addWorkspaceAssetReference('user-a', {
+      assetId: shopping.asset.id, workspaceId: 'workspace-a', scope: 'general',
+    });
+    const storedEntry = await assets.readAbilityAsset('user-a', entry.asset.id);
+    const workspaceRefs = await refs.listWorkspaceAssetReferences('user-a');
+    expect({ scope: storedEntry.scope, scopePolicy: storedEntry.scopePolicy }).toEqual({
+      scope: 'general', scopePolicy: undefined,
+    });
+    expect(workspaceRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: entry.asset.id, workspaceId: 'workspace-a', scope: 'global' }),
+      expect.objectContaining({ assetId: shopping.asset.id, workspaceId: 'workspace-a', scope: 'global' }),
+    ]));
+
+    const committed = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-kstar-semantica',
+      workspaceId: 'workspace-a',
+      purpose: 'conversation_task',
+      taskText: '请安排工作日晚餐和周末准备',
+      authorization: 'workspace_policy',
+      confirm: true,
+    }, {
+      minScore: 0.3,
+      embedTexts: async (texts: string[]) => texts.map((text, index) => {
+        if (index === 0 || text.includes('家庭一周晚餐计划')) return [1, 0];
+        return [0, 1];
+      }),
+    });
+    expect(committed.omittedRefs).toEqual([]);
+    expect(committed.assetIds).toEqual(expect.arrayContaining([entry.asset.id, shopping.asset.id]));
+    expect(committed.assetMatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetId: shopping.asset.id,
+        matchMethod: 'ontology',
+        entryAssetId: entry.asset.id,
+        distance: 1,
+        evidencePath: [expect.objectContaining({
+          fromAssetId: shopping.asset.id,
+          toAssetId: entry.asset.id,
+          kind: 'depends_on',
+        })],
+      }),
+    ]));
+
+    const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-kstar-semantica',
+      taskRunId: 'turn-kstar-semantica',
+      taskText: '请安排工作日晚餐和周末准备',
+      workspaceId: 'workspace-a',
+      committedProjectionId: committed.id,
+    });
+
+    expect(result.citations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: shopping.asset.id, matchMethod: 'ontology' }),
+    ]));
+    expect(result.answerEvidence?.relations).toEqual([
+      expect.objectContaining({
+        query: '请安排工作日晚餐和周末准备',
+        paths: [expect.objectContaining({
+          entryAssetId: entry.asset.id,
+          assetId: shopping.asset.id,
+          distance: 1,
+          relationKind: 'depends_on',
+        })],
+      }),
+    ]);
   });
 
   it('rejects committed injection when a frozen asset version changed', async () => {
@@ -420,17 +625,42 @@ describe('confirmed Recall projection prompt injection', () => {
 
     expect(result.promptBlock.length).toBeLessThanOrEqual(14_000);
     expect(result.promptBlock).toMatch(/<confirmed-ability-assets>[\s\S]*<\/confirmed-ability-assets>$/);
-    const payload = result.promptBlock
-      .slice(result.promptBlock.indexOf('\n', result.promptBlock.indexOf('Treat these')) + 1)
-      .replace(/\n<\/confirmed-ability-assets>$/, '');
+    const payload = result.promptBlock.split('\n').at(-2)!;
     const records = JSON.parse(payload) as Array<{ asset_id: string }>;
     expect(records.length).toBeGreaterThan(0);
     expect(records.length).toBeLessThan(12);
     expect(result.citations.map((citation) => citation.assetId))
       .toEqual(records.map((record) => record.asset_id));
+
+    const omissions = await import('../../../../src/main/features/recall/projection-omission');
+    const unavailableAudit = vi.spyOn(omissions, 'recordProjectionOmission').mockRejectedValue(new Error('synthetic audit unavailable'));
+    try {
+      const continued = await promptInjection.buildRecallTurnPromptContext('user-a', {
+        cid: 'cid-long', taskRunId: 'turn-long-audit-unavailable', taskText: 'Apply the long rules',
+      }, { ...fakeSemanticOptions, limit: 12 });
+      expect(continued.promptBlock).toMatch(/<confirmed-ability-assets>[\s\S]*<\/confirmed-ability-assets>$/);
+      const continuedRecords = JSON.parse(continued.promptBlock.split('\n').at(-2)!);
+      expect(continued.citations.map(citation => citation.assetId)).toEqual(continuedRecords.map((record: { asset_id: string }) => record.asset_id));
+      expect(continuedRecords.length).toBeGreaterThan(0);
+      expect(continuedRecords.length).toBeLessThan(12);
+      expect(unavailableAudit.mock.calls.some(call => call[3] === 'prompt_budget')).toBe(true);
+
+      const { assets, projection } = await modules();
+      const explicit = await projection.previewContextProjection('user-a', {
+        taskRunId: 'turn-long-explicit', purpose: 'global', authorization: 'user_confirmed', confirm: true,
+        conversationId: 'cid-long-explicit', explicitAssetIds: (await assets.listAbilityAssets('user-a')).map(asset => asset.id),
+      });
+      const committed = await promptInjection.buildRecallTurnPromptContext('user-a', {
+        cid: 'cid-long-explicit', taskRunId: 'turn-long-explicit', taskText: 'Apply the long rules', committedProjectionId: explicit.id,
+      });
+      const committedRecords = JSON.parse(committed.promptBlock.split('\n').at(-2)!);
+      expect(committedRecords.length).toBeGreaterThan(0);
+      expect(committedRecords.length).toBeLessThan(12);
+      expect(committed.citations.map(citation => citation.assetId)).toEqual(committedRecords.map((record: { asset_id: string }) => record.asset_id));
+    } finally { unavailableAudit.mockRestore(); }
   });
 
-  describe('profile memory channel（2026-09-13 通道显式化）', () => {
+  describe('profile memory channel', () => {
     async function writeProfileMemory() {
       const paths = await import('../../../../src/main/paths');
       const file = paths.userProfileFile('user-a');
@@ -486,10 +716,58 @@ describe('confirmed Recall projection prompt injection', () => {
       expect(result.profileMemoryEntries!.every((entry) => /^onto-/.test(entry.id))).toBe(true);
     });
 
-    it('库里已有正式个人资产时：画像块渲染真实 id/成熟度/版本，注入清单可回连资产', async () => {
+    it('已进本轮投影的个人资产不再以画像镜像双注', async () => {
       const { assets, projection, promptInjection } = await modules();
       const now = new Date().toISOString();
-      const created = await assets.createAbilityAsset('user-a', {
+      // 投影确认前就在库里：会进投影冻结集（旧版行为=同资产全文两块各一次，
+      // 措辞/版本可能分叉——实测口径稀释的根源）。
+      const created = await seedStoredAbilityAsset('user-a', {
+        schemaVersion: 2, ownerId: 'user-a', id: 'aa-personal-dup',
+        candidateId: 'cand-personal-dup', sourceCandidateIds: ['cand-personal-dup'],
+        reviewDecisionId: 'rd_personal_dup',
+        type: 'personal', title: '沟通语言', statement: '与该用户对话一律使用中文。',
+        evidenceRefs: [{ kind: 'conversation', id: 'conv-personal-dup' }],
+        scope: 'general', status: 'active', lifecycleStatus: 'user_confirmed_unverified',
+        maturity: 'bud', version: '1',
+        createdAt: now, updatedAt: now,
+      }, { actor: 'user', reason: 'dedupe test' });
+      const preview = await projection.previewContextProjection('user-a', {
+        taskRunId: 'task-profile-dup',
+        purpose: 'global',
+        taskText: 'Audit OAuth callback handling',
+      }, fakeSemanticOptions);
+      const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+      const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+        cid: 'cid-profile-dup',
+        taskRunId: 'turn-profile-dup',
+        taskText: 'Audit OAuth callback handling',
+        committedProjectionId: confirmed.id,
+      });
+      // 授权投影块是更强形态：保留全文与 projection 引用。
+      expect(result.promptBlock).toContain('<confirmed-ability-assets>');
+      expect(result.promptBlock).toContain(created.id);
+      // 画像块不再重复注入同 id；注入清单亦不含（收据按授权通道落账）。
+      const profileBlock = result.profileMemoryBlock ?? '';
+      expect(profileBlock.includes(created.id)).toBe(false);
+      expect((result.profileMemoryEntries ?? []).map((entry) => entry.id)).not.toContain(created.id);
+    });
+
+    it('库里已有正式个人资产（未进本轮投影冻结集）：画像块渲染真实 id/成熟度/版本，注入清单可回连资产', async () => {
+      const { assets, projection, promptInjection } = await modules();
+      const promoted = await createAssetWith({
+        judgment: 'Review OAuth callback and token exchange security.',
+        summary: 'OAuth review workflow',
+        sourceId: 'conversation-profile-real',
+      });
+      const preview = await projection.previewContextProjection('user-a', {
+        taskRunId: 'task-profile-real',
+        purpose: 'global',
+        taskText: 'Audit OAuth callback handling',
+      }, fakeSemanticOptions);
+      const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+      // 投影确认之后才落库的个人资产：可读、但不在冻结集 → 走画像镜像通道。
+      const now = new Date().toISOString();
+      const created = await seedStoredAbilityAsset('user-a', {
         schemaVersion: 2, ownerId: 'user-a', id: 'aa-personal-channel',
         candidateId: 'cand-personal-channel', sourceCandidateIds: ['cand-personal-channel'],
         reviewDecisionId: 'rd_personal_channel',
@@ -500,12 +778,6 @@ describe('confirmed Recall projection prompt injection', () => {
         createdAt: now, updatedAt: now,
       }, { actor: 'user', reason: 'profile channel test' });
       await assets.setAbilityAssetMaturity('user-a', created.id, 'transfer_validated');
-      const preview = await projection.previewContextProjection('user-a', {
-        taskRunId: 'task-profile-real',
-        purpose: 'global',
-        taskText: 'Audit OAuth callback handling',
-      }, fakeSemanticOptions);
-      const confirmed = await projection.confirmContextProjection('user-a', preview.id);
 
       const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
         cid: 'cid-profile-real',
@@ -528,6 +800,8 @@ describe('confirmed Recall projection prompt injection', () => {
       // 注入清单（供回执侧落账）带真实 id——用量统计与成熟度证据链的钥匙。
       expect(result.profileMemoryEntries?.map((entry) => entry.id)).toContain(created.id);
       expect(result.profileMemoryEntries?.every((entry) => !/^onto-/.test(entry.id))).toBe(true);
+      // 已进投影的规则资产不属于画像镜像（loadOntologyAssets 只镜像 personal）。
+      expect((result.profileMemoryEntries ?? []).map((entry) => entry.id)).not.toContain(promoted.asset.id);
     });
 
     it('无 durable memory 时不产生画像块，返回结构不携带画像字段', async () => {
@@ -634,7 +908,7 @@ describe('confirmed Recall projection prompt injection', () => {
       const { assets, promptInjection } = await modules();
       const promoted = await createAsset();
       const { asset } = promoted;
-      const blocked = await assets.createSystemAbilityAsset('user-a', {
+      const blocked = await seedStoredAbilityAsset('user-a', {
         schemaVersion: 2,
         ownerId: 'user-a',
         id: 'aa-000000000000000000000000',
@@ -664,7 +938,7 @@ describe('confirmed Recall projection prompt injection', () => {
       expect(result.promptBlock).toContain(asset.title);
       expect(result.promptBlock).not.toContain('Blocked asset');
       expect(result.assetIds).toEqual([asset.id]);
-      // M-3: 派发授权注入同样带边界条件（createAsset 带
+      // 派发授权注入同样带边界条件（createAsset 带
       // applicableWhen/forbiddenWhen）。
       expect(result.promptBlock).toContain('applicable_when');
       expect(result.promptBlock).toContain('forbidden_when');
@@ -680,7 +954,7 @@ describe('confirmed Recall projection prompt injection', () => {
 });
 
 /**
- * M-3 契约：适用/禁用条件必须随资产进入**每一条**注入路径。
+ * 注入契约：适用/禁用条件必须随资产进入**每一条**注入路径。
  *
  * `forbidden_when` 是硬安全约束。晋升 gate 校验它、「我的资产」详情页显示它，
  * 但在此之前三条注入路径的 record 里都没有——唯独模型拿不到。用户看到
@@ -689,7 +963,7 @@ describe('confirmed Recall projection prompt injection', () => {
  * 这组用例按**路径**而不是按函数组织：三条路径各自独立构造 record，任何一条
  * 漏掉都是一个真实的安全缺口，所以必须逐条钉死，不能只测其中一条。
  */
-describe('M-3 · 适用/禁用条件注入契约', () => {
+describe('适用/禁用条件注入契约', () => {
   it('carries forbidden_when into the confirmed-projection path', async () => {
     const asset = await createAsset();
     const { refs, projection, storage, layout, promptInjection } = await modules();
@@ -758,10 +1032,10 @@ describe('M-3 · 适用/禁用条件注入契约', () => {
    */
   it('omits the fields entirely when an asset carries no conditions', async () => {
     const { candidates, promptInjection } = await modules();
-    // 用 personal：适用/禁用条件是 RuleAsset 的准入门槛（PRD 3.1），rule 类候选
+    // 用 personal：适用/禁用条件是 RuleAsset 的准入门槛，rule 类候选
     // 缺边界会被 `rule_boundary_required` 直接挡下，构造不出「无条件的规则」。
     // personal 天然没有这两个字段，正是要测的那种资产。
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Works as a product owner defining release scope.',
       summary: 'Product owner role slice',
       suggestedType: 'personal',
@@ -778,4 +1052,50 @@ describe('M-3 · 适用/禁用条件注入契约', () => {
     expect(result.promptBlock).not.toContain('forbidden_when');
     expect(result.promptBlock).not.toContain('applicable_when');
   });
+});
+
+
+it('keeps the complete unclassified method and its final limitation when explicitly dispatched', async () => {
+  const { candidates, promptInjection } = await modules();
+  const statement = '适用条件：核对工程依据。\n\n1. 核对证据。\n2. 记录适用范围。\n\n' + '方法步骤应保持原有顺序。'.repeat(190) + '\n\n局限：未核对外部环境时不能据此宣称验证完成。';
+  const candidate = await createNightlyCandidateFixture('user-a', {
+    judgment: statement, summary: '条件证据核对流程', value: '便于以后复用核对过程并保留结论的局限。',
+    suggestedType: 'cognition', suggestedScope: 'project', suggestedAction: 'create',
+    sourceRefs: [{ kind: 'execution', id: 'exec-cognition-complete' }],
+  });
+  const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  expect((await promptInjection.evaluateRecallAssetRuntimeEligibility('user-a', asset, { operation: 'default_injection' })).eligible).toBe(false);
+  const dispatched = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', [asset.id]);
+  expect(dispatched.assetIds).toEqual([asset.id]);
+  expect(dispatched.promptBlock).toContain('未核对外部环境时不能据此宣称验证完成');
+  expect(dispatched.promptBlock).toContain(JSON.stringify(statement).slice(1, -1));
+});
+
+
+it('omits complete dispatched cognition records when the shared prompt budget is full', async () => {
+  const { candidates, promptInjection } = await modules();
+  const ids: string[] = [];
+  for (let index = 0; index < 4; index++) {
+    const statement = '方法条件：明确选用。\n' + String.fromCharCode(97 + index).repeat(3_700) + `\n局限末尾标记${index}`;
+    const candidate = await createNightlyCandidateFixture('user-a', {
+      judgment: statement, summary: `预算完整方法${index}`, value: '以完整过程及局限支持后续显式选用。',
+      suggestedType: 'cognition', suggestedScope: 'project', suggestedAction: 'create',
+      sourceRefs: [{ kind: 'execution', id: `exec-budget-complete-${index}` }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
+    ids.push(asset.id);
+  }
+  const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', ids);
+  expect(result.promptBlock.length).toBeLessThanOrEqual(14_000);
+  expect(result.assetIds.length).toBeGreaterThan(0);
+  expect(result.assetIds.length).toBeLessThan(ids.length);
+  expect(result.assets.map(asset => asset.id)).toEqual(result.assetIds);
+  expect(result.omittedAssetIds).toEqual(ids.slice(result.assetIds.length));
+  const { prepareAssetUsageClaim } = await import('../../../../src/main/features/recall/asset-usage-claim');
+  await expect(prepareAssetUsageClaim('user-a', 'turn-budget', { assetId: result.omittedAssetIds![0], assetVersion: '1',
+    outputExcerpt: 'The omitted asset cannot support adoption.' }, result.assets.map(asset => ({ assetId: asset.id, assetVersion: asset.version }))))
+    .rejects.toThrow('not supplied');
+  for (let index = 0; index < ids.length; index++) {
+    expect(result.promptBlock.includes(`局限末尾标记${index}`)).toBe(result.assetIds.includes(ids[index]));
+  }
 });

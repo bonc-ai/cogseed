@@ -62,6 +62,7 @@ export interface AbilityAssetStatementRewrite {
 }
 
 const TYPE_SHAPES: Record<AbilityAssetType, string> = {
+  cognition: '独立可理解的认识或做法，保留条件、局限和知识内容，不要求分类结构',
   personal: '一到三个陈述句（主体＋偏好/身份事实），120 字内，硬限 200 字',
   rule: '一到三个陈述句（场景＋做法），120 字内，硬限 200 字',
   fact: '一到三个陈述句（主体＋事实），200 字内；知识本身是位置/配置值时路径合法',

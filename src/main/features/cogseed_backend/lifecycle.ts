@@ -13,7 +13,10 @@ const TRANSITIONS: Readonly<Record<CogSeedTaskStatus, readonly CogSeedTaskStatus
   planned: ['queued', 'cancelled'],
   created: ['queued', 'cancelled', 'recoverable'],
   queued: ['running', 'cancelled', 'recoverable'],
-  running: ['waiting_user', 'completed', 'failed', 'cancelled', 'recoverable'],
+  running: ['waiting_user', 'completed', 'failed', 'cancelled', 'recoverable', 'background'],
+  // Decision 1B: a promoted run keeps going outside the turn. It may finish, fail,
+  // be cancelled or be recovered — it can never go back to running.
+  background: ['completed', 'failed', 'cancelled', 'recoverable'],
   waiting_user: ['queued', 'cancelled', 'recoverable'],
   completed: [],
   failed: ['queued'],
@@ -36,7 +39,10 @@ function isTerminal(status: CogSeedTaskStatus): boolean {
 }
 
 export function isCogSeedTaskActiveStatus(status: CogSeedTaskStatus): boolean {
-  return status === 'created' || status === 'queued' || status === 'running' || status === 'waiting_user';
+  // Decision 1B: a promoted run is still alive (it can end later), so the
+  // operations view keeps counting it as active.
+  return status === 'created' || status === 'queued' || status === 'running'
+    || status === 'waiting_user' || status === 'background';
 }
 
 /**
@@ -89,6 +95,7 @@ export async function transitionCogSeedTask(
       ...task,
       status: nextStatus,
       updatedAt: nowIso(),
+      ...(nextStatus === 'running' ? { executionStartedAt: nowIso() } : {}),
       ...(isTerminal(nextStatus) ? { terminalAt: nowIso() } : {}),
     };
     delete next.errorCode;

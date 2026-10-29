@@ -1,16 +1,5 @@
-/**
- * 探针 r1（边界测试员）→ r1 收尾整理为混合回归文件（记账员，2026-09-30）：
- * - active 回归（锁定既有正确行为）：30 天整点边界、epoch 过期、deleted
- *   终态全拒（2026-09-28 红队修复的回归验证）、expectedVersion 乐观锁、
- *   purged 终态与墓碑可读。
- * - 待议项（it.skip）：P-r1-7 deletedAt 未来时间戳 restore 复活、
- *   P-r1-27 archived 资产内容可变性（该用例即「补测试锁现状」方案的雏形，
- *   拍板后按方向启用或反转断言）。见 round-1-甄别.md toPending。
- *
- * 覆盖：保留期 30 天整点/过去/未来/epoch 时间戳、deleted 后内容与状态
- * 变更全拒、expectedVersion 乐观锁、二次 delete 幂等不续期、purged 后全拒。
- * 风格对齐 test/main/features/recall/family.test.ts（资产创建样例）。
- */
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
+/** 资产生命周期边界：30 天保留期、epoch 与未来时间戳、终态守卫、乐观版本锁及墓碑读取。 */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -52,7 +41,7 @@ async function loadAssets() {
 async function mkAsset(id: string) {
   const assets = await loadAssets();
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'personal', title: `资产 ${id}`, statement: `陈述 ${id}。`,
@@ -64,7 +53,7 @@ async function mkAsset(id: string) {
 
 const ACT = { actor: 'user' as const, reason: 'probe' };
 
-describe('regression r1 › 资产状态机边界（待议项已 skip）', () => {
+describe('资产状态机边界', () => {
   it('保留期恰好 30 天整：isWithinDeletionRetention 用严格小于——整点已过期，restore 拒绝', async () => {
     const assets = await loadAssets();
     await mkAsset('aa-edge');
@@ -86,18 +75,26 @@ describe('regression r1 › 资产状态机边界（待议项已 skip）', () =>
     expect(restored.deletedAt).toBeUndefined(); // 恢复清掉 deletedAt
   });
 
-  // 待议 P-r1-7：deletedAt 未来时间戳保留期判定恒真、restore 复活。是否加
-  // 方向检查牵连 sweep 语义（会不会把未来时间戳当已过期自动 purge），拍板前
-  // skip；断言锁定的是「现状 restore 成功」。
-  it.skip('deletedAt 在未来（时钟拨快 10 天）：保留期判定恒真——restore 成功', async () => {
+  // 未来 deletedAt 与保留期清扫的时间方向语义已对齐：恢复侧拒绝（不可能的
+  // 删除时刻不能证明「还能恢复」），清扫侧不因它判「已到期」（时间不明 ≠ 已到期）。
+  it('deletedAt 在未来（时钟拨快 10 天）：保留期判定不再恒真——restore 拒绝，资产保留待处置', async () => {
     const assets = await loadAssets();
     await mkAsset('aa-future');
     await assets.deleteAbilityAsset(UID, 'aa-future', ACT);
     const raw = JSON.parse(fs.readFileSync(assetFile('aa-future'), 'utf8'));
     raw.deletedAt = new Date(Date.now() + 10 * 86_400_000).toISOString();
     fs.writeFileSync(assetFile('aa-future'), JSON.stringify(raw));
-    const restored = await assets.restoreAbilityAsset(UID, 'aa-future', ACT);
-    expect(restored.status).toBe('active'); // 未来时间戳未被视为异常
+    await expect(assets.restoreAbilityAsset(UID, 'aa-future', ACT))
+      .rejects.toThrow(/retention window has expired/);
+    // 视图口径同源：时间不明（既不可恢复、也无剩余天数），不是「还能恢复 40 天」。
+    const stillDeleted = await assets.readAbilityAsset(UID, 'aa-future');
+    const view = assets.describeDeletedAbilityAsset(stillDeleted);
+    expect(view.restorable).toBe(false);
+    expect(view.retentionUnknown).toBe(true);
+    expect(view.retentionDaysLeft).toBeNull();
+    // 清扫不把未来时间戳当已到期：isWithinDeletionRetention 维持原语义，
+    // 该记录不会被自动彻底清除（时间不明等人工处置）。
+    expect(assets.isWithinDeletionRetention(stillDeleted)).toBe(true);
   });
 
   it('deletedAt = epoch 0：早已过期，restore 拒绝、仅剩 purge 一条路', async () => {
@@ -111,7 +108,7 @@ describe('regression r1 › 资产状态机边界（待议项已 skip）', () =>
       .rejects.toThrow(/retention window has expired/);
   });
 
-  it('deleted 终态：update/pause/resume/archive/revoke 全拒（2026-09-28 红队修复的回归验证）', async () => {
+  it('deleted 终态：update/pause/resume/archive/revoke 全拒', async () => {
     const assets = await loadAssets();
     await mkAsset('aa-del');
     await assets.deleteAbilityAsset(UID, 'aa-del', ACT);
@@ -153,10 +150,9 @@ describe('regression r1 › 资产状态机边界（待议项已 skip）', () =>
     expect(tomb.status).toBe('purged');
   });
 
-  // 待议 P-r1-27：archived 资产可被 updateAbilityAsset 改内容并 bump 版本，
-  // 正式测试零断言锁定。本用例即选项 A（补测试锁现状）的雏形；拍板选 A 则
-  // 启用本用例，选 B（冻结+守卫）则反转为 rejects 断言。
-  it.skip('archived 非终态：内容仍可改（与 deleted 口径刻意区分）——行为记录', async () => {
+  // 归档内容是否可变与删除保留期内不可变是不同的状态边界。
+  // 已确认口径：archived 不是终态，允许继续修改内容，状态保持 archived。
+  it('archived 非终态：内容仍可改（与 deleted 口径刻意区分）', async () => {
     const assets = await loadAssets();
     await mkAsset('aa-arch');
     await assets.archiveAbilityAsset(UID, 'aa-arch', ACT);

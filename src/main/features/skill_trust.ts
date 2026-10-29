@@ -84,6 +84,18 @@ export interface SecurityReceipt {
    * re-verification time did not exist when they were written).
    */
   scanner?: 'deep' | 'local';
+  /**
+   * Which check produced a `blocked` verdict.
+   *
+   * `deep` means skill-sentry blocked it; `local` means the declaration/red-flag
+   * validator did while the deep scan itself passed. The two are not the same
+   * claim, and a row that shows "已拦截" next to the deep scanner's 100 has to
+   * say which one it is — otherwise the pair reads as a scoring bug.
+   *
+   * Optional: receipts written before this field existed simply lack it, and the
+   * UI falls back to the unqualified "已拦截".
+   */
+  verdictSource?: 'local' | 'deep';
   scannedAt: string;
   /**
    * 0-100 score from the deep scanner, when one ran.
@@ -226,6 +238,9 @@ export type StaleReason =
   // profile above, and a receipt records it as `rulesetVersion`. Kept separate so
   // an audit can tell which of the two moved.
   | 'scanner_ruleset_changed'
+  // A blocked receipt written before `verdictSource` existed: one rescan fills it
+  // in so the UI can name the check that refused the skill.
+  | 'blocked_source_missing'
   // The security scanner is verified by pinned tree hash rather than by content
   // scanning (see features/scanner_trust). These record which of those checks
   // applied, so a scanner admitted without a pin is distinguishable in an audit
@@ -495,6 +510,36 @@ function _readUserOverride(raw: unknown): { userOverride?: SecurityReceipt['user
   return { userOverride: { outcome: o.outcome.slice(0, 64), at } };
 }
 
+/**
+ * 一个 Agent 的私有 Skill 回执（`<agentId>__<skillId>.json`）的快照与还原。
+ *
+ * 更新已装 Agent 时，新版本的深扫会按同一个键覆盖旧回执；更新中途失败要把旧版目录换回来，回执也必须
+ * 跟着换回去，否则旧私有 Skill 的树摘要与回执对不上，会被当成被篡改而拒绝加载（旧版"保留"了却用不了）。
+ */
+export function snapshotAgentReceipts(uid: string, agentId: string): Array<[string, Buffer]> {
+  const out: Array<[string, Buffer]> = [];
+  const dir = _receiptsDir(uid);
+  let names: string[];
+  try { names = fs.readdirSync(dir); } catch { return out; }
+  for (const name of names) {
+    if (!name.startsWith(`${agentId}__`) || !name.endsWith('.json')) continue;
+    try { out.push([name, fs.readFileSync(path.join(dir, name))]); } catch { /* 读不到就不还原这一份 */ }
+  }
+  return out;
+}
+
+export function restoreAgentReceipts(uid: string, agentId: string, snapshot: ReadonlyArray<[string, Buffer]>): void {
+  const dir = _receiptsDir(uid);
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (name.startsWith(`${agentId}__`) && name.endsWith('.json')) fs.rmSync(path.join(dir, name), { force: true });
+    }
+  } catch { /* 目录不存在：没有可清的 */ }
+  if (!snapshot.length) return;
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, bytes] of snapshot) fs.writeFileSync(path.join(dir, name), bytes);
+}
+
 export function readReceipt(uid: string, skillId: string, agentId?: string): SecurityReceipt | null {
   if (!safeId(uid) || !skillIdToFileStem(skillId)) return null;
   if (agentId !== undefined && !safeId(agentId)) return null;
@@ -519,6 +564,10 @@ export function readReceipt(uid: string, skillId: string, agentId?: string): Sec
     // single check. Anything other than the literal 'deep' is treated as local —
     // receipts predating this field then read as the weaker, conservative value.
     ...(raw.scanner === 'deep' || raw.scanner === 'local' ? { scanner: raw.scanner } : {}),
+    // Without this the source never reaches the table: `readReceipt` rebuilds
+    // from an allowlist, so a field missing here vanishes for every caller.
+    ...(raw.verdictSource === 'local' || raw.verdictSource === 'deep'
+      ? { verdictSource: raw.verdictSource } : {}),
     // Deep-scan disclosures. Same reason: this function rebuilds the object from
     // an allowlist, so a field absent here is invisible to every caller no matter
     // what was written. The skills panel reads all five to state how strong the
@@ -578,6 +627,7 @@ export function writeReceipt(
     topRule?: string;
     topLevel?: 'EXTREME' | 'MEDIUM' | 'LOW';
     scanner?: 'deep' | 'local';
+    verdictSource?: 'local' | 'deep';
     securityScore?: number;
     scannerVersion?: string;
     rulesetVersion?: string;
@@ -604,6 +654,8 @@ export function writeReceipt(
     ...(input.topRule ? { topRule: input.topRule } : {}),
     ...(input.topLevel ? { topLevel: input.topLevel } : {}),
     ...(input.scanner ? { scanner: input.scanner } : {}),
+    ...(input.decision === 'blocked' && input.verdictSource
+      ? { verdictSource: input.verdictSource } : {}),
     ...(typeof input.securityScore === 'number' ? { securityScore: input.securityScore } : {}),
     ...(input.scannerVersion ? { scannerVersion: input.scannerVersion } : {}),
     ...(input.rulesetVersion ? { rulesetVersion: input.rulesetVersion } : {}),
@@ -699,7 +751,13 @@ export function writeInstallReceipt(
  * always stale. A cheap wrong answer here costs one extra scan (measured in
  * milliseconds); the opposite error silently trusts content nobody checked.
  */
-export function isReceiptStale(uid: string, skillId: string, skillDir: string, agentId?: string): StaleVerdict {
+export function isReceiptStale(
+  uid: string,
+  skillId: string,
+  skillDir: string,
+  agentId?: string,
+  options?: { requireVerdictSource?: boolean },
+): StaleVerdict {
   const receipt = readReceipt(uid, skillId, agentId);
   if (!receipt) return { stale: true, reason: 'no_receipt' };
 
@@ -723,6 +781,17 @@ export function isReceiptStale(uid: string, skillId: string, skillDir: string, a
   // `rulesetVersion`, and treating "absent" as stale would rescan the whole library
   // on every call without ever converging (the failure `_isScannerAbsentByBuild`
   // exists to prevent).
+
+  // A blocked receipt written before `verdictSource` existed cannot say which
+  // check refused the skill, so the table shows "blocked" beside a possibly
+  // high deep score with no explanation. Only the DEEP path asks for this
+  // rescan: the sync path would re-evaluate with the thinner local rules and
+  // could overwrite a deep `blocked` with a local `pass` — a security
+  // regression, not a cosmetic refresh.
+  if (options?.requireVerdictSource && receipt.decision === 'blocked'
+      && !receipt.verdictSource) {
+    return { stale: true, reason: 'blocked_source_missing' };
+  }
   const scannerRuleset = currentScannerRulesetVersion();
   if (scannerRuleset && receipt.rulesetVersion && receipt.rulesetVersion !== scannerRuleset) {
     return { stale: true, reason: 'scanner_ruleset_changed' };

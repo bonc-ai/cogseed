@@ -15,6 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { conversationLayout, conversationMessageReadFile } from '../util/project-layout.js';
 import { createLogger } from '../logger.js';
+import { normalizeTaskRequest, parseSeedModelText } from './session_import/task-context.js';
 import type { GroupMessage } from './group_chat/visibility.js';
 
 const log = createLogger('task-continuation');
@@ -34,8 +35,12 @@ export interface TaskContinuationSnapshot {
   constraints: string[];
   /** Latest artifact reference, if any (path or display name). */
   latestArtifact: string | null;
-  /** Recommended next step. */
+  /** Recommended next step. Uses the user's current request when known. */
   nextStep: string;
+  /** The user's most recent explicit request from the imported session — the
+   *  continuation target. The summary / stage are background material. Absent
+   *  on snapshots built before this field existed. */
+  currentRequest?: string;
   /** The raw session summary this snapshot was derived from. */
   sourceSummary: string;
 }
@@ -46,6 +51,9 @@ export interface BuildSnapshotInput {
   projectId?: string | null;
   /** Session summary extracted during import (real text, never fabricated). */
   sessionSummary?: string;
+  /** The user's most recent explicit request (real transcript text). When
+   *  omitted it is recovered from the seed message. */
+  currentRequest?: string;
   /** Conversation title (used as goal fallback). */
   title?: string;
 }
@@ -57,21 +65,26 @@ function snapshotFile(userId: string, cid: string, projectHint?: string | null):
 }
 
 /** Read the seed (first commander) message of an imported conversation to
- *  recover the session summary. Mirrors the extraction in chats.insertWelcomeMessage. */
-async function readSeedSummary(userId: string, cid: string, projectHint?: string | null): Promise<string> {
+ *  recover the session summary and the current request. Uses the shared seed
+ *  parser so this cannot drift from the writer (`materialize`) or the welcome
+ *  panel (`chats`). */
+async function readSeedContext(
+  userId: string,
+  cid: string,
+  projectHint?: string | null,
+): Promise<{ summary: string; currentRequest: string }> {
   try {
     const msgFile = conversationMessageReadFile(userId, cid, projectHint);
     const content = await fs.readFile(msgFile, 'utf8');
     const lines = content.trim().split('\n').filter(Boolean);
-    if (!lines.length) return '';
+    if (!lines.length) return { summary: '', currentRequest: '' };
     const firstMsg = JSON.parse(lines[0]) as GroupMessage;
     if (firstMsg.from === 'commander' && firstMsg.model_text) {
-      const match = firstMsg.model_text.match(/请把它当作已发生的上下文.*?：\n\n(.+)/s);
-      if (match) return match[1].trim();
+      return parseSeedModelText(firstMsg.model_text);
     }
-    return '';
+    return { summary: '', currentRequest: '' };
   } catch {
-    return '';
+    return { summary: '', currentRequest: '' };
   }
 }
 
@@ -122,7 +135,32 @@ export async function buildContinuationSnapshot(
         /^(this session is being continued|the summary below|summary:|1\. primary request|primary request|from previous session|from previous|1\.|-\s*\*|-\s)/i.test(
           (parsed.goal || '').trim(),
         );
-      if (!goalNoise) return parsed;
+      if (!goalNoise) {
+        // Backfill the continuation target for snapshots built before
+        // `currentRequest` existed (or before it could be derived). This never
+        // touches the goal/brief that ensureProjectBrief distilled.
+        const nextRequest = normalizeTaskRequest(input.currentRequest);
+        const needsRequest = !!nextRequest && !String(parsed.currentRequest ?? '').trim();
+        const needsNext = !!nextRequest && /^继续这项工作$/.test(String(parsed.nextStep ?? '').trim());
+        if (needsRequest || needsNext) {
+          const updated: TaskContinuationSnapshot = {
+            ...parsed,
+            ...(needsRequest ? { currentRequest: nextRequest } : {}),
+            ...(needsNext ? { nextStep: nextRequest } : {}),
+          };
+          try {
+            await fs.writeFile(file, JSON.stringify(updated, null, 2), 'utf8');
+            log.info('backfilled continuation request', { conversationId: input.conversationId });
+          } catch (err) {
+            log.warn('failed to backfill continuation request', {
+              conversationId: input.conversationId,
+              error: (err as Error)?.message || String(err),
+            });
+          }
+          return updated;
+        }
+        return parsed;
+      }
       log.info('rebuilding continuation snapshot from noisy goal', {
         conversationId: input.conversationId,
       });
@@ -131,9 +169,14 @@ export async function buildContinuationSnapshot(
     /* no snapshot yet — build below */
   }
 
-  const summary = (input.sessionSummary ?? '').trim()
-    || await readSeedSummary(input.userId, input.conversationId, input.projectId);
+  const seed = await readSeedContext(input.userId, input.conversationId, input.projectId);
+  const summary = (input.sessionSummary ?? '').trim() || seed.summary;
+  const currentRequest = normalizeTaskRequest(input.currentRequest) || seed.currentRequest;
   const derived = deriveFromSummary(summary, input.title);
+  // The user's latest explicit request is a better next step than the generic
+  // placeholder, and it keeps `snapshotHasNoiseGoal` from triggering the
+  // hidden CLI brief distillation on the first handoff.
+  const nextStep = currentRequest || derived.nextStep;
 
   const snapshot: TaskContinuationSnapshot = {
     version: 1,
@@ -143,7 +186,8 @@ export async function buildContinuationSnapshot(
     stage: derived.stage,
     constraints: derived.constraints,
     latestArtifact: derived.latestArtifact,
-    nextStep: derived.nextStep,
+    nextStep,
+    ...(currentRequest ? { currentRequest } : {}),
     sourceSummary: derived.sourceSummary,
   };
 
@@ -154,6 +198,7 @@ export async function buildContinuationSnapshot(
       conversationId: input.conversationId,
       projectId: input.projectId ?? null,
       hasSummary: !!derived.sourceSummary,
+      hasCurrentRequest: !!currentRequest,
     });
   } catch (err) {
     log.warn('failed to persist continuation snapshot', {

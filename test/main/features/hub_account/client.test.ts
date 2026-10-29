@@ -20,6 +20,17 @@ describe('hub account client', () => {
     });
   }
 
+  it('PATCHes only display_name with bearer auth and unwraps the me DTO', async () => {
+    const me = {account:{account_id:'self',community_profile:{display_name:'<>&'}}};
+    mockFetchOnce(200, {ok:true,data:me});
+    const body = {display_name:'<>&', account_id:'spoof'};
+    expect(await createHubClient(BASE).updateProfile('fixture-token', body)).toEqual(me);
+    expect(fetch).toHaveBeenCalledWith(BASE + '/api/v1/account/me', expect.objectContaining({
+      method:'PATCH', body:JSON.stringify({display_name:'<>&'}),
+      headers:expect.objectContaining({Authorization:'Bearer fixture-token'}),
+    }));
+  });
+
   it('login builds the provider query and returns authorize_url + state', async () => {
     mockFetchOnce(200, { ok: true, data: { authorize_url: 'https://hub.example.com/login', state: 's1' } });
     const client = createHubClient(BASE);

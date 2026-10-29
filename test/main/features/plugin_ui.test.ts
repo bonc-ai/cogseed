@@ -149,15 +149,56 @@ describe('plugin_ui › runtime config store', () => {
       { status: 200, headers: { 'content-type': 'application/json' } },
     )));
     let info;
-    try { info = await pluginUiInfo(TEST_UID, 'withui'); } finally { vi.unstubAllGlobals(); }
+    try {
+      info = await pluginUiInfo(TEST_UID, 'withui');
+      // 公告只读缓存：首帧没有它，绝不为它等待（这是详情页"先短后长"的根因）。
+      expect(info.info!.latest_version).toBeUndefined();
+      expect(info.info!.min_version).toBeUndefined();
+      // 后台刷新落地后，下一次调用才带上公告。
+      await vi.waitFor(async () => {
+        const next = await pluginUiInfo(TEST_UID, 'withui');
+        expect(next.info!.latest_version).toBe('0.9.0');
+        expect(next.info!.min_version).toBe('0.8.0');
+      });
+    } finally { vi.unstubAllGlobals(); }
     expect(info.ok).toBe(true);
     expect(info.info!.config.configured).toBe(true);
     expect(info.info!.config.role).toBe('teacher');
     expect(JSON.stringify(info.info)).not.toContain('secret-key');
     expect(info.info!.ui!.commands).toEqual(['health', 'list-challenges']);
     expect(info.info!.skills).toEqual([]);
-    expect(info.info!.latest_version).toBe('0.9.0');
-    expect(info.info!.min_version).toBe('0.8.0');
+  });
+
+  it('returns get-info without waiting for the version announcement', async () => {
+    const { savePluginRuntimeConfig, pluginUiInfo } = await loadPluginUi();
+    installPkg('withui');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, agent_id: 'student-companion-S-1', role: 'student', person_id: 'S-1' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    try {
+      await savePluginRuntimeConfig(TEST_UID, 'withui', {
+        server_url: 'http://localhost:3000', api_key: 'secret-key', student_id: 'S-1', role: 'student',
+      });
+    } finally { vi.unstubAllGlobals(); }
+
+    // 平台 200ms 才回话；get-info 必须**立刻**返回，而不是陪它等。
+    let announcementAnswered = false;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      announcementAnswered = true;
+      return new Response(JSON.stringify({ ok: true, latest_version: 'v0.9.0' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }));
+    try {
+      const info = await pluginUiInfo(TEST_UID, 'withui');
+      expect(info.ok).toBe(true);
+      expect(info.info!.config.configured).toBe(true);
+      expect(announcementAnswered).toBe(false);
+      expect(info.info!.latest_version).toBeUndefined();
+      await vi.waitFor(() => expect(announcementAnswered).toBe(true));
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it('keeps the api key on save when the input omits it', async () => {

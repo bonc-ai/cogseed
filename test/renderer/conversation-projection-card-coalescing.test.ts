@@ -116,7 +116,7 @@ describe('model-selected projection sidecar coalescing', () => {
     expect(source).toContain("projectionId: coalescedProjectionMatch.projectionId");
     expect(source).toContain('const projectionCardForBubble = _projectionReceiptForMessage(message)');
     // 两卡互斥抑制已删（拍板项 #8）：投影在场不再抑制引用行——投影数据并入
-    // 同一张「本次使用的记忆」卡。
+    // 同一张「本轮资产检索与带入状态」卡。
     expect(source).toContain("const recallCitationsHtml = role === 'assistant'");
     expect(source).not.toContain('!hasProjectionCard');
     expect(source).toContain('const contentHtml = suppressProjectionTransportProse');

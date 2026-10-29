@@ -17,7 +17,12 @@ const conversationSource = readFileSync(
 const start = conversationSource.indexOf('function _slowSwitchHost');
 const end = conversationSource.indexOf('\nasync function sendInConversation', start);
 if (start < 0 || end < 0) throw new Error('could not locate slow-switch source range');
-const switchSource = conversationSource.slice(start, end);
+// The real A2A entry uses this earlier helper even for ordinary local drafts.
+const lookupStart = conversationSource.indexOf('function _conversationById(');
+const lookupEnd = conversationSource.indexOf('\nfunction _conversationOperationDialog(', lookupStart);
+if (lookupStart < 0 || lookupEnd < 0) throw new Error('could not locate conversation lookup source range');
+const switchSource = conversationSource.slice(lookupStart, lookupEnd) + '\n'
+  + conversationSource.slice(start, end);
 
 interface SwitchSandboxOpts {
   agents?: Array<Record<string, any>>;
@@ -28,6 +33,7 @@ interface SwitchSandboxOpts {
   /** Composer text — the switch resend falls back to it when no run is active. */
   composerText?: string;
   currentCid?: string;
+  contacts?: Array<{ user_id: string; name: string }>;
 }
 
 function buildSwitchSandbox(opts: SwitchSandboxOpts = {}) {
@@ -41,6 +47,7 @@ function buildSwitchSandbox(opts: SwitchSandboxOpts = {}) {
   const chipRenderCalls: string[] = [];
   const recipientSaveCalls: string[] = [];
   const chatAttachSetCalls: Array<{ cid: string; items: unknown }> = [];
+  const toasts: string[] = [];
 
   const agents = Array.isArray(opts.agents) ? opts.agents : [];
   const composerMembers = {
@@ -84,6 +91,7 @@ function buildSwitchSandbox(opts: SwitchSandboxOpts = {}) {
     },
     DRAFT_CID: 'main_chat',
     currentCid: cid,
+    conversations: [{ conversation_id: cid }],
     _quotesByCid: new Map(),
     _chatAttachments: new Map(),
     _persistQuoteDraft: () => {},
@@ -91,7 +99,7 @@ function buildSwitchSandbox(opts: SwitchSandboxOpts = {}) {
     t: (key: string) => String(key),
     escapeHtml: (s: unknown) => String(s),
     CSS: { escape: (s: string) => String(s) },
-    uiToast: () => {},
+    uiToast: (message: string) => { toasts.push(message); },
     autoGrow: () => {},
     abortConvStream: () => {},
     apiFetch: async () => ({ json: async () => ({ ok: true, history: [] }) }),
@@ -148,11 +156,12 @@ function buildSwitchSandbox(opts: SwitchSandboxOpts = {}) {
     window: {
       composerMembers,
       getComposerAgentList: () => agents,
+      getComposerContactCandidates: () => opts.contacts || [],
     },
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
   };
   vm.runInNewContext(switchSource, sandbox, { filename: 'slow-switch.js' });
-  return { sandbox, cid, input, sent, chipRenderCalls, recipientSaveCalls, chatAttachSetCalls };
+  return { sandbox, cid, input, sent, chipRenderCalls, recipientSaveCalls, chatAttachSetCalls, toasts };
 }
 
 describe('external-agent switch-and-continue routing', () => {
@@ -268,5 +277,18 @@ describe('external-agent switch-and-continue routing', () => {
     expect(sent[0].extra?.member_agent_ids).toBeUndefined();
     expect(sent[0].extra?.mention_agent_ids).toBeUndefined();
     expect(sent[0].extra?.recipient_agent_id).toBeUndefined();
+  });
+
+  it('keeps a manually typed contact out of local resend without structured authorization', async () => {
+    const { sandbox, input, sent, toasts } = buildSwitchSandbox({
+      contacts: [{ user_id: 'peer-remote', name: 'RemoteBob' }],
+      composerText: '@RemoteBob hello',
+    });
+
+    await sandbox.handleChatSubmit();
+
+    expect(sent).toHaveLength(0);
+    expect(input.value).toBe('@RemoteBob hello');
+    expect(toasts).toEqual(['composer.a2a.confirm_recipient']);
   });
 });

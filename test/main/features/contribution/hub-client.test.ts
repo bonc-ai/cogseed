@@ -13,6 +13,15 @@ import {
   clientAppVersion, listMine, listWithdrawalRequests, platformWireValue, readTerms, withdrawSubmission,
 } from '../../../../src/main/features/contribution/hub-client';
 
+const BASE = {
+  target_content_id: null, package_digest: 'a'.repeat(64), package_size: 3,
+  file_list: [{ path: 'agent.json', size: 1, sha256: 'b'.repeat(64) }],
+  metadata: { name: '报销助手', description: '核对材料', version: '1.0.0' },
+  declarations: {}, local_check: { blocking: [], warnings: [] },
+};
+const SKILL_MANIFEST = { ...BASE, content_type: 'skill' as const, local_skill_id: '00000000-0000-4000-8000-000000000001' };
+const AGENT_MANIFEST = { ...BASE, content_type: 'agent' as const, local_agent_id: '00000000-0000-4000-8000-000000000002' };
+
 const originalFetch = globalThis.fetch;
 let calls: Array<{ url: string; init: RequestInit }> = [];
 
@@ -45,9 +54,43 @@ describe('current Hub contribution adapter', () => {
       expect(headers['X-CogSeed-Client-Version']).toBe('1.2.3');
       expect(headers['X-CogSeed-Platform']).toBe('macos');
       expect(headers['X-CogSeed-Request-ID']).toMatch(/^[0-9a-f-]{36}$/);
+      // AG-FR-072：Hub 的企业线/开源线隔离依赖每个请求都带通道头
+      expect(headers['CogSeed-Channel']).toBe('open');
     }
     expect(JSON.parse(String(calls[3].init.body))).toEqual({ content_id: 'abcdef123456', reason: 'reason' });
     expect(JSON.parse(String(calls[3].init.body))).not.toHaveProperty('version');
+  });
+
+  it('条款与提交请求同样带通道头（不只是已登录读取类请求）', async () => {
+    await readTerms();
+    await createSubmission('uid', {
+      idempotencyKey: 'k1',
+      manifest: SKILL_MANIFEST,
+      packageBytes: Buffer.from('zip'),
+    });
+    for (const { init } of calls) {
+      expect((init.headers as Record<string, string>)['CogSeed-Channel']).toBe('open');
+    }
+  });
+
+  it('Agent 提交：multipart 的 manifest 带 content_type=agent，包文件名为 agent.zip；Skill 仍为 skill.zip', async () => {
+    await createSubmission('uid', { idempotencyKey: 'k-agent', manifest: AGENT_MANIFEST, packageBytes: Buffer.from('zip') });
+    await createSubmission('uid', { idempotencyKey: 'k-skill', manifest: SKILL_MANIFEST, packageBytes: Buffer.from('zip') });
+    const [agentForm, skillForm] = calls.map((c) => c.init.body as FormData);
+    expect(JSON.parse(String(await (agentForm.get('manifest') as Blob).text())).content_type).toBe('agent');
+    expect((agentForm.get('package') as File).name).toBe('agent.zip');
+    expect((skillForm.get('package') as File).name).toBe('skill.zip');
+    expect((calls[0].init.headers as Record<string, string>)['Idempotency-Key']).toBe('k-agent');
+  });
+
+  it('Agent 提交同样拒绝尚未冻结的 components / icon 字段', async () => {
+    await expect(createSubmission('uid', {
+      idempotencyKey: 'k', manifest: { ...AGENT_MANIFEST, local_check: { components: {} } }, packageBytes: Buffer.from('z'),
+    })).rejects.toThrow('components_contract_not_frozen');
+    await expect(createSubmission('uid', {
+      idempotencyKey: 'k', manifest: { ...AGENT_MANIFEST, icon: 'x' }, packageBytes: Buffer.from('z'),
+    })).rejects.toThrow('icon_contract_not_frozen');
+    expect(calls).toEqual([]);
   });
 
   /**

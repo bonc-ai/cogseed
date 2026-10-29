@@ -227,6 +227,77 @@ describe('reflection-orchestrator › runOneCycle', () => {
     expect(completed).toBe(0);
     expect(reflect).not.toHaveBeenCalled();
   });
+
+  // P-r2-15: the cycle's cooperative-cancellation signal must reach the
+  // per-agent reflection call, so a maxSliceMs expiry can interrupt an
+  // in-flight (minutes-long) reflection LLM call instead of only taking
+  // effect between agents.
+  it('forwards the cycle signal to the reflect callback', async () => {
+    const mod = await loadModule();
+    const controller = new AbortController();
+    const seenSignals: (AbortSignal | undefined)[] = [];
+    const completed = await mod.runOneCycle(TEST_UID, {
+      now: () => NOW,
+      reflect: async (_uid, _id, _since, signal) => { seenSignals.push(signal); },
+      isDirty: async () => true,
+      signal: controller.signal,
+    });
+    expect(completed).toBeGreaterThanOrEqual(1);
+    expect(seenSignals.length).toBeGreaterThanOrEqual(1);
+    for (const s of seenSignals) expect(s).toBe(controller.signal);
+  });
+
+  // P-r1-47: cooldown stamps for deleted agents are lazily pruned each cycle
+  // (~50B/agent would otherwise leak in reflection-state.json forever).
+  it('prunes cooldown stamps of deleted agents, keeping _default and live agents', async () => {
+    const paths = await import('../../../src/main/paths');
+    // One live, dispatchable agent.
+    const agentId = 'a1b2c3d4e5f6';
+    const dir = paths.agentDir(TEST_UID, agentId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify({
+      agent_id: agentId, name: 'Live Agent', interaction_mode: 'chat',
+    }));
+
+    writeReflectionState(TEST_UID, {
+      '_default': new Date(NOW - 6 * 3600 * 1000).toISOString(),
+      [agentId]: new Date(NOW - 6 * 3600 * 1000).toISOString(),
+      'deleted-agent': new Date(NOW - 6 * 3600 * 1000).toISOString(),
+    });
+
+    const mod = await loadModule();
+    await mod.runOneCycle(TEST_UID, {
+      now: () => NOW,
+      reflect: async () => { /* noop */ },
+      isDirty: async () => false,
+    });
+
+    const state = mod.readReflectionState(TEST_UID);
+    expect(state.lastReflectedAt['deleted-agent']).toBeUndefined();
+    expect(state.lastReflectedAt[agentId]).toBeDefined();
+    expect(state.lastReflectedAt[mod.DEFAULT_AGENT_ID]).toBeDefined();
+  });
+});
+
+// ── activeUserMismatch (P-r1-46) ─────────────────────────────────────────
+
+describe('reflection-orchestrator › activeUserMismatch', () => {
+  it('is false while the scheduled uid is still the active user', async () => {
+    const mod = await loadModule();
+    expect(await mod.activeUserMismatch(TEST_UID)).toBe(false);
+  });
+
+  it('is true after the active user switched away from the scheduled uid', async () => {
+    const users = await import('../../../src/main/features/users');
+    const mod = await loadModule();
+    users.activateUser('other-user');
+    try {
+      expect(await mod.activeUserMismatch(TEST_UID)).toBe(true);
+      expect(await mod.activeUserMismatch('other-user')).toBe(false);
+    } finally {
+      users.activateUser(TEST_UID);
+    }
+  });
 });
 
 // ── isAgentDirty (cross-agent dispatch fix) ─────────────────────────────

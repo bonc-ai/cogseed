@@ -30,6 +30,39 @@ async function backendPaths() {
 }
 
 describe('CogSeed task and session store', () => {
+  it('records conversation, agent and run refs on task events so a run is traceable (N-09)', async () => {
+    // Regression: task events used to carry only { source } payloads, so a run
+    // could be attributed only by parsing the session id string — which is why
+    // the 2026-10-12 17:07 incident could not be traced from the event stream.
+    const store = await backend();
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+
+    const traced = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-store-refs',
+      task: 'Traceable run.',
+      conversationId: 'cid-trace',
+      agentId: 'agent-trace',
+      groupChatRunId: 'run-trace',
+    });
+    const [first] = await events.readCogSeedTaskEvents(USER_A, traced.task.taskId, 0, 10);
+
+    expect(first).toMatchObject({
+      conversationId: 'cid-trace',
+      agentId: 'agent-trace',
+      runId: 'run-trace',
+    });
+
+    // A task with no refs must not invent them (absence stays semantic).
+    const bare = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-store-refs-bare',
+      task: 'Bare run.',
+    });
+    const [bareEvent] = await events.readCogSeedTaskEvents(USER_A, bare.task.taskId, 0, 10);
+    expect(bareEvent).not.toHaveProperty('conversationId');
+    expect(bareEvent).not.toHaveProperty('agentId');
+    expect(bareEvent).not.toHaveProperty('runId');
+  });
+
   it('persists a planned task without creating an execution or active session', async () => {
     const store = await backend();
     const events = await import('../../../../src/main/features/cogseed_backend/event-store');

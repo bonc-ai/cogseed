@@ -13,10 +13,8 @@ const cardMock = vi.hoisted(() => ({
     taskRunId: 'task-a',
     purpose: 'review',
     status: 'preview',
-    summary: { includedCount: 2, omittedCount: 1, sourceRefCount: 3 },
     assetSummaries: [{ assetId: 'aa-a', title: 'Use decision logs' }],
-    omittedAssetRefs: [{ assetId: 'aa-b', reason: 'asset_paused' }],
-    availableActions: ['confirm', 'defer', 'reject'],
+    includedAssetIds: ['aa-a', 'aa-b'],
   })),
 }));
 

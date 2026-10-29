@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { WS_ROOT, userAgentsDir, SRC_ROOT } from '../paths';
 import { createLogger } from '../logger';
+import { setAgentEnabled } from './component_enabled';
 import { getActiveUserId } from './users';
 
 const log = createLogger('version-migration');
@@ -116,16 +117,43 @@ function clearCliAgents(): number {
         const agentJson = JSON.parse(fs.readFileSync(agentJsonPath, 'utf8'));
         const runtime = agentJson.runtime;
 
-        // 检查是否为 CLI Agent
+        // CLI 运行时（cli / p3394-gateway）在本版本不再可用：**停用而不是删除**。
+        //
+        // 2026-10-13 的事件：迁移用 fs.rmSync 整目录删除，用户界面上的智能体直接
+        // 消失、也表现为"本地智能体没有回复"，且**不可恢复**。仓库规则明确要求
+        // 「Never delete user data to make progress：sideline 或写 tombstone」。
+        // 因此这里改为在 agent.json 上写停用标记（保持 JSON 合法、保留全部配置与
+        // 自定义字段），让用户/支持可以据此重建或恢复，而不是丢掉数据。
         if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
-          const agentPath = path.join(agentsDir, agentDir.name);
-          fs.rmSync(agentPath, { recursive: true, force: true });
+          const disabledAt = new Date().toISOString();
+          const tombstoned = {
+            ...agentJson,
+            disabled_at: disabledAt,
+            disabled_reason: 'cli-runtime-retired',
+            disabled_runtime_kind: runtime.kind,
+            ...(runtime.cli ? { disabled_runtime_cli: runtime.cli } : {}),
+          };
+          fs.writeFileSync(agentJsonPath, JSON.stringify(tombstoned, null, 2), 'utf8');
+          // Also flip the component-level enabled flag: the agent lists derive
+          // `enabled` from it (agents.ts reads readDisabledSets), so a tombstoned
+          // agent is presented as disabled instead of looking usable and then
+          // failing when the user picks it.
+          try {
+            setAgentEnabled(userId, agentDir.name, false);
+          } catch (err) {
+            log.warn('failed to disable tombstoned agent in component sets', {
+              userId,
+              agentId: agentDir.name,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
           clearedCount++;
-          log.info('cleared CLI agent', {
+          log.info('disabled CLI agent (tombstoned, not deleted)', {
             userId,
             agentId: agentDir.name,
             name: agentJson.name,
-            cli: runtime.cli
+            cli: runtime.cli,
+            disabledAt,
           });
         }
       } catch (err) {

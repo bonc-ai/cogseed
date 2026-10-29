@@ -23,6 +23,7 @@ import { getWorkspacePath } from '../../features/user_workspace';
 import { chatAttachmentDirForConversation } from '../../util/project-layout';
 
 export interface FeishuToolsOpts {
+  beforeAction?: (toolName: string, input: Record<string, unknown>) => Promise<ToolResult | undefined>;
   userId: string;
   /** Conversation id: scopes attachment roots and confirms routing. */
   cid?: string;
@@ -295,6 +296,7 @@ function createSendFileTool(opts: FeishuToolsOpts): AgentTool {
         {
           cid: opts.cid || 'turn',
           sourceKey: fileSourceKeyFor(opts.cid, opts.turnId, filePath),
+          ...(opts.beforeAction ? { beforeDispatch: async () => { const denied = await opts.beforeAction!('messaging_send_file', input); if (denied) throw new Error(denied.content); if (ctx.signal?.aborted) throw Object.assign(new Error('E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE: file send cancelled'), { name: 'AbortError' }); } } : {}),
           signal: ctx.signal ?? null,
         },
       );

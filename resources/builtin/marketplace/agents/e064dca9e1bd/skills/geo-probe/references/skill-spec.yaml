@@ -1,0 +1,11 @@
+name: geo-probe
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'GEO visibility probe (two ops): op=queries generates representative prompts
+  from the page topic+brand; op=score parses a set of model answers into brand-mention
+  rate, sourced-citation rate (SoV) and competitor share, honestly separating parametric
+  mentions from sourced citations;'
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

@@ -1,0 +1,7 @@
+{
+  "name": "引用未开放的内置能力",
+  "description_zh": "package-installer 不在客户端开放清单内。",
+  "workflow": "1. x",
+  "category": "office",
+  "skill_list": ["builtin:package-installer"]
+}

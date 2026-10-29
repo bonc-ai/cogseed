@@ -1,23 +1,4 @@
-/**
- * 红队探针 r3：已删资产的投影值能否借「分组回收站恢复」复活（终态资产残留）。
- *
- * 靶点（读码推演）：
- * - removeTemplateFieldValuesForRecallAsset（personal_ontology_template_files.ts
- *   :786 起）的 editPoDoc 回调只遍历 ctx.doc.groups 活组——文件内 grep "trash"
- *   零命中，doc.trash 里的投影值不被级联清理；
- * - deleteGroup 把整组（含 assetId 投影值）搬进 trash（personal_ontology_groups.ts
- *   :179-193），restoreDeletedGroup（:769）整状态复活，**无任何投影/资产存活检查**；
- * - 复活的投影值仍带 assetId → po.values.delete 返回 asset_projection_read_only
- *   （po/api.ts:375）——用户被自己删过的资产尸体锁死。
- *
- * 预言：组删除 → 资产投影级联清（removed=0，扫不到 trash）→ 组恢复 →
- * 已删资产的投影值原样复活且只读锁死。
- *
- * 2026-09-30 r3 收尾（记账员）：用例 1 对应待议 P-r3-6（恢复侧净化 / 删除侧
- * 截断 / 级联侧扩围三向分叉，且与 r1 P-r1-14 纠缠需统一权衡）；用例 2 是
- * r1 待议 P-r1-14（普通组孤儿）的运行时实证 → 均 it.skip。断言锁定的均是
- * 待议现状，拍板后随方向反转。见 round-3-甄别.md toPending。
- */
+/** 资产清除、普通组及回收站恢复之间的投影引用一致性。 */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -69,22 +50,28 @@ function dialect(lines: string[]): string {
   return ['## 字段区', '', '### 常用工具', ...lines, '', '---', '', '## 流水区', ''].join('\n');
 }
 
-describe('probe r3: 已删资产投影借分组回收站恢复复活（待议项已 skip）', () => {
-  // 待议 P-r3-6：恢复通道复活已删资产的投影值（restoreDeletedGroup 无投影/
-  // 资产存活检查，级联只扫活组不扫 trash）。
-  it.skip('组删除→资产级联清（trash 不扫）→组恢复→投影值复活且只读锁死', async () => {
+describe('已删资产投影借分组回收站恢复复活', () => {
+  // 清除资产后恢复分组，观察回收站中的投影值是否重新出现。
+  it('组删除→资产级联清（trash 不扫，对照组契约）→组恢复：已清资产的投影被过滤，不复活不锁死', async () => {
     const groups = await loadGroups();
     const templates = await loadTemplates();
     const api = await loadApi();
 
-    // 存量数据：普通组里带 v1 迁移来的资产投影值（writeGroupContent 伪造通道，
-    // r1 已证实；这里只作为数据构造手段）。
+    // 存量数据：普通组里带 v1 迁移来的资产投影值（伪造通道已关，按存量落盘
+    // 构造——迁移 toPoValue 原样保留 @asset 标记，生产语义等价）。
     const created = await groups.createGroup(UID, '探针组');
     const groupId = created.group!.group_id;
-    await groups.writeGroupContent(UID, groupId, dialect([
-      `- 资产维护的原文 [手动] @asset:${ASSET}`,
-    ]));
-    expect(readDoc().groups[0].values[0].assetId).toBe(ASSET);
+    await groups.writeGroupContent(UID, groupId, dialect(['- 普通值占位 [手动]']));
+    const doc0 = readDoc();
+    const g0 = doc0.groups.find((g: any) => g.id === groupId);
+    const field0 = g0.fields.find((f: any) => f.name === '常用工具');
+    g0.values.push({
+      id: 'v_r3', fieldId: field0.id, text: '资产维护的原文', source: '手动', assetId: ASSET,
+      createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, UID, 'cloud', 'cognition', 'personal-ontology.json'),
+      JSON.stringify(doc0, null, 2), 'utf8');
 
     // 用户删除分组：投影值随组进 trash（用户意图 = 不再保留这组内容）。
     const del = await groups.deleteGroup(UID, groupId);
@@ -92,46 +79,55 @@ describe('probe r3: 已删资产投影借分组回收站恢复复活（待议项
     expect(readDoc().groups).toHaveLength(0);
     expect(readDoc().trash).toHaveLength(1);
 
-    // 资产侧 purge 的投影级联：只扫活组，trash 里的投影值不被清。
+    // 资产侧 purge 的投影级联：只扫活组，trash 里的投影值不被清（设计口径，
+    // 与本文件对照组「普通活组不被级联清理」同一边界）。
     const purge = await templates.removeTemplateFieldValuesForRecallAsset(UID, ASSET);
     expect(purge.ok).toBe(true);
-    expect(purge.removed).toBe(0); // 关键断言：级联对 trash 零覆盖
-    expect(readDoc().trash[0].group.values[0].assetId).toBe(ASSET);
+    expect(purge.removed).toBe(0); // 级联对 trash 零覆盖
+    expect(readDoc().trash[0].group.values.some((v: any) => v.assetId === ASSET)).toBe(true);
 
     // 用户从回收站恢复分组（po.groups.restore 通道语义）。
     const restore = await groups.restoreDeletedGroup(UID, groupId);
     expect(restore.ok).toBe(true);
 
-    // 复活实锤：资产已删，投影值原样回来。
+    // 应然：ASSET 记录不在 ability-assets（从未创建=purge/物理删除同构）→
+    // 恢复侧过滤生效，投影值不复活；普通值与组本身照常恢复。
     const doc = readDoc();
     const revived = doc.groups.find((g: any) => g.id === groupId);
-    expect(revived.values).toHaveLength(1);
-    expect(revived.values[0].assetId).toBe(ASSET);
-    expect(revived.values[0].text).toBe('资产维护的原文');
-
-    // 锁死实证：复活的投影值在单值通道被只读守卫拦住，用户删不掉。
-    const valueId = revived.values[0].id;
-    const delValue = await api.poDeleteValue(UID, groupId, valueId);
-    expect(delValue.ok).toBe(false);
-    expect(delValue.error).toBe('asset_projection_read_only');
+    expect(revived).toBeTruthy();
+    expect(revived.values.some((v: any) => v.assetId === ASSET)).toBe(false);
+    expect(revived.values.some((v: any) => v.text === '资产维护的原文')).toBe(false);
+    expect(revived.values.some((v: any) => v.text === '普通值占位')).toBe(true);
+    // 无锁死态：剩下的普通值走单值通道可正常删（投影值已不在，无从锁死）。
+    const remaining = revived.values.find((v: any) => v.text === '普通值占位');
+    const delValue = await api.poDeleteValue(UID, groupId, remaining.id);
+    expect(delValue.ok).toBe(true);
   });
 
-  // 待议 P-r1-14（r1 遗留）：资产删除级联只清模板组，普通组 assetId 值的
-  // 运行时实证。拍板扩级联后反转，拍板维持现状则可转为「锁现状」回归启用。
-  it.skip('对照组：普通组活组的投影值同样不被级联清（P-r1-14 范围的运行时实证）', async () => {
+  // 普通活组中的投影值作为对照，区分模板组与普通组的清理范围（正确契约，启用）。
+  it('对照组：普通活组中的投影值不被级联清理', async () => {
     const groups = await loadGroups();
     const templates = await loadTemplates();
 
     const created = await groups.createGroup(UID, '活组');
     const groupId = created.group!.group_id;
-    await groups.writeGroupContent(UID, groupId, dialect([
-      `- 资产维护的原文 [手动] @asset:${ASSET}`,
-    ]));
+    await groups.writeGroupContent(UID, groupId, dialect(['- 普通值占位 [手动]']));
+    // 存量形态构造（与主例同款）：方言写通道已不再接受 @asset 标记，投影值
+    // 按迁移遗留形态直接落在文档里（迁移 toPoValue 原样保留 assetId）。
+    const doc0 = readDoc();
+    const g0 = doc0.groups.find((g: any) => g.id === groupId);
+    const field0 = g0.fields.find((f: any) => f.name === '常用工具');
+    g0.values.push({
+      id: 'v_r3c', fieldId: field0.id, text: '资产维护的原文', source: '手动', assetId: ASSET,
+      createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, UID, 'cloud', 'cognition', 'personal-ontology.json'),
+      JSON.stringify(doc0, null, 2), 'utf8');
 
     const purge = await templates.removeTemplateFieldValuesForRecallAsset(UID, ASSET);
     expect(purge.ok).toBe(true);
-    // 运行时证实：级联只处理 kind==='template' 的组，普通组（无论活组还是
-    // trash）一律不清——待议 P-r1-14 所述"普通组孤儿"的直接证据。
+    // 核对普通组中的投影值是否仍保留，不将模板组清理推断为全组清理。
     const after = readDoc().groups.find((g: any) => g.id === groupId);
     expect(after.values.some((v: any) => v.assetId === ASSET)).toBe(true);
     expect(purge.removed).toBe(0);

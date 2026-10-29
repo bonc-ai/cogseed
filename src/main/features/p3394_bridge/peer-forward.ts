@@ -34,6 +34,10 @@ const log = createLogger('p3394-bridge:peer-forward');
 
 export interface P3394ForwardReply {
   text: string;
+  /** Phase-1 acknowledgement (decision 2): the target promoted the forward to
+   *  a background job, so `text` may only be the acceptance note. */
+  kind?: 'reply' | 'background';
+  background?: { job_id: string };
 }
 
 export interface P3394PeerForwardDeps {
@@ -174,6 +178,12 @@ export async function forwardEnvelopeToPeer(
 
   try {
     const reply = await deps.sendAndWait(targetId, forwarded);
+    // A promoted forward has no result yet: relay the acceptance notice so the
+    // original sender (and the gateway's /p3394/call waiter) does not hang on an
+    // empty reply. The eventual result follows the normal background channel.
+    const relayText = reply.kind === 'background' && reply.background
+      ? `[p3394_background_accepted] job_id=${reply.background.job_id}`
+      : reply.text;
 
     // Relay the target's reply back to the original sender through the
     // same outbound channel (sender is a registered peer with an endpoint).
@@ -187,7 +197,7 @@ export async function forwardEnvelopeToPeer(
       role: 'responder',
       sender: { agent_id: 'cogseed', alias: 'CogSeed' },
       recipients: [{ agent_id: senderId }],
-      payload: { parts: [{ type: 'text', text: reply.text }] },
+      payload: { parts: [{ type: 'text', text: relayText }] },
       reply_to: envelope.message_id,
       idempotency_key: `forward-reply:${envelope.idempotency_key}`,
     };

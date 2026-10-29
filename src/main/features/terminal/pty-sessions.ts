@@ -127,11 +127,11 @@ function defaultShell(): { file: string; args: string[] } {
 }
 
 /** Resolve + sandbox the requested cwd. Falls back to the active workspace. */
-function resolveCwd(uid: string, requested?: string): string {
+function resolveCwd(uid: string, requested?: string, extraRoots: readonly string[] = []): string {
   const workspace = getWorkspacePath(uid);
   if (!requested) return workspace;
   const resolved = path.resolve(requested);
-  const roots = [workspace, ...grantedRootsForSandbox(uid)];
+  const roots = [workspace, ...grantedRootsForSandbox(uid), ...extraRoots.filter((root) => path.isAbsolute(root))];
   if (!isPathAllowed(resolved, roots)) {
     throw new Error('cwd is outside the allowed workspace');
   }
@@ -166,6 +166,8 @@ function viewOf(s: TerminalSession): TerminalSessionView {
 export interface StartTerminalOpts {
   uid: string;
   cwd?: string;
+  /** Conversation-derived roots (e.g. space project_dir) trusted for this PTY. */
+  allowedRoots?: readonly string[];
   cols?: number;
   rows?: number;
 }
@@ -177,7 +179,7 @@ export function startTerminalSession(opts: StartTerminalOpts): TerminalSessionVi
 
   const cols = clampInt(opts.cols, MIN_COLS, MAX_COLS, 80);
   const rows = clampInt(opts.rows, MIN_ROWS, MAX_ROWS, 24);
-  const cwd = resolveCwd(uid, opts.cwd);
+  const cwd = resolveCwd(uid, opts.cwd, opts.allowedRoots);
 
   const pty = loadNodePty();
   const { file, args } = defaultShell();

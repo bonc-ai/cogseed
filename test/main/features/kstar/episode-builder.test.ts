@@ -157,7 +157,7 @@ describe('KSTAR episode builders', () => {
       expect.objectContaining({ sequence: 1, actor: 'commander', id: 'call-write', name: 'write_file', argumentsSummary: 'path', status: 'error' }),
     ]);
     expect(episode.a.agentActions).toEqual([expect.objectContaining({ sequence: 0, actor: 'commander', action: 'Plan completed.', status: 'ok' })]);
-    expect(episode.evidenceRefs).toContainEqual(expect.objectContaining({ kind: 'conversation', id: 'msg-user' }));
+    expect(episode.evidenceRefs).toContainEqual(expect.objectContaining({ kind: 'conversation', id: 'msg-user', subtype: 'message' }));
     expect(episode.evidenceRefs).not.toContainEqual(expect.objectContaining({ id: 'msg-old' }));
     expect(episode).not.toHaveProperty('reuseTurnIds');
   });

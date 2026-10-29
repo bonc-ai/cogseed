@@ -64,6 +64,7 @@ describe('renderer lazy feature loader', () => {
     await expect(context.loadRendererFeature('marketplace')).resolves.toBeUndefined();
     expect(appended.map((script) => script.src)).toEqual([
       './modules/marketplace.js',
+      './modules/catalog.js',
     ]);
   });
 
@@ -82,6 +83,7 @@ describe('renderer lazy feature loader', () => {
       './hub-contributions.css',
       './modules/hub-contributions-model.js',
       './modules/hub-contributions.js',
+      './modules/hub-agent-contributions.js',
       './modules/skills-bindings.js',
     ]);
   });
@@ -150,10 +152,13 @@ describe('renderer lazy feature loader', () => {
     expect(styleCss).toContain('.conv-list-section-header:hover .conv-space-quick-task');
     // 中心页卡片的旧入口已移除（入口统一到左侧空间组）
     expect(js).not.toContain('data-ws="quick-task"');
-    // 本地文件夹导入：新建空间弹窗本地文件夹选择 + 导入进度订阅（workspace-import:progress 推送）
-    expect(js).toContain('data-ws="pick-import-dir"');
-    expect(js).toContain("_invoke('workspace.importFolder'");
-    expect(js).toContain('workspace-import:progress');
+    // 本地项目目录：新建空间弹窗选择目录 = **绑定**（原地工作），不是复制导入。
+    // 复制式导入（workspace.importFolder + 进度推送）已从弹窗退场；老空间 imports/
+    // 数据的读取路径另在主进程（spaces_artifacts 扫描 + IPC 放行）保持不动。
+    expect(js).toContain('data-ws="pick-project-dir"');
+    expect(js).toContain('{ projectDir: _createProjectDir }');
+    expect(js).not.toContain("_invoke('workspace.importFolder'");
+    expect(js).not.toContain('workspace-import:progress');
   });
 
   it('retries a required script while reusing scripts that already loaded', async () => {

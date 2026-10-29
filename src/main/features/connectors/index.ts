@@ -4,6 +4,7 @@ export {
   getInstance,
   beginOAuthConnect,
   connectViaOAuth,
+  connectInteractiveToken,
   addCustomInstance,
   removeInstance,
   refreshTools,

@@ -380,6 +380,30 @@ describe('kb_indexer › reconcile', () => {
     expect(kb.getFileByPath(TEST_UID, '.hidden/junk.md')).toBeNull();
   });
 
+  it('keeps po render-copy rows instead of deleting them at boot (P-r1-99)', async () => {
+    // po/store.ts syncGroupRender writes `.personal_ontology_groups/<id>.md`
+    // and enqueues it into kb_files. The walk whitelists that one dot-dir so
+    // reconcile sees the source; before the whitelist every boot-time
+    // reconcile enqueued a delete and silently dropped the ontology rows.
+    writeCtx('.personal_ontology_groups/g1.md', '# 学生');
+    writeCtx('.personal_ontology_groups/.history/old.json', '{}');  // inner dot-dir stays hidden
+
+    const idx = await import('../../../src/main/features/kb_indexer');
+    const r = await idx.reconcile(TEST_UID);
+    expect(r.enqueuedUpsert).toBe(1);   // only g1.md — .history/ remains invisible
+    expect(r.enqueuedDelete).toBe(0);
+    await idx.drain(TEST_UID);
+
+    // Boot path: a second reconcile must not judge the row "source gone".
+    const r2 = await idx.reconcile(TEST_UID);
+    expect(r2.enqueuedDelete).toBe(0);
+    expect(r2.unchanged).toBe(1);
+
+    const kb = await import('../../../src/main/features/kb_vector');
+    expect(kb.getFileByPath(TEST_UID, '.personal_ontology_groups/g1.md')?.status).toBe('ready');
+    expect(kb.getFileByPath(TEST_UID, '.personal_ontology_groups/.history/old.json')).toBeNull();
+  });
+
   it('re-enqueues files previously marked failed', async () => {
     const kb = await import('../../../src/main/features/kb_vector');
     const idx = await import('../../../src/main/features/kb_indexer');

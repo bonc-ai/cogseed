@@ -41,6 +41,7 @@ import {
   listAttachments,
   listTasks,
   nextDueAtForTest,
+  runTaskNow,
   stopScheduler,
   subscribeFires,
   updateTask,
@@ -51,7 +52,7 @@ import {
   type AutoTask,
   type Schedule,
 } from '../../../src/main/features/auto_tasks';
-import { setCurrentLang } from '../../../src/main/i18n';
+import { setCurrentLang, setCurrentUiLang } from '../../../src/main/i18n';
 import { _setDeviceFingerprintForTests } from '../../../src/main/util/device';
 
 const autoRuntime = vi.hoisted(() => ({
@@ -148,6 +149,7 @@ afterEach(() => {
   _setMarkRanFailureForTest(null);
   vi.useRealTimers();
   setCurrentLang('en');
+  setCurrentUiLang('zh');
   fs.rmSync(userRoot(TEST_UID), { recursive: true, force: true });
 });
 
@@ -164,7 +166,8 @@ describe('seed text composition', () => {
       },
     );
     const text = _buildSeedTextForTest(task);
-    expect(text).toBe('@Codex 使用 GitHub 连接器：使用 深度研究 技能：查看 CogSeed 项目最近 24h 新增的 issue。包括新建和回复。');
+    expect(text).toBe('自动任务「at_00000001」：本条由计划任务自动发送，不是用户此刻的输入。\n\n'
+        + '@Codex 使用 GitHub 连接器：使用 深度研究 技能：查看 CogSeed 项目最近 24h 新增的 issue。包括新建和回复。');
     expect(text).not.toContain('connectors.use_prefix');
     expect(text).not.toContain('skills.use_prefix');
   });
@@ -188,8 +191,29 @@ describe('seed text composition', () => {
     );
 
     expect(_buildSeedTextForTest(task)).toBe(
-      'brand-research 技能 鸟 content-writer 技能 水电费 GitHub 连接器',
+      '自动任务「at_00000001」：本条由计划任务自动发送，不是用户此刻的输入。\n\n'
+      + 'brand-research 技能 鸟 content-writer 技能 水电费 GitHub 连接器',
     );
+  });
+});
+
+describe('seed text composition › fire framing', () => {
+  it('states the schedule origin with the task title', () => {
+    setCurrentLang('zh');
+    const named = makeTask({ type: 'daily', hour: 9, minute: 0 }, { title: '每日构建检查', content: '检查构建' });
+    expect(_buildSeedTextForTest(named)).toBe(
+      '自动任务「每日构建检查」：本条由计划任务自动发送，不是用户此刻的输入。\n\n检查构建',
+    );
+    // 无标题时回退到任务 id，来源行永远不空
+    const anonymous = makeTask({ type: 'daily', hour: 9, minute: 0 }, { content: '检查构建' });
+    expect(_buildSeedTextForTest(anonymous)).toContain('「at_00000001」');
+  });
+
+  it('carries no timestamp, so identical fires stay identical', () => {
+    setCurrentLang('zh');
+    const task = makeTask({ type: 'daily', hour: 9, minute: 0 }, { title: 't', content: 'c' });
+    expect(_buildSeedTextForTest(task)).toBe(_buildSeedTextForTest({ ...task }));
+    expect(_buildSeedTextForTest(task)).not.toMatch(/\d{2}:\d{2}/);
   });
 });
 
@@ -579,6 +603,141 @@ describe('attachments', () => {
   });
 });
 
+describe('manual automation dispatch', () => {
+  const taskId = 'at_abc01234';
+  const schedule: Schedule = { type: 'one_time', at: '2026-05-22T10:00:00.000Z' };
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));
+    dispatchRuntime.dispatchToFeishuHome.mockReset();
+    dispatchRuntime.dispatchToFeishuHome.mockResolvedValue({ ok: true });
+  });
+
+  it('runs a paused project task with its saved chips and attachments, leaving its one-time schedule intact', async () => {
+    writeProject(TEST_UID, 'p_manual', ['agent_codex']);
+    await uploadAttachment(TEST_UID, taskId, 'brief.md', Buffer.from('manual brief'));
+    await createTask(TEST_UID, {
+      id: taskId, enabled: false, title: 'Manual test', content: 'read the brief',
+      project_id: 'p_manual', attachments: ['brief.md'],
+      recipient: { kind: 'agent', id: 'agent_codex', name: 'Codex' },
+      message_parts: [
+        { type: 'use', kind: 'skill', id: 'research', name: 'Research' },
+        { type: 'text', text: ' read the brief' },
+      ],
+      schedule,
+    });
+    setCurrentUiLang('en');
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: true, cid: 'cid_auto' });
+    expect(autoRuntime.createConversation).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({
+      title: 'Manual test', projectId: 'p_manual', originAutoTaskId: taskId,
+    }));
+    expect(autoRuntime.send).toHaveBeenCalledWith(expect.objectContaining({
+      userId: TEST_UID, cid: 'cid_auto',
+      text: expect.stringContaining('@Codex Research skill read the brief'), attachments: ['brief.md'],
+      recipient_agent_id: 'agent_codex', recipient_origin: 'user_selection',
+    }));
+    expect(fs.readFileSync(path.join(projectChatAttachmentDir(TEST_UID, 'p_manual', 'cid_auto'), 'brief.md'), 'utf8'))
+      .toBe('manual brief');
+    const saved = await getTask(TEST_UID, taskId);
+    expect(saved).toMatchObject({ enabled: false, schedule, last_manual_run_at: '2026-05-22T09:00:00.000Z' });
+    expect(saved?.last_run_at).toBeUndefined();
+  });
+
+  it('does not consume an enabled one-time task or change the next due time', async () => {
+    await createTask(TEST_UID, { id: taskId, content: 'hello', schedule });
+    const before = nextDueAtForTest((await getTask(TEST_UID, taskId))!, new Date());
+    await runTaskNow(TEST_UID, taskId);
+    const saved = (await getTask(TEST_UID, taskId))!;
+    expect(saved.enabled).toBe(true);
+    expect(nextDueAtForTest(saved, new Date())).toEqual(before);
+    vi.setSystemTime(new Date(schedule.at));
+    await _onTimerFireForTest(TEST_UID, taskId);
+    expect(autoRuntime.send).toHaveBeenCalledTimes(2);
+    expect((await getTask(TEST_UID, taskId))?.enabled).toBe(false);
+  });
+
+  it('keeps recurring schedule baselines unchanged', async () => {
+    await createTask(TEST_UID, { id: taskId, content: 'hello', schedule: { type: 'daily', hour: 10, minute: 0 } });
+    const before = nextDueAtForTest((await getTask(TEST_UID, taskId))!, new Date());
+    await runTaskNow(TEST_UID, taskId);
+    expect(nextDueAtForTest((await getTask(TEST_UID, taskId))!, new Date())).toEqual(before);
+    expect((await getTask(TEST_UID, taskId))?.last_run_at).toBeUndefined();
+  });
+
+  it('rejects invalid, missing, other-user, and other-device tasks before dispatch', async () => {
+    expect(await runTaskNow(TEST_UID, '../bad')).toEqual({ ok: false, error: 'invalid_id' });
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: false, error: 'not_found' });
+    await createTask(TEST_UID, { id: taskId, content: 'hello', schedule });
+    expect(await runTaskNow('another-user', taskId)).toEqual({ ok: false, error: 'not_found' });
+    const saved = (await getTask(TEST_UID, taskId))!;
+    fs.writeFileSync(autoTaskConfigFile(TEST_UID, taskId), JSON.stringify({ ...saved, device_id: 'another-device' }));
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: false, error: 'device_mismatch' });
+    expect(autoRuntime.createConversation).not.toHaveBeenCalled();
+  });
+
+  it('blocks repeat clicks, then permits a new run after the first dispatch settles', async () => {
+    await createTask(TEST_UID, { id: taskId, content: 'hello', schedule });
+    let release!: (result: { ok: true }) => void;
+    autoRuntime.send.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = runTaskNow(TEST_UID, taskId);
+    await vi.waitFor(() => expect(autoRuntime.send).toHaveBeenCalledTimes(1));
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: false, error: 'already_running' });
+    release({ ok: true });
+    await first;
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: true, cid: 'cid_auto' });
+    expect(autoRuntime.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for a manual dispatch before running a due scheduled boundary', async () => {
+    await createTask(TEST_UID, { id: taskId, content: 'hello', schedule });
+    let release!: (result: { ok: true }) => void;
+    autoRuntime.send.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = runTaskNow(TEST_UID, taskId);
+    await vi.waitFor(() => expect(autoRuntime.send).toHaveBeenCalledTimes(1));
+    vi.setSystemTime(new Date(schedule.at));
+    const scheduled = _onTimerFireForTest(TEST_UID, taskId);
+    expect(autoRuntime.send).toHaveBeenCalledTimes(1);
+    release({ ok: true });
+    await Promise.all([first, scheduled]);
+    expect(autoRuntime.send).toHaveBeenCalledTimes(2);
+    expect((await getTask(TEST_UID, taskId))?.enabled).toBe(false);
+  });
+
+  it('rolls back a failed dispatch, leaves no manual receipt, and allows retry', async () => {
+    await createTask(TEST_UID, { id: taskId, content: 'hello', schedule });
+    autoRuntime.send.mockResolvedValueOnce({ ok: false, error: 'failed' });
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: false, error: 'send_not_ok' });
+    expect(autoRuntime.deleteConversation).toHaveBeenCalledWith(TEST_UID, 'cid_auto', null);
+    expect((await getTask(TEST_UID, taskId))?.last_manual_run_at).toBeUndefined();
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: true, cid: 'cid_auto' });
+  });
+
+  it('returns recipient and conversation-creation failures to the caller', async () => {
+    await createTask(TEST_UID, { id: taskId, content: 'hello', schedule,
+      recipient: { kind: 'agent', id: 'agent_codex', name: 'Codex' } });
+    autoRuntime.isAgentChatDispatchable.mockReturnValueOnce(false);
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: false, error: 'recipient_unavailable' });
+    autoRuntime.createConversation.mockRejectedValueOnce(new Error('disk unavailable'));
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: false, error: 'conv_create_failed' });
+    expect(autoRuntime.send).not.toHaveBeenCalled();
+  });
+
+  it('uses independent messaging idempotency keys for each manual run and the scheduled run', async () => {
+    await createTask(TEST_UID, { id: taskId, content: 'hello', schedule,
+      recipient: { kind: 'messaging', instanceId: 'instance', recipient: 'owner' } });
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: true });
+    expect(await runTaskNow(TEST_UID, taskId)).toEqual({ ok: true });
+    vi.setSystemTime(new Date(schedule.at));
+    await _onTimerFireForTest(TEST_UID, taskId);
+    const keys = dispatchRuntime.dispatchToFeishuHome.mock.calls.map((args) => args[1].sourceKey);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(3);
+    expect(keys[0]).toMatch(/^auto-task:at_abc01234:manual:/);
+    expect(keys[2]).toBe('auto-task:at_abc01234:2026-05-22');
+    expect(autoRuntime.createConversation).not.toHaveBeenCalled();
+  });
+});
+
 describe('scheduler dispatch', () => {
   it('rejects a legacy management-only recipient before creating a conversation', async () => {
     vi.useFakeTimers();
@@ -647,7 +806,9 @@ describe('scheduler dispatch', () => {
     expect(autoRuntime.send).toHaveBeenCalledWith({
       userId: TEST_UID,
       cid: 'cid_auto',
-      text: '@Codex send the morning report',
+      text: expect.stringContaining('@Codex send the morning report'),
+      recipient_agent_id: 'agent_codex',
+      recipient_origin: 'user_selection',
       attachments: ['brief.md'],
     });
     expect(autoRuntime.deleteConversation).not.toHaveBeenCalled();
@@ -1006,7 +1167,7 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
 
     expect(dispatchRuntime.dispatchToFeishuHome).toHaveBeenCalledWith(TEST_UID, {
       instanceId: 'inst_feishu_1',
-      text: 'hello from auto task',
+      text: expect.stringContaining('hello from auto task'),
       sourceKey: 'auto-task:at_a1b2c3d1:2026-05-22',
     });
     expect(dispatchRuntime.assembleBriefingText).not.toHaveBeenCalled();
@@ -1115,7 +1276,7 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
     expect(autoRuntime.send).toHaveBeenCalledWith({
       userId: TEST_UID,
       cid: 'cid_compat',
-      text: 'legacy commander task',
+      text: expect.stringContaining('legacy commander task'),
     });
     expect(dispatchRuntime.dispatchToFeishuHome).not.toHaveBeenCalled();
     expect(events[0]).toMatchObject({ type: 'conv_created', task_id: taskId });

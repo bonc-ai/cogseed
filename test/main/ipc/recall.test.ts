@@ -8,6 +8,7 @@ const UID = 'uRecallIpc';
 
 const recallMock = vi.hoisted(() => ({
   listRecallCandidates: vi.fn(async () => []),
+  withRecallCandidateProcessingDetails: vi.fn(async (_uid: string, candidate: unknown) => candidate),
   readRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ id })),
   saveRecallCandidate: vi.fn(async (_uid: string, input: unknown) => input),
   deferRecallCandidate: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'deferred' })),
@@ -72,6 +73,9 @@ const recycleBinMock = vi.hoisted(() => ({
   createAppRecycleBatchForConversations: vi.fn(async () => ({ id: 'recycle-all' })),
 }));
 const captureMock = vi.hoisted(() => ({
+  readRecallCaptureModelRuntime: vi.fn<() => Promise<Record<string, unknown>>>(async () => ({
+    runtimeStatus: 'known', apiConfigured: true, available: true, channel: 'api', authorizationRequired: false,
+  })),
   listRecallCaptures: vi.fn(async () => []),
   queryRecallCaptures: vi.fn(async () => ({ captures: [], nextCursor: null, counts: { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 } })),
   readRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
@@ -101,8 +105,9 @@ const captureMock = vi.hoisted(() => ({
   })),
 }));
 const captureSettingsMock = vi.hoisted(() => ({
-  readRecallCaptureSettings: vi.fn(async (uid: string) => ({ id: 'settings', ownerId: uid, enabled: true, executionPolicy: 'smart', quietMinutes: 10, nightlyStart: '02:00', nightlyEnd: '06:00', catchUpMissed: true })),
+  readRecallCaptureSettings: vi.fn(async (uid: string) => ({ id: 'settings', ownerId: uid, enabled: true, executionPolicy: 'smart', quietMinutes: 10, nightlyStart: '02:00', nightlyEnd: '06:00', catchUpMissed: true, modelCandidates: [] })),
   updateRecallCaptureSettings: vi.fn(async (uid: string, input: unknown) => ({ id: 'settings', ownerId: uid, ...input })),
+  migrateUnifiedDiscoverySettings: vi.fn(async () => {}),
 }));
 const viewMock = vi.hoisted(() => ({
   listRecallViews: vi.fn(async () => []),
@@ -233,6 +238,13 @@ afterEach(() => vi.resetModules());
 function call(channel: string, payload: unknown = {}) { if (!invokeHandler) throw new Error('missing handler'); return invokeHandler({ sender: trustedIpcSender() }, { channel, payload }); }
 
 describe('ipc › recall candidate governance', () => {
+  it.each(['understanding', 'experience_method', 'fact', 'unknown', '', null, 1, [], {}])('rejects malformed category at IPC before either writer (%j)', async contentCategory => {
+    const candidate = { candidateId: 'cand-a', judgment: '保留完整认知', value: '复用判断', suggestedType: 'cognition',
+      suggestedScope: 'general', sourceRefs: [], contentCategory };
+    await expect(call('recall.candidates.update', candidate)).resolves.toMatchObject({ ok: false, error: 'invalid cognition content category' });
+    await expect(call('recall.assets.update', { assetId: 'aa-a', contentCategory, reason: '分类修订' })).resolves.toMatchObject({ ok: false, error: 'invalid cognition content category' });
+    expect(assetMock.updateAbilityAsset).not.toHaveBeenCalled();
+  });
   it('routes Recall memory pause, resume, removal, and version history', async () => {
     await expect(call('recall.assets.pause', { assetId: 'aa-method', note: '暂时不用' }))
       .resolves.toMatchObject({ ok: true, asset: { status: 'paused' } });
@@ -252,8 +264,8 @@ describe('ipc › recall candidate governance', () => {
   });
 
   it('routes validated save and governance actions with the active uid', async () => {
-    await expect(call('recall.candidates.save', { judgment: 'Use decision logs', suggestedType: 'rule', suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] })).resolves.toMatchObject({ ok: true });
-    expect(recallMock.saveRecallCandidate).toHaveBeenCalledWith(UID, expect.objectContaining({ judgment: 'Use decision logs', suggestedType: 'rule' }));
+    await expect(call('recall.candidates.save', { judgment: 'Use decision logs', suggestedType: 'rule', suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] })).resolves.toMatchObject({ ok: false });
+    expect(recallMock.saveRecallCandidate).not.toHaveBeenCalled();
     await expect(call('recall.candidates.promote', { candidateId: 'cand-a' })).resolves.toMatchObject({
       ok: true,
       asset: { id: 'aa-a' },
@@ -292,11 +304,15 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.assets.update', {
       assetId: 'aa-method',
       statement: 'Keep the reusable method scoped.',
+      contentCategory: 'method',
+      expectedVersion: '1',
       scopePolicy: { purposeTags: ['review'], workspaceIds: ['workspace-a'] },
       reason: 'Narrow the reuse boundary.',
       acknowledgeRecommendation: true,
     })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-method' } });
     expect(assetMock.updateAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', expect.objectContaining({
+      contentCategory: 'method',
+      expectedVersion: '1',
       statement: 'Keep the reusable method scoped.',
       scopePolicy: { purposeTags: ['review'], workspaceIds: ['workspace-a'] },
       reason: 'Narrow the reuse boundary.',
@@ -420,29 +436,20 @@ describe('ipc › recall candidate governance', () => {
       .resolves.toMatchObject({ ok: true, capture: { id: 'rcap-a', workflowStatus: 'completed' } });
     expect(captureMock.readRecallCaptureWorkflow).toHaveBeenCalledWith(UID, 'rcap-a');
 
-    await expect(call('recall.captures.retry', { captureId: 'rcap-a' }))
-      .resolves.toMatchObject({ ok: true, capture: { status: 'queued' } });
-    expect(captureMock.retryRecallCapture).toHaveBeenCalledWith(UID, 'rcap-a');
-
-    await expect(call('recall.captures.pause', { captureId: 'rcap-a' })).resolves.toMatchObject({ capture: { status: 'paused' } });
-    await expect(call('recall.captures.resume', { captureId: 'rcap-a' })).resolves.toMatchObject({ capture: { status: 'queued' } });
-    await expect(call('recall.captures.cancel', { captureId: 'rcap-a' })).resolves.toMatchObject({ capture: { status: 'cancelled' } });
-    await expect(call('recall.captures.runNow', { captureId: 'rcap-a' })).resolves.toMatchObject({ capture: { status: 'queued' } });
-    await expect(call('recall.captures.manualCreate', { conversationId: 'conv-a' }))
-      .resolves.toMatchObject({ capture: { conversationId: 'conv-a', status: 'waiting_manual' } });
-    expect(captureMock.queueManualRecallCaptureFromConversation).toHaveBeenCalledWith(UID, 'conv-a');
-    await expect(call('recall.captures.historicalAutoStart', { conversationId: 'conv-a' }))
-      .resolves.toMatchObject({ capture: { conversationId: 'conv-a', status: 'queued', autoWrite: true } });
-    expect(captureMock.startHistoricalRecallCapture).toHaveBeenCalledWith(UID, 'conv-a');
-    expect(captureMock.queueManualRecallCaptureFromConversation).toHaveBeenCalledTimes(1);
+    for (const channel of ['retry', 'pause', 'resume', 'cancel', 'runNow', 'manualCreate', 'historicalAutoStart', 'batchRetry', 'batchRunNow']) {
+      await expect(call(`recall.captures.${channel}`, { captureId: 'rcap-a', conversationId: 'conv-a', captureIds: ['rcap-a'] }))
+        .resolves.toMatchObject({ ok: false });
+    }
+    expect(captureMock.retryRecallCapture).not.toHaveBeenCalled();
+    expect(captureMock.queueManualRecallCaptureFromConversation).not.toHaveBeenCalled();
 
     await expect(call('recall.captures.settings.update', { executionPolicy: 'nightly', nightlyStart: '02:00' }))
       .resolves.toMatchObject({ ok: true, settings: { executionPolicy: 'nightly' } });
     expect(captureSettingsMock.updateRecallCaptureSettings).toHaveBeenCalledWith(UID, { executionPolicy: 'nightly', nightlyStart: '02:00' });
-    await expect(call('recall.captures.settings.update', { executionPolicy: 'smart', quietMinutes: 30 }))
-      .resolves.toMatchObject({ ok: true, settings: { executionPolicy: 'smart', quietMinutes: 30 } });
+    await expect(call('recall.captures.settings.update', { enabled: false }))
+      .resolves.toMatchObject({ ok: true, settings: { enabled: false } });
     await expect(call('recall.captures.settings.get'))
-      .resolves.toMatchObject({ ok: true, settings: { enabled: true }, model: { configured: expect.any(Boolean) } });
+      .resolves.toMatchObject({ ok: true, settings: { enabled: true }, model: { configured: true, runtimeStatus: 'known', channel: 'api', available: true } });
     expect(captureSettingsMock.readRecallCaptureSettings).toHaveBeenCalledWith(UID);
 
     await expect(call('recall.views.list', { purpose: 'conversation_capture', workspaceId: 'workspace-a', limit: 5 }))
@@ -464,6 +471,22 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.teaching.revoke', { signalId: 'teach-a' }))
       .resolves.toMatchObject({ ok: true, signal: { status: 'revoked' } });
     expect(teachingMock.revokeUserTeachingSignal).toHaveBeenCalledWith(UID, 'teach-a');
+  });
+
+  it('preserves CLI fallback and unknown runtime status through capture settings IPC', async () => {
+    captureMock.readRecallCaptureModelRuntime.mockResolvedValueOnce({
+      runtimeStatus: 'known', apiConfigured: false, cliAvailable: true, available: true, channel: 'cli', cliAgentId: 'codex',
+    });
+    await expect(call('recall.captures.settings.get')).resolves.toMatchObject({
+      ok: true, model: { configured: false, available: true, channel: 'cli', cliAgentId: 'codex' },
+    });
+    captureMock.readRecallCaptureModelRuntime.mockResolvedValueOnce({
+      runtimeStatus: 'unknown', apiConfigured: false, runtimeError: 'CLI detection failed',
+    });
+    const unknown = await call('recall.captures.settings.get') as { model: Record<string, unknown> };
+    expect(unknown).toMatchObject({ ok: true, model: { runtimeStatus: 'unknown', runtimeError: 'CLI detection failed' } });
+    expect(unknown.model.channel).not.toBe('unavailable');
+    expect(unknown.model.available).not.toBe(false);
   });
 
   it('writes a Recall source tombstone only after a conversation delete succeeds', async () => {

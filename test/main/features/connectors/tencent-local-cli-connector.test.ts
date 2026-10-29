@@ -61,11 +61,11 @@ describe('local_cli availability gate', () => {
     const catalog = await import('../../../../src/main/features/connectors/catalog');
     availability._setLocalCliProbeForTest(() => true);
 
-    expect(availability.connectorAvailabilityForId('tencent-meeting')).toBe('enabled');
-    expect(availability.isConnectorRuntimeEnabled('tencent-meeting')).toBe(true);
-    expect(() => availability.assertConnectorRuntimeEnabled('tencent-meeting')).not.toThrow();
+    expect(availability.connectorAvailabilityForId('test-runtime-user', 'tencent-meeting')).toBe('enabled');
+    expect(availability.isConnectorRuntimeEnabled('test-runtime-user', 'tencent-meeting')).toBe(true);
+    expect(() => availability.assertConnectorRuntimeEnabled('test-runtime-user', 'tencent-meeting')).not.toThrow();
 
-    const out = availability.catalogWithAvailability(catalog.CONNECTOR_CATALOG);
+    const out = availability.catalogWithAvailability('test-runtime-user', catalog.CONNECTOR_CATALOG);
     const entry = out.find((e) => e.id === 'tencent-meeting');
     expect(entry).toBeTruthy();
     expect(entry).not.toHaveProperty('availability');
@@ -79,9 +79,9 @@ describe('local_cli availability gate', () => {
 
     // Visible (not hidden): the user can act on it by installing the CLI, so hiding the card
     // would remove the only hint that the connector exists.
-    expect(availability.connectorAvailabilityForId('tencent-meeting')).toBe('visible_disabled');
+    expect(availability.connectorAvailabilityForId('test-runtime-user', 'tencent-meeting')).toBe('visible_disabled');
 
-    const out = availability.catalogWithAvailability(catalog.CONNECTOR_CATALOG);
+    const out = availability.catalogWithAvailability('test-runtime-user', catalog.CONNECTOR_CATALOG);
     const entry = out.find((e) => e.id === 'tencent-meeting');
     expect(entry).toMatchObject({
       availability: 'visible_disabled',
@@ -90,8 +90,8 @@ describe('local_cli availability gate', () => {
 
     // And the install path is blocked, so a stale renderer cannot start a connect that the
     // catalog already knows will fail.
-    expect(availability.isConnectorRuntimeEnabled('tencent-meeting')).toBe(false);
-    expect(() => availability.assertConnectorRuntimeEnabled('tencent-meeting')).toThrow(/connector_unsupported/);
+    expect(availability.isConnectorRuntimeEnabled('test-runtime-user', 'tencent-meeting')).toBe(false);
+    expect(() => availability.assertConnectorRuntimeEnabled('test-runtime-user', 'tencent-meeting')).toThrow(/connector_unsupported/);
   });
 
   it('leaves unrelated connectors untouched when the CLI is missing', async () => {
@@ -100,8 +100,8 @@ describe('local_cli availability gate', () => {
     availability._setLocalCliProbeForTest(() => false);
 
     // A missing CLI must not leak into the Google remote-switch decisions.
-    expect(availability.connectorAvailabilityForId('github')).toBe('enabled');
-    expect(availability.connectorAvailabilityForId('notion')).toBe('enabled');
+    expect(availability.connectorAvailabilityForId('test-runtime-user', 'github')).toBe('enabled');
+    expect(availability.connectorAvailabilityForId('test-runtime-user', 'notion')).toBe('enabled');
   });
 });
 
@@ -125,7 +125,8 @@ describe('local_cli template materialization', () => {
     expect(transport.command).toBe(process.execPath);
     // Credential-owning: nothing token-shaped is forwarded into the child env. The Electron-as-Node
     // vars are injected because the template uses `${COGSEED_NODE}`, and that is all.
-    expect(Object.keys(transport.env || {}).sort()).toEqual(['COGSEED_NODE', 'COGSEED_PC_DIR', 'ELECTRON_RUN_AS_NODE']);
+    expect(transport.env).toMatchObject({ COGSEED_NODE: process.execPath, ELECTRON_RUN_AS_NODE: '1' });
+    expect(Object.keys(transport.env || {}).some((key) => /TOKEN|SECRET/.test(key))).toBe(false);
   });
 
   it('still requires a token for credential-forwarding templates', async () => {
@@ -158,13 +159,23 @@ function candidatesFrom(source: string): { absolute: string[]; homeJoined: strin
   };
 }
 
+/** Slice one function body out of a source file. Required since `availability.ts` serves more than
+ *  one `local_cli` connector: a whole-file scan would fold every CLI's candidates into one list and
+ *  compare it against a single adapter's. */
+function sliceFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`function ${name} not found`);
+  const end = source.indexOf('\n}', start);
+  return end < 0 ? source.slice(start) : source.slice(start, end);
+}
+
 describe('local_cli candidate-list drift pin', () => {
   it('keeps the availability probe and the adapter resolving the same tmeet locations', () => {
     const adapterSrc = fs.readFileSync(path.join(REPO_ROOT, ADAPTER_REL), 'utf8');
     const availabilitySrc = fs.readFileSync(path.join(REPO_ROOT, AVAILABILITY_REL), 'utf8');
 
-    const adapter = candidatesFrom(adapterSrc);
-    const availability = candidatesFrom(availabilitySrc);
+    const adapter = candidatesFrom(sliceFunction(adapterSrc, '_candidates'));
+    const availability = candidatesFrom(sliceFunction(availabilitySrc, '_tmeetAbsoluteCandidates'));
 
     expect(availability.absolute).toEqual(adapter.absolute);
     expect(availability.homeJoined).toEqual(adapter.homeJoined);
@@ -176,12 +187,30 @@ describe('local_cli candidate-list drift pin', () => {
   it('keeps both implementations aware of the Windows shim names', () => {
     const adapterSrc = fs.readFileSync(path.join(REPO_ROOT, ADAPTER_REL), 'utf8');
     const availabilitySrc = fs.readFileSync(path.join(REPO_ROOT, AVAILABILITY_REL), 'utf8');
+    // The tmeet adapter spells its own Windows names; main builds them from the binary name (one
+    // helper now serves all four CLIs), so assert each side's actual contract.
+    expect(adapterSrc).toContain("'tmeet.cmd'");
+    expect(adapterSrc).toContain("'tmeet.exe'");
+    expect(availabilitySrc).toContain('${binName}.cmd');
+    expect(availabilitySrc).toContain('${binName}.exe');
+    expect(availabilitySrc).toContain("_cliPathNames('tmeet')");
     for (const src of [adapterSrc, availabilitySrc]) {
-      expect(src).toContain("'tmeet.cmd'");
-      expect(src).toContain("'tmeet.exe'");
       // The override env var must be honoured by both, or a user could install the CLI somewhere
       // custom and have the card claim it is missing.
       expect(src).toContain('COGSEED_TMEET_BIN');
     }
   });
+});
+
+it('isolates official CLI credentials by user on both login and invocation transports', async () => {
+  const { scopeTencentMeetingTransport } = await import('../../../../src/main/features/connectors/apply-template');
+  const transport = { kind: 'stdio' as const, command: 'node', args: [] };
+  const first = scopeTencentMeetingTransport('first', transport) as any;
+  const second = scopeTencentMeetingTransport('second', transport) as any;
+  // The transport env carries host-native paths; compare on a `/`-joined form so
+  // the per-user directory assertion holds on Windows too.
+  const posix = (value: string) => value.split(path.sep).join('/');
+  expect(posix(first.env.TMEET_CLI_CONFIG_DIR)).toContain('/first/local/');
+  expect(posix(first.env.TMEET_CLI_DATA_DIR)).toContain('/first/local/');
+  expect(second.env.TMEET_CLI_DATA_DIR).not.toEqual(first.env.TMEET_CLI_DATA_DIR);
 });

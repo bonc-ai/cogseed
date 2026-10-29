@@ -1,148 +1,167 @@
-// ─── Generic right-click context menu ───
-// Small floating menu anchored at the cursor; items are { label, onClick,
-// disabled?, icon? }. There's exactly one menu instance at a time — opening a new
-// menu closes the previous one. Dismissers: outside click, Escape, scroll,
-// resize, and the i18n-change broadcast (label text may need refreshing).
-//
-// IME guard (CLAUDE.md §8): the up/down/Enter shortcuts early-return when a
-// composition is active so a half-typed Chinese candidate doesn't trigger
-// the wrong menu item.
-
+// Shared menu runtime: cursor context menus and button-anchored dropdowns.
+// Items: {label, onClick, icon?, disabled?, loading?, danger?, separatorBefore?, attrs?}.
+// One menu at a time. Page callbacks own business state; this module owns
+// placement, roving focus, IME-safe navigation and dismissal/focus return.
 const _ctxMenuLog = createLogger('context-menu');
-
 let _ctxMenuEl = null;
 let _ctxMenuItems = [];
 let _ctxMenuActiveIdx = -1;
-let _ctxMenuOpen = false;
+let _ctxMenuTrigger = null;
+let _ctxMenuOwner = null;
+let _ctxMenuId = 0;
 
-function showContextMenu(event, items) {
-  closeContextMenu();
-  if (!Array.isArray(items) || items.length === 0) return;
+function showContextMenu(event, items, options = {}) {
+  closeContextMenu(false);
+  if (!Array.isArray(items)) return;
   _ctxMenuItems = items.filter((it) => it && typeof it.label === 'string' && typeof it.onClick === 'function');
-  if (_ctxMenuItems.length === 0) return;
-
+  if (!_ctxMenuItems.length) return;
   const menu = document.createElement('div');
   menu.className = 'context-menu';
+  menu.id = `ui-menu-${++_ctxMenuId}`;
   menu.setAttribute('role', 'menu');
-  menu.innerHTML = _ctxMenuItems.map((it, idx) => {
-    const icon = it.icon && typeof uiIconHtml === 'function'
-      ? `<span class="context-menu-icon">${uiIconHtml(it.icon)}</span>`
-      : '';
-    return `<button type="button" class="context-menu-item${it.disabled ? ' is-disabled' : ''}"`
-    + ` data-context-menu-idx="${idx}" role="menuitem" tabindex="-1"`
-    + ` ${it.disabled ? 'disabled' : ''}>${icon}<span class="context-menu-label">${escapeHtml(it.label)}</span></button>`;
-  }).join('');
+  menu.innerHTML = _ctxMenuItems.map((it, idx) => (
+    (it.separatorBefore ? '<div class="context-menu-separator" role="separator"></div>' : '')
+    + uiButton({ label: it.label, icon: it.icon, role: it.danger ? 'danger' : 'ghost', size: 'sm',
+      loading: it.loading, disabled: it.disabled, className: 'context-menu-item',
+      attrs: { ...it.attrs, role: 'menuitem', 'data-context-menu-idx': idx },
+    })
+  )).join('');
+  // A menu opened from a row inside a modal must sit above the modal overlay;
+  // otherwise it opens correctly but is painted behind the dimmer.
+  if (options.trigger && typeof options.trigger.closest === 'function'
+    && options.trigger.closest('.ui-modal, .ui-dialog')) {
+    menu.classList.add('context-menu--above-modal');
+  }
   document.body.appendChild(menu);
   _ctxMenuEl = menu;
-  _ctxMenuOpen = true;
-  _ctxMenuActiveIdx = -1;
-
-  // Place at cursor; flip when overflowing viewport. Read offset after
-  // appending so the menu has real dimensions.
-  const x = event.clientX || 0;
-  const y = event.clientY || 0;
-  const rect = menu.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const left = x + rect.width > vw - 4 ? Math.max(4, x - rect.width) : x;
-  const top  = y + rect.height > vh - 4 ? Math.max(4, y - rect.height) : y;
-  menu.style.left = `${left}px`;
-  menu.style.top  = `${top}px`;
-
-  menu.querySelectorAll('.context-menu-item').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const idx = Number(btn.dataset.contextMenuIdx);
-      const it = _ctxMenuItems[idx];
-      closeContextMenu();
-      if (it && !it.disabled) {
-        try { it.onClick(); }
-        catch (err) { _ctxMenuLog.warn('item onClick threw', err); }
-      }
-    });
-    btn.addEventListener('mouseenter', () => {
-      const idx = Number(btn.dataset.contextMenuIdx);
-      _setActiveIdx(idx);
-    });
+  _ctxMenuOwner = options.owner || null;
+  _ctxMenuTrigger = options.trigger || null;
+  if (_ctxMenuTrigger) {
+    _ctxMenuTrigger.setAttribute('aria-expanded', 'true');
+    _ctxMenuTrigger.setAttribute('aria-controls', menu.id);
+    menu.setAttribute('aria-labelledby', _ctxMenuTrigger.id || '');
+    if (!_ctxMenuTrigger.id) {
+      menu.removeAttribute('aria-labelledby');
+      menu.setAttribute('aria-label', _ctxMenuTrigger.getAttribute('aria-label') || '');
+    }
+  }
+  const bounds = menu.getBoundingClientRect();
+  const anchor = _ctxMenuTrigger && _ctxMenuTrigger.getBoundingClientRect();
+  const x = anchor ? anchor.right - bounds.width : (event.clientX || 0);
+  const y = anchor ? anchor.bottom + 4 : (event.clientY || 0);
+  const left = anchor ? x : (x + bounds.width > window.innerWidth - 8 ? x - bounds.width : x);
+  const top = y + bounds.height > window.innerHeight - 8
+    ? (anchor ? anchor.top - bounds.height - 4 : y - bounds.height) : y;
+  menu.style.left = `${Math.max(8, Math.min(left, window.innerWidth - bounds.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(top, window.innerHeight - bounds.height - 8))}px`;
+  menu.querySelectorAll('.context-menu-item').forEach((button) => {
+    button.tabIndex = -1;
+    const idx = Number(button.dataset.contextMenuIdx);
+    button.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); _activateContextMenuItem(idx); });
+    button.addEventListener('mouseenter', () => { if (!button.disabled) _setActiveIdx(idx, false); });
+    button.addEventListener('focus', () => _setActiveIdx(idx, false));
   });
+  if (options.focus === 'first' || options.focus === 'last') {
+    _moveContextMenuFocus(options.focus === 'first' ? 1 : -1, true);
+  }
 }
 
-function closeContextMenu() {
-  if (!_ctxMenuOpen) return;
-  _ctxMenuOpen = false;
-  _ctxMenuActiveIdx = -1;
-  if (_ctxMenuEl && _ctxMenuEl.parentNode) _ctxMenuEl.parentNode.removeChild(_ctxMenuEl);
+function closeContextMenu(restoreFocus = true) {
+  if (!_ctxMenuEl) return;
+  const trigger = _ctxMenuTrigger;
+  const hadFocus = _ctxMenuEl.contains(document.activeElement);
+  _ctxMenuEl.remove();
   _ctxMenuEl = null;
   _ctxMenuItems = [];
+  _ctxMenuActiveIdx = -1;
+  _ctxMenuTrigger = null;
+  _ctxMenuOwner = null;
+  if (trigger) {
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.removeAttribute('aria-controls');
+    if (restoreFocus && hadFocus && trigger.isConnected) trigger.focus();
+  }
 }
 
-function _setActiveIdx(idx) {
-  if (!_ctxMenuEl) return;
-  if (idx < 0 || idx >= _ctxMenuItems.length) {
-    _ctxMenuActiveIdx = -1;
-  } else {
-    _ctxMenuActiveIdx = idx;
-  }
-  _ctxMenuEl.querySelectorAll('.context-menu-item').forEach((btn, i) => {
-    btn.classList.toggle('is-active', i === _ctxMenuActiveIdx);
+function _setActiveIdx(idx, focus = true) {
+  if (!_ctxMenuEl || !_ctxMenuItems[idx] || _ctxMenuItems[idx].disabled || _ctxMenuItems[idx].loading) return;
+  _ctxMenuActiveIdx = idx;
+  _ctxMenuEl.querySelectorAll('.context-menu-item').forEach((button, i) => {
+    button.classList.toggle('is-active', i === idx);
+    if (focus && i === idx) button.focus();
   });
 }
 
-// ── Dismissers ─────────────────────────────────────────────────────────
+function _moveContextMenuFocus(direction, edge = false) {
+  let idx = edge || _ctxMenuActiveIdx < 0 ? (direction > 0 ? -1 : 0) : _ctxMenuActiveIdx;
+  for (let count = 0; count < _ctxMenuItems.length; count++) {
+    idx = (idx + direction + _ctxMenuItems.length) % _ctxMenuItems.length;
+    if (!_ctxMenuItems[idx].disabled && !_ctxMenuItems[idx].loading) { _setActiveIdx(idx); return; }
+  }
+}
+
+function _activateContextMenuItem(idx) {
+  const item = _ctxMenuItems[idx];
+  if (!item || item.disabled || item.loading) return;
+  closeContextMenu();
+  try { Promise.resolve(item.onClick()).catch((err) => _ctxMenuLog.warn('menu action failed', err)); }
+  catch (err) { _ctxMenuLog.warn('menu action failed', err); }
+}
+
+function uiDropdownMenu({ trigger, items }) {
+  const owner = {};
+  const open = (focus = 'first') => {
+    if (!trigger.isConnected || trigger.disabled) return;
+    showContextMenu({}, typeof items === 'function' ? items() : items, { trigger, owner, focus });
+  };
+  const click = (e) => { e.stopPropagation(); if (_ctxMenuOwner === owner) closeContextMenu(); else open(); };
+  const keydown = (e) => {
+    if (e.isComposing || e.keyCode === 229 || !['ArrowDown', 'ArrowUp'].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation(); open(e.key === 'ArrowUp' ? 'last' : 'first');
+  };
+  trigger.setAttribute('aria-haspopup', 'menu');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.addEventListener('click', click);
+  trigger.addEventListener('keydown', keydown);
+  return {
+    open,
+    close() { if (_ctxMenuOwner === owner) closeContextMenu(); },
+    refresh() {
+      if (_ctxMenuOwner !== owner) return;
+      const idx = _ctxMenuActiveIdx;
+      open();
+      _setActiveIdx(idx);
+    },
+    destroy() {
+      if (_ctxMenuOwner === owner) closeContextMenu();
+      trigger.removeEventListener('click', click);
+      trigger.removeEventListener('keydown', keydown);
+    },
+  };
+}
 
 document.addEventListener('mousedown', (e) => {
-  if (!_ctxMenuOpen) return;
-  if (_ctxMenuEl && _ctxMenuEl.contains(e.target)) return;
-  closeContextMenu();
+  if (!_ctxMenuEl || _ctxMenuEl.contains(e.target) || _ctxMenuTrigger?.contains(e.target)) return;
+  closeContextMenu(false);
 }, true);
-
 document.addEventListener('keydown', (e) => {
-  if (!_ctxMenuOpen) return;
-  // IME composition guard — Chinese / Japanese / Korean Enter commits a
-  // candidate; don't fire menu actions while a composition is active.
-  if (e.isComposing || e.keyCode === 229) return;
-  // Escape 分层（2026-09-14 真机）：菜单从弹窗里弹出时必须先收菜单、再收弹窗。
-  // 各弹窗的 Escape 监听是 document 上的 capture 监听，而本模块在启动时就注册
-  // （早于任何弹窗）——先处理并 stopImmediatePropagation，弹窗这一下就不会
-  // 关掉，用户不会留下一个悬空菜单。
+  if (!_ctxMenuEl || e.isComposing || e.keyCode === 229) return;
   if (e.key === 'Escape') {
-    e.preventDefault();
-    e.stopImmediatePropagation();
+    e.preventDefault(); e.stopImmediatePropagation(); closeContextMenu();
+  } else if (e.key === 'Tab') {
+    // Return to the anchor, then let the native Tab order continue from it.
     closeContextMenu();
-    return;
-  }
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    let next = _ctxMenuActiveIdx + 1;
-    while (next < _ctxMenuItems.length && _ctxMenuItems[next].disabled) next += 1;
-    if (next < _ctxMenuItems.length) _setActiveIdx(next);
-    return;
-  }
-  if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    let prev = _ctxMenuActiveIdx - 1;
-    while (prev >= 0 && _ctxMenuItems[prev].disabled) prev -= 1;
-    if (prev >= 0) _setActiveIdx(prev);
-    return;
-  }
-  if (e.key === 'Enter') {
+  } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault(); e.stopImmediatePropagation();
+    _moveContextMenuFocus(e.key === 'ArrowUp' || e.key === 'End' ? -1 : 1, e.key === 'Home' || e.key === 'End');
+  } else if (e.key === 'Enter' || e.key === ' ') {
     if (_ctxMenuActiveIdx < 0) return;
-    const it = _ctxMenuItems[_ctxMenuActiveIdx];
-    if (!it || it.disabled) return;
-    e.preventDefault();
-    closeContextMenu();
-    try { it.onClick(); }
-    catch (err) { _ctxMenuLog.warn('item onClick threw on Enter', err); }
+    e.preventDefault(); e.stopImmediatePropagation(); _activateContextMenuItem(_ctxMenuActiveIdx);
   }
-  // capture 监听：菜单在启动时注册（早于任何弹窗的 Escape 监听），capture +
-  // 注册顺序保证「先收菜单」；弹窗的 capture 监听被上面 stopImmediatePropagation
-  // 拦下，不会顺带把弹窗关掉（2026-09-14 真机：否则用户留下一个悬空菜单）。
 }, true);
-
-window.addEventListener('scroll', () => closeContextMenu(), true);
+window.addEventListener('scroll', (e) => { if (!_ctxMenuEl?.contains(e.target)) closeContextMenu(); }, true);
 window.addEventListener('resize', () => closeContextMenu());
 window.addEventListener('i18n-change', () => closeContextMenu());
-
 window.showContextMenu = showContextMenu;
 window.closeContextMenu = closeContextMenu;
+window.uiDropdownMenu = uiDropdownMenu;

@@ -15,11 +15,17 @@ import type { AgentTool, ToolContext, ToolResult } from "./base.js";
 export interface MetacognitionToolHandler {
   read(target: 'competence' | 'strategies'): {
     ok: boolean; content: string;
+    error?: string;
     usage: { current: number; limit: number };
+    /** mtime (ms) of the backing file when it exists — the optimistic-lock
+     *  baseline for a following write (P-r2-13). */
+    mtimeMs?: number;
   };
   write(target: 'competence' | 'strategies', content: string): {
     ok: boolean; error?: string;
     usage: { current: number; limit: number };
+    /** mtime (ms) of the file after a successful write — the new baseline. */
+    mtimeMs?: number;
   };
 }
 
@@ -77,7 +83,6 @@ export function createMetacognitionTool(
     async execute(input: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
       const action = input.action as string;
       const target = input.target as 'competence' | 'strategies';
-      const content = (input.content as string) || '';
 
       if (target !== 'competence' && target !== 'strategies') {
         return {
@@ -89,9 +94,22 @@ export function createMetacognitionTool(
       switch (action) {
         case 'read': {
           const result = handler.read(target);
-          return { content: JSON.stringify(result), isError: false };
+          // `ok` is part of the handler contract (P-r1-48): honor it instead
+          // of declaring an error field that this branch never read.
+          return { content: JSON.stringify(result), isError: !result.ok };
         }
         case 'write': {
+          // P-r1-48: a hallucinating model can pass a non-string `content`
+          // (e.g. a number). The old `(input.content as string) || ''` cast
+          // let it through until `content.trim()` threw a technical TypeError
+          // deep in the handler — reject it here with a precise message.
+          if (typeof input.content !== 'string') {
+            return {
+              content: JSON.stringify({ ok: false, error: '"content" must be a string for write' }),
+              isError: true,
+            };
+          }
+          const content = input.content;
           if (!content.trim()) {
             return {
               content: JSON.stringify({ ok: false, error: '"content" is required for write' }),

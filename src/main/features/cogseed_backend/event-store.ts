@@ -159,6 +159,9 @@ export async function appendCogSeedTaskEvent(
   sessionId: string,
   type: CogSeedTaskEventType,
   payload: Record<string, unknown>,
+  /** Optional traceability refs (cid / agent / run) recorded on the event so a
+   *  run can be attributed without parsing the session id. */
+  refs?: { conversationId?: string; agentId?: string; runId?: string },
 ): Promise<CogSeedTaskEvent> {
   assertCogSeedUserId(userId);
   assertCogSeedTaskId(taskId);
@@ -174,6 +177,9 @@ export async function appendCogSeedTaskEvent(
       sequence: prior.length + 1,
       type,
       createdAt: nowIso(),
+      ...(refs?.conversationId ? { conversationId: refs.conversationId } : {}),
+      ...(refs?.agentId ? { agentId: refs.agentId } : {}),
+      ...(refs?.runId ? { runId: refs.runId } : {}),
       payload: validatePayload(payload),
     };
     await appendJsonlAtomic(file, event);

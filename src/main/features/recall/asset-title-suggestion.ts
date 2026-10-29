@@ -1,13 +1,13 @@
 /**
- * LLM 起标题共享函数（设计《认知资产-四病整改设计-20260928》3.2/3.5 配套）。
+ * LLM 起标题共享函数。
  *
- * 输入 statement + type，输出一个**过 3.1 判定**的合规标题。供晋升线（不合规
- * summary 兜底）、存量「标题重起」轮（3.3）、跨会话记忆修正线（旧标题缺失或
+ * 输入 statement + type，输出通过标题校验的标题。供晋升线（不合规
+ * summary 兜底）、存量标题整理、跨会话记忆修正线（旧标题缺失或
  * 不合规时）调用；本文件只交付函数，不接调用方。
  *
  * 模型链与失败口径与 capture/skill-draft 同款：buildRunner（ephemeral、
  * disableTools）+ 严格 JSON 解析 + 分类失败码；开跑前 `hasConfiguredModelForUser`
- * 预检，不通过**明示失败**、不静默跳过（设计 3.3 模型预检口径）。输出不合规
+ * 预检，不通过时返回失败。输出不合规
  * （含非 JSON、超长、抄正文开头、标点结尾）按可重试处理：携带失败原因重试，
  * 总尝试次数（默认 3）耗尽后抛 `invalid_model_output`。
  */
@@ -53,7 +53,7 @@ const FAILURE_MESSAGES: Record<AbilityAssetTitleSuggestionFailureCode, string> =
 const ISSUE_HINTS: Record<string, string> = {
   empty: '标题为空',
   too_long: '含汉字时超过 16 字（不含汉字时超过 60 字符）',
-  prefix_overlap: '第一个字与正文第一个字相同（不得与正文开头重复）',
+  prefix_overlap: '完整照抄了正文首句，应概括为独立可读的短标题；项目名、人名和术语可以保留',
   punctuation_suffix: '以标点符号结尾',
 };
 
@@ -74,6 +74,7 @@ export interface AbilityAssetTitleSuggestion {
 }
 
 const TYPE_HINTS: Record<AbilityAssetType, string> = {
+  cognition: '独立可理解的认识或做法，保留条件、局限和知识内容，不要求分类结构',
   personal: '个人偏好或身份事实（如沟通偏好、工作习惯）',
   rule: '做事规则或约束（遇到什么情况该怎么做）',
   template: '可复用的产出模板或结构',
@@ -87,7 +88,7 @@ function titleSystemPrompt(): string {
     '要求：',
     '1. 标题是名词性短语，独立可读，不写成完整句子；',
     '2. 含汉字时不超过 16 个字；不含汉字时不超过 60 个字符；',
-    '3. 不得与正文开头重复（第一个字都不能与正文第一个字相同）；',
+    '3. 不要整句照抄正文或截断成标题；可以保留相同的项目名、人名和术语，不必为了首字相同而改写名称；',
     '4. 不以任何标点符号结尾；',
     '5. 概括正文的核心含义，可以换用正文里没有出现的词；',
     '6. 只输出严格 JSON：{"title":"标题"}，不要输出其他任何内容。',
@@ -146,7 +147,7 @@ export async function suggestAbilityAssetTitle(
   options: AbilityAssetTitleSuggestionOptions = {},
 ): Promise<AbilityAssetTitleSuggestion> {
   if (!safeId(userId)) throw new AbilityAssetTitleSuggestionFailure('model_failed', safeFailureMessage('model_failed'));
-  const statement = String(input.statement || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
+  const statement = String(input.statement || '').replace(/\s+/g, ' ').trim();
   if (!statement) {
     // 没有正文就没有可概括的对象：这是调用方的数据错误，不是模型失败，
     // 用 model_failed 码明示，不编造标题。
@@ -156,7 +157,7 @@ export async function suggestAbilityAssetTitle(
     ? Number(options.attempts)
     : 3;
 
-  // 模型预检（设计 3.3）：不通过则明示失败、勿静默跳过——模型配置在加密文件
+  // 模型预检：不通过则明示失败、勿静默跳过——模型配置在加密文件
   // 里无法离线确证，开跑前必须探测。
   if (!hasConfiguredModelForUser(userId).configured) {
     throw new AbilityAssetTitleSuggestionFailure('model_not_configured', safeFailureMessage('model_not_configured'));

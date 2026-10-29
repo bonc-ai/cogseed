@@ -1,0 +1,10 @@
+name: ui-artifact-workspace
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Manage UIDesigner standalone artifacts through stable per-artifact directories,
+  artifact.json, HTML-default or explicit alternate formats, in-place iteration, relative
+  assets, and on-demand ZIP packaging so later turns can quickly resume the same design.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

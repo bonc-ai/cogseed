@@ -21,9 +21,7 @@
  * 读写该文件时**原样保留 `assetRefs`**（引用包由 meeting_refs 管理，职责不越界）。
  *
  * T034 范围：save / list / confirm。
- * T045/T046 范围：`buildConclusionCandidateInput`（结论→候选的**确定性组装**，
- * 单一函数出口）与 `precipitateMeetingConclusion`（必过确认闸的沉淀写口，只到
- * 候选不到资产——调既有 `saveRecallCandidate`，不放宽其 `reviewReady`）。
+ * 结论确认仅维护会议记录；不创建 Recall 候选。
  */
 
 import * as fs from 'node:fs';
@@ -32,13 +30,11 @@ import { createHash } from 'node:crypto';
 
 import { createLogger } from '../logger';
 import { userMeetingRefsDir } from '../paths';
-import { docKeyForDocId, getMeetingDoc, MAX_DOC_ID_CHARS } from './meeting_doc';
+import { docKeyForDocId, MAX_DOC_ID_CHARS } from './meeting_doc';
 import { MEETING_REF_SCHEMA_VERSION } from './meeting_refs';
+import { emitMeetingStage } from './meeting_stage_events';
 import type { MeetingAssetRef, MeetingAssetType } from './meeting_refs';
 import { parseSource } from './transcript_clean_pipeline';
-import { saveRecallCandidate } from './recall/candidate-service';
-import type { SaveRecallCandidateInput } from './recall/candidate-service';
-import { cognitionContextFileSourceId } from './recall/source-catalog';
 
 const log = createLogger('meeting-conclusions');
 
@@ -56,11 +52,6 @@ export type MeetingUnlinkableReason = 'no_transcript_ref' | 'anchor_not_found' |
 /**
  * 会议侧纪要错误（失败一律码化 + 归因 schema/data/workflow；渲染层按码翻四语）。
  * `invalid_*` = 形状不合法；`item_not_found` = 条目不存在。
- * 沉淀线新增（T046/T048，contracts/ipc.md §1.3 失败码表）：
- *   - `not_confirmed`：未确认就沉淀（workflow）；
- *   - `unknown_scenario`：suggestedType 不在既有资产类型枚举（schema）；
- *   - `field_not_available`：tags/category（012 边界，如实拒绝不静默丢弃）；
- *   - `candidate_write_failed`：既有候选写失败（data，含敏感内容闸命中）。
  */
 export type MeetingConclusionErrorCode =
   | 'invalid_doc_id'
@@ -68,11 +59,7 @@ export type MeetingConclusionErrorCode =
   | 'invalid_item_id'
   | 'invalid_input'
   | 'invalid_anchor'
-  | 'item_not_found'
-  | 'not_confirmed'
-  | 'unknown_scenario'
-  | 'field_not_available'
-  | 'candidate_write_failed';
+  | 'item_not_found';
 
 export class MeetingConclusionError extends Error {
   constructor(message: string, readonly code: MeetingConclusionErrorCode) {
@@ -115,7 +102,7 @@ export interface MeetingConclusion {
   /** 资产引用（可空）。快照取自本文件的引用包（同一份冻结）。 */
   assetRefs: MeetingConclusionAssetRef[];
   status: MeetingConclusionStatus;
-  /** 沉淀去向：候选 id（T045/T046 回填，本模块只留字段位）。 */
+  /** 历史沉淀去向：保留旧候选 id 的读兼容，不再生成。 */
   candidateId?: string;
   precipitatedAt?: string;
   /** 不可关联原因（历史纪要缺结构化引用时如实标注，不报错）。 */
@@ -481,7 +468,7 @@ export function listMeetingConclusions(uid: string, docId: string): MeetingConcl
 
 /**
  * 确认一条纪要结论（`draft → confirmed`）。**不产生任何候选/资产副作用**——
- * 只改本记录状态（沉淀是 T045/T046 的 precipitate 通道的事，confirm 不碰）。
+ * 只改本记录状态，不创建候选或资产。
  * 已 confirmed/precipitated ⇒ 幂等返回原样（不报错、不再写盘）。
  */
 export function confirmMeetingConclusion(uid: string, docId: string, conclusionId: string): MeetingConclusion {
@@ -505,248 +492,73 @@ export function confirmMeetingConclusion(uid: string, docId: string, conclusionI
     body.conclusions[index] = next;
     body.updatedAt = at;
     writeBody(uid, body);
+
+    // 会议环节完成事件：纪要条目**首次**确认时广播一次，供会议产物沉淀消费
+    // （specs/009-meeting-output-archive 契约 A4 / T018）。
+    // 只在 draft → confirmed 这个真实跃迁上发；重复确认走下面的幂等返回，不发事件。
+    // 位置纪律：writeBody 成功之后才发；emitMeetingStage 永不抛异常，不影响本函数契约。
+    //
+    // 内容边界（重要，别误解）：`transcriptRefs` 只携带**锚点**（utteranceId / blockIndex /
+    // 句内偏移），本模块不保存转写正文切片。所以沉淀出去的是一份**可回查的条目摘要**，
+    // 不是转写原文 —— 产出文本里显式标注这一点，避免读者把它当成完整纪要。
+    emitMeetingStage({
+      stage: 'conclusion_confirmed',
+      uid,
+      docKey: docKeyForDocId(id),
+      docId: id,
+      artifactKind: 'minutes',
+      sourceText: renderConfirmedConclusionForKb(next),
+      confirmed: true,
+      // 每条结论一个版本段 → 各自独立成文件，不互相覆盖（FR-005）。
+      version: next.id,
+      at,
+    });
+
     return viewOfStored(next, id);
   }
   return viewOfStored(current, id);
 }
 
-// ── T045/T046：沉淀为候选（组装 + 必过确认闸的写口）──────────────────────
-
-/** 既有资产类型枚举（`AbilityAssetType`，candidate-service 单点维护；此处只镜像值域做校验）。 */
-const PRECIPITATE_TYPES: ReadonlySet<string> = new Set(['personal', 'rule', 'template', 'skill_method', 'fact']);
-/** 沉淀入参的文本上限（对齐 SaveRecallCandidateInput 的 judgment/value 上界）。 */
-const MAX_PRECIPITATE_TEXT = 4_000;
-/** suggestedScope 上限（对齐 candidate-service 的 boundedText(suggestedScope, 500)）。 */
-const MAX_PRECIPITATE_SCOPE = 500;
-
 /**
- * 沉淀入参（contracts/ipc.md §1.3 `.precipitate` 的 `input`）。
+ * 把一条**已确认**的纪要条目渲染成可沉淀的 Markdown。
  *
- * **不含 tags/category**（012 边界）：这两个键一旦**收到**就 `field_not_available`
- * 拒绝（T048）——不静默丢弃、不映射 `assetType`/`familyName`。类型上保留
- * `unknown` 位只为让「收到了」可判定。
+ * 单独成函数是为了让单测能直接断言产出文本，不必走事件链路。
+ * 显式标注「条目摘要、非转写原文」是因为本模块只持有锚点、不持有正文 —— 标注是为了不误导读者。
  */
-export interface MeetingPrecipitateInput {
-  /** 资产类型建议；缺省 `personal`；枚举外 ⇒ `unknown_scenario`。 */
-  suggestedType?: string;
-  /** 作用域建议；缺省 `personal`；须非空 ≤500。 */
-  suggestedScope?: string;
-  /** 判断陈述；缺省用结论摘要。 */
-  judgment?: string;
-  /** 「为什么以后有用」；缺省由 saveRecallCandidate 兜底为 judgment。 */
-  value?: string;
-  /** 规则类候选的适用/禁用边界（既有门槛，透传）。 */
-  applicableWhen?: string[];
-  forbiddenWhen?: string[];
-  /** 012 边界：收到即拒（field_not_available）；见接口注释。 */
-  tags?: unknown;
-  category?: unknown;
-}
+export function renderConfirmedConclusionForKb(c: MeetingConclusion): string {
+  const lines: string[] = [
+    `# 会议纪要条目（已确认）`,
+    ``,
+    `- 来源文档：\`${c.docId}\``,
+    `- 条目 id：\`${c.id}\``,
+    `- 确认时间：${c.updatedAt}`,
+    `- 条目类型：会议结论条目摘要（**非转写原文**；正文请按下方锚点回查）`,
+    ``,
+    `## 摘要`,
+    ``,
+    c.summary || '（无摘要）',
+    ``,
+  ];
 
-/** 结论来源文档的元信息（sourceRefs 的 title/sourceVersion 取这里，不另起算）。 */
-export interface ConclusionCandidateSource {
-  docId: string;
-  /** 展示标题（≤120）；缺省从 docId 派生文件名。 */
-  title?: string;
-  /** 文档版本信号（mtime 字符串化）；缺省不写该键（不编造版本）。 */
-  sourceVersion?: string;
-}
-
-/**
- * 沉淀幂等键：`mtg-<sha1 前 16 位>`（data-model §1.6：`hash(docId + conclusionId)`）。
- * 同一 (docId, conclusionId) 恒同值 ⇒ saveRecallCandidate 的 captureKey 分支
- * 命中即返回既有，不重复建账；形态过 `safeId`（`mtg-` + 十六进制）。
- */
-export function conclusionCaptureKey(docId: string, conclusionId: string): string {
-  return `mtg-${createHash('sha1').update(`${docId}\n${conclusionId}`, 'utf8').digest('hex').slice(0, 16)}`;
-}
-
-/**
- * 【T045】结论 → 候选的**确定性组装**（单一函数出口，零模型调用）。
- *
- * 产出 `SaveRecallCandidateInput`，字段填法照 data-model §1.6（不新增候选结构）：
- *   - `judgment`：overrides.judgment 优先，缺省结论摘要（≤240 ≤ 4000 ✓）；
- *   - `value`：**仅显式给值时才带键**（缺省交给 saveRecallCandidate 兜底为 judgment）；
- *   - `suggestedType`/`suggestedScope`：缺省 `personal`；
- *   - `suggestedAction`：显式 `'create'`——会议沉淀语义就是新建候选；且不显式给
- *     action 时，既有 `reviewReady` 的 `(hasExplicitAction || !hasExplicitValue)`
- *     会把「显式给了 value」的候选打落 weak_observation（入参形状导致的假阴性，
- *     不是证据弱），显式 create 让其余判据（value/sourceRefs/evidenceRefs/scope）
- *     原样生效——**不改 candidate-service 一行**；
- *   - `sourceRefs`：恰 1 条 `artifact_file/context_file`，id 用
- *     `cognitionContextFileSourceId(docId)`（source-catalog 单点同源，与来源目录
- *     的 id 逐字一致）；title 取文档展示名、sourceVersion 取 mtime 信号（缺省不写）；
- *   - `evidenceRefs`：每个段落锚点一条（同 id、`title` = 定位描述「文档 · 段落
- *     U0001」、`excerpt` = 结论摘要 ≤240）——**不含转写正文**（双引用纪律：
- *     正文永远在知识库，这里只有锚点定位 + 摘要）。无锚点 ⇒ 空数组 ⇒ 既有
- *     `reviewReady` 判 false ⇒ 候选落 `weak_observation`（**如实行为，不是缺陷**，
- *     T046 验收③；不给锚点硬造证据才是缺陷）；
- *   - `captureKey = conclusionCaptureKey(docId, conclusionId)`（幂等）；
- *   - **不传 `origin`**：由既有 `deriveCandidateOrigin` 依 captureKey 派生 `capture`；
- *   - `risk`/`spaceId`/`taskRunId`/`targetAssetId` 均不带（会议不是空间/任务/改进提案）。
- *
- * 打标钩子位（T048，012 边界——**预留，不实现**）：
- *   // [tags hook] 012 标签系统接管点：候选晋升为正式资产后，由资产管家
- *   // （update_ability_asset 的 fields.tags，旧 category 键收编为一条标签）打标。
- *   // 在 012 与会议沉淀线打通**之前**，precipitate 入口对 tags/category 一律
- *   // field_not_available 如实拒绝（见 precipitateMeetingConclusion），不映射
- *   // assetType/familyName、不静默丢弃；届时写标签的唯一入口就是本函数。
- */
-export function buildConclusionCandidateInput(
-  conclusion: MeetingConclusion,
-  source: ConclusionCandidateSource,
-  overrides: MeetingPrecipitateInput = {},
-): SaveRecallCandidateInput {
-  if (!conclusion || typeof conclusion !== 'object') {
-    throw new MeetingConclusionError('meeting conclusion must be an object', 'invalid_input');
-  }
-  const docId = String(source?.docId || conclusion.docId || '').trim();
-  if (!docId) {
-    throw new MeetingConclusionError('conclusion candidate source missing docId', 'invalid_doc_id');
-  }
-  const judgment = String(overrides.judgment ?? '').trim() || String(conclusion.summary ?? '').trim();
-  if (!judgment) {
-    throw new MeetingConclusionError('meeting conclusion judgment empty', 'invalid_summary');
-  }
-  // 文档展示名：显式给优先；缺省取 docId 的文件名段（与 meeting_doc 的派生同思路）。
-  const title = String(source?.title ?? '').trim()
-    || docId.split(/[\\/]/).filter(Boolean).pop() || docId;
-  const contextRef = {
-    kind: 'artifact_file' as const,
-    subtype: 'context_file' as const,
-    scope: 'personal' as const,
-    id: cognitionContextFileSourceId(docId),
-    title,
-    ...(String(source?.sourceVersion ?? '').trim() ? { sourceVersion: String(source.sourceVersion).trim() } : {}),
-  };
-  const anchors = Array.isArray(conclusion.transcriptRefs) ? conclusion.transcriptRefs : [];
-  const evidenceRefs = anchors.map((anchor) => ({
-    ...contextRef,
-    // 定位描述（不存正文）：「哪份文档 · 哪一段」。excerpt = 结论摘要（≤240）。
-    title: `${title} · ${anchor.utteranceId}`,
-    excerpt: String(conclusion.summary ?? ''),
-  }));
-  return {
-    judgment,
-    ...(overrides.value !== undefined && String(overrides.value).trim() ? { value: String(overrides.value).trim() } : {}),
-    suggestedType: (String(overrides.suggestedType ?? '').trim() || 'personal') as MeetingAssetType,
-    suggestedScope: String(overrides.suggestedScope ?? '').trim() || 'personal',
-    suggestedAction: 'create',
-    sourceRefs: [contextRef],
-    evidenceRefs,
-    captureKey: conclusionCaptureKey(docId, conclusion.id),
-    ...(Array.isArray(overrides.applicableWhen) ? { applicableWhen: overrides.applicableWhen } : {}),
-    ...(Array.isArray(overrides.forbiddenWhen) ? { forbiddenWhen: overrides.forbiddenWhen } : {}),
-    // [tags hook] 见函数注释的打标钩子位：012 落地前会议侧不写 tags/category。
-  };
-}
-
-/**
- * 【T046】沉淀一条已确认的纪要结论为**候选**（必过确认闸；只到候选不到资产）。
- *
- * - `status === 'draft'` ⇒ `not_confirmed` 拒绝（沉淀必过用户确认，FR-006）；
- * - 已 `precipitated` ⇒ 走同一 captureKey 幂等路径（saveRecallCandidate 命中
- *   既有即返回），不重复建账；回填时保留首个 precipitatedAt；
- * - 组装收在 `buildConclusionCandidateInput`（单一出口）；写候选走**既有**
- *   `saveRecallCandidate`（reviewReady / assertNotForbiddenToPersist / promote
- *   门槛一行不改——无锚点落 weak_observation 是既有闸的如实行为）；
- * - 写失败（含敏感内容闸命中）⇒ `candidate_write_failed`，本记录不回填
- *   candidateId（不留「记了候选 id 但没真的建」的中间态，data-model §1.5）；
- * - 成功 ⇒ 回填 `candidateId` + `status:'precipitated'` + `precipitatedAt`。
- *
- * 【T048】tags/category（012 边界）：入参**收到**任一键（own property 且值非
- * undefined）⇒ `field_not_available` 拒绝。文案指向**已上线**的标签路径：候选
- * 晋升为正式资产后经资产管家打标（`update_ability_asset` 的 `fields.tags`；
- * 旧 `category` 键在资产管家侧已收编为一条标签，合并去重）——不是映射、不是
- * 静默丢弃，也不指向任何未上线的未来功能。
- */
-export async function precipitateMeetingConclusion(
-  uid: string,
-  docId: string,
-  conclusionId: string,
-  input: MeetingPrecipitateInput = {},
-): Promise<{ conclusion: MeetingConclusion; candidateId: string }> {
-  const id = requireDocId(docId);
-  const itemId = typeof conclusionId === 'string' ? conclusionId.trim() : '';
-  if (!itemId || itemId.length > MAX_CONCLUSION_ID_CHARS) {
-    throw new MeetingConclusionError('invalid meeting conclusion id', 'invalid_item_id');
-  }
-  // T048：tags/category 如实拒绝（先于其他校验——「不支持的键」比「值不合法」更早说清）。
-  for (const field of ['tags', 'category'] as const) {
-    if (input !== null && typeof input === 'object'
-      && Object.prototype.hasOwnProperty.call(input, field)
-      && (input as Record<string, unknown>)[field] !== undefined) {
-      throw new MeetingConclusionError(
-        `${field} is not available on meeting precipitation; tag the promoted asset via the asset steward (update_ability_asset fields.tags) instead`,
-        'field_not_available',
-      );
+  lines.push(`## 转写回查锚点`, ``);
+  if (Array.isArray(c.transcriptRefs) && c.transcriptRefs.length) {
+    for (const ref of c.transcriptRefs) {
+      lines.push(`- 段落 \`${ref.utteranceId}\`（第 ${ref.blockIndex} 段，偏移 ${ref.from}–${ref.to}）`);
     }
+  } else {
+    // 历史数据可能缺结构化引用；如实说明，不报错也不假装有。
+    lines.push(`（本条无可关联的转写锚点${c.unlinkable ? `：${c.unlinkable}` : ''}）`);
   }
-  if (input && typeof input === 'object') {
-    if (input.suggestedType !== undefined && !PRECIPITATE_TYPES.has(String(input.suggestedType).trim())) {
-      throw new MeetingConclusionError('unknown suggested type', 'unknown_scenario');
+  lines.push(``);
+
+  if (Array.isArray(c.assetRefs) && c.assetRefs.length) {
+    lines.push(`## 关联资产（引用时的冻结版）`, ``);
+    for (const a of c.assetRefs) {
+      const version = typeof a.version === 'string' ? a.version : '';
+      lines.push(`- \`${a.assetId}\`${version ? `（v${version}）` : ''}`);
     }
-    if (input.suggestedScope !== undefined) {
-      const scope = String(input.suggestedScope).trim();
-      if (!scope || scope.length > MAX_PRECIPITATE_SCOPE) {
-        throw new MeetingConclusionError('invalid suggested scope', 'invalid_input');
-      }
-    }
-    for (const field of ['judgment', 'value'] as const) {
-      const text = (input as Record<string, unknown>)[field];
-      if (text !== undefined && (typeof text !== 'string' || text.length > MAX_PRECIPITATE_TEXT)) {
-        throw new MeetingConclusionError(`invalid precipitate ${field}`, 'invalid_input');
-      }
-    }
+    lines.push(``);
   }
 
-  const body = readBody(uid, id);
-  if (!body || !Array.isArray(body.conclusions)) {
-    throw new MeetingConclusionError('meeting conclusion not found', 'item_not_found');
-  }
-  const index = body.conclusions.findIndex((c) => c && c.id === itemId);
-  if (index < 0) {
-    throw new MeetingConclusionError('meeting conclusion not found', 'item_not_found');
-  }
-  const stored = body.conclusions[index];
-  if (stored.status !== 'confirmed' && stored.status !== 'precipitated') {
-    // 必过确认闸：draft（或存量脏值）一律拒绝，不许绕过用户确认直进候选池。
-    throw new MeetingConclusionError('meeting conclusion is not confirmed', 'not_confirmed');
-  }
-
-  // 来源文档元信息：读既有统一文档模型（只读探测，不惰性创建——沉淀不该顺手建文档）。
-  const doc = getMeetingDoc(uid, id, { create: false });
-  const candidateInput = buildConclusionCandidateInput(
-    viewOfStored(stored, id),
-    {
-      docId: id,
-      ...(doc?.title ? { title: doc.title } : {}),
-      ...(doc?.sourceVersion ? { sourceVersion: doc.sourceVersion } : {}),
-    },
-    input,
-  );
-
-  let candidateId: string;
-  try {
-    const candidate = await saveRecallCandidate(uid, candidateInput);
-    candidateId = candidate.id;
-  } catch (error) {
-    // 既有候选写失败（含 assertNotForbiddenToPersist 命中）：码化透传，不回填。
-    log.warn('meeting conclusion precipitation failed', { conclusionId: itemId, error: (error as Error).message });
-    throw new MeetingConclusionError((error as Error).message || 'recall candidate write failed', 'candidate_write_failed');
-  }
-
-  const at = nowIso();
-  const next: MeetingConclusion = {
-    ...stored,
-    status: 'precipitated',
-    candidateId,
-    // 幂等重沉淀保留首个 precipitatedAt（时间戳只记第一次真正建账）。
-    precipitatedAt: stored.precipitatedAt ?? at,
-    updatedAt: at,
-  };
-  body.conclusions[index] = next;
-  body.updatedAt = at;
-  writeBody(uid, body);
-  return { conclusion: viewOfStored(next, id), candidateId };
+  return lines.join('\n');
 }

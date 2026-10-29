@@ -1,0 +1,10 @@
+name: ui-reference-packs
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Select conditional neutral design-system reference archetypes and page-pattern
+  boundaries for UIDesigner; use when references, brand material, or weak visual systems
+  need style DNA while preventing accidental dashboard/kanban/pricing template use.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

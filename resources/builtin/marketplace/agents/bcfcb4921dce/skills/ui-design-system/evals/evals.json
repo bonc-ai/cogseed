@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "id": "smoke-ui-design-system",
+      "kind": "smoke",
+      "input": "A synthetic task that exercises ui-design-system.",
+      "expected": "Follows SKILL.md; deterministic output; no network or filesystem side effects."
+    }
+  ]
+}

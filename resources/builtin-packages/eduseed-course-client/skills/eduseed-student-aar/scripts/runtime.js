@@ -1,4 +1,19 @@
 "use strict";
+/**
+ * CogSeed local patch (2026-09-28) — Windows has no HOME.
+ *
+ * The bundled sources used a bare HOME lookup with an empty-string fallback, which on Windows (where
+ * only USERPROFILE / HOMEDRIVE+HOMEPATH exist) collapses to the empty string and
+ * turns the KSTAR episode directory into a CWD-relative `.eduseed` path: records
+ * were written wherever the skill happened to run and became unreadable as soon
+ * as the working directory changed. os.homedir() is correct on every platform
+ * and is already used elsewhere in this bundle for plugin-update state.
+ *
+ * Pending the same fix in upstream plugin-runtime.ts.
+ */
+function __eduseedHomeDir() {
+  return process.env.HOME || require("node:os").homedir();
+}
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -15161,8 +15176,13 @@ var ConfigError = class extends Error {
 function loadConfig(env = process.env) {
   const pick2 = (name) => env[name];
   const mock = pick2("EDUSEED_MOCK") === "1" || pick2("EDUSEED_MOCK") === "true";
+  // CogSeed local patch (2026-09-28): SKILL.md documents check-deliverables and
+  // prepare-submission as 离线 (local-only), so they must run without injected
+  // credentials instead of failing in loadConfig before the exempt check.
+  const offline = pick2("EDUSEED_OFFLINE") === "1";
   const missing = REQUIRED_VARS.filter((name) => {
-    if (mock && (name === "EDUSEED_API_KEY" || name === "EDUSEED_SERVER_URL")) return false;
+    if ((mock || offline) && (name === "EDUSEED_API_KEY" || name === "EDUSEED_SERVER_URL")) return false;
+    if (offline && name === "EDUSEED_STUDENT_ID") return false;
     return !pick2(name)?.trim();
   });
   if (missing.length > 0) {
@@ -15530,6 +15550,9 @@ function parsePatterns(raw) {
   return raw.split(/[,，、\n]/).map((p) => p.trim()).filter((p) => p.length > 0);
 }
 function patternToRegExp(pattern) {
+  // CogSeed local patch (2026-09-28): patterns are authored with "/" while
+  // Windows relative paths use "\", so normalise the pattern before matching.
+  pattern = String(pattern).replace(/\\/g, "/");
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   const globbed = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
   return new RegExp(`^${globbed}$`, "i");
@@ -15553,7 +15576,7 @@ function listFilesRecursive(dir) {
       if (entry.isDirectory()) {
         stack.push(full);
       } else if (entry.isFile()) {
-        out.push(path.relative(dir, full));
+        out.push(path.relative(dir, full).split(path.sep).join("/")); // CogSeed local patch (2026-09-28): Windows "\" never matched "/" patterns
       }
     }
   }
@@ -15718,7 +15741,10 @@ function spawnChallengeCacheRefresh() {
     const child = spawn(process.execPath, [self, "list-challenges"], {
       env: { ...process.env, EDUSEED_CACHE_REFRESH: "1" },
       detached: true,
-      stdio: "ignore"
+      stdio: "ignore",
+      // CogSeed local patch (2026-09-28): without this the detached refresh can
+      // flash a console window on Windows.
+      windowsHide: true
     });
     child.unref();
   } catch {
@@ -16206,7 +16232,7 @@ function recordLearningDelta(episode, score) {
 }
 function persistEpisode(episode, opts) {
   try {
-    const base = opts?.dir ?? path3.join(process.env.HOME ?? "", ".eduseed", "kstar", episode.S.student_id);
+    const base = opts?.dir ?? path3.join(__eduseedHomeDir(), ".eduseed", "kstar", episode.S.student_id);
     fs3.mkdirSync(base, { recursive: true });
     const file2 = path3.join(base, `${episode.episode_id}.json`);
     fs3.writeFileSync(file2, JSON.stringify(episode, null, 2), { mode: 384 });
@@ -16246,7 +16272,7 @@ var getEpisodeOutputSchema = {
 };
 function episodeDir(studentId, dir) {
   const safeId = /^[A-Za-z0-9_-]{1,64}$/.test(studentId) ? studentId : "invalid-id";
-  return dir ?? path4.join(process.env.HOME ?? "", ".eduseed", "kstar", safeId);
+  return dir ?? path4.join(__eduseedHomeDir(), ".eduseed", "kstar", safeId);
 }
 function loadAllEpisodes(studentId, dir) {
   const base = episodeDir(studentId, dir);
@@ -16891,7 +16917,7 @@ var fs5 = __toESM(require("node:fs"), 1);
 var path5 = __toESM(require("node:path"), 1);
 function writeDeltaRToEpisode(studentId, challengeId, delta, dir) {
   const safeId = /^[A-Za-z0-9_-]{1,64}$/.test(studentId) ? studentId : "invalid-id";
-  const base = dir ?? path5.join(process.env.HOME ?? "", ".eduseed", "kstar", safeId);
+  const base = dir ?? path5.join(__eduseedHomeDir(), ".eduseed", "kstar", safeId);
   let files;
   try {
     files = fs5.readdirSync(base).filter((f) => f.endsWith(".json"));
@@ -16950,7 +16976,7 @@ function recordTeacherReviewEpisode(input, opts) {
     ...input.aiScore !== void 0 ? { delta_r: { predicted: input.aiScore, actual: input.score, attribution: `\u6559\u5E08\u7EC8\u5BA1\u5224\u5B9A ${input.action}\uFF08\u4E0E AI \u5206\u5DEE ${input.score - input.aiScore}\uFF09` } } : {}
   };
   try {
-    const root = opts?.dir ?? path6.join(process.env.HOME ?? "", ".eduseed", "kstar");
+    const root = opts?.dir ?? path6.join(__eduseedHomeDir(), ".eduseed", "kstar");
     const base = path6.join(root, `teacher-${input.teacherId}`);
     fs6.mkdirSync(base, { recursive: true });
     const file2 = path6.join(base, `${episode.episode_id}.json`);
@@ -17046,9 +17072,17 @@ function findCogseedPkgCli() {
     const p = (0, import_node_path2.join)(env.COGSEED_PC_DIR, "bin", "cogseed-pkg.cjs");
     if ((0, import_node_fs2.existsSync)(p)) return p;
   }
+  // CogSeed local patch (2026-09-28): packaged Windows installs (NSIS,
+  // productName "CogSeed") had no candidate here, so only macOS had a fallback
+  // beyond the host-injected COGSEED_PC_DIR. Linux ships as AppImage, whose
+  // resources live in a per-run mount point and cannot be addressed statically.
   const candidates = process.platform === "darwin" ? [
     "/Applications/CogSeed.app/Contents/Resources/app.asar.unpacked/bin/cogseed-pkg.cjs",
     "/Applications/CogSeed Dev.app/Contents/Resources/app.asar.unpacked/bin/cogseed-pkg.cjs"
+  ] : process.platform === "win32" ? [
+    (0, import_node_path2.join)(env.LOCALAPPDATA ?? "", "Programs", "CogSeed", "resources", "app.asar.unpacked", "bin", "cogseed-pkg.cjs"),
+    (0, import_node_path2.join)(env.LOCALAPPDATA ?? "", "Programs", "CogSeed Dev", "resources", "app.asar.unpacked", "bin", "cogseed-pkg.cjs"),
+    (0, import_node_path2.join)(env.ProgramFiles ?? "", "CogSeed", "resources", "app.asar.unpacked", "bin", "cogseed-pkg.cjs")
   ] : [];
   return candidates.find((p) => (0, import_node_fs2.existsSync)(p)) ?? null;
 }
@@ -17737,8 +17771,11 @@ var COMMANDS = [
   { command: "agent-inbox", role: "both", desc: "P3394 \u6536\u4EF6\u7BB1" },
   { command: "agent-contacts", role: "both", desc: "P3394 \u901A\u8BAF\u5F55" }
 ];
-var CURRENT_PLUGIN_VERSION = true ? "0.5.4" : "0.0.0";
+var CURRENT_PLUGIN_VERSION = true ? "0.5.5" : "0.0.0";
 var LICENSE_EXEMPT = /* @__PURE__ */ new Set(["help", "license-check", "health", "plugin-version", "check-deliverables", "prepare-submission"]);
+// CogSeed local patch (2026-09-28): the subset of exempt commands that never talk
+// to the platform, so they can run with no credentials at all.
+var OFFLINE_LOCAL_COMMANDS = /* @__PURE__ */ new Set(["check-deliverables", "prepare-submission"]);
 function compareVersions(a, b) {
   const pa = String(a).trim().replace(/^v/, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
   const pb = String(b).trim().replace(/^v/, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
@@ -17827,7 +17864,8 @@ async function runRuntime(input) {
       profileUsed = profileUsed ? `${profileUsed},${envName}` : envName;
     }
   }
-  const config2 = loadConfig();
+  const offlineLocal = OFFLINE_LOCAL_COMMANDS.has(command);
+  const config2 = loadConfig(offlineLocal ? { ...process.env, EDUSEED_OFFLINE: "1" } : process.env);
   const client = new PlatformClient(config2);
   console.error(
     `[aix-course-plugin] cmd=${command} role=${config2.role} student=${config2.studentId || "-"} server=${config2.serverUrl} mock=${config2.mock} from=${fromAgentOf(config2)}${profileUsed ? ` profile=${profileUsed}` : ""}`
@@ -17838,7 +17876,7 @@ async function runRuntime(input) {
   }
   try {
     const result = await dispatch(client, config2, command, payload);
-    if (!config2.mock) {
+    if (!config2.mock && !offlineLocal) {
       void maybeSilentUpdate({
         currentVersion: CURRENT_PLUGIN_VERSION,
         pkgName: process.env.EDUSEED_PKG_NAME?.trim() || "eduseed-course-client",

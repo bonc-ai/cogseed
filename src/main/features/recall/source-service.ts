@@ -1,4 +1,5 @@
 import { safeId } from '../../storage';
+import { cognitionMessageSourceId } from './source-identity';
 
 export const COGNITION_SOURCE_TYPES = [
   'conversation',
@@ -39,6 +40,15 @@ export const LEGACY_COGNITION_SOURCE_KINDS = [
 
 export type LegacyCognitionSourceKind = typeof LEGACY_COGNITION_SOURCE_KINDS[number];
 
+/** Owned message / attachment coordinates. Offsets refer to the versioned UTF-8
+ * text decoded as a JS string, not to a model-generated quotation. */
+export interface CognitionSourceLocator {
+  conversationId: string;
+  messageId: string;
+  attachmentName?: string;
+  range?: { start: number; end: number };
+}
+
 export interface CognitionSourceRef {
   /** New writers use v2 discriminants. Explicit legacy inputs remain legacy so
    * existing consumers can complete their own migration without losing stable
@@ -54,6 +64,7 @@ export interface CognitionSourceRef {
   excerpt?: string;
   degraded?: boolean;
   reason?: string;
+  locator?: CognitionSourceLocator;
 }
 
 export interface CognitionSourceInput {
@@ -68,6 +79,20 @@ export interface CognitionSourceInput {
   excerpt?: string;
   degraded?: boolean;
   reason?: string;
+  locator?: CognitionSourceLocator;
+}
+
+export function normalizeSourceLocator(value: unknown): CognitionSourceLocator | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const row = value as CognitionSourceLocator;
+  if (!safeId(row.conversationId) || !safeId(row.messageId)) return undefined;
+  if (row.attachmentName !== undefined && (typeof row.attachmentName !== 'string'
+    || !row.attachmentName.trim() || /[\\/\0]/.test(row.attachmentName) || ['.', '..'].includes(row.attachmentName))) return undefined;
+  if (row.range !== undefined && (!row.range || !Number.isSafeInteger(row.range.start)
+    || !Number.isSafeInteger(row.range.end) || row.range.start < 0 || row.range.end <= row.range.start)) return undefined;
+  return { conversationId: row.conversationId, messageId: row.messageId,
+    ...(row.attachmentName ? { attachmentName: row.attachmentName } : {}),
+    ...(row.range ? { range: { start: row.range.start, end: row.range.end } } : {}) };
 }
 
 const SOURCE_TYPES = new Set<string>(COGNITION_SOURCE_TYPES);
@@ -78,7 +103,7 @@ const MAX_TITLE_LENGTH = 120;
 const MAX_EXCERPT_LENGTH = 240;
 const SECRET_VALUE_RE = /(\b(?:authorization\s*:\s*bearer\s+|bearer\s+|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*))([^\s,;]+)/gi;
 const SENSITIVE_KEY_VALUE_RE = /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|password|secret|cookie)\s*[=:]\s*)([^\s,;]+)/gi;
-const JSON_SECRET_VALUE_RE = /((?:[\"'])(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|authorization|token|password|secret|cookie)(?:[\"'])\s*:\s*[\"'])(?:\\.|[^\"'])*(?=[\"'])/gi;
+const JSON_SECRET_KEY_NAMES = 'access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|authorization|token|password|secret|cookie';
 
 const DEFAULT_SUBTYPE: Record<CognitionSourceType, CognitionSourceSubtype> = {
   conversation: 'session',
@@ -119,14 +144,51 @@ function isSourceScope(value: unknown): value is CognitionSourceScope {
   return typeof value === 'string' && SOURCE_SCOPES.has(value);
 }
 
-export function redactSourceExcerpt(value: unknown): string | undefined {
-  const compacted = compactText(value, MAX_EXCERPT_LENGTH * 3);
+/** Replace complete quoted values after credential-like JSON keys. A regex
+ *  cannot see escaped quotes or an unterminated value at the truncation edge,
+ *  so scan the value span and replace all of it; a value cut at the end is
+ *  redacted through the end rather than leaving a suffix. */
+function redactJsonSecretValues(text: string): string {
+  const keyRe = new RegExp(`(["'])(${JSON_SECRET_KEY_NAMES})\\1\\s*:\\s*`, 'gi');
+  const pieces: string[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = keyRe.exec(text))) {
+    const valueStart = keyRe.lastIndex;
+    const quote = text[valueStart];
+    if (quote !== '"' && quote !== "'") continue;
+    let end = valueStart + 1;
+    let closed = false;
+    while (end < text.length) {
+      const ch = text[end];
+      if (ch === '\\') { end += 2; continue; }
+      if (ch === quote) { closed = true; break; }
+      end += 1;
+    }
+    pieces.push(text.slice(cursor, valueStart + 1), '[REDACTED]');
+    if (closed) {
+      pieces.push(quote);
+      cursor = end + 1;
+    } else {
+      cursor = text.length;
+    }
+    keyRe.lastIndex = cursor;
+  }
+  if (!pieces.length) return text;
+  pieces.push(text.slice(cursor));
+  return pieces.join('');
+}
+
+export function redactSourceExcerpt(value: unknown, maxLength = MAX_EXCERPT_LENGTH): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  // Redact the full value before compaction: truncating a long secret first
+  // would leave an unmatched prefix/suffix that the value scanner cannot see.
+  const compacted = compactText(redactJsonSecretValues(value), maxLength * 3);
   if (!compacted) return undefined;
   const redacted = compacted
     .replace(SECRET_VALUE_RE, '$1[REDACTED]')
-    .replace(SENSITIVE_KEY_VALUE_RE, '$1[REDACTED]')
-    .replace(JSON_SECRET_VALUE_RE, '$1[REDACTED]');
-  return compactText(redacted, MAX_EXCERPT_LENGTH);
+    .replace(SENSITIVE_KEY_VALUE_RE, '$1[REDACTED]');
+  return compactText(redacted, maxLength);
 }
 
 function parseStringRef(value: string): CognitionSourceInput | undefined {
@@ -182,6 +244,13 @@ export function cognitionSourceRefKey(ref: Pick<CognitionSourceRef, 'kind' | 'id
   return `${ref.kind}:${ref.id}`;
 }
 
+/** Removing an owning session/message also invalidates its located evidence. */
+export function cognitionSourceDependsOn(ref: CognitionSourceRef, source: Pick<CognitionSourceRef, 'kind' | 'id'>): boolean {
+  return (ref.kind === source.kind && ref.id === source.id)
+    || (source.kind === 'conversation' && !!ref.locator && (source.id === ref.locator.conversationId
+      || source.id === cognitionMessageSourceId(ref.locator.conversationId, ref.locator.messageId)));
+}
+
 export function normalizeCognitionSourceRef(input: unknown): CognitionSourceRef | undefined {
   const source = typeof input === 'string'
     ? parseStringRef(input)
@@ -197,10 +266,15 @@ export function normalizeCognitionSourceRef(input: unknown): CognitionSourceRef 
 
   const canonical = canonicalizeSource(source as CognitionSourceInput);
   if (!canonical) return undefined;
+  const locator = normalizeSourceLocator(source.locator);
+  if (source.locator !== undefined && (!locator
+    || (locator.attachmentName ? canonical.kind !== 'artifact_file' || canonical.subtype !== 'artifact'
+      : canonical.kind !== 'conversation' || canonical.subtype !== 'message'))) return undefined;
   const title = compactText(source.title, MAX_TITLE_LENGTH);
   const excerpt = redactSourceExcerpt(source.excerpt);
   const reason = compactText(canonical.reason || source.reason, MAX_TITLE_LENGTH);
   const sourceVersion = compactText(source.sourceVersion, 80);
+  if (locator?.range && !sourceVersion) return undefined;
   const authorizationRef = typeof source.authorizationRef === 'string' && safeId(source.authorizationRef)
     ? source.authorizationRef
     : undefined;
@@ -216,6 +290,7 @@ export function normalizeCognitionSourceRef(input: unknown): CognitionSourceRef 
     ...(excerpt ? { excerpt } : {}),
     ...(canonical.degraded === true || source.degraded === true ? { degraded: true } : {}),
     ...(reason ? { reason } : {}),
+    ...(locator ? { locator } : {}),
   };
 }
 
@@ -226,7 +301,19 @@ export function normalizeCognitionSourceRefs(inputs: unknown[]): CognitionSource
     const ref = normalizeCognitionSourceRef(input);
     if (!ref) continue;
     const key = cognitionSourceRefKey(ref);
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      const existing = out.find(row => cognitionSourceRefKey(row) === key)!;
+      const left = existing.locator, right = ref.locator;
+      if (left?.range && right?.range && existing.sourceVersion === ref.sourceVersion
+        && left.conversationId === right.conversationId && left.messageId === right.messageId
+        && left.attachmentName === right.attachmentName) {
+        existing.locator = { ...left, range: {
+          start: Math.min(left.range.start, right.range.start),
+          end: Math.max(left.range.end, right.range.end),
+        } };
+      }
+      continue;
+    }
     seen.add(key);
     out.push(ref);
   }

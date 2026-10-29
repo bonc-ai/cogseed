@@ -54,7 +54,9 @@
  *   P3394_AGENT_MODE          oneshot（默认）| sscli
  *   P3394_AGENT_CLI           自定义 CLI（覆盖预设）
  *   P3394_AGENT_CLI_ARGS      CLI 参数模板，{message} 为消息占位（oneshot；覆盖预设）
- *   P3394_AGENT_TIMEOUT_MS    Agent 单次回答上限（默认 10 分钟）
+ *   P3394_AGENT_TIMEOUT_MS    Agent 单次回答上限（默认 8 分钟；须小于 hub 回复超时 12 分钟）
+ *   P3394_BACKGROUND_JOB_DEADLINE_MS  提升到后台的任务独立上限（默认 60 分钟）
+ *   P3394_BACKGROUND_JOBS_FILE        后台作业记录文件（默认 <网关 home>/background-jobs.json，0600）
  *   P3394_DISABLE_ONESHOT_STREAM  1 关闭 oneshot 模式增量输出回发（默认开启）
  */
 
@@ -65,6 +67,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { OpencodeApi } = require('./opencode-api.cjs');
 const { spawn } = require('child_process');
 
 // ── 命令行参数（G-35 统一包快速接入）：环境变量之外的便捷入口——
@@ -560,7 +563,14 @@ function spawnCli(cli, args, optsArg) {
   return spawn(resolved, args, opts);
 }
 
-const TIMEOUT_MS = Number(process.env.P3394_AGENT_TIMEOUT_MS || 10 * 60 * 1000);
+// Stays BELOW the hub reply timeout (12 min) so a deadline promotion lands
+// before the hub gives up; keep the two in step when changing either.
+const TIMEOUT_MS = Number(process.env.P3394_AGENT_TIMEOUT_MS || 8 * 60 * 1000);
+
+// Decision 2 / B-line wiring: when enabled, a run that reaches the agent deadline is
+// handed to the background ceiling instead of being killed, so a long task outlives
+// its turn and still reports back (phase 1 at the deadline, phase 2 when it exits).
+const PROMOTE_ON_DEADLINE = process.env.P3394_PROMOTE_ON_DEADLINE === '1';
 const NODE_KIND = (process.env.P3394_NODE_KIND || 'agent').trim();
 if (!['agent', 'sub_agent', 'task_agent', 'capability', 'model_runtime'].includes(NODE_KIND)) {
   console.error('[p3394-gateway] P3394_NODE_KIND must be agent|sub_agent|task_agent|capability|model_runtime');
@@ -999,6 +1009,11 @@ const {
   probeInspectCommand,
   probeStreamJsonInitModel,
   probeCodexConfigModel,
+  codexConfigStamp,
+  shouldRestartForConfig,
+  codexModelProblem,
+  isCodexModelRejection,
+  probeCodexModelsCache,
   probeConfigModels,
   effortArgsFor,
   effortLevelFor,
@@ -1079,7 +1094,7 @@ function modelControllable() {
 
 const activeTasks = new Map(); // task_id → child
 const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
-function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs, extraArgs) {
+function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs, extraArgs, background) {
   return new Promise((resolve, reject) => {
     const args = splitArgs(CLI_ARGS).map((part) => part.replace('{message}', message));
     // CogSeed 扩展（通用）：单轮模型选择按「模型参数模板」注入（预设声明
@@ -1138,27 +1153,54 @@ function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs, extraAr
       streamedChars += visible.length;
       onProgress(visible);
     };
-    const timer = setTimeout(() => {
+    // Promotion signal (decision 2): a CLI/runner that outlives the turn emits
+    // a structured line and keeps working. Once promoted, the 60-minute
+    // background ceiling owns the run — the agent deadline must not kill it.
+    const signalTap = background ? createBackgroundSignalTap((signal) => {
+      try { background.onSignal(signal); } catch (error) {
+        console.error('[p3394-gateway] background promotion failed: ' + (error && error.message ? error.message : String(error)));
+      }
+    }) : null;    const timer = setTimeout(() => {
+      if (background && background.promoted) return;
+      if (background && PROMOTE_ON_DEADLINE) {
+        try {
+          background.onSignal({ eta_seconds: Math.round(BACKGROUND_JOB_DEADLINE_MS / 1000) });
+        } catch (error) {
+          console.error('[p3394-gateway] background promotion failed: ' + (error && error.message ? error.message : String(error)));
+        }
+        // Promoted: the background ceiling owns the child now - do not kill it
+        // at the agent deadline.
+        if (background.promoted) return;
+      }
       timingOut = true;
       void killProcessTree(child, 'SIGTERM').then(() => {
         if (taskId && activeTasks.get(taskId) === child) activeTasks.delete(taskId);
         reject(new Error('p3394_agent_timeout'));
       });
     }, TIMEOUT_MS);
-    child.stdout.on('data', (chunk) => { if (out.length < MAX_REPLY_BYTES * 4) out += chunk; if (ONESHOT_STREAM_CHILD) forwardStream(chunk.toString('utf8')); });
+    child.stdout.on('data', (chunk) => {
+      const chunkText = chunk.toString('utf8');
+      // The promotion sentinel never reaches the visible reply/stream.
+      const visibleChunk = signalTap ? signalTap.push(chunkText) : chunkText;
+      if (out.length < MAX_REPLY_BYTES * 4) out += visibleChunk;
+      if (ONESHOT_STREAM_CHILD) forwardStream(visibleChunk);
+    });
     child.stderr.on('data', (chunk) => {
-      if (errOut.length < 8 * 1024) errOut += chunk;
+      const chunkText = chunk.toString('utf8');
+      const visibleChunk = signalTap ? signalTap.push(chunkText) : chunkText;
+      if (errOut.length < 8 * 1024) errOut += visibleChunk;
       if (PRESET_NAME === 'openclaw') {
-        ocPendingLine += chunk.toString('utf8');
+        ocPendingLine += visibleChunk;
         const lines = ocPendingLine.split(/\r?\n/);
         ocPendingLine = lines.pop() || '';
         for (const line of lines) forwardOpenclawProgress(line);
       } else if (ONESHOT_STREAM_CHILD) {
-        forwardStream(chunk.toString('utf8'));
+        forwardStream(visibleChunk);
       }
     });
     child.on('error', (error) => { if (timingOut) return; clearTimeout(timer); if (taskId) activeTasks.delete(taskId); reject(error); });
     child.on('close', (code) => {
+      if (signalTap) out += signalTap.flush();
       clearTimeout(timer);
       if (timingOut) return;
       if (taskId) activeTasks.delete(taskId);
@@ -1222,7 +1264,7 @@ const oneshotRuntime = {
         try {
           const rawReply = await runAgent(
             text + note + hint, cancelKey, opts && opts.cwd, onDelta, onProgress,
-            opts && opts.execPrefs, buildResumeArgs(cliSessionId),
+            opts && opts.execPrefs, buildResumeArgs(cliSessionId), opts && opts.background,
           );
           const reply = clipReply(rawReply);
           const nextId = extractCliSessionId(rawReply);
@@ -1243,7 +1285,7 @@ const oneshotRuntime = {
     // 消息；登记了 sessionIdPattern 的 CLI 顺手提取会话号写回（下轮生效）。
     const transcript = readTranscriptTail(sessionId);
     const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
-    const rawReply = await runAgent(prompt, cancelKey, opts && opts.cwd, onDelta, onProgress, opts && opts.execPrefs);
+    const rawReply = await runAgent(prompt, cancelKey, opts && opts.cwd, onDelta, onProgress, opts && opts.execPrefs, undefined, opts && opts.background);
     const reply = clipReply(rawReply);
     const nextId = extractCliSessionId(rawReply);
     if (nextId) writeCliSession(sessionId, nextId);
@@ -1344,6 +1386,12 @@ class CodexAppServerRuntime {
     this.threads = new Map();
     this.activeTurns = new Map(); // task_id（无则 message_id）→ { threadId }
     this.seq = 0;
+    // E-03：spawn 时的配置代次（config.toml/auth.json mtime）——下一轮发现
+    // 变化就换新 app-server，免去真机上的手工 kill。
+    this.configStamp = 0;
+    // E-01：本代 app-server 枚举到的模型清单（null = 未探测；[] = 探测失败
+    // 也缓存，避免每轮重付枚举超时）。
+    this.modelIds = null;
   }
   _send(message) {
     if (this.child && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(message) + '\n');
@@ -1416,12 +1464,79 @@ class CodexAppServerRuntime {
     entry.onProgress(text);
   }
   async start() {
-    if (this.child) return;
+    if (this.child) {
+      // E-03：常驻 app-server 只在启动时读 CODEX_HOME 配置，用户改完模型/供应商
+      // 后旧进程仍按旧配置跑（真机上表现为"改了配置不生效，必须手工 kill pid"）。
+      // 下一轮开始前比较配置代次，变了就换新进程——thread 绑定随进程失效，按
+      // cli-session.json 走 thread/resume 恢复原会话（G-27 持久化通道）。
+      if (shouldRestartForConfig(this.configStamp, codexConfigStamp(), this.activeTurns.size)) {
+        await this._restartForConfigChange();
+      } else {
+        return;
+      }
+    }
     // 并发去重：预热（server.listen 回调）与首轮 deliver 可能同时触发
     // start()，没有这层会让同一个 gateway 双 spawn 两个 app-server。
     if (this.startPromise) return this.startPromise;
     this.startPromise = this._doStart().finally(() => { this.startPromise = null; });
     return this.startPromise;
+  }
+  /** 配置变更后的换进程：只在无在途轮次时调用（见 shouldRestartForConfig）。
+   *  终止旧进程、清空线程绑定与模型清单缓存，让 _doStart 起一个新的。 */
+  async _restartForConfigChange() {
+    const stale = this.child;
+    console.log('[p3394-gateway] codex config changed → restarting app-server'
+      + (stale && stale.pid ? ' (old pid ' + stale.pid + ')' : ''));
+    if (stale) await killProcessTree(stale, 'SIGTERM');
+    if (this.child === stale) this.child = null;
+    this.buf = '';
+    // 新进程不认识旧 thread：清内存绑定，下一轮按盘上 cli-session.json 走
+    // thread/resume（被拒再退回 thread/start），会话连续性不受影响。
+    this.threads.clear();
+    this.modelIds = null;
+    this.pending.clear();
+  }
+  /** 本代 app-server 的模型清单（E-01 诊断用，按代缓存）：枚举失败缓存空数组，
+   *  调用方据此"无法判定 → 放行给 CLI"，不反复付枚举超时。 */
+  async _knownModelIds() {
+    if (this.modelIds) return this.modelIds;
+    let ids = [];
+    try {
+      const inspected = await this.inspectModels();
+      if (inspected && inspected.status === 'ready' && Array.isArray(inspected.models)) {
+        ids = inspected.models.map((item) => String((item && item.id) || '').trim()).filter(Boolean);
+      }
+    } catch { ids = []; }
+    this.modelIds = ids;
+    return ids;
+  }
+  /** 本机权威模型清单（同步、零网络）：CODEX_HOME/models_cache.json 的
+   *  models[].slug（真机报告 E-01 指定的权威来源）∪ 已缓存的 app-server
+   *  枚举结果。清单为空 = 无从判定，调用方放行给 CLI。 */
+  _localModelIds() {
+    const cached = probeCodexModelsCache();
+    const ids = Array.isArray(cached && cached.ids) ? cached.ids.slice() : [];
+    for (const id of this.modelIds || []) if (!ids.includes(id)) ids.push(id);
+    return ids;
+  }
+  /** thread/start 被拒 / 轮次失败时的可执行诊断（E-01）：请求模型（或
+   *  config.toml 默认模型）不在清单里 → 换成带可用模型的错误；判定不了就保留
+   *  原始错误。options.assumeModelFault：thread/start 这种参数级失败可直接按
+   *  模型诊断；轮次失败必须先匹配"模型不受支持"报文，避免把取消/超时误诊。 */
+  async _modelDiagnosedError(error, requestedModel, options) {
+    const raw = error && error.message ? error.message : String(error);
+    const assume = !!(options && options.assumeModelFault);
+    if (!assume && !isCodexModelRejection(raw)) return error instanceof Error ? error : new Error(raw);
+    try {
+      const suspect = (requestedModel && requestedModel.trim()) || probeCodexConfigModel() || '';
+      const problem = codexModelProblem(suspect, this._localModelIds())
+        || codexModelProblem(suspect, await this._knownModelIds());
+      if (problem) {
+        const origin = (requestedModel && requestedModel.trim()) ? '' : ' [from CODEX_HOME config.toml]';
+        return new Error(problem.message + origin + ' | ' + raw);
+      }
+    } catch { /* 诊断失败不掩盖原始错误 */ }
+    return error instanceof Error ? error : new Error(raw);
   }
   async _doStart() {
     if (this.child) return;
@@ -1429,18 +1544,30 @@ class CodexAppServerRuntime {
     // 会让 gateway 进程直接崩（uncaught 'error'），而且 initialize 会挂到
     // TIMEOUT_MS 才失败。这里快速失败并清空状态，deliver 侧拿到明确错误。
     let spawnError = null;
-    this.child = spawnCli(CODEX_APP_SERVER, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] });
-    this.child.on('error', (error) => {
+    const child = spawnCli(CODEX_APP_SERVER, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = child;
+    // 换进程（E-03）时旧 child 的 close 事件可能晚于新 child 赋值：只在仍是
+    // 当前 child 时才清空状态，否则会把新进程的引用抹掉（后续 _send 静默丢弃）。
+    child.on('error', (error) => {
       spawnError = error;
-      this._failPending(new Error('p3394_codex_app_server_spawn_failed: ' + error.message));
-      this.child = null;
+      if (this.child === child) {
+        this._failPending(new Error('p3394_codex_app_server_spawn_failed: ' + error.message));
+        this.child = null;
+      }
     });
-    this.child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk) => {
       this.buf += chunk.toString(); const lines = this.buf.split('\n'); this.buf = lines.pop();
       for (const line of lines) if (line.trim()) this._onLine(line.trim());
     });
-    this.child.stderr.on('data', (chunk) => { if (String(chunk).includes('ERROR')) console.error('[p3394-gateway] codex app-server: ' + String(chunk).trim().slice(-500)); });
-    this.child.on('close', () => { this._failPending(new Error('p3394_codex_app_server_exited')); this.child = null; });
+    child.stderr.on('data', (chunk) => { if (String(chunk).includes('ERROR')) console.error('[p3394-gateway] codex app-server: ' + String(chunk).trim().slice(-500)); });
+    child.on('close', () => {
+      if (this.child !== child) return;
+      this._failPending(new Error('p3394_codex_app_server_exited'));
+      this.child = null;
+    });
+    // 记下这一代进程读到的配置版本，供 start() 判定是否需要换进程（E-03）。
+    this.configStamp = codexConfigStamp();
+    this.modelIds = null;
     await this._request('initialize', { clientInfo: { name: 'p3394-gateway', version: '1.0' }, capabilities: { experimentalApi: true } });
     if (spawnError) throw spawnError;
     this._send({ jsonrpc: '2.0', method: 'initialized', params: {} });
@@ -1494,6 +1621,9 @@ class CodexAppServerRuntime {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     const cwd = (opts && opts.cwd) || null;
+    const prefs = (opts && opts.execPrefs) || {};
+    // 本轮实际模型：单轮下发优先，否则 codex 自己 config.toml 的默认值。
+    const requestedModel = (prefs.model && String(prefs.model).trim()) || '';
     await this.start();
     let threadId = this.threads.get(sessionId);
     if (!threadId) {
@@ -1523,7 +1653,15 @@ class CodexAppServerRuntime {
       // config 是 app-server 的 per-thread 覆盖——若当前版本不认该字段导致
       // thread/start 被拒，去掉 config 重试一次（强度静默降级、模型保留，
       // 不让整轮失败）。
-      const prefs = (opts && opts.execPrefs) || {};
+      // E-01 快检：模型名先对**本机权威清单**（models_cache.json，纯文件读）核
+      // 一次；命中不了再问 app-server 的枚举清单（慢，只在判负时付）。两处都
+      // 没有才拒绝——真机上错名要等模型层 114 秒才回一段原始报文，这里毫秒级
+      // 给出可用模型。清单为空 = 无从判定 → 放行给 CLI。
+      const effectiveModel = requestedModel || probeCodexConfigModel() || '';
+      const localProblem = codexModelProblem(effectiveModel, this._localModelIds());
+      if (localProblem && codexModelProblem(effectiveModel, await this._knownModelIds())) {
+        throw new Error(localProblem.message + (requestedModel ? '' : ' [from CODEX_HOME config.toml]'));
+      }
       const startParams = {
         cwd,
         approvalPolicy: 'never',
@@ -1541,10 +1679,16 @@ class CodexAppServerRuntime {
           ? { ...startParams, config: { model_reasoning_effort: effortLevel } }
           : startParams);
       } catch (configError) {
-        if (!effortLevel) throw configError;
+        if (!effortLevel) throw await this._modelDiagnosedError(configError, requestedModel, { assumeModelFault: true });
         console.warn('[p3394-gateway] codex thread/start rejected effort config; retrying without it: '
           + (configError && configError.message ? configError.message : String(configError)));
-        result = await this._request('thread/start', startParams);
+        try {
+          result = await this._request('thread/start', startParams);
+        } catch (retryError) {
+          // 去掉强度后的重试仍失败：多半不是强度问题而是模型名（E-01）——
+          // 换成带可用模型的错误，别把原始 JSON-RPC 文本丢给用户。
+          throw await this._modelDiagnosedError(retryError, requestedModel, { assumeModelFault: true });
+        }
       }
       threadId = result && result.thread && result.thread.id;
       if (!threadId) throw new Error('p3394_codex_thread_start_failed');
@@ -1579,7 +1723,12 @@ class CodexAppServerRuntime {
         entry.reject(error);
       }
     }
-    return promise;
+    // E-01：模型层在**轮次内**才拒（真机原文 114 秒后到，事件是 model.delta /
+    // turn failed）——这里对失败做一次诊断包装：确实是"模型不受支持"就换成带
+    // 可用模型的错误；取消/超时/网络抖动的报文不匹配，原样保留不误诊。
+    return promise.catch(async (error) => {
+      throw await this._modelDiagnosedError(error, requestedModel);
+    });
   }
   /** 终止在途 turn（app-server v2 协议 turn/interrupt）。不 kill 共享的
    *  app-server 进程——进程保持可复用，只中断目标线程的在途 turn。 */
@@ -1617,6 +1766,10 @@ class SscliRuntime {
   constructor() {
     this.child = null;
     this.pending = new Map(); // request_id → {resolve, reject, deltas, timer}
+    // request_ids of promote frames awaiting their ack. The shim echoes the
+    // deliver's request_id on that ack (its only correlation key); tracking it
+    // keeps _parseLine from mistaking "deadline dropped" for "run finished".
+    this.promoteAcks = new Set();
     this.sessions = new Set();
     this.reqSeq = 0;
     this.lineBuf = '';
@@ -1639,9 +1792,29 @@ class SscliRuntime {
         deltas: [],
         onDelta,
         onProgress,
-        terminating: false,
-        timer: setTimeout(() => {
+        terminating: false,        timer: setTimeout(() => {
           if (entry.terminating) return;
+          // Promotion (decision 2): hand the run to the background ceiling instead of
+          // killing the shim. The pending entry stays alive so a late `completed`
+          // frame still resolves it (handleEnvelope then sends phase 2).
+          const promoteBg = op && op.background;
+        if (promoteBg && PROMOTE_ON_DEADLINE && !promoteBg.promoted) {
+          // Tell the shim first: it owns its own deadline and would otherwise
+          // abort the CLI at the same instant this timer fires. Its ack will
+          // carry this same request_id; record it so the ack is not taken as
+          // the deliver's completion (the entry must stay pending for the real
+          // `completed`/`failed` event that still follows).
+          this.promoteAcks.add(requestId);
+          try { this._send({ op: 'promote', request_id: requestId, task_id: entry.taskId }); } catch { /* shim gone */ }
+        }
+          if (promoteBg && PROMOTE_ON_DEADLINE && !promoteBg.promoted) {
+            try {
+              promoteBg.onSignal({ eta_seconds: Math.round(BACKGROUND_JOB_DEADLINE_MS / 1000) });
+            } catch (error) {
+              console.error('[p3394-gateway] background promotion failed: ' + (error && error.message ? error.message : String(error)));
+            }
+            if (promoteBg.promoted) return;
+          }
           entry.terminating = true;
           void (async () => {
             const child = this.child;
@@ -1677,6 +1850,7 @@ class SscliRuntime {
         entry.onProgress?.(parsed.text);
       }
       if (parsed.event === 'completed') {
+        this.promoteAcks.delete(parsed.request_id);
         this.pending.delete(parsed.request_id);
         clearTimeout(entry.timer);
         // completed 带 text（shim 已提取的终态全文，含信封型 CLI 的
@@ -1686,6 +1860,7 @@ class SscliRuntime {
           : entry.deltas.join('');
         entry.resolve(finalText);
       } else if (parsed.event === 'failed') {
+        this.promoteAcks.delete(parsed.request_id);
         this.pending.delete(parsed.request_id);
         clearTimeout(entry.timer);
         entry.reject(new Error(parsed.error || 'p3394_sscli_failed'));
@@ -1693,6 +1868,12 @@ class SscliRuntime {
       return;
     }
     if (parsed.ok !== undefined && parsed.request_id) {
+      // A promote ack shares the deliver's request_id (the shim has only that
+      // key) but means "the shim dropped its own deadline", not "the run
+      // finished". Resolving the deliver entry here posts an empty phase 2
+      // milliseconds after `accepted` while the CLI is still working; the
+      // real reply text arrives later in the `completed` event.
+      if (this.promoteAcks.delete(parsed.request_id)) return;
       const entry = this.pending.get(parsed.request_id);
       if (!entry) return;
       this.pending.delete(parsed.request_id);
@@ -1702,6 +1883,7 @@ class SscliRuntime {
     }
   }
   _failAll(error) {
+    this.promoteAcks.clear();
     for (const [requestId, entry] of this.pending) {
       if (entry.terminating) continue;
       clearTimeout(entry.timer);
@@ -1777,6 +1959,9 @@ class SscliRuntime {
     await this.start();
     return this._request({
       op: 'deliver',
+      // Promotion controller (decision 2): the shim backend can outlive the
+      // agent deadline too, so the deadline handler needs it.
+      background: (opts && opts.background) || null,
       session_id: sessionId,
       // PR209 评审 M6 复核返工：deliver 帧透传外部 task_id——shim 据此把
       // 取消键对齐到 cancel 帧的 task_id（此前帧里只有内部 req-N，cancel
@@ -2341,6 +2526,9 @@ class ClaudePersistentRuntime {
 // server 按工作目录复用（同项目多会话共享），会话连续性由 opencode 服务端
 // 自管。reasoning 与正文的 delta 都是 field:'text'，按 partID→type 映射
 // 区分，思考流不混进气泡。COGSEED_P3394_OPENCODE_PERSISTENT=0 回退 sscli。
+// OpenCode 2 uses authenticated /api/session, asynchronous /prompt + /wait,
+// projected messages and /api/event. opencode-api.cjs negotiates that contract;
+// the legacy transport below remains for v1 servers.
 const OPENCODE_PERSISTENT_ENABLED = String(process.env.COGSEED_P3394_OPENCODE_PERSISTENT ?? '1').trim() !== '0';
 // 无人值守放行：opencode server 的 bash/edit 默认 permission.asked 等人工
 // 批准，headless 无人应答会永久挂起。垫片/oneshot 模式下同一 CLI 本就是
@@ -2364,6 +2552,9 @@ class OpencodeRuntime {
     this.servers.set(key, entry);
     entry.ready = (async () => {
       const serveEnv = { ...process.env };
+      // Each managed server owns an in-memory credential; never persist or log it.
+      const password = serveEnv.OPENCODE_SERVER_PASSWORD || crypto.randomBytes(24).toString('hex');
+      serveEnv.OPENCODE_SERVER_PASSWORD = password;
       if (OPENCODE_AUTO_APPROVE && !serveEnv.OPENCODE_CONFIG_CONTENT) {
         serveEnv.OPENCODE_CONFIG_CONTENT = '{"permission":{"bash":"allow","edit":"allow","webfetch":"allow","websearch":"allow"}}';
       }
@@ -2385,6 +2576,11 @@ class OpencodeRuntime {
       child.on('close', () => { if (this.servers.get(key) === entry) this.servers.delete(key); });
       entry.port = port;
       entry.base = 'http://127.0.0.1:' + port;
+      entry.api = new OpencodeApi(entry.base, password, serveEnv.OPENCODE_SERVER_USERNAME || 'opencode');
+      try { await entry.api.detect(); } catch (error) {
+        await killProcessTree(child, 'SIGTERM');
+        throw error;
+      }
       this._subscribeEvents(entry);
       return entry;
     })();
@@ -2395,7 +2591,9 @@ class OpencodeRuntime {
   _subscribeEvents(entry) {
     const connect = () => {
       if (this.closing || this.servers.get(entry.key) !== entry || !entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null) return;
-      const req = http.get(entry.base + '/event', (res) => {
+      const req = http.get(entry.base + (entry.api.v2 ? '/api/event' : '/event'), { headers: entry.api.headers }, (res) => {
+        res.setEncoding('utf8');
+        if (res.statusCode !== 200) { res.resume(); res.on('end', () => { setTimeout(connect, 2000).unref(); }); return; }
         let buf = '';
         res.on('data', (c) => {
           buf += c;
@@ -2415,10 +2613,14 @@ class OpencodeRuntime {
     connect();
   }
   _onEvent(ev) {
-    const p = ev && ev.properties;
+    const p = ev && (ev.properties || ev.data);
     if (!p || typeof p.sessionID !== 'string') return;
     const turn = this.turns.get(p.sessionID);
-    if (!turn) return;
+    if (!turn || turn.cancelled) return;
+    if (ev.type === 'session.text.delta' && typeof p.delta === 'string') {
+      turn.onDelta && turn.onDelta(p.delta);
+      return;
+    }
     if (ev.type === 'message.part.updated' && p.part && typeof p.part.id === 'string') {
       const part = p.part;
       turn.partTypes.set(part.id, part.type);
@@ -2454,14 +2656,16 @@ class OpencodeRuntime {
       return;
     }
     const server = await this._serverFor(cwd);
-    const created = await this._postJson(server.base, '/session', {});
+    const created = server.api.v2
+      ? { id: await server.api.createSession(cwd) }
+      : await this._postJson(server.base, '/session', {}, server.api.headers);
     if (!created || typeof created.id !== 'string') throw new Error('p3394_opencode_session_failed');
     this.sessions.set(sessionId, { cwd, ocSessionId: created.id });
   }
-  _postJson(base, pathName, body) {
+  _postJson(base, pathName, body, headers = {}) {
     return new Promise((resolve, reject) => {
       const data = JSON.stringify(body);
-      const req = http.request(base + pathName, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+      const req = http.request(base + pathName, { method: 'POST', headers: { ...headers, 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
         let buf = '';
         res.on('data', (c) => { buf += c; });
         res.on('end', () => {
@@ -2474,9 +2678,9 @@ class OpencodeRuntime {
       req.end();
     });
   }
-  _getJson(base, pathName) {
+  _getJson(base, pathName, headers = {}) {
     return new Promise((resolve, reject) => {
-      const req = http.get(base + pathName, (res) => {
+      const req = http.get(base + pathName, { headers }, (res) => {
         let buf = '';
         res.on('data', (c) => { buf += c; });
         res.on('end', () => {
@@ -2489,7 +2693,7 @@ class OpencodeRuntime {
   }
   _abortSession(server, sessionId) {
     return new Promise((resolve, reject) => {
-      const req = http.request(server.base + '/session/' + encodeURIComponent(sessionId) + '/abort', { method: 'POST' }, (res) => {
+      const req = http.request(server.base + (server.api.v2 ? '/api/session/' : '/session/') + encodeURIComponent(sessionId) + (server.api.v2 ? '/interrupt?resume=false' : '/abort'), { method: 'POST', headers: server.api.headers }, (res) => {
         let buf = '';
         res.on('data', (c) => { buf += c; });
         res.on('end', () => {
@@ -2532,7 +2736,7 @@ class OpencodeRuntime {
       for (const [, hitEntry] of this.servers) { entry = hitEntry; break; }
       if (!entry) entry = await this._serverFor(process.cwd());
       else await entry.ready;
-      const body = await this._getJson(entry.base, '/api/model');
+      const body = await this._getJson(entry.base, '/api/model', entry.api.headers);
       const rawModels = body && Array.isArray(body.data)
         ? body.data
         : (body && Array.isArray(body.models) ? body.models : null);
@@ -2569,9 +2773,15 @@ class OpencodeRuntime {
     const turn = { onDelta, onProgress, partTypes: new Map(), timer: null, progressCount: 0, lastText: '', taskId: (opts && opts.taskId) || null, req: null, server, ocSessionId: entry.ocSessionId, cancelled: false };
     this.turns.set(entry.ocSessionId, turn);
     try {
+      if (server.api.v2) {
+        return await server.api.deliver(entry.ocSessionId, text + note + hint, opts && opts.execPrefs && opts.execPrefs.model, {
+          onRequest: (req) => { turn.req = req; },
+          isCancelled: () => turn.cancelled,
+        });
+      }
       const msg = await new Promise((resolve, reject) => {
         const data = JSON.stringify({ parts: [{ type: 'text', text: text + note + hint }] });
-        const req = http.request(server.base + '/session/' + encodeURIComponent(entry.ocSessionId) + '/message', { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+        const req = http.request(server.base + '/session/' + encodeURIComponent(entry.ocSessionId) + '/message', { method: 'POST', headers: { ...server.api.headers, 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
           let buf = '';
           res.on('data', (c) => { buf += c; });
           res.on('end', () => {
@@ -2590,6 +2800,7 @@ class OpencodeRuntime {
       const out = (msg.parts || []).filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join('');
       return (out.trim() || (turn.lastText || '').trim());
     } finally {
+      turn.settled = true;
       if (turn.timer) clearTimeout(turn.timer);
       // 宽限删除：SSE 帧与同步 HTTP 终态分属两个连接、无到达顺序保证——
       // 终态先到时立刻删 turn 会把紧随其后的过程/增量帧全部丢弃（终态文本
@@ -2605,7 +2816,7 @@ class OpencodeRuntime {
     if (!taskId) return false;
     const matches = [];
     for (const [, turn] of this.turns) {
-      if (turn.taskId === String(taskId) && turn.req && !turn.req.destroyed) {
+      if (turn.taskId === String(taskId) && !turn.settled && (turn.server.api.v2 || (turn.req && !turn.req.destroyed))) {
         turn.cancelled = true;
         matches.push(turn);
       }
@@ -2664,6 +2875,416 @@ function runtimeFor() {
   }
   if (PRESET_NAME === 'codex') return codexAppServerRuntime;
   return oneshotRuntime;
+}
+
+
+// ── 两段式后台任务（决策 2）──────────────────────────────────────────────
+// 长任务被提升到后台时不回正文，而是先回一条 accepted 帧立即结束本次请求；
+// 任务真正结束后再向同一对 reply_endpoint/reply_token 主动推 finished 帧。
+//
+// 提升信号来自 CLI/runner（stdout/stderr 均可，独占一行）：
+//   [[p3394:background]] {"job_id":"bg-...","eta_seconds":900}
+// 或单行 JSON：{"status":"background","job_id":"..."}（B 线 runner 的形状）。
+// job_id 缺省按 bg-<peer>-<task> 推导（与宿主 backgroundJobId 一致），
+// 同一任务的重复提升因此天然幂等。作业记录落 GATEWAY_HOME/background-jobs.json
+// （0600），每次状态变更先写盘再发；网关重启后补发未投递的 finished / 重挂
+// 未到期作业的 watchdog。
+const BACKGROUND_SIGNAL_PREFIX = '[[p3394:background]]';
+// Independent ceiling of a promoted job (default 60 min). Deliberately NOT
+// bounded by P3394_AGENT_TIMEOUT_MS: the whole point of promotion is to outlive
+// the turn/reply window.
+const BACKGROUND_JOB_DEADLINE_MS = Number(process.env.P3394_BACKGROUND_JOB_DEADLINE_MS || 60 * 60 * 1000);
+const BACKGROUND_JOBS_FILE = process.env.P3394_BACKGROUND_JOBS_FILE
+  ? path.resolve(process.env.P3394_BACKGROUND_JOBS_FILE)
+  : path.join(GATEWAY_HOME, 'background-jobs.json');
+const BACKGROUND_MAX_SUMMARY_CHARS = 2000;
+const BACKGROUND_MAX_LOG_TAIL_CHARS = 2000;
+const BACKGROUND_DELIVERY_ATTEMPTS = 3;
+const backgroundJobs = new Map(); // job_id → record (mirror of the 0600 file)
+const backgroundJobTimers = new Map(); // job_id → deadline timer
+
+/** Deterministic per (peer, task), mirroring the host's `backgroundJobId`. */
+function backgroundJobId(peer, taskId) {
+  const clean = (value) => String(value || '').trim().replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80);
+  return 'bg-' + (clean(peer) || 'peer') + '-' + (clean(taskId) || 'task');
+}
+
+function isValidBackgroundJobId(value) {
+  return typeof value === 'string' && /^bg-[A-Za-z0-9._:-]{1,120}$/.test(value);
+}
+
+/** Line tap that strips promotion sentinels from the visible reply/stream.
+ *  Only a line that can still become a sentinel is held; ordinary text passes
+ *  through immediately. */
+function createBackgroundSignalTap(onSignal) {
+  const prefix = BACKGROUND_SIGNAL_PREFIX;
+  let pending = '';
+  const emit = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    if (trimmed.startsWith(prefix)) {
+      const rest = trimmed.slice(prefix.length).trim();
+      let payload = {};
+      if (rest) {
+        try { payload = JSON.parse(rest); } catch { return true; } // malformed sentinel stays off the wire
+      }
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) onSignal(payload);
+      return true;
+    }
+    // B-line runner shape: a single-line JSON object carrying `status:'background'`.
+    if (trimmed.startsWith('{') && trimmed.length <= 4096) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const nested = parsed.p3394_background;
+          if (parsed.status === 'background' || (nested && typeof nested === 'object')) {
+            onSignal(nested && typeof nested === 'object' ? nested : parsed);
+            return true;
+          }
+        }
+      } catch { /* ordinary JSON/agent output — keep it */ }
+    }
+    return false;
+  };
+  return {
+    push(chunk) {
+      if (!chunk) return '';
+      pending += chunk;
+      let out = '';
+      let idx;
+      while ((idx = pending.indexOf('\n')) >= 0) {
+        const line = pending.slice(0, idx);
+        pending = pending.slice(idx + 1);
+        if (!emit(line)) out += line + '\n';
+      }
+      if (!pending) return out;
+      const trimmed = pending.trimStart();
+      // Hold a partial line only when it could still turn into a sentinel.
+      if (trimmed.startsWith(prefix) || trimmed.startsWith('{') || (trimmed && prefix.startsWith(trimmed))) return out;
+      out += pending;
+      pending = '';
+      return out;
+    },
+    flush() {
+      const rest = pending;
+      pending = '';
+      if (!rest) return '';
+      return emit(rest) ? '' : rest;
+    },
+  };
+}
+
+function readBackgroundJobsFile() {
+  let text;
+  try { text = fs.readFileSync(BACKGROUND_JOBS_FILE, 'utf8'); } catch { return []; }
+  try {
+    const parsed = JSON.parse(text);
+    const rows = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.jobs) ? parsed.jobs : []);
+    return rows.filter((row) => row && typeof row === 'object' && isValidBackgroundJobId(row.job_id) && typeof row.state === 'string');
+  } catch {
+    console.error('[p3394-gateway] background-jobs.json is corrupt; starting empty');
+    return [];
+  }
+}
+
+/** Atomic 0600 write (temp + rename): a crash mid-write must not truncate the
+ *  only durable record that a promoted job exists. */
+function writeBackgroundJobsFile() {
+  const dir = path.dirname(BACKGROUND_JOBS_FILE);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = BACKGROUND_JOBS_FILE + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp';
+  const payload = { schema_version: 1, jobs: Array.from(backgroundJobs.values()) };
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + '\n', { mode: 0o600 });
+    try { fs.chmodSync(tmp, 0o600); } catch { /* best effort */ }
+    fs.renameSync(tmp, BACKGROUND_JOBS_FILE);
+  } catch (error) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    throw error;
+  }
+  try { fs.chmodSync(BACKGROUND_JOBS_FILE, 0o600); } catch { /* best effort */ }
+}
+
+/** Write-ahead: persist before sending any phase/state frame. */
+function persistBackgroundJob(job) {
+  backgroundJobs.set(job.job_id, job);
+  writeBackgroundJobsFile();
+}
+
+function patchBackgroundJob(jobId, patch) {
+  const current = backgroundJobs.get(jobId);
+  if (!current) return null;
+  const next = { ...current, ...patch, job_id: current.job_id, updated_at: new Date().toISOString() };
+  backgroundJobs.set(jobId, next);
+  writeBackgroundJobsFile();
+  return next;
+}
+
+function clearBackgroundJobDeadline(jobId) {
+  const timer = backgroundJobTimers.get(jobId);
+  if (!timer) return;
+  clearTimeout(timer);
+  backgroundJobTimers.delete(jobId);
+}
+
+function armBackgroundJobDeadline(job, onFire) {
+  clearBackgroundJobDeadline(job.job_id);
+  const deadline = Date.parse(job.deadline);
+  const delay = Number.isFinite(deadline) ? Math.max(0, deadline - Date.now()) : 0;
+  const timer = setTimeout(onFire, delay);
+  if (typeof timer.unref === 'function') timer.unref();
+  backgroundJobTimers.set(job.job_id, timer);
+}
+
+function backgroundTimeoutPayload(jobId) {
+  return {
+    phase: 'finished',
+    job_id: jobId,
+    outcome: 'timeout',
+    error: {
+      code: 'p3394_background_timeout',
+      message: 'background job exceeded ' + Math.round(BACKGROUND_JOB_DEADLINE_MS / 60000) + ' minutes',
+    },
+  };
+}
+
+/** POST one phase to the reply pair saved at promotion time. Retries are
+ *  bounded; a failed finished frame stays `finished` on disk for restart replay. */
+function postBackgroundEnvelope(job, background, text) {
+  const endpoint = job && typeof job.reply_endpoint === 'string' ? job.reply_endpoint : '';
+  if (!endpoint) {
+    console.error('[p3394-gateway] background phase dropped: no reply_endpoint for ' + (job && job.job_id));
+    return Promise.resolve(false);
+  }
+  const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const envelope = {
+    spec_version: 'p3394/1.0',
+    message_id: 'msg-bg-' + String(background.phase || 'phase') + '-' + nonce,
+    session_id: job.session_id,
+    task_id: job.task_id || undefined,
+    kind: 'message',
+    performative: 'inform',
+    role: 'responder',
+    sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+    recipients: [{ agent_id: job.peer }],
+    reply_to: job.message_id || undefined,
+    payload: { parts: [{ type: 'text', text: text || '' }] },
+    // The two-phase payload rides extensions.background so the envelope schema
+    // (and its strict validation) stays untouched.
+    extensions: { background },
+    idempotency_key: 'idem-bg-' + String(background.phase || 'phase') + '-' + job.job_id,
+  };
+  const url = new URL(endpoint.replace(/\/$/, '') + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (job.reply_token) headers.Authorization = 'Bearer ' + job.reply_token;
+  const body = JSON.stringify({ envelope });
+  return new Promise((resolve) => {
+    let attempt = 0;
+    const deliver = () => {
+      attempt += 1;
+      const req = http.request(url, { method: 'POST', headers }, (res) => {
+        res.resume();
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(true);
+            return;
+          }
+          retryOrGiveUp('rejected ' + res.statusCode);
+        });
+      });
+      req.setTimeout(OUTBOUND_HTTP_TIMEOUT_MS, () => req.destroy());
+      req.on('error', (error) => retryOrGiveUp(error && error.message ? error.message : String(error)));
+      req.end(body);
+    };
+    const retryOrGiveUp = (why) => {
+      if (attempt < BACKGROUND_DELIVERY_ATTEMPTS) {
+        const timer = setTimeout(deliver, 1500 * attempt);
+        if (typeof timer.unref === 'function') timer.unref();
+        return;
+      }
+      console.error('[p3394-gateway] background ' + background.phase + ' delivery failed (' + why + ') for ' + job.job_id);
+      resolve(false);
+    };
+    deliver();
+  });
+}
+
+function normalizeFinishedFields(job, result) {
+  const outcomes = new Set(['completed', 'failed', 'timeout']);
+  const outcome = result && outcomes.has(result.outcome) ? result.outcome : 'failed';
+  const summary = result && typeof result.summary === 'string' ? result.summary.trim().slice(0, BACKGROUND_MAX_SUMMARY_CHARS) : '';
+  const logTail = result && typeof result.log_tail === 'string' ? result.log_tail.slice(-BACKGROUND_MAX_LOG_TAIL_CHARS) : '';
+  const artifacts = result && Array.isArray(result.artifacts)
+    ? result.artifacts.filter((entry) => typeof entry === 'string' && entry.trim()).slice(0, 50)
+    : [];
+  const error = result && result.error && typeof result.error.message === 'string'
+    ? {
+        ...(typeof result.error.code === 'string' ? { code: result.error.code.slice(0, 80) } : {}),
+        message: result.error.message.slice(0, 1000),
+      }
+    : undefined;
+  return {
+    phase: 'finished',
+    job_id: job.job_id,
+    outcome,
+    ...(summary ? { summary } : {}),
+    ...(artifacts.length ? { artifacts } : {}),
+    ...(logTail ? { log_tail: logTail } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
+/** Record the terminal payload, then push phase 2. On delivery success the job
+ *  becomes `delivered`; otherwise it stays `finished` for restart replay. */
+function deliverBackgroundFinished(job, result) {
+  let updated;
+  try {
+    updated = patchBackgroundJob(job.job_id, {
+      state: 'finished',
+      result: normalizeFinishedFields(job, result),
+      finished_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[p3394-gateway] background job write failed: ' + (error && error.message ? error.message : String(error)));
+    updated = { ...job, state: 'finished', result: normalizeFinishedFields(job, result) };
+    backgroundJobs.set(job.job_id, updated);
+  }
+  if (!updated) return;
+  const payload = updated.result;
+  const text = payload.summary || (payload.error && payload.error.message) || ('[p3394_background] ' + payload.outcome + ' ' + payload.job_id);
+  void postBackgroundEnvelope(updated, payload, text).then((ok) => {
+    if (!ok) return;
+    try { patchBackgroundJob(job.job_id, { state: 'delivered', delivered_at: new Date().toISOString() }); } catch { /* replay will retry */ }
+  });
+}
+
+/** Build the per-request promotion controller used by handleEnvelope. */
+function createBackgroundController(envelope, onPromote) {
+  const ext = (envelope && envelope.extensions) || {};
+  // H-01: the saved pair is exactly the trusted pair for the original request;
+  // reply_token follows the endpoint fallback.
+  const target = trustedReplyTarget(ext.reply_endpoint, ext.reply_token);
+  const peer = (envelope.sender && envelope.sender.agent_id) || 'cogseed';
+  const taskId = envelope.task_id || envelope.message_id;
+  const derivedJobId = backgroundJobId(peer, taskId);
+  const controller = {
+    promoted: false,
+    settled: false,
+    job: null,
+  };
+  controller.onSignal = (signal) => {
+    if (controller.promoted) return;
+    const payload = signal && typeof signal === 'object' ? signal : {};
+    const claimed = isValidBackgroundJobId(payload.job_id) ? payload.job_id : derivedJobId;
+    const eta = Number(payload.eta_seconds);
+    const acceptedAt = new Date().toISOString();
+    // The same deterministic job id may already be on disk (gateway restart +
+    // duplicate promotion): keep the original record/deadline.
+    const existing = backgroundJobs.get(claimed);
+    if (existing) {
+      controller.promoted = true;
+      controller.job = existing;
+      if (existing.state === 'pending') armBackgroundJobDeadline(existing, () => fireBackgroundTimeout(controller));
+      return;
+    }
+    const job = {
+      job_id: claimed,
+      peer,
+      reply_endpoint: target.endpoint,
+      reply_token: target.token,
+      deadline: new Date(Date.now() + BACKGROUND_JOB_DEADLINE_MS).toISOString(),
+      state: 'pending',
+      accepted_at: acceptedAt,
+      updated_at: acceptedAt,
+      session_id: envelope.session_id,
+      task_id: envelope.task_id || null,
+      message_id: envelope.message_id,
+      phase1_delivered: false,
+      ...(Number.isFinite(eta) && eta > 0 && eta <= 24 * 60 * 60 ? { eta_seconds: Math.round(eta) } : {}),
+    };
+    controller.promoted = true;
+    controller.job = job;
+    if (onPromote) { try { onPromote(); } catch { /* stream already gone */ } }
+    try {
+      persistBackgroundJob(job);
+    } catch (error) {
+      console.error('[p3394-gateway] background job persist failed: ' + (error && error.message ? error.message : String(error)));
+    }
+    const accepted = {
+      phase: 'accepted',
+      job_id: job.job_id,
+      ...(job.eta_seconds ? { eta_seconds: job.eta_seconds } : {}),
+    };
+    // Keep the phase-2 send behind phase 1: an initiator that sees the result
+    // first has no waiter to resolve, and a late accepted frame would be a
+    // confusing duplicate. Ordering is best-effort but covers the common case.
+    controller.phase1 = postBackgroundEnvelope(job, accepted, '[p3394_background] accepted ' + job.job_id).then((ok) => {
+      if (!ok) return
+      try { patchBackgroundJob(job.job_id, { phase1_delivered: true }); } catch { /* replay will retry */ }
+      return undefined;
+    });
+    armBackgroundJobDeadline(job, () => fireBackgroundTimeout(controller));
+    console.log('[p3394-gateway] promoted to background ' + job.job_id + ' (deadline ' + job.deadline + ')');
+  };
+  controller.finish = (result) => {
+    if (!controller.promoted || controller.settled || !controller.job) return;
+    controller.settled = true;
+    clearBackgroundJobDeadline(controller.job.job_id);
+    const send = () => deliverBackgroundFinished(controller.job, result);
+    if (controller.phase1) void controller.phase1.then(send, send);
+    else send();
+  };
+  return controller;
+}
+
+function fireBackgroundTimeout(controller) {
+  if (!controller || !controller.promoted || controller.settled || !controller.job) return;
+  const job = controller.job;
+  console.warn('[p3394-gateway] background job timed out ' + job.job_id);
+  controller.finish(backgroundTimeoutPayload(job.job_id));
+  // The CLI can no longer report a useful result: stop it (tree kill).
+  void cancelTask(job.task_id || job.message_id);
+}
+
+/** Startup replay: finished-but-undelivered results are re-sent, pending jobs
+ *  re-arm their ceiling, already-expired jobs report timeout. Idempotent by
+ *  job_id (phase-2 envelope idempotency key + host-side job_id dedupe). */
+function resumeBackgroundJobs() {
+  for (const row of readBackgroundJobsFile()) backgroundJobs.set(row.job_id, row);
+  if (backgroundJobs.size === 0) return;
+  let pending = 0;
+  for (const job of Array.from(backgroundJobs.values())) {
+    if (!job || job.state === 'delivered' || job.state === 'isolated') continue;
+    if (job.state === 'pending') {
+      pending += 1;
+      if (!job.phase1_delivered) {
+        const accepted = {
+          phase: 'accepted',
+          job_id: job.job_id,
+          ...(job.eta_seconds ? { eta_seconds: job.eta_seconds } : {}),
+        };
+        void postBackgroundEnvelope(job, accepted, '[p3394_background] accepted ' + job.job_id).then((ok) => {
+          if (!ok) return;
+          try { patchBackgroundJob(job.job_id, { phase1_delivered: true }); } catch { /* best effort */ }
+        });
+      }
+      const deadline = Date.parse(job.deadline);
+      if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+        deliverBackgroundFinished(job, backgroundTimeoutPayload(job.job_id));
+      } else {
+        armBackgroundJobDeadline(job, () => {
+          const current = backgroundJobs.get(job.job_id);
+          if (!current || current.state !== 'pending') return;
+          deliverBackgroundFinished(current, backgroundTimeoutPayload(job.job_id));
+        });
+      }
+      continue;
+    }
+    if (job.result) {
+      deliverBackgroundFinished(job, job.result);
+    }
+  }
+  console.log('[p3394-gateway] background job replay: ' + backgroundJobs.size + ' job(s), ' + pending + ' pending');
 }
 
 // ── 回复回发（可携带 resource parts） ──
@@ -2795,6 +3416,9 @@ function createStreamEmitter(envelope) {
   let progressTimer = null;
   let streamedChars = 0;
   let chain = Promise.resolve();
+  // Promotion hands the run to the background; the initiator already has its
+  // accepted answer, so further delta frames would be posted to nobody.
+  let stopped = false;
   const flush = (kind) => {
     const text = kind === 'progress' ? progressBuffer : buffer;
     if (!text) return;
@@ -2819,7 +3443,7 @@ function createStreamEmitter(envelope) {
   };
   return {
     push(text) {
-      if (typeof text !== 'string' || !text) return;
+      if (stopped || typeof text !== 'string' || !text) return;
       // 总量上限：失控/异常的常驻 CLI（sscli/codex）无限刷 delta 时截断帧流，
       // 而不是无限向回发端点 POST（oneshot 侧 runAgent 另有 256KB 双保险）。
       if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
@@ -2829,7 +3453,7 @@ function createStreamEmitter(envelope) {
     },
     // openclaw 过程日志（[skills]/[tools] 等）→ progress 帧，process rail 展示。
     pushProgress(text) {
-      if (typeof text !== 'string' || !text) return;
+      if (stopped || typeof text !== 'string' || !text) return;
       if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
       streamedChars += text.length;
       progressBuffer += (progressBuffer && !/\n$/.test(progressBuffer) ? '\n' : '') + text;
@@ -2839,11 +3463,19 @@ function createStreamEmitter(envelope) {
     // 合并器），text 只作旧宿主的降级行。事件与文本帧共用 sequence 序列，
     // chain 串行保证有序。
     pushEvent(event, fallbackText) {
-      if (!event || typeof event !== 'object') return;
+      if (stopped || !event || typeof event !== 'object') return;
       if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
       sequence += 1;
       const seq = sequence;
       chain = chain.then(() => postStreamEvent(envelope, fallbackText || '.', seq, 'progress', event));
+    },
+    stop() {
+      stopped = true;
+      buffer = '';
+      progressBuffer = '';
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (progressTimer) { clearTimeout(progressTimer); progressTimer = null; }
+      chain = Promise.resolve();
     },
     async finish() {
       if (timer) { clearTimeout(timer); timer = null; }
@@ -2955,6 +3587,12 @@ async function handleEnvelope(envelope) {
     artifactNote = '\n\n[附件已保存到会话工作区，路径如下]\n' + inFiles.map((file) => '- ' + file.path).join('\n');
   }
 
+  // Declared outside the try/catch: the catch still has to decide whether
+  // this run was promoted (a background failure must be reported as phase 2,
+  // not as an ordinary error reply). A block-scoped const inside `try`
+  // would raise a ReferenceError from `catch` and swallow the error reply
+  // entirely — exactly the V-03 regression.
+  let background = null;
   try {
     const stream = createStreamEmitter(envelope);
     // 统一入口：按 runtimeFor() 选中后端（sscli 主导 / codex 专有 / oneshot
@@ -2980,7 +3618,10 @@ async function handleEnvelope(envelope) {
     // 可取消键，使 cancel 控制帧（按 task_id 匹配）能真正终止运行中的 CLI。
     // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）；peer-call
     // hint 每会话只注一次（peerHintThisTurn 由 marker 防重，首轮失败下轮补注）。
-    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    // background：决策 2 的提升信号控制器——oneshot runner 在 CLI 输出里识别到
+    // 提升信号后立即回 accepted 并停止等待；其余 runtime 不认识该回调则维持原行为。
+    background = createBackgroundController(envelope, () => stream.stop());
+    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn, execPrefs: executionPrefsFor(envelope), background }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
     if (peerHintThisTurn && hintMark) {
       try { fs.writeFileSync(hintMark, String(Date.now())); } catch { /* best effort：下轮重注无害 */ }
     }
@@ -2994,11 +3635,34 @@ async function handleEnvelope(envelope) {
     const reply = replyBody.length > MAX_REPLY_BYTES ? replyBody.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : replyBody;
     // Agent 运行期间写入 workspace/out/ 的文件 → 随回复回传（Artifact 端到端）
     const outParts = collectOutParts(outDir, runStartedAt);
+    // 已被提升到后台：这一段不再回普通 reply，而是把真实结果作为第二段
+    // 主动推回第一段保存的 reply_endpoint/reply_token。
+    if (background.promoted) {
+      const artifacts = outParts.map((part) => part && part.name).filter(Boolean);
+      background.finish({ outcome: 'completed', summary: reply, artifacts });
+      console.log('[p3394-gateway] background job completed ' + background.job.job_id);
+      return;
+    }
     if (outParts.length) console.log('[p3394-gateway] attaching ' + outParts.length + ' artifact(s) to reply');
     if (idem) remember(idem, reply);
     console.log('[p3394-gateway] agent replied ' + reply.slice(0, 120));
     postReply(envelope, reply, outParts, turnUsage);
   } catch (error) {
+    // 后台任务失败/被取消：终态必须以第二段回传，不能再走普通错误 reply
+    //（第一段 waiter 早已 resolve，普通 reply 只会成为一条无主入站消息）。
+    if (background && background.promoted) {
+      const cancelled = Boolean(envelope.task_id && cancelledTasks.has(envelope.task_id));
+      if (cancelled) cancelledTasks.delete(envelope.task_id);
+      background.finish({
+        outcome: 'failed',
+        error: {
+          code: cancelled ? 'p3394_background_cancelled' : 'p3394_agent_error',
+          message: sanitizeStreamText(error && error.message ? error.message : String(error)),
+        },
+      });
+      console.log('[p3394-gateway] background job failed ' + background.job.job_id);
+      return;
+    }
     // 已被 cancel 控制帧终止的任务：取消回执已发，不再补发错误回信。
     if (envelope.task_id && cancelledTasks.has(envelope.task_id)) {
       cancelledTasks.delete(envelope.task_id);
@@ -3285,6 +3949,11 @@ server.listen(PORT, GATEWAY_HOST, () => {
     });
   }
   registerWithCogseed();
+  // 决策 2 · 网关重启恢复：未投递的 finished 补发、未到期作业重挂 watchdog、
+  // 已过期作业回 timeout（job_id 幂等，宿主侧重复只入站一次）。
+  try { resumeBackgroundJobs(); } catch (error) {
+    console.error('[p3394-gateway] background job replay failed: ' + (error && error.message ? error.message : String(error)));
+  }
   if (SEND_TASK) sendTaskOneShot(SEND_TASK);
   if (HEARTBEAT_MS > 0) {
     const timer = setInterval(sendHeartbeat, HEARTBEAT_MS);

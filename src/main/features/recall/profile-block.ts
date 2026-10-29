@@ -9,7 +9,7 @@
  */
 
 import type { RecallAbilityAssetRecord } from './candidate-service';
-import { filterRecallAssetsForAgentRead, type RecallAgentReadContext } from './prompt-injection';
+import { filterRecallAssetsForDefaultInjection, type RecallAgentReadContext } from './prompt-injection';
 
 export const PROFILE_BLOCK_MAX_ENTRIES = 6;
 export const PROFILE_ENTRY_MAX_CHARS = 500;
@@ -29,14 +29,14 @@ export async function loadAssetProfileEntriesWithAvailability(
   const records = await listAssets(userId);
   const personalRecords = records.filter((asset) => asset.type === 'personal');
   const activePersonal = personalRecords.filter((asset) => asset.status === 'active');
-  const assets = await filterRecallAssetsForAgentRead(userId, activePersonal, deps.readContext || {});
+  const assets = await filterRecallAssetsForDefaultInjection(userId, activePersonal, deps.readContext || {});
   if (!assets.length) return { entries: [], hasPersonalAssets: personalRecords.length > 0 };
   const usageCounts = deps.usageCounts
     ? await deps.usageCounts(userId)
-    : new Map(Object.entries(await loadAssetUsageStats(userId)).map(([id, stat]) => [id, stat.count]));
+    : new Map([...await loadAssetUsageStats(userId)].map(([id, stat]) => [id, stat.count]));
   // 两档排序（2026-09-20 出身收敛）：刚沉淀的（72h 内）最优先——刚教的偏好
   // 立即生效，不被"用得少"压出块；其余一档。同档内使用次数为主、新近为辅。
-  // 出身（确认/模型记的）不再是排序或显示维度：模型记下来的=已确定。
+  // 来源不作为排序权重；确认、验证与默认使用资格由共同准入决定。
   const RECENT_MS = 72 * 3600 * 1_000;
   const now = Date.now();
   const tierOf = (asset: RecallAbilityAssetRecord): number => {

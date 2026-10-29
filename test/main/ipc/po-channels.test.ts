@@ -6,14 +6,14 @@ import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
  * po.* v2 通道 IPC 契约测试（2026-09-30 补断层；对照旧 personalOntology.*
  * 通道的同款契约模式，见 personal-ontology-candidates.test.ts）。
  *
- * 覆盖 src/main/ipc/index.ts 全部 27 条薄转发通道（po.snapshot / groups /
- * deleted / fields / values / entries / templates / history / candidates /
- * data）。IPC 只校验转调 features（Constitution II）：
- * ① 通道已注册（不是 unknown channel）；
- * ② payload 塞 uid 不改变转调入参（用户身份只来自 ctx.userId）；
- * ③ 非法参数被拒（bad id / 空文本 / 枚举外 ruleKind / 类型不符）；
- * ④ 合法参数透传（首参 ctx.userId，其余按通道转发形状）且返回形状
- *    不增删字段（IPC 层只做 `{ ok:true, ...result }` 展开）。
+ * 覆盖 src/main/ipc/index.ts 全部 po.* 通道。2026-10-06 起通道分两类：
+ * ① 8 条只读/无害通道保持薄转发契约（snapshot / deleted / templates.status
+ *    / archiveInfo / history.list / candidates.reject / data.export /
+ *    data.importPreview）：IPC 只校验转调 features（Constitution II）——
+ *    payload 塞 uid 不改入参、非法参数被拒、合法参数透传且返回形状不增删字段。
+ * ② 18 条结构化写通道（groups/fields/values/entries/templates 安装卸载/
+ *    history.restore/importApply）与 candidates.confirm 同口径收口：旧页面
+ *    已停驻，直写绕过共同本体命令服务一律拒绝并指向治理入口。
  */
 
 type InvokeFn = (event: unknown, req: { channel: string; payload?: unknown }) => Promise<any>;
@@ -97,50 +97,58 @@ function call(channel: string, payload: unknown = {}) {
 }
 
 const GID = 'grp0123456789';
-const FID = 'fld0123456789';
-const VID = 'val0123456789';
-const EID = 'ent0123456789';
 
-/** 27 条通道的合法样本：channel → { payload, 目标 mock, 期望转发参数（不含首参 uid）。
+/** 只读/无害通道的合法样本：channel → { payload, 目标 mock, 期望转发参数（不含首参 uid）。
  *  wrapKey = IPC handler 把 features 返回包进固定形状的通道（如 po.deleted.list → { deleted }）。 */
 const CASES: Array<{ channel: string; payload: any; target: () => any; args: any[]; wrapKey?: string }> = [
   { channel: 'po.snapshot', payload: {}, target: () => poApi.getPoSnapshot, args: [] },
-  { channel: 'po.groups.create', payload: { title: '测试组' }, target: () => poApi.poCreateGroup, args: ['测试组'] },
-  { channel: 'po.groups.rename', payload: { groupId: GID, title: '新名' }, target: () => poApi.poRenameGroup, args: [GID, '新名'] },
-  { channel: 'po.groups.delete', payload: { groupId: GID }, target: () => poApi.poDeleteGroup, args: [GID] },
-  { channel: 'po.groups.restore', payload: { groupId: GID }, target: () => poApi.poRestoreDeletedGroup, args: [GID] },
   { channel: 'po.deleted.list', payload: {}, target: () => poApi.poListDeletedGroups, args: [], wrapKey: 'deleted' },
-  { channel: 'po.fields.create', payload: { groupId: GID, name: '字段', isRelation: true }, target: () => poApi.poCreateField, args: [GID, '字段', { isRelation: true }] },
-  { channel: 'po.fields.rename', payload: { groupId: GID, fieldId: FID, name: '新字段' }, target: () => poApi.poRenameField, args: [GID, FID, '新字段'] },
-  { channel: 'po.fields.delete', payload: { groupId: GID, fieldId: FID }, target: () => poApi.poDeleteField, args: [GID, FID] },
-  { channel: 'po.fields.setRelation', payload: { groupId: GID, fieldId: FID, isRelation: true }, target: () => poApi.poSetFieldRelationFlag, args: [GID, FID, true] },
-  { channel: 'po.values.add', payload: { groupId: GID, fieldId: FID, text: '值', asOf: '2026-09', ruleKind: 'operation' }, target: () => poApi.poAddValue, args: [GID, FID, { text: '值', asOf: '2026-09', ruleKind: 'operation' }] },
-  { channel: 'po.values.update', payload: { groupId: GID, valueId: VID, patch: { text: '新值' } }, target: () => poApi.poUpdateValue, args: [GID, VID, { text: '新值' }] },
-  { channel: 'po.values.delete', payload: { groupId: GID, valueId: VID }, target: () => poApi.poDeleteValue, args: [GID, VID] },
-  { channel: 'po.entries.add', payload: { groupId: GID, text: '一笔', section: '分节' }, target: () => poApi.poAddEntry, args: [GID, '一笔', { section: '分节' }] },
-  { channel: 'po.entries.delete', payload: { groupId: GID, entryId: EID }, target: () => poApi.poDeleteEntry, args: [GID, EID] },
-  { channel: 'po.entries.promote', payload: { groupId: GID, entryId: EID, fieldName: '字段' }, target: () => poApi.poPromoteEntry, args: [GID, EID, '字段'] },
   { channel: 'po.templates.status', payload: {}, target: () => poApi.poListTemplateStatus, args: [], wrapKey: 'templates' },
-  { channel: 'po.templates.install', payload: { templateId: 'student', restoreData: true }, target: () => poApi.poInstallTemplate, args: ['student', true] },
-  { channel: 'po.templates.uninstall', payload: { templateId: 'student', archiveMemory: true }, target: () => poApi.poUninstallTemplate, args: ['student', true] },
   { channel: 'po.templates.archiveInfo', payload: { templateId: 'student' }, target: () => poApi.poTemplateArchiveInfo, args: ['student'] },
   { channel: 'po.history.list', payload: { groupId: GID }, target: () => poApi.poListHistory, args: [GID], wrapKey: 'history' },
-  { channel: 'po.history.restore', payload: { groupId: GID, snapshotId: 'snap001' }, target: () => groupsFeature.restoreGroupSnapshot, args: [GID, 'snap001'] },
-  { channel: 'po.candidates.confirm', payload: { candidateId: 'cand1', dest: {}, acknowledgeConflict: true }, target: () => candidatesFeature.confirmCandidate, args: ['cand1', {}, { acknowledgeConflict: true }] },
   { channel: 'po.candidates.reject', payload: { candidateId: 'cand1' }, target: () => candidatesFeature.rejectCandidate, args: ['cand1'] },
   { channel: 'po.data.export', payload: {}, target: () => poApi.poExportMarkdown, args: [], wrapKey: 'markdown' },
   { channel: 'po.data.importPreview', payload: { text: '## 组' }, target: () => poApi.poImportPreview, args: ['## 组'] },
-  { channel: 'po.data.importApply', payload: { items: [] }, target: () => poApi.poImportApply, args: [[]] },
 ];
 
-describe('ipc › po.* v2 通道（27 条薄转发）', () => {
-  it('全部通道已注册（不是 unknown channel）', async () => {
-    expect(CASES.length).toBe(27);
+/** 已收口的结构化写通道：无论参数形状，一律治理拒绝且不触达 features。 */
+const CLOSED_WRITE_CHANNELS = [
+  'po.groups.create', 'po.groups.rename', 'po.groups.delete', 'po.groups.restore',
+  'po.fields.create', 'po.fields.rename', 'po.fields.delete', 'po.fields.setRelation',
+  'po.values.add', 'po.values.update', 'po.values.delete',
+  'po.entries.add', 'po.entries.delete', 'po.entries.promote',
+  'po.templates.install', 'po.templates.uninstall',
+  'po.history.restore', 'po.data.importApply',
+];
+
+describe('ipc › po.* v2 通道（8 条只读薄转发 + 18 条写通道治理收口）', () => {
+  it('只读通道全部已注册（不是 unknown channel）', async () => {
+    expect(CASES.length).toBe(8);
     for (const c of CASES) {
       const res = await call(c.channel, c.payload);
       expect(res, c.channel).not.toEqual({ ok: false, error: `unknown channel: ${c.channel}` });
       expect(res.ok, c.channel).toBe(true);
     }
+  });
+
+  it('不允许旧本体候选绕过共同审核直接写入旧记忆', async () => {
+    const result = await call('po.candidates.confirm', { candidateId: 'cand-legacy', dest: { toGlobalMemory: true } });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('transfer it to the common Recall review');
+    expect(candidatesFeature.confirmCandidate).not.toHaveBeenCalled();
+  });
+
+  it('结构化写通道一律治理拒绝：不触达 features，错误指向本体工作台命令入口', async () => {
+    expect(CLOSED_WRITE_CHANNELS.length).toBe(18);
+    const featureMocks = [
+      ...Object.values(poApi), candidatesFeature.confirmCandidate, groupsFeature.restoreGroupSnapshot,
+    ].map(fn => fn.mockClear());
+    for (const channel of CLOSED_WRITE_CHANNELS) {
+      const res = await call(channel, {});
+      expect(res.ok, channel).toBe(false);
+      expect(res.error, channel).toContain('legacy personal ontology writes are closed');
+    }
+    for (const fn of featureMocks) expect(fn).not.toHaveBeenCalled();
   });
 
   it('payload 塞 uid 不改变转调入参：身份只来自 ctx.userId', async () => {
@@ -155,33 +163,13 @@ describe('ipc › po.* v2 通道（27 条薄转发）', () => {
     }
   });
 
-  it('非法参数被拒（bad id / 空文本 / 枚举外 ruleKind / 类型不符）', async () => {
+  it('非法参数被拒（bad id / 空文本 / 类型不符）', async () => {
     const invalid: Array<{ channel: string; payload: any }> = [
-      { channel: 'po.groups.create', payload: { title: '   ' } },
-      { channel: 'po.groups.rename', payload: { groupId: '../evil', title: 'x' } },
-      { channel: 'po.groups.delete', payload: { groupId: '' } },
-      { channel: 'po.groups.restore', payload: { groupId: 'bad id!' } },
-      { channel: 'po.fields.create', payload: { groupId: GID, name: '' } },
-      { channel: 'po.fields.rename', payload: { groupId: GID, fieldId: '../evil', name: 'x' } },
-      { channel: 'po.fields.delete', payload: { groupId: GID, fieldId: null } },
-      { channel: 'po.fields.setRelation', payload: { groupId: GID, fieldId: '../evil' } },
-      { channel: 'po.values.add', payload: { groupId: GID, fieldId: FID, text: '  ' } },
-      { channel: 'po.values.add', payload: { groupId: GID, fieldId: FID, text: '值', ruleKind: 'evil_kind' } },
-      { channel: 'po.values.update', payload: { groupId: GID, valueId: 'bad id!', patch: {} } },
-      { channel: 'po.values.update', payload: { groupId: GID, valueId: VID, patch: null } },
-      { channel: 'po.values.delete', payload: { groupId: GID, valueId: '../evil' } },
-      { channel: 'po.entries.add', payload: { groupId: GID, text: '' } },
-      { channel: 'po.entries.delete', payload: { groupId: GID, entryId: 'bad id!' } },
-      { channel: 'po.entries.promote', payload: { groupId: GID, entryId: EID, fieldName: ' ' } },
-      { channel: 'po.templates.install', payload: { templateId: '../evil' } },
-      { channel: 'po.templates.uninstall', payload: { templateId: '' } },
       { channel: 'po.templates.archiveInfo', payload: { templateId: 'bad id!' } },
       { channel: 'po.history.list', payload: { groupId: '../evil' } },
-      { channel: 'po.history.restore', payload: { groupId: GID, snapshotId: '' } },
       { channel: 'po.candidates.confirm', payload: { candidateId: '' } },
       { channel: 'po.candidates.reject', payload: { candidateId: 42 } },
       { channel: 'po.data.importPreview', payload: { text: 123 } },
-      { channel: 'po.data.importApply', payload: { items: 'not-array' } },
     ];
     for (const c of invalid) {
       const res = await call(c.channel, c.payload);

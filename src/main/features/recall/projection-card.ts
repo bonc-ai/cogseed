@@ -3,8 +3,6 @@ import { readContextProjection, type ContextProjectionRecord, type OmittedAssetR
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import type { CognitionSourceRef } from './source-service';
 
-export type ProjectionCardAction = 'confirm' | 'add_asset' | 'modify_scope' | 'defer' | 'reject';
-
 export interface ProjectionCardAssetSummary {
   assetId: string;
   title: string;
@@ -25,18 +23,6 @@ export interface ProjectionCardAssetSummary {
   matchMethod?: RecallAssetMatchMethod;
 }
 
-export interface ProjectionCardSummary {
-  includedCount: number;
-  omittedCount: number;
-  sourceRefCount: number;
-  text: string;
-}
-
-export interface ProjectionCardPreview {
-  sourceRefs: CognitionSourceRef[];
-  omittedAssetRefs: OmittedAssetRef[];
-}
-
 export interface RecallProjectionCard {
   kind: 'recall_projection_card';
   projectionId: string;
@@ -45,23 +31,12 @@ export interface RecallProjectionCard {
   purpose: string;
   status: ContextProjectionRecord['status'];
   authorization: ContextProjectionRecord['authorization'];
-  summary: ProjectionCardSummary;
   assetSummaries: ProjectionCardAssetSummary[];
   modelSelectedAssetIds?: string[];
   modelSelectedCount?: number;
   totalAssetCount: number;
-  projectionPreview: ProjectionCardPreview;
   includedAssetIds: string[];
-  omittedAssetRefs: OmittedAssetRef[];
   sourceRefs: CognitionSourceRef[];
-  /**
-   * 已确认投影里"资产已被改到新版本、但本次注入仍用确认时那一版"的资产。
-   *
-   * 版本钉住是有意的（prompt-injection 绝不在用户背后把新版本顶上去），所以
-   * 这里只做告知：不改注入内容，也不自动升版。空数组 = 没有漂移。
-   */
-  staleAssetIds: string[];
-  availableActions: ProjectionCardAction[];
   createdAt: string;
   expiresAt?: string;
   confirmedAt?: string;
@@ -70,28 +45,10 @@ export interface RecallProjectionCard {
   draftState: 'preview' | 'deferred' | 'terminal';
 }
 
-function actionsFor(status: ContextProjectionRecord['status']): ProjectionCardAction[] {
-  if (status === 'preview') return ['confirm', 'add_asset', 'modify_scope', 'defer', 'reject'];
-  if (status === 'deferred') return ['modify_scope', 'reject'];
-  return [];
-}
-
 function draftStateFor(status: ContextProjectionRecord['status']): RecallProjectionCard['draftState'] {
   if (status === 'preview') return 'preview';
   if (status === 'deferred') return 'deferred';
   return 'terminal';
-}
-
-function summarize(projection: ContextProjectionRecord): ProjectionCardSummary {
-  const includedCount = projection.assetIds.length;
-  const omittedCount = projection.omittedRefs.length;
-  const sourceRefCount = projection.sourceRefs.length;
-  return {
-    includedCount,
-    omittedCount,
-    sourceRefCount,
-    text: `Preload candidates: ${includedCount}; add or remove as needed.`,
-  };
 }
 
 function toSummary(
@@ -126,7 +83,6 @@ export async function buildProjectionCard(userId: string, projectionId: string):
     .map((assetId) => assetById.get(assetId))
     .filter((asset): asset is RecallAbilityAssetRecord => Boolean(asset))
     .map((asset) => toSummary(asset, matchesByAsset.get(asset.id), confirmedVersions?.[asset.id]));
-  const staleAssetIds = assetSummaries.filter((summary) => summary.stale).map((summary) => summary.assetId);
 
   return {
     kind: 'recall_projection_card',
@@ -136,7 +92,6 @@ export async function buildProjectionCard(userId: string, projectionId: string):
     purpose: projection.purpose,
     status: projection.status,
     authorization: projection.authorization,
-    summary: summarize(projection),
     assetSummaries,
     ...(Array.isArray(projection.modelSelectedAssetIds)
       ? {
@@ -145,15 +100,8 @@ export async function buildProjectionCard(userId: string, projectionId: string):
         }
       : {}),
     totalAssetCount: projection.assetIds.length,
-    projectionPreview: {
-      sourceRefs: projection.sourceRefs,
-      omittedAssetRefs: projection.omittedRefs,
-    },
     includedAssetIds: [...projection.assetIds],
-    omittedAssetRefs: projection.omittedRefs,
     sourceRefs: projection.sourceRefs,
-    staleAssetIds,
-    availableActions: actionsFor(projection.status),
     createdAt: projection.createdAt,
     ...(projection.expiresAt ? { expiresAt: projection.expiresAt } : {}),
     ...(projection.confirmedAt ? { confirmedAt: projection.confirmedAt } : {}),

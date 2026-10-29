@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -78,8 +79,8 @@ const p3394GatewayCalls = vi.hoisted(() => [] as Array<any>);
 vi.mock("../../../../src/main/features/p3394_bridge/p3394-gateway-turn", () => ({
   runP3394GatewayTurn: vi.fn(async (input: any) => {
     p3394GatewayCalls.push(input);
-    // 第二期收口：原直连用例的 CLI 事件流改由网关 turn 桥接 —— 复用
-    // localRunnerScripts 脚本队列，按直连总线的转换规则发 onProcess /
+    // CLI 事件流通过网关 turn 桥接，复用 localRunnerScripts 脚本队列，
+    // 按总线的转换规则发 onProcess /
     // onCoordinatorActivity / onProcessInfo；`__return__` 控制终态。
     if (localRunnerScripts.length > 0) {
       const events = localRunnerScripts.shift()!;
@@ -108,7 +109,7 @@ vi.mock("../../../../src/main/features/p3394_bridge/p3394-gateway-turn", () => (
       const text = terminal?.output || "gateway turn done";
       const failed = terminal?.status && terminal.status !== "completed" && terminal.status !== "cancelled";
       if (failed) {
-        // MA-01：turn 层把网关错误信转成失败时带回 failureKind/failureCode/
+        // turn 层把网关错误信转成失败时带回 failureKind/failureCode/
         // infrastructureFailure；注入形状与真实返回值一致，跨层契约才可验证。
         return {
           text: "",
@@ -174,7 +175,7 @@ const abortRaceProbe = vi.hoisted(() => ({
 }));
 // Records every model turn the bus drives, so tests can assert WHAT a given
 // session actually received as its turn input (`opts.message`) — e.g. that a
-// G8b handback turn carried the worker's full reply, not a summary.
+// handback turn carried the worker's full reply, not a summary.
 const _recordedCalls = vi.hoisted(
   () =>
     [] as Array<{
@@ -182,10 +183,11 @@ const _recordedCalls = vi.hoisted(
       message: string;
       systemPrompt?: string;
       sourceMessageText?: string;
+      suppliedAbilityAssets?: Array<{ assetId: string; assetVersion: string }>;
     }>,
 );
 // Records the result each tool's execute() returned — lets a test assert that a
-// G8d in-process dispatch tool (run_worker) handed its sub-run's full reply back
+// in-process dispatch tool (run_worker) handed its sub-run's full reply back
 // synchronously as the tool result, not via an async re-wake.
 const _recordedToolResults = vi.hoisted(
   () =>
@@ -217,6 +219,7 @@ vi.mock("../../../../src/main/model/client", () => ({
     _recordedCalls.push({
       sid,
       message: String(opts.message || ""),
+      suppliedAbilityAssets: opts.suppliedAbilityAssets,
       ...(opts.systemPrompt ? { systemPrompt: String(opts.systemPrompt) } : {}),
       ...(opts.sourceMessageText ? { sourceMessageText: String(opts.sourceMessageText) } : {}),
     });
@@ -235,6 +238,15 @@ vi.mock("../../../../src/main/model/client", () => ({
       }
       if (ev?.type === "__emit_cognition_save_receipt__") {
         await opts.onCognitionSaveReceipt?.(ev.receipt);
+        continue;
+      }
+      if (ev?.type === "__complete_execution__") {
+        await opts.executionLifecycle?.started();
+        await opts.executionLifecycle?.terminal({ status: 'completed', output: ev.text });
+        continue;
+      }
+      if (ev?.type === "__emit_asset_usage_claim__") {
+        await opts.onAssetUsageClaim?.(ev.claim);
         continue;
       }
       if (ev?.type === "__capture_tool_definitions__") {
@@ -379,7 +391,7 @@ async function createDelegatedAbilityAsset(
   scopePolicy?: { purposeTags?: string[] },
 ) {
   const candidates = await import("../../../../src/main/features/recall/candidate-service");
-  const promoted = await candidates.saveRecallCandidate(TEST_UID, {
+  const promoted = await createNightlyCandidateFixture(TEST_UID, {
     judgment: `Use the confirmed delegated asset for ${label}.`,
     summary: `Delegated asset ${label}`,
     suggestedType: "rule",
@@ -388,9 +400,7 @@ async function createDelegatedAbilityAsset(
   });
   const asset = (await candidates.promoteRecallCandidate(TEST_UID, promoted.id, {
     actor: "user",
-    // forceCreateSimilar（2026-09-17 修）：本分支新增的防分裂闸门会拦下
-    // 同模板造数（语义相似≈0.9+）。这里就是"用户已确认要新条目"的造数
-    // 语义，走闸门的正当逃生口，而不是给闸门开洞。
+    // 同模板夹具的语义相似度会触发防分裂闸门；这里显式模拟用户已确认新建。
     forceCreateSimilar: true,
     ...(scopePolicy ? { scopePolicy } : {}),
   })).asset;
@@ -881,7 +891,7 @@ describe("group_chat visibility › recipient-specific external projection", () 
     await waitForQuiescent(TEST_UID, cid);
   });
 
-  // MA-01 跨层契约（验收报告 P1）：上游 turn 层把网关错误信转成失败后，下游必须
+  // 上游 turn 层把网关错误信转成失败后，下游必须
   // 「失败不计贡献、汇总记 missing、整体不完成」——不能出现 run=completed、
   // actor done、missing=[] 与界面「全部完成」并存的假成功。
   it("does not count a gateway runtime error as a contribution in the run ledger", async () => {
@@ -1567,7 +1577,11 @@ describe("group_chat bus integration › structured user recipient", () => {
     });
 
     const auth = await import("../../../../src/main/features/auth");
-    vi.spyOn(auth, "hasConfiguredModel").mockReturnValue({ configured: false });
+    const users = await import("../../../../src/main/features/users");
+    vi.spyOn(auth, "hasConfiguredModel").mockReturnValue({ configured: true });
+    vi.spyOn(auth, "hasConfiguredModelForUser").mockImplementation((userId) => (
+      userId === TEST_UID ? { configured: false } : { configured: true }
+    ));
     const registry = await import("../../../../src/main/features/local_agents/registry");
     vi.spyOn(registry, "detectAll").mockResolvedValue([
       {
@@ -1581,19 +1595,25 @@ describe("group_chat bus integration › structured user recipient", () => {
       },
     ] as Awaited<ReturnType<typeof registry.detectAll>>);
 
-    const groupChat = await import("../../../../src/main/features/group_chat");
-    const result = await groupChat.send({
-      userId: TEST_UID,
-      cid,
-      text: "在吗",
-      recipient_agent_id: gatewayAgentId,
-      recipient_origin: "cli_fallback",
-    });
+    try {
+      users.activateUser("group-fallback-other-user");
+      const groupChat = await import("../../../../src/main/features/group_chat");
+      const result = await groupChat.send({
+        userId: TEST_UID,
+        cid,
+        text: "在吗",
+        recipient_agent_id: gatewayAgentId,
+        recipient_origin: "cli_fallback",
+      });
 
-    expect(result).toMatchObject({
-      ok: true,
-      msg: { text: "在吗", to: [gatewayAgentId] },
-    });
+      expect(result).toMatchObject({
+        ok: true,
+        msg: { text: "在吗", to: [gatewayAgentId] },
+      });
+      expect(auth.hasConfiguredModelForUser).toHaveBeenCalledWith(TEST_UID);
+    } finally {
+      users.activateUser(TEST_UID);
+    }
   });
 
   it("refuses to launch the external Agent when the user denies the confirm dialog", async () => {
@@ -1671,8 +1691,8 @@ describe("group_chat bus integration › structured user recipient", () => {
     const codexCall = p3394GatewayCalls.find((call) => call.agent?.agent_id === codexId);
     expect(codexCall).toBeDefined();
     // The switched-context digest is host-side augmentation of the full main
-    // transcript; it must not cross the external boundary (round-3 privacy
-    // review), so the previous external Agent's result stays host-only.
+    // transcript; it must not cross the external boundary, so the previous
+    // external Agent's result stays host-only.
     expect(codexCall.prompt).not.toContain("<group-context-summary>");
     expect(codexCall.prompt).not.toContain("WorkBuddy product analysis");
     // The task itself still reaches the next external Agent.
@@ -1681,11 +1701,100 @@ describe("group_chat bus integration › structured user recipient", () => {
 });
 
 describe("group_chat bus integration › teaching receipts", () => {
+  it.each(["report_ability_asset_usage", "read_file"])(
+    "keeps only adoption bookkeeping transparent to the final answer boundary: %s",
+    async (toolName) => {
+      const cid = newCid();
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      // Synthetic meeting recap: roles, decisions, and deadlines below are invented.
+      const answer = "**决定**\n- 周五前上线搜索筛选功能\n\n**待办**\n- 小甲补测试，周四给结果。";
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: "delta", text: answer },
+        { type: "event", event: { stream: "tool", data: { phase: "start", name: toolName } } },
+        { type: "__emit_asset_usage_claim__", claim: {
+          assetId: "asset-a", assetVersion: "1", outputExcerpt: answer.replace(/\n/g, "\\n"),
+        } },
+        { type: "event", event: { stream: "tool", data: { phase: "end", name: toolName } } },
+        { type: "delta", text: '<commander-result status="success" />' },
+        { type: "final", text: '<commander-result status="success" />' },
+      ]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "整理本次会议复盘。" });
+      await waitForQuiescent(TEST_UID, cid);
+      const reply = (await readConversationMessages(cid)).find(message => message.from === "commander" && message.turn_end);
+      expect(reply?.text.includes(answer)).toBe(toolName === "report_ability_asset_usage");
+      expect(reply?.text).not.toContain("采用登记未生成回执");
+      expect(reply?.text).not.toContain("commander-result");
+      const { listAssetUsageReceipts } = await import("../../../../src/main/features/recall/asset-usage-receipt");
+      expect(await listAssetUsageReceipts(TEST_UID)).toEqual([]);
+    },
+  );
+
+  it('keeps the current business answer through report, thinking and a nonempty closing without duplicating process text', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const answer = '完整咨询正文：先确认需求，再按预算和风险比较两个可执行方案。\n';
+    const detail = '推荐保留现有入口，只替换已证实失效的部分。\n';
+    const closing = '下一步先采用第一个方案。';
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: 'delta', text: '准备读取背景，这句不是最终成果。' },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'start', name: 'read_file' } } },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'end', name: 'read_file' } } },
+      { type: 'delta', text: answer },
+      { type: 'progress', origin: 'thinking', text: '内部思考不属于任务正文。' },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'start', name: 'report_ability_asset_usage' } } },
+      { type: '__emit_asset_usage_claim__', claim: { assetId: 'asset-a', assetVersion: '1', outputExcerpt: answer.replace(/\n/g, '\\n') } },
+      { type: 'progress', origin: 'thinking', text: '继续考虑如何收尾。' },
+      { type: 'delta', text: detail },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'end', name: 'report_ability_asset_usage' } } },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'start', name: 'report_ability_asset_usage' } } },
+      { type: 'progress', origin: 'thinking', text: '第二条采用仅属记账。' },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'end', name: 'report_ability_asset_usage' } } },
+      { type: 'delta', text: closing }, { type: 'final', text: closing },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: '请提供完整咨询方案。' });
+    await waitForQuiescent(TEST_UID, cid);
+    const reply = (await readConversationMessages(cid)).find(message => message.from === 'commander' && message.turn_end);
+    expect(reply?.text).toBe(answer + detail + closing);
+    expect(JSON.stringify(reply?.process)).not.toContain(answer.trim());
+    expect(JSON.stringify(reply?.process)).not.toContain(detail.trim());
+    expect(JSON.stringify(reply?.process)).toContain('内部思考不属于任务正文');
+    expect(reply?.text).not.toContain('采用登记未生成回执');
+  });
+
+  it('does not revive an earlier business answer when a non-bookkeeping tool interrupts the reporting tail', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const obsolete = '上一阶段只用于准备的文本，不是这次最终结果。';
+    const answer = '重新读取后得到的完整业务结论。\n';
+    const closing = '按这个结论执行。';
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: 'delta', text: obsolete },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'end', name: 'report_ability_asset_usage' } } },
+      { type: 'progress', origin: 'thinking', text: '需要重新检查文件。' },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'start', name: 'read_file' } } },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'end', name: 'read_file' } } },
+      { type: 'delta', text: answer },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'end', name: 'report_ability_asset_usage' } } },
+      { type: 'progress', origin: 'thinking', text: '完成本阶段记账。' },
+      { type: 'delta', text: closing }, { type: 'final', text: closing },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: '重新检查后给结论。' });
+    await waitForQuiescent(TEST_UID, cid);
+    const reply = (await readConversationMessages(cid)).find(message => message.from === 'commander' && message.turn_end);
+    expect(reply?.text).toBe(answer + closing);
+    expect(reply?.text).not.toContain(obsolete);
+    expect(JSON.stringify(reply?.process)).toContain(obsolete);
+    expect(JSON.stringify(reply?.process)).not.toContain(answer.trim());
+  });
+
   it("persists a deduplicated taught receipt on the visible commander reply (并入保存回执链)", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
-    // 教学回执并入保存回执（2026-09-28 四病整改 7.0 修7 / F39）：runner 不再有
+    // 教学与保存共用回执：runner 不再有
     // onTeachingReceipt，教学信号以 candidate+taught-pending-review 走同一条
     // 保存回执收集口径（渲染层不再有独立教学卡）。
     const receipt = {
@@ -1953,7 +2062,7 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
       text: `@${AGENT_NAME} long task`,
     });
 
-    // G8d: top-level turns run through one per-conversation runtime (not a
+    // Top-level turns run through one per-conversation runtime (not a
     // per-actor worker keyed by agent id). Find the running runtime bound to
     // this agent's turn.
     const runningFor = (id: string) => {
@@ -2277,10 +2386,9 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
   });
 
   it("session-level stop durably stops running runs and rejects their Wake requests", async () => {
-    // 真机形状：会话级 Stop（无 run 作用域参数）之前只清内存队列/worker，不写
-    // 台账 → run 永远 running、汇总被「本 run 有待审批 Wake」挡住。这里钉住：
-    // 停止那一刻 actor 还在 pending 时，Stop 之后 run 必须是 stopped，且该 run 的
-    // 待审批 Wake 必须以「用户停止」这个理由被拒（不能被自动判死抢走理由）。
+    // 会话级 Stop（无 run 作用域参数）必须把 run 持久化为 stopped。
+    // 若停止时 actor 仍为 pending，该 run 的待审批 Wake 必须被拒，
+    // 且保留「用户停止」这一理由，不能被自动过期处理覆盖。
     const cid = newCid();
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const store = await import("../../../../src/main/features/group_chat/run_store");
@@ -2318,9 +2426,8 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
   });
 
   it("session-level stop resolves a Wake whose actor already failed instead of leaving it pending", async () => {
-    // 真机复现的另一种形状：actor 已经 failed（终态），Wake 却还是 pending ——
-    // 用户反复点批准都只会得到「actor already terminal」。这种唤醒在停止时必须
-    // 被系统判死（expired + 真实理由），而不是继续挂在待审批里。
+    // actor 已为 failed（终态）而 Wake 仍为 pending 时，会话级 Stop
+    // 必须将该 Wake 标为 expired，并记录 actor 的终态理由。
     const cid = newCid();
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const store = await import("../../../../src/main/features/group_chat/run_store");
@@ -2433,10 +2540,6 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
   });
 });
 
-// SKIP 这块的第二条:`fromActorId: 'commander'` 写 @<id> 在文本里——
-// 现在 commander 文本 @ 不解析,@<id>→@<name> 的 rewrite 链也跟着断
-// (rewrite 依赖 router 把 agent 加进 idToName)。dispatch_to 工具用名字调
-// 而非 id,这条已是 dead semantic;留着第一条(@<name> 不变)。
 describe("group_chat bus integration › @<id> rewrite is no-op when text already uses @<name>", () => {
   it("text \"@Writer ...\" stays \"@Writer ...\" after enqueue (rewrite only fires when text uses raw id)", async () => {
     const cid = newCid();
@@ -2635,7 +2738,7 @@ describe("group_chat state logging privacy", () => {
   });
 });
 
-describe("group_chat bus integration › G8d in-process dispatch (run_worker / dispatch_to)", () => {
+describe("group_chat bus integration › in-process dispatch (run_worker / dispatch_to)", () => {
   it('does NOT expose kstar_control to the Commander (world model owns the lifecycle)', async () => {
     const cid = newCid();
     const state = await import('../../../../src/main/features/group_chat/state');
@@ -2663,7 +2766,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     }
   });
 
-  // G8d step 3: dispatch tools run their target's turn in-process and hand the
+  // Dispatch tools run their target's turn in-process and hand the
   // result back as the tool result — no staging, no turn-end flush, no re-wake.
   // The commander reads the result and synthesises within the SAME turn. The
   // mock's `__call_tool__` drives the real tool execute() so the nested run
@@ -2791,9 +2894,9 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       "WORKER-INTERNAL-OUTPUT-7c1d: scanned 42 files, here is the full structured summary the commander needs.";
 
     // Commander's SINGLE turn: call run_worker with NO `to` (anonymous worker),
-    // then synthesise for the user in the SAME turn. G8d removed the re-wake —
-    // the worker's result returns as the tool result, in-process, so the
-    // commander reads it and continues without a second scheduled turn.
+    // then synthesise for the user in the SAME turn. The worker's result
+    // returns as the tool result, in-process, so the commander reads it and
+    // continues without a second scheduled turn.
     _setScript(state.buildGconvSessionId(cid), [
       {
         type: "__call_tool__",
@@ -2849,7 +2952,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(toolResult!.content).toContain(
       `workflow_step_id="${successOutcome.workflowStepId}"`,
     );
-    // G4 wiring (step 3b-tail): run_worker is parallel-safe so independent
+    // run_worker is parallel-safe so independent
     // fan-out in one turn runs concurrently (bounded by dispatchSlots).
     expect(
       toolResult!.executionMode,
@@ -3045,8 +3148,10 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     });
   });
 
-  it("grants ability assets ONLY via Commander dispatch — no host-side injection into agents", async () => {
-    const cid = newCid();
+  it.each([false, true])("grants and settles dispatched ability assets (worker=%s)", async worker => {
+    const conversation = await (await import('../../../../src/main/features/chats')).createConversation(TEST_UID, { title: 'Synthetic dispatch adoption' });
+    const cid = conversation.conversation_id;
+    cidsToDrop.add(cid);
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
@@ -3055,15 +3160,16 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     // only the explicit dispatch grant. Pin the projection explicitly so this
     // dispatch-boundary test does not depend on semantic-ranking heuristics.
 
-    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+    const candidate = await createNightlyCandidateFixture(TEST_UID, {
       judgment: "Never leak asset context into delegated turns unless the Commander grants it.",
       summary: "Commander-gated asset grant rule",
-      suggestedType: "rule",
+      suggestedType: "cognition",
+      contentCategory: "rule",
       suggestedScope: "review",
       sourceRefs: [{ kind: "execution", id: "exec-gate" }],
     });
     const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
-    // 自动投影按 PRD 3.6 只接纳 Transfer Verified 及以上。本用例考的是
+    // 自动投影只接纳 Transfer Verified 及以上。本用例考的是
     // "资产只经 Commander 分发、不由宿主注入 Agent"的契约，不是成熟度闸门，
     // 所以先把资产抬到够格的档位。
     await (await import("../../../../src/main/features/recall/asset-service")).setAbilityAssetMaturity(TEST_UID, asset.id, "transfer_validated");
@@ -3081,13 +3187,21 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     _setScript(state.buildGconvSessionId(cid), [
       {
         type: "__call_tool__",
-        name: "dispatch_to",
-        input: { to: AGENT_NAME, message: "audit the flow", ability_assets: [asset.id] },
+        name: worker ? "run_worker" : "dispatch_to",
+        input: worker ? { task: "audit the flow", ability_assets: [asset.id] } : { to: AGENT_NAME, message: "audit the flow", ability_assets: [asset.id] },
       },
       { type: "final", text: "Synthesised." },
     ]);
     const agentSid = state.buildGmemberSessionId(cid, AGENT_ID);
-    _setScript(agentSid, [{ type: "final", text: AGENT_REPLY }]);
+    _setScript(worker ? 'gworker-*' : agentSid, [
+      { type: '__complete_execution__', text: AGENT_REPLY },
+      { type: '__emit_asset_usage_claim__', claim: { assetId: asset.id, assetVersion: asset.version, outputExcerpt: AGENT_REPLY } },
+      { type: 'final', text: AGENT_REPLY },
+    ]);
+    const routing = await import('../../../../src/main/features/recall/capture-model-routing');
+    const resultCheck = vi.spyOn(routing, 'runRecallCaptureModel').mockResolvedValue({ result: { text: JSON.stringify({ checks: [
+      { assetId: asset.id, version: asset.version, status: 'complied', outputEvidence: { quote: AGENT_REPLY } },
+    ] }), meta: {} } } as any);
 
     bus.subscribe(TEST_UID, cid, () => {});
     await bus.enqueue({
@@ -3100,8 +3214,9 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     await waitForQuiescent(TEST_UID, cid);
 
     // The agent's system prompt received the Commander-granted asset block...
-    const agentCall = _recordedCalls.find((c) => c.sid === agentSid);
+    const agentCall = _recordedCalls.find((c) => worker ? c.sid.startsWith("gworker-") : c.sid === agentSid);
     expect(agentCall).toBeTruthy();
+    expect(agentCall!.suppliedAbilityAssets).toContainEqual({ assetId: asset.id, assetVersion: asset.version });
     expect(agentCall!.systemPrompt).toContain("<commander-dispatched-assets>");
     expect(agentCall!.systemPrompt).toContain(asset.title);
     // ...and NEVER the host-side confirmed-assets block.
@@ -3121,9 +3236,20 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       assetVersion: asset.version,
       boundary: "real",
     });
+    const injections = await (await import('../../../../src/main/features/recall/injection-receipt')).listInjectionReceipts(TEST_UID);
+    const dispatched = injections.find(row => row.assetId === asset.id && row.status === 'dispatched');
+    expect(dispatched?.dispatchBinding).toMatchObject({ conversationId: cid });
+    expect(injections.filter(row => row.taskRunId === dispatched!.taskRunId && row.assetId === asset.id
+      && row.status === 'omitted' && row.channel === 'catalog_hint')).toEqual([]);
+    const observations = await (await import('../../../../src/main/features/recall/asset-usage-receipt')).listAssetUsageReceipts(TEST_UID);
+    expect(observations.filter(row => row.taskRunId === dispatched!.taskRunId)).toEqual([
+      expect.objectContaining({ assetId: asset.id, status: 'applied', projectionId: 'dispatch-turn' }),
+    ]);
+    expect(resultCheck.mock.calls.some(([, input]) => String(input.message).includes(AGENT_REPLY))).toBe(true);
+    resultCheck.mockRestore();
   }, BUS_TEST_TIMEOUT_MS);
 
-  it("授予不存在的资产 id 仍被拒（2026-09-18 放宽后守住可读性闸），且错误不回显 id", async () => {
+  it("授予不存在的资产 id 仍被拒，且错误不回显 id", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -3153,14 +3279,14 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
   }, BUS_TEST_TIMEOUT_MS);
 
-  it("没有投影也能授予目录内资产（2026-09-18 放宽：目录化 + 模型自选）", async () => {
+  it("没有投影也能授予目录内资产", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
     const assetService = await import("../../../../src/main/features/recall/asset-service");
 
-    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+    const candidate = await createNightlyCandidateFixture(TEST_UID, {
       judgment: "Delegated turns can use any catalog asset the Commander picks.",
       summary: "catalog-wide dispatch grant",
       suggestedType: "rule",
@@ -3360,14 +3486,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   });
 
 
-  // 第二期通道收口（2026-08-24）：直连 `cli` 通道不再是默认执行路径，
-  // 本用例钉住的 PID 探活 / CLI 会话持久化语义是直连专属；网关模式下
-  // 会话连续性由 P3394 session 承担。网关侧 PID 数据源与探活语义列入
-  // 后续增强（见 docs/design 设计文档第 5 节），补齐后恢复本用例。
-  //
-  // 2026-09-20：本用例是 develop 上**唯一保留**的硬跳过，已登记在
-  // test/skip-allowlist.json（含理由与恢复条件），nightly 的 skip 检查会盯着它；
-  // 同日复核确认它恢复后确实会红（同类另外 3 条恢复后均直接通过）。
+  // 该直连 PID 探活契约在网关模式下暂不启用；恢复条件见 skip-allowlist。
   it.skip("CLI process-info accepts only a positive integer number as the in-memory PID", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -4071,20 +4190,6 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(retryCall?.message).toContain("Verify its current state before deciding whether to run it again");
   });
 
-
-  // G-18/G-19（2026-08-25）：直连执行路径已删除，直连专属的 resume/
-  // 会话持久化语义钉子随之移除——网关模式下会话连续性由 P3394 session
-  // 与网关侧 cli-session（G-27 resume）承担；PID 数据源已由网关
-  // hello/manifest 自报（extensions.pid / manifest.pid）。
-
-
-
-  // G-18/G-19（2026-08-25）：直连会话写入顺序钉子随直连路径移除（网关
-  // 模式会话连续性由 P3394 session 承担，见上方总注释）。
-
-
-  // G-18/G-19（2026-08-25）：直连会话持久化失败钉子随直连路径移除（见上）。
-
   it("uses the highest-scoring idle member, then one anonymous worker, and returns coordinator_exhausted", async () => {
     const cid = newCid();
     const reviewerId = "c1c1c1c1c1c1";
@@ -4224,7 +4329,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
 
   it("returns to Commander when retry preparation fails before its run write", async () => {
     const cid = newCid();
-    const secret = "SECRET_RETRY_PREPARE_PREWRITE";
+    const secret = "synthetic-secret SECRET_RETRY_PREPARE_PREWRITE";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const collaboration =
@@ -4542,7 +4647,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     "reconciles a durable running $s attempt when begin audit append throws",
     async (pathKind) => {
       const cid = newCid();
-      const secret = "SECRET_BEGIN_AUDIT_FAILURE";
+      const secret = "synthetic-secret SECRET_BEGIN_AUDIT_FAILURE";
       const state = await import("../../../../src/main/features/group_chat/state");
       const bus = await import("../../../../src/main/features/group_chat/bus");
       const collaboration =
@@ -4620,7 +4725,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
 
   it("does not invent an attempt when begin fails before durability", async () => {
     const cid = newCid();
-    const secret = "SECRET_BEGIN_BEFORE_DURABILITY";
+    const secret = "synthetic-secret SECRET_BEGIN_BEFORE_DURABILITY";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const collaboration =
@@ -4813,7 +4918,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   it("redacts raw abort-settlement errors after durable begin", async () => {
     const cid = newCid();
     const secret =
-      "SECRET_POST_BEGIN_SETTLEMENT /Users/private/abort-token.json token=raw";
+      // Invented home path and token-shaped text exercise error redaction.
+      "SECRET_POST_BEGIN_SETTLEMENT /Users/test/abort-token.json token=raw";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const collaboration =
@@ -4858,7 +4964,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     ]);
     expect(logs).not.toContain(secret);
     expect(logs).not.toContain("SECRET_POST_BEGIN_SETTLEMENT");
-    expect(logs).not.toContain("/Users/private/abort-token.json");
+    expect(logs).not.toContain("/Users/test/abort-token.json");
     expect(logs).not.toContain("token=raw");
     const warnings = loggerMocks.warn.mock.calls.filter(
       ([message]) => message === "nested abort settlement failed",
@@ -4878,7 +4984,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   it("redacts raw abort-settlement errors after retry preparation", async () => {
     const cid = newCid();
     const secret =
-      "SECRET_POST_PREPARATION_SETTLEMENT /Users/private/retry-token.json token=raw";
+      "SECRET_POST_PREPARATION_SETTLEMENT /Users/test/retry-token.json token=raw";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const collaboration =
@@ -4923,7 +5029,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     ]);
     expect(logs).not.toContain(secret);
     expect(logs).not.toContain("SECRET_POST_PREPARATION_SETTLEMENT");
-    expect(logs).not.toContain("/Users/private/retry-token.json");
+    expect(logs).not.toContain("/Users/test/retry-token.json");
     expect(logs).not.toContain("token=raw");
     const warnings = loggerMocks.warn.mock.calls.filter(
       ([message]) => message === "nested abort settlement failed",
@@ -4943,7 +5049,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   it("sanitizes named-member storage failure and stops before model dispatch", async () => {
     const cid = newCid();
     const secret =
-      "SECRET_MEMBER_STORAGE /Users/private/member-token.json token=raw";
+      "SECRET_MEMBER_STORAGE /Users/test/member-token.json token=raw";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const collaboration =
@@ -5018,7 +5124,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     "settles a $s attempt when runNestedDispatch throws after begin",
     async (pathKind) => {
       const cid = newCid();
-      const secret = "SECRET_EXECUTE_THROW";
+      const secret = "synthetic-secret SECRET_EXECUTE_THROW";
       const state = await import("../../../../src/main/features/group_chat/state");
       const bus = await import("../../../../src/main/features/group_chat/bus");
       const collaboration =
@@ -5215,7 +5321,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   it("sanitizes an unclassified nested exception and does not recover it", async () => {
     const cid = newCid();
     const secret =
-      "SECRET_NESTED_THROW /Users/private/token.txt api_token=raw-secret";
+      "SECRET_NESTED_THROW /Users/test/token.txt api_token=raw-secret";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const collaboration =
@@ -5273,7 +5379,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     await expectNoLifecycleSecretLeak(cid, secret);
   });
 
-  it("dispatch_to (named) runs the agent IN-PROCESS, keeps the agent's visible bubble, and the commander synthesises (Option B) — no re-wake", async () => {
+  it("dispatch_to (named) runs the agent IN-PROCESS, keeps the agent's visible bubble, and the commander synthesises — no re-wake", async () => {
     const cid = newCid();
     const state =
       await import("../../../../src/main/features/group_chat/state");
@@ -5336,7 +5442,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       members.actors.some((a) => a.id === AGENT_ID && a.kind === "agent"),
     ).toBe(true);
 
-    // 4) Option B — BOTH bubbles persist: the agent's own reply AND the
+    // 4) Both bubbles persist: the agent's own reply AND the
     //    commander's synthesis.
     const lines = fs
       .readFileSync(
@@ -5587,7 +5693,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     ).toBe(true);
   }, BUS_TEST_TIMEOUT_MS);
 
-  // Entry 2 (G8d §1 / step 5): the user can talk to an agent directly — a user
+  // The user can talk to an agent directly — a user
   // message addressed to an agent runs that agent's top-level turn and the agent
   // delivers to the user, without the commander in the loop. This is runtime
   // routing (router default: user→commander, but an explicit @agent → that
@@ -5723,6 +5829,34 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(lines.indexOf(agentMsg)).toBeLessThan(lines.indexOf(segs[1]));
   }, BUS_TEST_TIMEOUT_MS);
 
+  it('keeps only the post-dispatch business answer when adoption bookkeeping thinks and closes afterward', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const pre = '先让写作助手形成草稿，这句话已经单独交付。';
+    const answer = '根据草稿得到的完整最终建议。\n';
+    const closing = '建议先落实第一项。';
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: 'delta', text: pre },
+      { type: '__call_tool__', name: 'dispatch_to', input: { to: AGENT_NAME, message: 'draft it' } },
+      { type: 'delta', text: answer },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'end', name: 'report_ability_asset_usage' } } },
+      { type: 'progress', origin: 'thinking', text: '仅做采用记账收尾。' },
+      { type: 'delta', text: closing }, { type: 'final', text: closing },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: 'final', text: '助手的草稿正文。' }]);
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: '请写草稿并给最终建议。' });
+    await waitForQuiescent(TEST_UID, cid);
+    const messages = await readConversationMessages(cid);
+    const replies = messages.filter(message => message.from === 'commander');
+    expect(replies).toHaveLength(2);
+    expect(replies[0].text).toContain(pre);
+    expect(replies[1].text).toBe(answer + closing);
+    expect(replies[1].text).not.toContain(pre);
+    expect(JSON.stringify(replies[1].process)).not.toContain(answer.trim());
+  }, BUS_TEST_TIMEOUT_MS);
+
   // The inverse: an anonymous worker is the commander's invisible hands, so the
   // turn must NOT segment (no second bubble with nothing visible between).
   it("commander loop bubbles: an anonymous run_worker does NOT split the commander bubble", async () => {
@@ -5853,7 +5987,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       "tutor should post a visible reply to the user",
     ).toBe(true);
 
-    // Gap-B "thinking placeholder" signal: the hand-off runs the tutor's turn
+    // The hand-off runs the tutor's turn
     // in-process (bypassing runTurn's start-of-turn state_changed), so without
     // surfacing it the renderer had nothing to paint between the commander's
     // narration and the tutor's first token. The nested dispatch must emit a
@@ -5965,11 +6099,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       event: { stream, data: { phase } },
     });
 
-    // Mirrors d33b828f234c from the reported run: research triggered context
-    // compaction, the commander narrated a visible pre-dispatch segment, three
-    // execution-plan calls failed, and hand_off_to delivered the final answer.
-    // The old whole-turn process array was attached again to an empty tail;
-    // the generic compaction-visibility rule forced that tail to persist.
+    // Context compaction and failed planning calls must stay with the visible
+    // pre-dispatch segment, without reviving an empty tail after hand_off_to.
     _setScript(state.buildGconvSessionId(cid), [
       contextProgress(
         "context",
@@ -6831,7 +6962,7 @@ describe("group_chat bus integration › Recall asset usage receipt", () => {
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
     const projections = await import("../../../../src/main/features/recall/context-projection");
 
-    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+    const candidate = await createNightlyCandidateFixture(TEST_UID, {
       judgment: "Keep OAuth state checks before token exchange.",
       summary: "OAuth state check rule",
       suggestedType: "rule",
@@ -6900,7 +7031,8 @@ describe("group_chat bus integration › deterministic host routing (task turn)"
     expect(projection.status).toBe("confirmed");
   }, BUS_TEST_TIMEOUT_MS);
 
-  it("leaves greetings untouched — zero KStar writes", async () => {
+  it("leaves greetings untouched — the trivial gate opens nothing and writes no task state", async () => {
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -6914,6 +7046,127 @@ describe("group_chat bus integration › deterministic host routing (task turn)"
     const store = await import("../../../../src/main/features/kstar/requirement-store");
     const taskState = await store.readConversationTaskState(TEST_UID, cid);
     expect(taskState?.currentTaskId).toBeFalsy();
+    // The gate now records its decision, but only once the conversation has
+    // state: a greeting must never be what brings KStar state into existence.
+    const paths = await import("../../../../src/main/features/kstar/paths");
+    expect(fs.existsSync(paths.kstarConversationTaskStatePath(TEST_UID, cid))).toBe(false);
+  }, BUS_TEST_TIMEOUT_MS);
+
+  it("records an obviously trivial mid-task message without disturbing the open task", async () => {
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+
+    // Open a governed task first; the beforeEach stub judges it a task.
+    _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "I will review it." }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "审查一下 bus.ts 的守卫实现" });
+    await waitForQuiescent(TEST_UID, cid);
+    const opened = await store.readConversationTaskState(TEST_UID, cid);
+    expect(opened?.currentTaskId).toBeTruthy();
+
+    // A greeting mid-task. This gate used to short-circuit with no record and
+    // no log, so its hit count could not be measured at all.
+    _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "不客气。" }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "谢谢" });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const after = await store.readConversationTaskState(TEST_UID, cid);
+    const kinds = (after?.routingDecisions ?? []).map((decision) => decision.kind);
+    expect(kinds).toContain("obviously_trivial");
+    // Recording the gate must not change what the gate does: nothing opens and
+    // the tracked task stays exactly as it was.
+    expect(after?.currentTaskId).toBe(opened?.currentTaskId);
+  }, BUS_TEST_TIMEOUT_MS);
+
+  it("still governs a task-shaped request that merely mentions progress", async () => {
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+
+    // The status pattern is unanchored, so "进度" matched anywhere in the
+    // message and this request was filtered as obvious trivia: no model call,
+    // no governed task, no requirement. It carries a goal verb, so it has to
+    // reach the judge.
+    _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "I will compile it." }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "整理一下这个季度的进度报告" });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const taskState = await store.readConversationTaskState(TEST_UID, cid);
+    expect(taskState?.currentTaskId).toBeTruthy();
+    const kinds = (taskState?.routingDecisions ?? []).map((decision) => decision.kind);
+    expect(kinds).not.toContain("obviously_trivial");
+  }, BUS_TEST_TIMEOUT_MS);
+
+  it("records an unavailable judge mid-task instead of leaving the skipped turn invisible", async () => {
+    const prevKey = process.env.ANTHROPIC_API_KEY;
+    // `hasConfiguredModel()` also counts an ambient key, so the test pins the
+    // "no model configured" state instead of inheriting the developer's shell.
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
+      const cid = newCid();
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const store = await import("../../../../src/main/features/kstar/requirement-store");
+
+      _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "I will review it." }]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "审查一下 bus.ts 的守卫实现" });
+      await waitForQuiescent(TEST_UID, cid);
+      const opened = await store.readConversationTaskState(TEST_UID, cid);
+      expect(opened?.currentTaskId).toBeTruthy();
+
+      // The judge cannot answer: no configured model. That is a normal
+      // configuration state, not a failure — but the skipped turn has to be
+      // visible, otherwise it looks identical in the trace to a judged one.
+      bus._setHostRoutingJudgeForTest(null);
+      _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "Still here." }]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "再检查一下 recall 的投影实现" });
+      await waitForQuiescent(TEST_UID, cid, 6000);
+
+      const after = await store.readConversationTaskState(TEST_UID, cid);
+      const unavailable = (after?.routingDecisions ?? []).filter((decision) => decision.kind === "routing_unavailable");
+      expect(unavailable).toHaveLength(1);
+      expect(unavailable[0].reason).toContain("no configured model");
+      // The safe default is preserved: an unjudged turn opens nothing and
+      // leaves the tracked task alone.
+      expect(after?.currentTaskId).toBe(opened?.currentTaskId);
+    } finally {
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prevKey;
+    }
+  }, BUS_TEST_TIMEOUT_MS);
+
+
+  it("records a judge failure instead of dropping the turn's governance silently", async () => {
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+
+    // The judge never answers (runner error / timeout). This used to return
+    // `openedTask:false` with nothing recorded, so a task-shaped message lost
+    // its governance with no trace anywhere.
+    bus._setHostRoutingJudgeForTest(async () => null);
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "Answered anyway." },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "审查一下 bus.ts 的守卫实现" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const taskState = await store.readConversationTaskState(TEST_UID, cid);
+
+    // No task is opened — guessing "task" could strand a task the user never
+    // asked for — but the gap is now visible to the trace.
+    expect(taskState?.currentTaskId).toBeFalsy();
+    const failed = (taskState?.routingDecisions ?? []).filter((decision) => decision.kind === "routing_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0].reason).toContain("routing judge unavailable");
   }, BUS_TEST_TIMEOUT_MS);
 });
 
@@ -7079,7 +7332,7 @@ describe("group_chat bus integration › delegated ability asset Projection subs
     },
   );
 
-  /** 2026-09-18 放宽：授予不再要求"投影子集"——目录里（存在、可读、过闸）
+  /** 授予不要求"投影子集"——目录里（存在、可读、过闸）
    *  的资产都能派。保住的不变量是"授予精确"：被派发者只看到被授予的那几条，
    *  看不到投影里的其他资产与投影 id。 */
   function delegatedTargetPrompt(run: { targetSessionId?: string }): string | undefined {
@@ -7089,7 +7342,7 @@ describe("group_chat bus integration › delegated ability asset Projection subs
   }
 
   it.each(delegatedAssetSurfaces)(
-    "%s allows an active asset outside the current confirmed Projection, and grants it precisely (2026-09-18)",
+    "%s allows an active asset outside the current confirmed Projection, and grants it precisely",
     async (surface) => {
       const cid = newCid();
       const seeded = await seedDelegatedProjection(
@@ -7110,7 +7363,7 @@ describe("group_chat bus integration › delegated ability asset Projection subs
   );
 
   it.each(delegatedAssetSurfaces)(
-    "%s still stops at the host approval gate when the current Projection is not confirmed — the asset relax does not reopen it (2026-09-18)",
+    "%s still stops at the host approval gate when the current Projection is not confirmed",
     async (surface) => {
       const cid = newCid();
       const seeded = await seedDelegatedProjection(
@@ -7120,8 +7373,7 @@ describe("group_chat bus integration › delegated ability asset Projection subs
       );
       const run = await runDelegatedSurface(cid, surface, [seeded.asset.id]);
 
-      // 资产授予的放宽只针对"成员资格"，宿主审批门（KStar 投影未确认 →
-      // 暂停特权派单）原样保留：这是产品决定，不由本次放宽放开。
+      // 目录资产可授予不等于宿主审批已通过：KStar 投影未确认时仍暂停特权派单。
       expect(run.result?.isError).toBe(true);
       const payload = JSON.parse(run.result!.content) as { error_code?: string; error?: string };
       expect(payload.error_code).toBe("kstar_projection_not_confirmed");
@@ -7133,7 +7385,7 @@ describe("group_chat bus integration › delegated ability asset Projection subs
   );
 
   it.each(delegatedAssetSurfaces)(
-    "%s allows an explicit grant when the Projection version has drifted — the receipt pins the version read at dispatch time (2026-09-18)",
+    "%s allows an explicit grant when the Projection version has drifted — the receipt pins the version read at dispatch time",
     async (surface) => {
       const cid = newCid();
       const seeded = await seedDelegatedProjection(
@@ -7160,7 +7412,7 @@ describe("group_chat bus integration › delegated ability asset Projection subs
   );
 
   it.each(delegatedAssetSurfaces)(
-    "%s allows an explicit grant when no current Requirement exists (2026-09-18)",
+    "%s allows an explicit grant when no current Requirement exists",
     async (surface) => {
       const cid = newCid();
       const asset = await createDelegatedAbilityAsset(`without-requirement-${surface}`);
@@ -8860,7 +9112,7 @@ describe("group_chat bus integration › direct agent reply routing", () => {
   }, BUS_TEST_TIMEOUT_MS);
 });
 
-describe("group_chat bus integration › Task 5 nested workflow preparation", () => {
+describe("group_chat bus integration › nested workflow preparation", () => {
   it.each([
     ["dispatch_to", { to: AGENT_NAME, message: "Write the final strategy" }],
     ["hand_off_to", { to: AGENT_NAME, message: "Write the final strategy" }],
@@ -8932,7 +9184,7 @@ describe("group_chat bus integration › Task 5 nested workflow preparation", ()
   );
 });
 
-describe("group_chat bus integration › Task 6 run attribution", () => {
+describe("group_chat bus integration › run attribution", () => {
   it("durably admits an unmentioned member before queued execution", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
@@ -9378,7 +9630,7 @@ async function busOrEnqueue(
   await bus.enqueue({ uid, cid, fromActorId: "user", text });
 }
 
-describe("group_chat bus integration › Task 5 anonymous context patch", () => {
+describe("group_chat bus integration › anonymous context patch", () => {
   it("applies an anonymous worker context patch without adding a roster member or exposing the patch wrapper", async () => {
     const cid = newCid();
     const state =
@@ -9434,7 +9686,7 @@ describe("group_chat bus integration › Task 5 anonymous context patch", () => 
   });
 });
 
-describe("group_chat bus integration › Task 5 anonymous resume", () => {
+describe("group_chat bus integration › anonymous resume", () => {
   it("resumes the same anonymous workflow step through the real run_worker tool path", async () => {
     const cid = newCid();
     const state =
@@ -9754,7 +10006,7 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
   }, BUS_TEST_TIMEOUT_MS);
 });
 
-describe("group_chat bus integration › Task 5 Wake rejection", () => {
+describe("group_chat bus integration › Wake rejection", () => {
   it("rejects a real wake-gated handoff only after cancelling its exact workflow step", async () => {
     process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
@@ -9815,6 +10067,82 @@ describe("group_chat bus integration › Task 5 Wake rejection", () => {
       run?.steps.find((step) => step.id === request!.workflow_step_id)?.status,
     ).toBe("skipped");
   });
+});
+
+describe("group_chat bus integration › wake-gated hand-off ends the commander turn", () => {
+  // Regression: a wake-gated hand_off_to used to return the pending-wake result
+  // WITHOUT endTurn, so the Commander's turn kept running, tripped the core
+  // runner's premature-completion guard on unfinished plan steps, and did the
+  // delegated work itself in parallel with the Agent's Wake execution.
+  async function writeWakeAgent(agentId: string, agentName: string) {
+    const paths = await import("../../../../src/main/paths");
+    const agentDir = paths.agentDir(TEST_UID, agentId);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "agent.json"),
+      JSON.stringify({
+        agent_id: agentId,
+        name: agentName,
+        description: "wake end-turn test agent",
+        workflow: "test",
+        created_at: "t",
+        updated_at: "t",
+      }),
+    );
+  }
+
+  async function runWakeGatedTool(tool: "hand_off_to" | "dispatch_to") {
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const wakeService =
+      await import("../../../../src/main/features/p3394/wake-service");
+    const agentId = "wakeendturn01";
+    const agentName = "WakeEndTurnAgent";
+    await writeWakeAgent(agentId, agentName);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: tool,
+        input: { to: agentName, message: "Write the meeting minutes" },
+      },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "Produce the meeting minutes",
+    });
+    await waitForQuiescent(TEST_UID, cid);
+    const [request] = await wakeService.listWakeRequests(TEST_UID, cid);
+    const result = _recordedToolResults.find((entry) => entry.name === tool);
+    return { request, result };
+  }
+
+  it("hand_off_to through the wake gate returns endTurn with the pending-wake result", async () => {
+    const { request, result } = await runWakeGatedTool("hand_off_to");
+    expect(request?.source).toBe("hand_off_to");
+    expect(request?.status).toBe("pending");
+    expect(result?.endTurn).toBe(true);
+    const payload = JSON.parse(result!.content);
+    expect(payload).toMatchObject({
+      status: "pending_wake_approval",
+      request_id: request!.id,
+    });
+    expect(payload.instruction).toContain("Your turn has ended");
+  }, BUS_TEST_TIMEOUT_MS);
+
+  it("dispatch_to through the wake gate keeps the caller in the loop (no endTurn)", async () => {
+    const { request, result } = await runWakeGatedTool("dispatch_to");
+    expect(request?.source).toBe("dispatch_to");
+    expect(request?.status).toBe("pending");
+    expect(result?.endTurn).toBeUndefined();
+    const payload = JSON.parse(result!.content);
+    expect(payload.status).toBe("pending_wake_approval");
+    expect(payload.instruction).not.toContain("Your turn has ended");
+  }, BUS_TEST_TIMEOUT_MS);
 });
 
 describe("group_chat bus integration › Task 5 anonymous resume capability", () => {
@@ -9930,7 +10258,7 @@ describe("group_chat bus integration › Task 5 anonymous resume capability", ()
   });
 });
 
-describe("group_chat bus integration › Task 5 actor-turn settlement wrapper", () => {
+describe("group_chat bus integration › actor-turn settlement wrapper", () => {
   it("settles an unavailable nested agent exactly once", async () => {
     const cid = newCid();
     const state =
@@ -10072,7 +10400,7 @@ describe("group_chat bus integration › Task 5 actor-turn settlement wrapper", 
   it("redacts nested settlement and final-settlement failures", async () => {
     const cid = newCid();
     const settlementSecret =
-      "SECRET_SETTLEMENT /Users/private/workflow-token.json token=raw";
+      "SECRET_SETTLEMENT /Users/test/workflow-token.json token=raw";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const collaboration =
@@ -10911,7 +11239,7 @@ describe("group_chat bus integration › coordinator access admission", () => {
   }, BUS_TEST_TIMEOUT_MS);
 });
 
-describe("group_chat bus integration › Task 10 transactional handoff finalization", () => {
+describe("group_chat bus integration › transactional handoff finalization", () => {
   async function setAgentInteractive(agentId: string, interactive: boolean): Promise<void> {
     const paths = await import("../../../../src/main/paths");
     const file = path.join(paths.agentDir(TEST_UID, agentId), "agent.json");
@@ -11151,7 +11479,7 @@ describe("group_chat bus integration › Task 10 transactional handoff finalizat
 
   it("rolls back a failed post-reply state commit and logs restoration failures without private data", async () => {
     const cid = newCid();
-    const secret = "SECRET task /private/path RecoveryGuide raw error";
+    const secret = "synthetic-secret SECRET task /private/path RecoveryGuide raw error";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     await setAgentInteractive(AGENT_ID, true);
@@ -11219,7 +11547,7 @@ describe("group_chat bus integration › Task 10 transactional handoff finalizat
   });
 });
 
-describe("group_chat bus integration › Task 10 handoff finalization races", () => {
+describe("group_chat bus integration › handoff finalization races", () => {
   async function makeInteractive(): Promise<void> {
     const paths = await import("../../../../src/main/paths");
     const file = path.join(paths.agentDir(TEST_UID, AGENT_ID), "agent.json");
@@ -11402,7 +11730,7 @@ describe("group_chat bus integration › Task 10 handoff finalization races", ()
 
   it("rolls back an atomic commit and fails workflow when resume enqueue fails", async () => {
     const cid = newCid();
-    const secret = "RAW_ENQUEUE_FAILURE /private/path token=secret";
+    const secret = "synthetic-secret RAW_ENQUEUE_FAILURE /private/path token=secret";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     let terminalCalls = 0;
@@ -11444,7 +11772,7 @@ describe("group_chat bus integration › Task 10 handoff finalization races", ()
 
   it("settles workflow failure even when CAS rollback cleanup fails", async () => {
     const cid = newCid();
-    const secret = "RAW_ROLLBACK_FAILURE /private/path token=secret";
+    const secret = "synthetic-secret RAW_ROLLBACK_FAILURE /private/path token=secret";
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     (bus as any)._setHandoffStateHooksForTest?.({
@@ -11552,11 +11880,11 @@ describe("group_chat bus › desktop message broadcaster", () => {
   });
 });
 
-describe("group_chat bus integration › model-selected asset attachment (2026-09-18)", () => {
+describe("group_chat bus integration › model-selected asset attachment", () => {
   async function seedCatalogAsset(tag: string) {
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
     const assetService = await import("../../../../src/main/features/recall/asset-service");
-    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+    const candidate = await createNightlyCandidateFixture(TEST_UID, {
       judgment: `Catalog asset for ${tag}: keep the attached set small and justified.`,
       summary: `catalog-${tag}`,
       suggestedType: "rule",
@@ -11677,14 +12005,14 @@ describe("group_chat bus integration › model-selected asset attachment (2026-0
   }, 20_000);
 });
 
-describe("group_chat bus integration › experience catalog hint (specs/016 T025)", () => {
+describe("group_chat bus integration › experience catalog hint ", () => {
   it("并列注入资产与经验两段目录，且互不污染：资产块零经验条目、经验块零资产条目、正文不硬注入", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     // 一条在用资产（资产目录可见）+ 一条同类型经验（"报告"命中消息文本的任务类型）。
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
-    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+    const candidate = await createNightlyCandidateFixture(TEST_UID, {
       judgment: "Report asset: lead with the conclusion, then evidence.",
       summary: "report-first rule",
       suggestedType: "rule",
@@ -11736,7 +12064,7 @@ describe("group_chat bus integration › experience catalog hint (specs/016 T025
     const expBlock = prompt.slice(expIdx);
     expect(assetBlock).not.toContain("[exp:");
     expect(expBlock).not.toContain("[asset:");
-    // 模型能看见经验清单（单行条目），但正文仍需自取（拍板 C-7）。
+    // 模型能看见经验清单（单行条目），但正文仍需自取。
     expect(expBlock).toContain("[exp:exp-bus-catalog1]");
     expect(expBlock).toContain("read_task_experience");
     expect(prompt).not.toContain("报告类经验正文：经验正文只应经");

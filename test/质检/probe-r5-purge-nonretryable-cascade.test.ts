@@ -1,26 +1,43 @@
-/**
- * 探针 r5（边界测试员 · 第 5 轮）→ 主题：删除生命周期「彻底清除」的可重入性。
- *
- * 疑点：purgeAbilityAsset 的执行序是 setStatus（先把主记录落成 purged 墓碑）→
- * removeRecallJsonlStream（删版本流）→ cascadePurgeAssetReferences（清引用）。
- * 后两步任一 IO 失败时主记录已是终态；重试会在入口被 assertNotPurged
- * （asset-service.ts setStatus 内）拒绝，而 store.ts 的
- * removeRecallJsonlStream / removeRecallJsonlRecords 注释明言
- * 「清除要可重入，半路失败后重试不该被绊住」——两处口径互相矛盾。
- *
- * 本探针用 chmod 只读版本流目录制造真实的级联 IO 失败（主记录目录不受影响），
- * 验证：① 首次 purge 半途而废但墓碑已落盘；② 恢复可写后重试被终态守卫拒绝；
- * ③ 版本流正文残留且保留期清扫（只扫 status==='deleted'）永远不会再碰它。
- * 风格对齐 test/质检/regression-r1-asset-lifecycle.test.ts。
- *
- * 2026-09-30 r1 收尾（记账员）：用例 1 对应待议 P-r1-1（重试豁免/级联先行/
- * 后台清扫三修法各有取舍待拍板）→ it.skip，断言锁定现状；用例 2 对照组
- * （无 IO 故障时正常清空，不依赖漏洞）保留 active，修复后应持续绿。
- */
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
+/** 清除级联发生 IO 失败后的可重入性；无故障路径作为对照。 */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+
+/**
+ * 级联失败注入点：`fs.promises.rm` 模块本身。
+ *
+ * 为什么不在 fixture 里用 chmod 造「删不掉」——两种平台假设都立不住：
+ *   POSIX：unlink 由**父目录**写位决定，文件 chmod 0444 照样能删；
+ *   win32：只读属性确实挡住 unlink，但 Node 的 fs.rm 对 unlink 的 EPERM 会先
+ *          `chmod(path, 0o666)` 再重试一次（lib/internal/fs/rimraf.js 的
+ *          fixWinEPERM），只读文件因此被正常删掉。两者都会把用例退化成
+ *          「期望 reject 实际 resolve」。
+ * 也不能 spy：本仓 vitest 把 node:fs/promises 外置，`vi.spyOn(fs.promises,'rm')`
+ * 拦不到 storage.ts 的 `import * as fsp from 'node:fs/promises'`。
+ * 所以只在这个模块边界上包一层：首次删除指定版本流抛 EPERM，其余（含重试那次）
+ * 全部转交真实实现——store 的落盘、级联、行锁与重入逻辑仍然真实执行。
+ */
+const streamRemovalFault = vi.hoisted(() => ({ armed: false, basename: '', hits: 0 }));
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rm: async (target: Parameters<typeof actual.rm>[0], options?: Parameters<typeof actual.rm>[1]) => {
+      if (streamRemovalFault.armed && path.basename(String(target)) === streamRemovalFault.basename) {
+        streamRemovalFault.armed = false;
+        streamRemovalFault.hits += 1;
+        throw Object.assign(
+          new Error(`EPERM: operation not permitted, unlink '${String(target)}'`),
+          { code: 'EPERM' },
+        );
+      }
+      return actual.rm(target, options as never);
+    },
+  };
+});
 
 vi.mock('../../src/main/features/kb_indexer', () => ({
   enqueue: () => {},
@@ -39,11 +56,13 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-probe-r5a-'));
   prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  streamRemovalFault.armed = false;
+  streamRemovalFault.basename = '';
+  streamRemovalFault.hits = 0;
   vi.resetModules();
 });
 
 afterEach(() => {
-  try { fs.chmodSync(versionsDir(), 0o755); } catch { /* 目录可能不存在 */ }
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -65,7 +84,7 @@ async function loadAssets() {
 async function mkAsset(id: string) {
   const assets = await loadAssets();
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'personal', title: `资产 ${id}`, statement: `陈述 ${id}。`,
@@ -77,8 +96,8 @@ async function mkAsset(id: string) {
 
 const ACT = { actor: 'user' as const, reason: 'probe' };
 
-describe('probe r5 › purge 级联中途失败后的可重入性（用例 1 待议 P-r1-1）', () => {
-  it.skip('级联 IO 失败：墓碑已落盘、重试被 assertNotPurged 拒绝、版本流正文永久残留（待议 P-r1-1，拍板前 skip）', async () => {
+describe('purge 级联中途失败后的可重入性', () => {
+  it('级联 IO 失败后墓碑已落盘：重试可重入并清掉残留版本流', async () => {
     const assets = await loadAssets();
     await mkAsset('aa-p5a');
     // 追加第二个版本，让版本流里有正文本可被清除
@@ -87,27 +106,27 @@ describe('probe r5 › purge 级联中途失败后的可重入性（用例 1 待
     expect(fs.existsSync(stream)).toBe(true);
     expect(fs.readFileSync(stream, 'utf8')).toContain('版本二正文r5。');
 
-    // 制造级联失败：版本流目录只读 → fs.rm 抛 EPERM/EACCES（主记录目录不受影响）
-    fs.chmodSync(versionsDir(), 0o555);
+    // 制造级联失败：只让「删除这条版本流」的第一次调用失败（主记录目录不受影响）。
+    streamRemovalFault.basename = path.basename(stream);
+    streamRemovalFault.armed = true;
     await expect(assets.purgeAbilityAsset(UID, 'aa-p5a', ACT)).rejects.toThrow();
+    expect(streamRemovalFault.hits, '故障注入必须命中版本流删除这一步').toBe(1);
+    expect(fs.existsSync(stream), '失败后残留版本流仍在（重试才有东西可清）').toBe(true);
 
     // setStatus 已先行把主记录落成墓碑（正文已从主记录清空）
     const raw = JSON.parse(fs.readFileSync(assetFile('aa-p5a'), 'utf8')) as { status: string; statement: string };
     expect(raw.status).toBe('purged');
     expect(raw.statement).toBe('');
 
-    // 恢复可写后重试：入口终态守卫拒绝（与 store.ts「清除要可重入」注释相悖）
-    fs.chmodSync(versionsDir(), 0o755);
-    await expect(assets.purgeAbilityAsset(UID, 'aa-p5a', ACT)).rejects.toThrow(/has been purged/);
+    // 应然契约（级联失败必须可重入重试）：故障解除后重试同一 purge
+    // 入口——墓碑已落仍可持锁复核终态后重入级联清理，残留版本流被清空。
+    const retried = await assets.purgeAbilityAsset(UID, 'aa-p5a', ACT);
+    expect(retried.status).toBe('purged');
+    expect(fs.existsSync(stream)).toBe(false);
+    expect(await assets.listAbilityAssetVersions(UID, 'aa-p5a')).toEqual([]);
 
-    // 保留期清扫只扫 status==='deleted'：purged 残留永远不会再被触碰
-    const retention = await import('../../src/main/features/recall/asset-retention-service');
-    const sweep = await retention.runAbilityAssetRetentionSweep(UID);
-    expect(sweep.purged).not.toContain('aa-p5a');
-    expect(sweep.failed.map((f) => f.assetId)).not.toContain('aa-p5a');
-
-    // 正文仍残留在版本流里，且无任何产品路径可再清除它
-    expect(fs.readFileSync(stream, 'utf8')).toContain('版本二正文r5。');
+    // 重试后的墓碑不可再次变更：正文清除是终态，重放不再产生新账。
+    await expect(assets.purgeAbilityAsset(UID, 'aa-p5a', ACT)).resolves.toBeTruthy();
   });
 
   it('对照组：无 IO 故障时 purge 正常清空版本流（证明上例残留是失败+不可重试所致）', async () => {

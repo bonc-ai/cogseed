@@ -17,10 +17,18 @@ const streamGate = vi.hoisted(() => ({
 }));
 const streamProbe = vi.hoisted(() => ({
   messages: [] as string[],
+  systemPrompts: [] as string[],
+  modelOverrides: [] as Array<{ provider: string; model: string } | undefined>,
+  skillLists: [] as Array<string[] | undefined>,
   readOnlyRoots: [] as string[][],
   dispatchResults: [] as string[],
   maxToolLoops: [] as Array<number | undefined>,
+  toolAccesses: [] as Array<string | undefined>,
+  idleTimeouts: [] as Array<number | undefined>,
+  streamIdleTimeouts: [] as Array<number | undefined>,
   lifecycleSeen: [] as boolean[],
+  realRunnerTools: [] as Array<{ message: string; definitions: string[]; lookups: Record<string, string> }>,
+  receptionApprovals: [] as Array<{ shell: unknown; write: unknown; mode: unknown }>,
 }));
 
 // Mock the model client so `runTurn` doesn't try to do a real LLM call.
@@ -41,9 +49,48 @@ vi.mock('../../../../src/main/features/recall/context-projection', () => ({
 vi.mock('../../../../src/main/model/client', () => ({
   async *streamChatWithModel(_opts: any) {
     streamProbe.messages.push(String(_opts?.message || ''));
+    streamProbe.systemPrompts.push(String(_opts?.systemPrompt || ''));
+    streamProbe.modelOverrides.push(_opts?.modelOverride);
+    streamProbe.skillLists.push(Array.isArray(_opts?.skillList) ? [..._opts.skillList] : undefined);
     streamProbe.readOnlyRoots.push(Array.isArray(_opts?.readOnlyExtraRoots) ? [..._opts.readOnlyExtraRoots] : []);
     streamProbe.maxToolLoops.push(typeof _opts?.maxToolLoops === 'number' ? _opts.maxToolLoops : undefined);
+    streamProbe.toolAccesses.push(typeof _opts?.toolAccess === 'string' ? _opts.toolAccess : undefined);
+    streamProbe.idleTimeouts.push(typeof _opts?.idleTimeout === 'number' ? _opts.idleTimeout : undefined);
+    streamProbe.streamIdleTimeouts.push(typeof _opts?.streamIdleTimeout === 'number' ? _opts.streamIdleTimeout : undefined);
     streamProbe.lifecycleSeen.push(!!_opts?.executionLifecycle);
+    streamProbe.receptionApprovals.push({ shell: _opts.beforeShellApproval, write: _opts.beforeWriteApproval, mode: _opts.permissionMode });
+    if (_opts?.agentId && String(_opts?.message || '').includes('FORCED_AGENT_STREAM_THROW')) {
+      throw new Error('forced worker stream failure');
+    }
+    if (String(_opts?.message || '').includes('REAL_CREATOR_TOOL_CONSTRUCTION_TEST')) {
+      const { buildRunner } = await import('../../../../src/main/model/core-agent/runner');
+      const built = await buildRunner({
+        sessionId: `${_opts.sessionId}-real-runner`,
+        userId: _opts.userId,
+        cid: _opts.cid,
+        agentId: _opts.agentId,
+        agentName: _opts.agentName,
+        systemPrompt: _opts.systemPrompt,
+        modelOverride: _opts.modelOverride,
+        toolAccess: _opts.toolAccess,
+        permissionMode: _opts.permissionMode,
+        turnId: _opts.turnId,
+        ephemeralSession: true,
+        ...(Array.isArray(_opts.skillList) ? { skillList: [..._opts.skillList] } : {}),
+        ...(Array.isArray(_opts.readOnlyExtraRoots) ? { readOnlyExtraRoots: [..._opts.readOnlyExtraRoots] } : {}),
+        ...(Array.isArray(_opts.extraTools) ? { extraTools: [..._opts.extraTools] } : {}),
+      });
+      const tools = (built.runner as any).tools as Map<string, unknown>;
+      const lookups: Record<string, string> = {};
+      for (const name of ['web_search', 'web_fetch']) {
+        lookups[name] = tools.has(name) ? 'present' : 'not-found';
+      }
+      streamProbe.realRunnerTools.push({
+        message: String(_opts.message),
+        definitions: built.toolDefs.map((tool) => tool.name),
+        lookups,
+      });
+    }
     if (String(_opts?.message || '').includes('ARTIFACT_EVENT_TEST')) {
       _opts?.onArtifactCreated?.({ id: 'art-live-1', title: 'Live App' });
     }
@@ -83,7 +130,7 @@ vi.mock('../../../../src/main/model/client', () => ({
           : { to: AGENT_NAME, message: task },
         { signal: new AbortController().signal },
       );
-      streamProbe.dispatchResults.push(String(result?.content || ''));
+    streamProbe.dispatchResults.push(String(result?.content || ''));
       yield { type: 'final', text: data.tool === 'hand_off_to' ? '' : 'commander synthesis ok' };
       yield { type: 'done' };
       return;
@@ -100,6 +147,12 @@ vi.mock('../../../../src/main/model/client', () => ({
     }
     if (String(_opts?.message || '').includes('COMMANDER_RESULT_FAILURE_TEST')) {
       yield { type: 'final', text: '没有完成调度。\n<commander-result status="failure" />' };
+      yield { type: 'done' };
+      return;
+    }
+    if (String(_opts?.message || '').includes('ONTOLOGY_CITATION_TEST')) {
+      // 本体引用采用回归：commander 最终答复携带 [[ontology: 稳定引用标记。
+      yield { type: 'final', text: '按负责人规则整理 [[ontology:project-module/owner-rule@3]]' };
       yield { type: 'done' };
       return;
     }
@@ -257,6 +310,65 @@ vi.mock('../../../../src/main/features/local_agents/launch_confirm', () => ({
   requestLaunchConfirm: vi.fn(async () => true),
 }));
 
+// P-r1-91 回归（画像通道落账 bus 侧容错）：两个可探单点——
+//  ① buildRecallTurnPromptContext：携带 PROFILE_MEMORY_LEDGER_TEST 标记的回合
+//     注入一条画像记忆条目（真实实现走不到画像分支：本文件 mock 掉了
+//     context-projection），其余回合原样透传真实实现；
+//  ② recordProfileMemoryInjection：按开关拒绝，模拟收据流一条坏记录/瞬时
+//     IO 错（其余导出保持真实实现）。
+const profileLedgerProbe = vi.hoisted(() => ({ calls: 0, failNext: false }));
+vi.mock('../../../../src/main/features/recall/prompt-injection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/features/recall/prompt-injection')>();
+  return {
+    ...actual,
+    buildRecallTurnPromptContext: async (uid: string, input: any) => {
+      try {
+        const result = await actual.buildRecallTurnPromptContext(uid, input);
+        if (!String(input?.taskText || '').includes('PROFILE_MEMORY_LEDGER_TEST')) return result;
+        return {
+          ...result,
+          promptBlock: result.promptBlock || '<asset-context>profile ledger probe</asset-context>',
+          profileMemoryEntries: [{ id: 'aa-profile-ledger-probe', source: 'USER.md', version: '1' }],
+        };
+      } catch {
+        if (!String(input?.taskText || '').includes('PROFILE_MEMORY_LEDGER_TEST')) throw new Error('no projection in routing tests');
+        return {
+          promptBlock: '<asset-context>profile ledger probe</asset-context>',
+          citations: [],
+          profileMemoryEntries: [{ id: 'aa-profile-ledger-probe', source: 'USER.md', version: '1' }],
+        } as any;
+      }
+    },
+  };
+});
+vi.mock('../../../../src/main/features/recall/injection-receipt', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/features/recall/injection-receipt')>();
+  return {
+    ...actual,
+    recordProfileMemoryInjection: async (..._args: unknown[]) => {
+      profileLedgerProbe.calls += 1;
+      if (profileLedgerProbe.failNext) throw new Error('profile ledger IO error (regression-b6)');
+      return undefined;
+    },
+  };
+});
+
+// 本体采用回执消费侧探针：bus 在最终答复持久化后扫描 [[ontology: 引用标记并
+// 调用 finalizeOntologyUsageCitations。探针只捕获入参并支持注入失败；真实
+// 实现照常透传（隔离工作区里没有查询回执时它只会安静返回空数组）。
+const ontologyUsageProbe = vi.hoisted(() => ({ calls: [] as Array<{ uid: string; taskRunId: string; messageId: string; finalText: string }>, failNext: false }));
+vi.mock('../../../../src/main/features/cognition/ontology/usage-receipt', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/features/cognition/ontology/usage-receipt')>();
+  return {
+    ...actual,
+    finalizeOntologyUsageCitations: async (uid: string, input: { taskRunId: string; messageId: string; finalText: string }) => {
+      ontologyUsageProbe.calls.push({ uid, ...input });
+      if (ontologyUsageProbe.failNext) throw new Error('ontology usage IO error (regression)');
+      return actual.finalizeOntologyUsageCitations(uid, input);
+    },
+  };
+});
+
 let tmpDir: string;
 let prevWs: string | undefined;
 let prevWakeGate: string | undefined;
@@ -276,11 +388,23 @@ beforeEach(async () => {
   gatewayTurnMock.calls.length = 0;
   cliRunMock.nextResult = null;
   cliRunMock.nextResults.length = 0;
+  profileLedgerProbe.calls = 0;
+  profileLedgerProbe.failNext = false;
+  ontologyUsageProbe.calls.length = 0;
+  ontologyUsageProbe.failNext = false;
   streamProbe.messages.length = 0;
+  streamProbe.systemPrompts.length = 0;
+  streamProbe.modelOverrides.length = 0;
+  streamProbe.skillLists.length = 0;
   streamProbe.readOnlyRoots.length = 0;
   streamProbe.dispatchResults.length = 0;
   streamProbe.maxToolLoops.length = 0;
+  streamProbe.toolAccesses.length = 0;
+  streamProbe.idleTimeouts.length = 0;
+  streamProbe.streamIdleTimeouts.length = 0;
   streamProbe.lifecycleSeen.length = 0;
+  streamProbe.realRunnerTools.length = 0;
+  streamProbe.receptionApprovals.length = 0;
   streamGate.releaseActiveTurn = null;
   cidsToDrop.clear();
   const users = await import('../../../../src/main/features/users');
@@ -339,7 +463,353 @@ async function waitForQuiescent(uid: string, cid: string, timeoutMs = 2000) {
   throw new Error(`bus did not quiesce for ${uid}/${cid}`);
 }
 
+async function materializeBusCreator(includeSearchCapability: boolean) {
+  const paths = await import('../../../../src/main/paths');
+  const { creatorManifestDigest } = await import('../../../../src/main/features/creator/verification-service');
+  const { createCreatorPresetMaterializer } = await import('../../../../src/main/features/creator/materializer');
+  type CreatorPresetManifestV1 = import('../../../../src/main/features/creator/types').CreatorPresetManifestV1;
+  type CreatorPresetDraft = import('../../../../src/main/features/creator/store').CreatorPresetDraft;
+
+  const fixture = JSON.parse(fs.readFileSync(
+    path.resolve(process.cwd(), 'test/fixtures/creator/golden/local-agent.json'),
+    'utf8',
+  )) as { manifest: CreatorPresetManifestV1 };
+  const draftManifest = structuredClone(fixture.manifest);
+  draftManifest.version = 'draft';
+  if (!includeSearchCapability) {
+    draftManifest.capabilities = draftManifest.capabilities.filter(({ capabilityId }) => capabilityId !== 'tool.search');
+    draftManifest.permissions.tools = draftManifest.permissions.tools.filter((capabilityId) => capabilityId !== 'tool.search');
+  }
+  const publishedManifest = { ...draftManifest, version: '1' };
+  const draftId = includeSearchCapability ? 'bus-creator-search-draft' : 'bus-creator-local-draft';
+  const draftDigest = creatorManifestDigest(draftManifest);
+  const manifestDigest = creatorManifestDigest(publishedManifest);
+  const verificationRunId = includeSearchCapability ? 'bus-creator-search-verification' : 'bus-creator-local-verification';
+  const lifecycleRecords = [
+    { event: 'draft.saved', presetId: publishedManifest.presetId, draftId, metadata: { manifestDigest: draftDigest } },
+    { event: 'creator.verification.recorded', presetId: publishedManifest.presetId, draftId, metadata: { manifestDigest: draftDigest, verificationRunId, status: 'passed' } },
+    { event: 'creator.lifecycle.verified', presetId: publishedManifest.presetId, draftId, metadata: { manifestDigest: draftDigest, verificationRunId } },
+    { event: 'creator.lifecycle.approved', presetId: publishedManifest.presetId, draftId, metadata: {
+      manifestDigest: draftDigest,
+      verificationRunId,
+      approvedCapabilities: publishedManifest.capabilities.map(({ capabilityId }) => capabilityId),
+      approvedSideEffects: [],
+    } },
+    { event: 'preset.version_published', presetId: publishedManifest.presetId, version: publishedManifest.version, draftId },
+    { event: 'creator.lifecycle.published', presetId: publishedManifest.presetId, version: publishedManifest.version, draftId, metadata: {
+      manifestDigest,
+      draftManifestDigest: draftDigest,
+      verificationRunId,
+    } },
+  ];
+  const materializer = createCreatorPresetMaterializer({
+    resolveCapabilities: async () => ({ skillIds: [] }),
+    readVersion: async () => publishedManifest,
+    readDraft: async () => ({
+      schemaVersion: 1,
+      draftId,
+      manifest: draftManifest,
+      updatedAt: '2026-08-21T06:00:00.000Z',
+    } satisfies CreatorPresetDraft),
+    listAudit: async () => lifecycleRecords as any,
+    now: () => '2026-08-21T06:03:00.000Z',
+    createRevision: () => includeSearchCapability ? 'bus-creator-search-revision' : 'bus-creator-local-revision',
+  });
+  const binding = await materializer.materializeCreatorPreset(TEST_UID, {
+    presetId: publishedManifest.presetId,
+    version: publishedManifest.version,
+    manifestDigest,
+  });
+
+  const writeJson = (file: string, value: unknown): void => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(value)}\n`, 'utf8');
+  };
+  writeJson(paths.userCreatorPresetVersionFile(TEST_UID, publishedManifest.presetId, publishedManifest.version), publishedManifest);
+  writeJson(paths.userCreatorPresetStateFile(TEST_UID, publishedManifest.presetId), {
+    schemaVersion: 1,
+    presetId: publishedManifest.presetId,
+    activeVersion: publishedManifest.version,
+    updatedAt: '2026-08-21T06:04:00.000Z',
+  });
+  const auditFile = paths.userCreatorAuditFile(TEST_UID);
+  fs.mkdirSync(path.dirname(auditFile), { recursive: true });
+  fs.writeFileSync(auditFile, [
+    {
+      schemaVersion: 1,
+      auditId: 'bus-creator-published',
+      event: 'creator.lifecycle.published',
+      createdAt: '2026-08-21T06:03:00.000Z',
+      presetId: publishedManifest.presetId,
+      version: publishedManifest.version,
+      metadata: { manifestDigest },
+    },
+    {
+      schemaVersion: 1,
+      auditId: 'bus-creator-active',
+      event: 'creator.lifecycle.active',
+      createdAt: '2026-08-21T06:04:00.000Z',
+      presetId: publishedManifest.presetId,
+      version: publishedManifest.version,
+      metadata: { manifestDigest },
+    },
+  ].map((record) => `${JSON.stringify(record)}\n`).join(''), 'utf8');
+  return binding;
+}
+
 describe('group_chat bus › enqueue routing + persistence', () => {
+  it('persists stable IDs once without repeating model dispatch and preserves no-ID submissions', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const { conversationLayout } = await import('../../../../src/main/util/project-layout');
+    const storage = await import('../../../../src/main/storage');
+    const input = { uid: TEST_UID, cid: TEST_CID, fromActorId: 'user', text: 'stable question', messageId: 'stable-inbound-1' };
+    const [first, duplicate] = await Promise.all([bus.enqueue(input), bus.enqueue(input)]);
+    await waitForQuiescent(TEST_UID, TEST_CID);
+    expect(first.id).toBe(duplicate.id);
+    expect(streamProbe.messages).toHaveLength(1);
+    await expect(bus.enqueue({ ...input, text: 'collision' })).rejects.toThrow('stable message id conflict');
+    const plain = { uid: TEST_UID, cid: TEST_CID, fromActorId: 'user', text: 'ordinary repeated text' };
+    const one = await bus.enqueue(plain);
+    await waitForQuiescent(TEST_UID, TEST_CID);
+    const two = await bus.enqueue(plain);
+    await waitForQuiescent(TEST_UID, TEST_CID);
+    expect(one.id).not.toBe(two.id);
+    expect(streamProbe.messages).toHaveLength(3);
+    const rows = await storage.readJsonl<any>(conversationLayout(TEST_UID, TEST_CID).messageFile);
+    expect(rows.filter((row) => row.id === input.messageId)).toHaveLength(1);
+    expect(rows.filter((row) => row.text === plain.text)).toHaveLength(2);
+  });
+
+  it('rechecks the explicit uid policy immediately before a normal Agent turn executes', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const agents = await import('../../../../src/main/features/agents');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const original = agents.getAgentForChatDispatch;
+    let calls = 0;
+    const gate = vi.spyOn(agents, 'getAgentForChatDispatch').mockImplementation(async (uid, agentId) => {
+      calls += 1;
+      return original(uid, agentId);
+    });
+    const cid = 'cid-normal-agent-policy-gate';
+    cidsToDrop.add(cid);
+    await state.ensureAgentMember(TEST_UID, cid, AGENT_ID, AGENT_NAME);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      forceTo: [AGENT_ID],
+      text: 'NORMAL_AGENT_POLICY_GATE_TEST',
+    });
+    // The spec disappears after persistence but immediately before the queued turn runs —
+    // that is the race this test guards. Injecting it here (instead of failing the Nth call)
+    // keeps the enqueue-time classification honest and drives B's turn-time fail-closed check.
+    gate.mockImplementation(async () => {
+      calls += 1;
+      return null;
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(gate).toHaveBeenCalledWith(TEST_UID, AGENT_ID);
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(streamProbe.messages.some((message) => message.includes('NORMAL_AGENT_POLICY_GATE_TEST'))).toBe(false);
+    gate.mockRestore();
+  });
+
+  it('uses the Creator-bound model despite a mismatched queued execution override', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const { creatorManifestDigest } = await import('../../../../src/main/features/creator/verification-service');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const raw = JSON.parse(fs.readFileSync(agentFile, 'utf8')) as Record<string, unknown>;
+    const manifest = {
+      schemaVersion: 1,
+      presetId: 'creator-preset',
+      version: '1',
+      displayName: 'Creator model test',
+      description: 'Creator model test.',
+      presetType: 'cogseed-agent',
+      model: { providerId: 'creator-provider', modelId: 'creator-model' },
+      capabilities: [],
+      prompt: { systemSections: ['bounded'], locale: 'en' },
+      runtime: {
+        sessionPolicy: 'new-per-run', memoryPolicy: 'read-only', loopPolicy: 'single-agent',
+        sandboxProfile: 'creator-read-only-v1', timeoutMs: 60000, budget: {},
+      },
+      permissions: { tools: [], files: ['workspace.readonly'], sideEffects: [], approvalMode: 'always' },
+      provenance: { createdBy: 'user', sourceSessionId: 'creator-session', sourceAssetRefs: [] },
+    };
+    const manifestDigest = creatorManifestDigest(manifest);
+    fs.writeFileSync(agentFile, JSON.stringify({
+      ...raw,
+      default_model: { provider: 'creator-provider', model: 'creator-model' },
+      skill_list: [],
+      creator_binding: {
+        schemaVersion: 1,
+        presetId: 'creator-preset',
+        version: '1',
+        manifestDigest,
+        materializationRevision: 'creator-revision',
+      },
+    }));
+    const bindingFile = paths.userCreatorAgentBindingFile(TEST_UID, 'creator-preset');
+    fs.mkdirSync(path.dirname(bindingFile), { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({
+      schemaVersion: 1,
+      presetId: 'creator-preset',
+      bindings: [{
+        schemaVersion: 1,
+        presetId: 'creator-preset',
+        version: '1',
+        manifestDigest,
+        agentId: AGENT_ID,
+        materializedAt: '2026-08-21T06:03:00.000Z',
+        materializationRevision: 'creator-revision',
+        policy: {
+          model: { providerId: 'creator-provider', modelId: 'creator-model' },
+          skillIds: [], capabilityIds: [], runtime: manifest.runtime, permissions: manifest.permissions,
+        },
+      }],
+    }));
+    const versionFile = paths.userCreatorPresetVersionFile(TEST_UID, 'creator-preset', '1');
+    fs.mkdirSync(path.dirname(versionFile), { recursive: true });
+    fs.writeFileSync(versionFile, JSON.stringify(manifest));
+    const stateFile = paths.userCreatorPresetStateFile(TEST_UID, 'creator-preset');
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({
+      schemaVersion: 1, presetId: 'creator-preset', activeVersion: '1', updatedAt: '2026-08-21T06:04:00.000Z',
+    }));
+    const auditFile = paths.userCreatorAuditFile(TEST_UID);
+    fs.mkdirSync(path.dirname(auditFile), { recursive: true });
+    fs.writeFileSync(auditFile, [
+      { schemaVersion: 1, auditId: 'published-1', event: 'creator.lifecycle.published', createdAt: '2026-08-21T06:02:00.000Z', presetId: 'creator-preset', version: '1', metadata: { manifestDigest } },
+      { schemaVersion: 1, auditId: 'active-1', event: 'creator.lifecycle.active', createdAt: '2026-08-21T06:04:00.000Z', presetId: 'creator-preset', version: '1', metadata: { manifestDigest } },
+    ].map((record) => `${JSON.stringify(record)}\n`).join(''));
+
+    const cid = 'cid-creator-model-override';
+    cidsToDrop.add(cid);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      forceTo: [AGENT_ID],
+      text: 'CREATOR_MODEL_OVERRIDE_TEST',
+      executionConfig: { provider: 'task-provider', model: 'task-model' },
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const index = streamProbe.messages.findIndex((message) => message.includes('CREATOR_MODEL_OVERRIDE_TEST'));
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(streamProbe.modelOverrides[index]).toEqual({
+      provider: 'creator-provider',
+      model: 'creator-model',
+    });
+    expect(streamProbe.toolAccesses[index]).toBe('read-only');
+    expect(streamProbe.idleTimeouts[index]).toBe(60);
+    expect(streamProbe.streamIdleTimeouts[index]).toBe(60);
+  });
+
+  it('carries a materialized Creator without network capability through bus to a real runner', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const binding = await materializeBusCreator(false);
+    const cid = 'cid-creator-real-runner-no-search';
+    cidsToDrop.add(cid);
+    await state.ensureAgentMember(TEST_UID, cid, binding.agentId, 'Local research');
+    const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-creator-bus-test';
+    try {
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        forceTo: [binding.agentId],
+        text: 'REAL_CREATOR_TOOL_CONSTRUCTION_TEST no-search',
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      const probe = streamProbe.realRunnerTools.find(({ message }) => message.includes('no-search'));
+      expect(probe).toBeDefined();
+      expect(probe?.definitions).not.toEqual(expect.arrayContaining(['web_search', 'web_fetch']));
+      expect(probe?.lookups).toEqual({ web_search: 'not-found', web_fetch: 'not-found' });
+    } finally {
+      if (previousAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
+    }
+  });
+
+  it('carries both manifest capability and tool permission through bus to visible network tools', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const binding = await materializeBusCreator(true);
+    const cid = 'cid-creator-real-runner-search';
+    cidsToDrop.add(cid);
+    await state.ensureAgentMember(TEST_UID, cid, binding.agentId, 'Local research');
+    const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-creator-bus-test';
+    try {
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        forceTo: [binding.agentId],
+        text: 'REAL_CREATOR_TOOL_CONSTRUCTION_TEST search',
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      const probe = streamProbe.realRunnerTools.find(({ message }) => message.includes('REAL_CREATOR_TOOL_CONSTRUCTION_TEST search'));
+      expect(probe).toBeDefined();
+      expect(probe?.definitions).toEqual(expect.arrayContaining(['web_search', 'web_fetch']));
+      expect(probe?.lookups).toMatchObject({ web_search: 'present', web_fetch: 'present' });
+    } finally {
+      if (previousAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
+    }
+  });
+
+  it('loads the queued agent and its runtime skills from the enqueue uid', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const secondUid = 'u2';
+    const secondWorkspace = path.join(tmpDir, 'workspace-u2');
+    fs.mkdirSync(secondWorkspace, { recursive: true });
+    const userWorkspace = await import('../../../../src/main/features/user_workspace');
+    userWorkspace.setWorkspacePath(secondUid, secondWorkspace);
+
+    const firstAgentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const first = JSON.parse(fs.readFileSync(firstAgentFile, 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(firstAgentFile, JSON.stringify({
+      ...first,
+      workflow: 'USER_ONE_WORKFLOW_ONLY',
+      skill_list: ['user-one-skill'],
+    }));
+    const secondAgentFile = path.join(paths.agentDir(secondUid, AGENT_ID), 'agent.json');
+    fs.mkdirSync(path.dirname(secondAgentFile), { recursive: true });
+    fs.writeFileSync(secondAgentFile, JSON.stringify({
+      ...first,
+      workflow: 'USER_TWO_WORKFLOW_ONLY',
+      skill_list: ['user-two-skill'],
+    }));
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const cid = 'cid-user-two-agent';
+    cidsToDrop.add(cid);
+    await state.ensureAgentMember(secondUid, cid, AGENT_ID, 'user two agent');
+    await bus.enqueue({
+      uid: secondUid,
+      cid,
+      fromActorId: 'user',
+      forceTo: [AGENT_ID],
+      text: 'USER_TWO_QUEUED_TURN',
+    });
+    await waitForQuiescent(secondUid, cid);
+
+    const index = streamProbe.messages.findIndex((message) => message.includes('USER_TWO_QUEUED_TURN'));
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(streamProbe.systemPrompts[index]).toContain('USER_TWO_WORKFLOW_ONLY');
+    expect(streamProbe.systemPrompts[index]).not.toContain('USER_ONE_WORKFLOW_ONLY');
+    expect(streamProbe.skillLists[index]).toEqual(['user-two-skill']);
+  });
+
   it('projects a normal Commander run into the Dashboard task bridge without a second execution', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const parent = {
@@ -667,6 +1137,66 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     ]));
   });
 
+  it('P-r1-91: profile-memory ledger failure does not fail the persisted turn (bus-side tolerance)', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    profileLedgerProbe.failNext = true;
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: 'PROFILE_MEMORY_LEDGER_TEST 普通问题',
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    // 画像落账确实被调用且确实失败（模拟收据流坏记录/瞬时 IO 错）。
+    expect(profileLedgerProbe.calls).toBe(1);
+    // 已持久化的回合不被误标失败：commander 运行统计仍是 success/零 error。
+    const stats = JSON.parse(fs.readFileSync(paths.commanderRuntimeStatsFile(TEST_UID), 'utf-8'));
+    expect(stats.attempts).toBe(1);
+    expect(stats.successes).toBe(1);
+    expect(stats.failures).toBe(0);
+    expect(stats.errors).toBe(0);
+    // 回合正常收尾：commander 回复真实落盘。
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(findCommanderReply(lines)).toBeTruthy();
+  });
+
+  it('finalizes ontology citations only for persisted replies carrying the marker and survives receipt failure', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const marker = '[[ontology:project-module/owner-rule@3]]';
+    await bus.enqueue({ uid: TEST_UID, cid: TEST_CID, fromActorId: 'user', text: 'ONTOLOGY_CITATION_TEST 普通问题' });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    // 持久化后的最终答复带标记：宿主按 uid + 本回合 + 已落盘消息调用采用回执。
+    expect(ontologyUsageProbe.calls).toHaveLength(1);
+    const citationCall = ontologyUsageProbe.calls[0];
+    expect(citationCall.uid).toBe(TEST_UID);
+    expect(citationCall.taskRunId).toBeTruthy();
+    expect(citationCall.finalText).toContain(marker);
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = findCommanderReply(lines);
+    expect(reply?.text).toContain(marker);
+    expect(citationCall.messageId).toBe(reply?.id);
+
+    // 不带标记的普通答复不触发采用回执（用独立会话避免历史回显命中标记分支）。
+    const plainCid = 'cidbus-ontology-plain';
+    await bus.enqueue({ uid: TEST_UID, cid: plainCid, fromActorId: 'user', text: '再问一个' });
+    await waitForQuiescent(TEST_UID, plainCid);
+    expect(ontologyUsageProbe.calls).toHaveLength(1);
+
+    // 收据流写入失败只留 warn，不把已持久化回合标成失败。
+    ontologyUsageProbe.failNext = true;
+    const failCid = 'cidbus-ontology-fail';
+    await bus.enqueue({ uid: TEST_UID, cid: failCid, fromActorId: 'user', text: 'ONTOLOGY_CITATION_TEST 第三次' });
+    await waitForQuiescent(TEST_UID, failCid);
+    expect(ontologyUsageProbe.calls).toHaveLength(2);
+    const stats = JSON.parse(fs.readFileSync(paths.commanderRuntimeStatsFile(TEST_UID), 'utf-8'));
+    expect(stats.successes).toBe(3);
+    expect(stats.errors).toBe(0);
+  });
+
   it('ignores legacy Hermes commander backend config and runs the CogSeed commander', async () => {
     const config = await import('../../../../src/main/features/config');
     config.writePreferences({
@@ -811,6 +1341,58 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(await wake.listWakeRequests(TEST_UID, TEST_CID)).toHaveLength(1);
   });
 
+  it('A2A reception approval follows inbound turns and leaves local outbound turns in the same CID unchanged', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const chats = await import('../../../../src/main/features/chats');
+    const cid = 'a2a-approval-bidirectional';
+    // A trusted reception turn only runs against a confirmed single-root grant
+    // (workspace set by the receiver at confirmation). Without it the bus must
+    // refuse the turn, so the fixture models the real post-confirm state.
+    const grantRaw = path.join(tmpDir, 'reception-grant-bidirectional');
+    fs.mkdirSync(grantRaw, { recursive: true });
+    // Grants are canonical paths (macOS tmpdir is /var -> /private/var).
+    const grant = fs.realpathSync(grantRaw);
+    await chats.createConversation(TEST_UID, { conversationId: cid, title: 'A2A' });
+    await chats.updateConversation(TEST_UID, cid, {
+      permission_mode: 'full',
+      a2a: { inbound: true, outgoing: true, peer_user_id: 'cs_peer', state: 'active', workspace: grant, exchange_id: cid },
+    });
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'a2a_cs_peer', text: 'inbound', forceTo: ['commander'], externalInbound: true });
+    await waitForQuiescent(TEST_UID, cid);
+    expect(streamProbe.receptionApprovals).toEqual([{
+      shell: expect.any(Function), write: expect.any(Function), mode: 'ask',
+    }]);
+    streamProbe.receptionApprovals.length = 0;
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'my outbound request', forceTo: ['commander'] });
+    await waitForQuiescent(TEST_UID, cid);
+    expect(streamProbe.receptionApprovals).toEqual([{ shell: undefined, write: undefined, mode: 'full' }]);
+  });
+
+  it.each(['dispatch_to', 'hand_off_to'])('A2A reception approval stays attached through nested %s', async (tool) => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const chats = await import('../../../../src/main/features/chats');
+    const cid = `a2a-nested-${tool}`;
+    const grantRaw = path.join(tmpDir, 'workspace');
+    fs.mkdirSync(grantRaw, { recursive: true });
+    const grant = fs.realpathSync(grantRaw);
+    await chats.createConversation(TEST_UID, { conversationId: cid, title: 'A2A' });
+    await chats.updateConversation(TEST_UID, cid, {
+      permission_mode: 'auto_approve',
+      a2a: { inbound: true, peer_user_id: 'cs_peer', state: 'active', workspace: grant, exchange_id: cid },
+    });
+    const producedPath = path.join(tmpDir, 'workspace', 'nested-result.txt');
+    fs.writeFileSync(producedPath, 'result');
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'a2a_cs_peer', forceTo: ['commander'], externalInbound: true,
+      text: `NESTED_OUTPUT_VISIBILITY_TEST:${Buffer.from(JSON.stringify({ tool, path: producedPath })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+    expect(streamProbe.receptionApprovals).toHaveLength(2);
+    for (const turn of streamProbe.receptionApprovals) {
+      expect(turn).toEqual({ shell: expect.any(Function), write: expect.any(Function), mode: 'ask' });
+    }
+  });
+
   it('P3394 external inbound never wakes a named agent directly (no bypass; Commander mediates)', async () => {
     process.env.COGSEED_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
@@ -902,6 +1484,166 @@ describe('group_chat bus › enqueue routing + persistence', () => {
       expect(await wake.listWakeRequests(TEST_UID, TEST_CID)).toHaveLength(0);
     } finally {
       (bus as any)._setInteractiveFollowupStarterForTest(null);
+    }
+  });
+
+  it('keeps explicit composer recipients on the admitted native Agent session', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    await state.ensureAgentMember(TEST_UID, TEST_CID, AGENT_ID, AGENT_NAME);
+    await tasks.createCogSeedTask(TEST_UID, { requestId: 'req-prior-native', conversationId: TEST_CID, agentId: AGENT_ID, task: 'Summarize a meeting' });
+    const followups: any[] = [];
+    bus._setInteractiveFollowupStarterForTest(async input => { followups.push(input); return {} as any; });
+    try {
+      const before = streamProbe.messages.length;
+      await bus.enqueue({ uid: TEST_UID, cid: TEST_CID, fromActorId: 'user', forceTo: [AGENT_ID], text: 'Apply my choices.' });
+      await bus.enqueue({ uid: TEST_UID, cid: TEST_CID, fromActorId: 'user', text: `@${AGENT_NAME} Confirm existing minutes.` });
+      expect(followups).toHaveLength(2);
+      expect(followups.every(row => row.agentId === AGENT_ID)).toBe(true);
+      expect(streamProbe.messages).toHaveLength(before);
+    } finally { bus._setInteractiveFollowupStarterForTest(null); }
+  });
+
+  it('keeps a Group Chat-owned waiting_user task with the Group Chat executor', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const paths = await import('../../../../src/main/paths');
+    await state.ensureAgentMember(TEST_UID, TEST_CID, AGENT_ID, AGENT_NAME);
+    await state.setActiveRecipient(TEST_UID, TEST_CID, AGENT_ID);
+    // A Group Chat turn projection, exactly what the bus writes after an agent
+    // emits an interaction card. Its `waiting_user` status is display state.
+    await tasks.createCogSeedTask(TEST_UID, {
+      requestId: 'req-group-chat-form-regression',
+      task: 'Ask for the preflight directory.',
+      conversationId: TEST_CID,
+      agentId: AGENT_ID,
+      executionKind: 'group-chat',
+      groupChatRunId: 'run-group-chat-form-regression',
+      groupChatTurnId: 'turn-group-chat-form-regression',
+      groupChatSourceMessageId: 'msg-group-chat-form-regression',
+      groupChatActorKind: 'agent',
+    });
+    const followups: any[] = [];
+    bus._setInteractiveFollowupStarterForTest(async (input) => { followups.push(input); return {} as any; });
+    try {
+      // Regression: this branch used to call the Runtime follow-up starter,
+      // which refused the Group Chat task and projected a failed turn.
+      const before = streamProbe.messages.length;
+      const msg = await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        forceTo: [AGENT_ID],
+        text: `@${AGENT_NAME}\n- 待检查目录：/tmp/package`,
+      });
+      expect(followups).toHaveLength(0);
+      // An Agent that already owns a turn is admitted directly (no new wake
+      // request), and the answer reaches its Group Chat turn.
+      expect(msg.to).toEqual([AGENT_ID]);
+      expect(msg.wake_requests ?? []).toHaveLength(0);
+      await waitForQuiescent(TEST_UID, TEST_CID);
+      expect(streamProbe.messages.slice(before).some((text) => text.includes('/tmp/package'))).toBe(true);
+      const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
+      const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n')
+        .filter(Boolean).map((line) => JSON.parse(line));
+      expect(lines.some((row) => row.failure_code === 'runtime_admission_failed')).toBe(false);
+    } finally {
+      bus._setInteractiveFollowupStarterForTest(null);
+    }
+  });
+
+  it('falls back to normal dispatch when the Runtime declines a follow-up', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const errors = await import('../../../../src/main/features/cogseed_backend/followup-errors');
+    const paths = await import('../../../../src/main/paths');
+    await state.ensureAgentMember(TEST_UID, TEST_CID, AGENT_ID, AGENT_NAME);
+    await state.setActiveRecipient(TEST_UID, TEST_CID, AGENT_ID);
+    // Runtime-owned prior task: the follow-up branch is entered.
+    await tasks.createCogSeedTask(TEST_UID, {
+      requestId: 'req-runtime-owned-followup',
+      task: 'Summarize the meeting.',
+      conversationId: TEST_CID,
+      agentId: AGENT_ID,
+    });
+    bus._setInteractiveFollowupStarterForTest(async () => {
+      throw new errors.CogSeedFollowupNotRuntimeOwnedError('group-chat-owned', 'cogseed-task-raced');
+    });
+    try {
+      const before = streamProbe.messages.length;
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        forceTo: [AGENT_ID],
+        text: `@${AGENT_NAME}\n- 待检查目录：/tmp/package`,
+      });
+      await waitForQuiescent(TEST_UID, TEST_CID);
+      // The answer was not consumed into a failure: it continues through the
+      // normal group-chat dispatch path and reaches the Agent.
+      expect(streamProbe.messages.slice(before).some((text) => text.includes('/tmp/package'))).toBe(true);
+      const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
+      const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n')
+        .filter(Boolean).map((line) => JSON.parse(line));
+      expect(lines.some((row) => row.failure_code === 'runtime_admission_failed')).toBe(false);
+    } finally {
+      bus._setInteractiveFollowupStarterForTest(null);
+    }
+  });
+
+  it('attributes an admitted-but-failed follow-up to the run that carried it', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const runs = await import('../../../../src/main/features/group_chat/run_store');
+    const chats = await import('../../../../src/main/features/chats');
+    const paths = await import('../../../../src/main/paths');
+    const conv = await chats.createConversation(TEST_UID, { title: 'attribution' });
+    const cid = conv.conversation_id;
+    cidsToDrop.add(cid);
+    await state.ensureAgentMember(TEST_UID, cid, AGENT_ID, AGENT_NAME);
+    await state.setActiveRecipient(TEST_UID, cid, AGENT_ID);
+    await runs.createRun({
+      uid: TEST_UID,
+      cid,
+      runId: 'run-admission-attribution',
+      submittedText: 'attribution',
+      memberAgentIds: [],
+      mentionAgentIds: [AGENT_ID],
+      externalAgentIds: [],
+    });
+    await tasks.createCogSeedTask(TEST_UID, {
+      requestId: 'req-runtime-attribution',
+      task: 'Summarize the meeting.',
+      conversationId: cid,
+      agentId: AGENT_ID,
+    });
+    bus._setInteractiveFollowupStarterForTest(async () => { throw new Error('runtime admission refused'); });
+    try {
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        forceTo: [AGENT_ID],
+        runId: 'run-admission-attribution',
+        text: `@${AGENT_NAME}\n- 待检查目录：/tmp/package`,
+      });
+      const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+      const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n')
+        .filter(Boolean).map((line) => JSON.parse(line));
+      const failure = lines.find((row) => row.failure_code === 'runtime_admission_failed');
+      // Regression: the failure projection dropped the run id, so Run Center
+      // reported `no_terminal` (missing contribution) instead of the cause.
+      expect(failure?.run_id).toBe('run-admission-attribution');
+    } finally {
+      bus._setInteractiveFollowupStarterForTest(null);
     }
   });
 
@@ -1111,6 +1853,39 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(stats.errors).toBe(0);
   });
 
+  it('enqueues a commander degradation report when a dispatched agent stream throws', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const runStore = await import('../../../../src/main/features/group_chat/run_store');
+    const cid = 'cid-forced-degradation-report';
+    await state.addMember(TEST_UID, cid, { kind: 'agent', id: AGENT_ID, name: AGENT_NAME });
+    const run = await runStore.createRun({
+      uid: TEST_UID,
+      cid,
+      submittedText: 'force a dispatched agent failure',
+      memberAgentIds: [AGENT_ID],
+      mentionAgentIds: [AGENT_ID],
+    });
+
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'commander',
+      text: 'FORCED_AGENT_STREAM_THROW',
+      forceTo: [AGENT_ID],
+      dispatch: true,
+      runId: run!.run_id,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const agentRun = await runStore.readRun(TEST_UID, cid, run!.run_id);
+    expect(agentRun?.actors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agent_id: AGENT_ID, terminal: 'failed' }),
+    ]));
+    expect(agentRun?.actor_report_enqueued).toBe(true);
+    expect(streamProbe.messages.some((message) => (
+      message.includes(`@${AGENT_NAME}`) && message.includes('汇总汇报')
+    ))).toBe(true);
+  });
+
   it('records markerless agent completions as success when no runtime error occurs', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const paths = await import('../../../../src/main/paths');
@@ -1144,13 +1919,14 @@ describe('group_chat bus › enqueue routing + persistence', () => {
       const trigger = await bus.enqueue({
         uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
         text: 'ACTIVE_TURN_TEST',
+        dispatchTurnId: 'turn-a2a-in-contract',
       });
       const processEv = await Promise.race([
         progressSeen,
         new Promise((_, reject) => setTimeout(() => reject(new Error('progress event timeout')), 1000)),
       ]) as any;
 
-      expect(processEv.turn_id).toEqual(expect.any(String));
+      expect(processEv.turn_id).toBe('turn-a2a-in-contract');
       const running = bus.runtimeSnapshot(TEST_UID, TEST_CID);
       expect(running.activeTurns).toHaveLength(1);
       expect(running.activeTurns[0]).toMatchObject({

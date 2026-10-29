@@ -53,8 +53,8 @@ describe('resource page composition integration', () => {
     const css = read('resource-pages.css');
 
     expect(css).toContain('--resource-page-gutter: var(--space-6);');
-    expect(css).toContain('padding-inline-end: var(--resource-page-inset);');
-    expect(css).toContain('var(--shell-header-inset, var(--resource-page-gutter))');
+    // Page headers keep the shared uiPageHeader padding (specs/008 D12).
+    expect(css).not.toContain('--shell-header-inset');
     expect(css).toContain('padding: var(--space-6) var(--resource-page-inset) var(--space-7);');
     expect(css).toContain('padding: var(--space-3) var(--resource-page-inset) 0;');
     expect(css).toContain('@media (max-width: 1280px)');

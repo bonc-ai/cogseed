@@ -10,6 +10,8 @@
  * which is exactly the shipped-preset behavior.
  */
 
+import { publicModelAbilitiesFor } from './public_model_catalog';
+
 export interface ModelAbilityOverrideValue {
   contextWindow?: number;
   maxTokens?: number;
@@ -40,7 +42,7 @@ export function modelAbilityOverrideFor(
       out.contextWindow = value.contextWindow;
     }
     if (typeof value.maxTokens === 'number' && Number.isSafeInteger(value.maxTokens) && value.maxTokens > 0) {
-      out.maxTokens = value.maxTokens;
+      out.maxTokens = Math.min(value.maxTokens, publicModelAbilitiesFor(modelId).maxTokens ?? Infinity);
     }
     return Object.keys(out).length ? out : null;
   } catch {

@@ -9,7 +9,8 @@ import {
   recordKstarSubmitFailedOutcome,
 } from './direct-experience-assets';
 import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord } from './episode-store';
-import { assetMutationFor, clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
+import { assetMutationFor, clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore } from './extraction-service';
+import { scopeForTask } from '../recall/experience-taxonomy';
 import type { KstarAdmissionContext } from './improvement-admission';
 import { attributionAllowsReusableLearning } from './secondary-attribution';
 import { readKstarReview } from './review-service';

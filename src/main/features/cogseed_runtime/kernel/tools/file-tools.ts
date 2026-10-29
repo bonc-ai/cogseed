@@ -1,3 +1,4 @@
+import type { TranscriptCorrectionEvidence } from '../../../transcript-tool-contract';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -11,6 +12,7 @@ import type { RuntimeSkillVersionPin } from '../../protocol';
 import type { RuntimeActionApprovalClient } from './action-approval';
 
 export interface RuntimeToolResult {
+  correction?: TranscriptCorrectionEvidence;
   content: string;
   isError?: boolean;
   persistedOutput?: {
@@ -23,13 +25,17 @@ export interface RuntimeToolResult {
 export interface RuntimeToolCallContext {
   userId: string;
   runtimeSessionId: string;
+  signal?: AbortSignal | null;
   allowedRoots: readonly string[];
   writableRoots: readonly string[];
+  /** Canonical workspace root; default cwd for shell/skill. */
+  workspaceRoot?: string;
   pcDir: string;
   toolPolicy: RuntimeToolPolicy;
   allowedSkillIds?: readonly string[];
   skillVersionPins?: readonly RuntimeSkillVersionPin[];
   actionApproval?: RuntimeActionApprovalClient;
+  beforeAction?: (toolName: string, input: Record<string, unknown>, signal?: AbortSignal | null) => Promise<(RuntimeToolResult & { approvalRequestId?: string }) | undefined>;
 }
 
 export interface RuntimeToolImplementation<TInput = Record<string, unknown>> {
@@ -144,12 +150,26 @@ async function capRuntimeResult(
   return toRuntimeResult(capped as RuntimeToolResult);
 }
 
+function normalizeReadableRuntimePath(candidate: unknown, ctx: RuntimeToolCallContext): string {
+  if (ctx.toolPolicy.fileRead === 'all') {
+    const abs = path.resolve(String(candidate ?? ''));
+    if (!path.isAbsolute(abs)) {
+      throw Object.assign(new Error('runtime file path must be absolute'), { code: 'E_RUNTIME_PATH_DENIED' });
+    }
+    if (isRuntimeTranscriptPath(abs)) {
+      throw Object.assign(new Error('Runtime request cannot read CogSeed transcript paths'), { code: 'E_RUNTIME_TRANSCRIPT_PATH' });
+    }
+    return abs;
+  }
+  return normalizeRuntimePath(String(candidate ?? ''), ctx.allowedRoots);
+}
+
 async function runStatFile(input: { path: string }, ctx: RuntimeToolCallContext): Promise<RuntimeToolResult> {
-  if (ctx.toolPolicy.fileRead !== 'explicit_roots') {
+  if (ctx.toolPolicy.fileRead === 'none') {
     return formatError('E_RUNTIME_PERMISSION_DENIED', 'runtime file read is not enabled by policy');
   }
   try {
-    const abs = normalizeRuntimePath(input.path, ctx.allowedRoots);
+    const abs = normalizeReadableRuntimePath(input.path, ctx);
     const meta = await statFile(ctx.userId, abs);
     const kind = meta.kind;
     return { content: formatStat({ absPath: abs, kind, bytes: meta.bytes, totalChars: meta.totalChars, source: meta.source }) };
@@ -159,11 +179,11 @@ async function runStatFile(input: { path: string }, ctx: RuntimeToolCallContext)
 }
 
 async function runReadFile(input: { path: string; charStart?: number; charEnd?: number }, ctx: RuntimeToolCallContext): Promise<RuntimeToolResult> {
-  if (ctx.toolPolicy.fileRead !== 'explicit_roots') {
+  if (ctx.toolPolicy.fileRead === 'none') {
     return formatError('E_RUNTIME_PERMISSION_DENIED', 'runtime file read is not enabled by policy');
   }
   try {
-    const abs = normalizeRuntimePath(input.path, ctx.allowedRoots);
+    const abs = normalizeReadableRuntimePath(input.path, ctx);
     const slice = await readRange(ctx.userId, abs, {
       charStart: typeof input.charStart === 'number' ? input.charStart : undefined,
       charEnd: typeof input.charEnd === 'number' ? input.charEnd : undefined,
@@ -262,10 +282,29 @@ async function runGrepFiles(input: { pattern: string; regex?: boolean; glob?: st
 
 
 function normalizeWritableRuntimePath(candidate: unknown, ctx: RuntimeToolCallContext): string {
+  if (ctx.toolPolicy.fileWrite === 'all') {
+    const abs = path.resolve(String(candidate ?? ''));
+    if (!path.isAbsolute(abs)) {
+      throw Object.assign(new Error('runtime file path must be absolute'), { code: 'E_RUNTIME_PATH_DENIED' });
+    }
+    if (isRuntimeTranscriptPath(abs)) {
+      throw Object.assign(new Error('Runtime request cannot write CogSeed transcript paths'), { code: 'E_RUNTIME_TRANSCRIPT_PATH' });
+    }
+    return abs;
+  }
   if (ctx.toolPolicy.fileWrite !== 'explicit_writable_roots') {
     throw Object.assign(new Error('runtime file write is not enabled by policy'), { code: 'E_RUNTIME_PERMISSION_DENIED' });
   }
   return normalizeRuntimePath(String(candidate ?? ''), ctx.writableRoots);
+}
+
+function runtimeWriteFingerprint(target: string): string {
+  try {
+    const entry = fs.lstatSync(target, { bigint: true });
+    const actual = fs.statSync(target, { bigint: true });
+    return [fs.realpathSync(target), entry.dev, entry.ino, entry.size, entry.mtimeNs, entry.ctimeNs,
+      actual.dev, actual.ino, actual.size, actual.mtimeNs, actual.ctimeNs].join(':');
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'; throw error; }
 }
 
 function atomicWriteUtf8(target: string, content: string): void {
@@ -284,6 +323,13 @@ async function runWriteFile(input: { path: string; content?: string }, ctx: Runt
   try {
     const abs = normalizeWritableRuntimePath(input.path, ctx);
     const content = typeof input.content === 'string' ? input.content : '';
+    const baseline = runtimeWriteFingerprint(abs);
+    const denied = ctx.beforeAction ? await ctx.beforeAction('write_file', { path: abs, content }, ctx.signal)
+      : formatError('E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE', 'current host conditions unavailable');
+    if (denied) return denied;
+    if (ctx.signal?.aborted) return formatError('E_RUNTIME_ABORTED', 'file action cancelled');
+    if (normalizeWritableRuntimePath(input.path, ctx) !== abs || runtimeWriteFingerprint(abs) !== baseline)
+      return formatError('E_RUNTIME_FILE_BASELINE_CHANGED', 'file target changed during preflight');
     atomicWriteUtf8(abs, content);
     return { content: `written path="${escapeAttr(abs)}" bytes="${Buffer.byteLength(content, 'utf8')}"` };
   } catch (err) {
@@ -306,6 +352,13 @@ async function runEditFile(input: { path: string; old_string?: string; new_strin
     const updated = input.replace_all === true
       ? current.split(oldString).join(newString)
       : current.replace(oldString, newString);
+    const baseline = runtimeWriteFingerprint(abs);
+    const denied = ctx.beforeAction ? await ctx.beforeAction('edit_file', { path: abs, content: updated }, ctx.signal)
+      : formatError('E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE', 'current host conditions unavailable');
+    if (denied) return denied;
+    if (ctx.signal?.aborted) return formatError('E_RUNTIME_ABORTED', 'file action cancelled');
+    if (normalizeWritableRuntimePath(input.path, ctx) !== abs || runtimeWriteFingerprint(abs) !== baseline)
+      return formatError('E_RUNTIME_FILE_BASELINE_CHANGED', 'file target changed during preflight');
     atomicWriteUtf8(abs, updated);
     return { content: `edited path="${escapeAttr(abs)}" replacements="${input.replace_all === true ? occurrences : 1}"` };
   } catch (err) {

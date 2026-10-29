@@ -543,7 +543,7 @@ export async function libraryComposition(uid: string): Promise<CompositionReport
   const passStarted = Date.now();
 
   for (const id of ids) {
-    const resolved = await resolveSkillForScan(id);
+    const resolved = await resolveSkillForScan(uid, id);
     if (!resolved) {
       unresolved += 1;
       continue;

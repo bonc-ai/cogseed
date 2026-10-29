@@ -1,4 +1,6 @@
-import { createHash } from 'node:crypto';
+import { cognitionStableSourceId as stableId, cognitionMessageSourceId, cognitionAttachmentSourceId } from './source-identity';
+import { cognitionMessageSourceRef, readLocatedSource } from './source-locator';
+export { cognitionMessageSourceId, cognitionAttachmentSourceId } from './source-identity';
 
 import { safeId } from '../../storage';
 import * as chatArtifacts from '../chat_artifacts';
@@ -27,6 +29,7 @@ import {
   COGNITION_SOURCE_TYPES,
   cognitionSourceRefKey,
   normalizeCognitionSourceRef,
+  normalizeSourceLocator,
   type CognitionSourceInput,
   type CognitionSourceRef,
   type CognitionSourceType,
@@ -97,11 +100,6 @@ type SourceAdapter = (
   query: SourceAdapterQuery,
 ) => Promise<DiscoveredSource[]>;
 
-function stableId(prefix: string, ...parts: string[]): string {
-  const digest = createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 24);
-  return `${prefix}-${digest}`;
-}
-
 function sourceRef(input: CognitionSourceInput): CognitionSourceRef & { kind: CognitionCatalogKind } {
   const ref = normalizeCognitionSourceRef(input);
   if (!ref || ref.taxonomyVersion !== 2 || !COGNITION_SOURCE_TYPES.includes(ref.kind as CognitionCatalogKind)) {
@@ -116,10 +114,6 @@ function discovered(
   statusReason?: string,
 ): DiscoveredSource {
   return { ...sourceRef(input), status, ...(statusReason ? { statusReason } : {}) };
-}
-
-export function cognitionMessageSourceId(conversationId: string, messageId: string): string {
-  return stableId('msg', conversationId, messageId);
 }
 
 export function cognitionArtifactSourceId(conversationId: string, artifactId: string): string {
@@ -291,13 +285,8 @@ async function conversationSources(userId: string, query: Parameters<SourceAdapt
   );
   return [
     ...sessions,
-    ...messages.map(({ conversation, message }) => discovered({
-      kind: 'conversation',
-      subtype: 'message',
-      scope: 'conversation',
-      id: cognitionMessageSourceId(conversation.conversation_id, message.id),
-      sourceVersion: message.ts,
-    }, conversationStatus(conversation).status, conversationStatus(conversation).statusReason)),
+    ...messages.map(({ conversation, message }) => discovered(
+      cognitionMessageSourceRef(conversation.conversation_id, { id: message.id, text: message.text || '' }), conversationStatus(conversation).status, conversationStatus(conversation).statusReason)),
   ];
 }
 
@@ -350,9 +339,20 @@ async function artifactFileSources(userId: string, query: Parameters<SourceAdapt
     Math.min(2_000, Math.max(100, (query.limit - contexts.length) * 20)),
     query.disabledConversationIds,
   );
-  const items = [...contexts];
+  const items = contexts.slice(0, query.limit);
   const seen = new Set(items.map((item) => item.id));
   for (const { conversation, message } of rows) {
+    for (const attachmentName of message.attachments || []) {
+      if (!/\.(txt|md|markdown|csv|tsv|json|yaml|yml|log)$/i.test(attachmentName)) continue;
+      const locator = normalizeSourceLocator({ conversationId: conversation.conversation_id, messageId: message.id, attachmentName });
+      if (!locator) continue;
+      const id = cognitionAttachmentSourceId(conversation.conversation_id, message.id, attachmentName);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      items.push(discovered({ kind: 'artifact_file', subtype: 'artifact', scope: 'conversation', id,
+        title: attachmentName, locator }));
+      if (items.length >= query.limit) return items;
+    }
     for (const artifact of message.artifacts || []) {
       const sourceConversationId = artifact.source_cid || conversation.conversation_id;
       const id = cognitionArtifactSourceId(sourceConversationId, artifact.id);
@@ -452,6 +452,7 @@ function controlSourceRef(control: CognitionSourceControlRecord): CognitionSourc
     scope: control.scope,
     title: control.title,
     sourceVersion: control.sourceVersion,
+    locator: control.locator,
   });
 }
 
@@ -646,6 +647,44 @@ export async function cognitionExistingSourceIds(
     // 调用方按"无法确认"处理（当前是放行已有引用、拒绝新增）。
   }
   return found;
+}
+
+/** Read current metadata for attached sources. Unlike existence checks, an old
+ * control entry cannot stand in for a removed source. No source body is returned. */
+export async function readCognitionSourceBaselines(userId: string, refs: readonly CognitionSourceRef[]): Promise<Map<string, string>> {
+  const wanted = new Set(refs.filter(ref => ref.taxonomyVersion === 2 && !ref.degraded).map(cognitionSourceRefKey));
+  const result = new Map<string, string>();
+  if (!wanted.size) return result;
+  const controls = await listCognitionSourceControls(userId);
+  const disabledConversationIds = new Set(controls.filter(row => row.kind === 'conversation' && row.availability !== 'active').map(row => row.sourceId));
+  const disabled = new Set(controls.filter(row => row.availability !== 'active').map(row => cognitionSourceRefKey({ kind: row.kind, id: row.sourceId })));
+  // Session references have a canonical metadata read. Do not enumerate other
+  // conversations or load their message bodies to resolve attached sessions.
+  const sessions = refs.filter(ref => ref.taxonomyVersion === 2 && ref.kind === 'conversation' && ref.subtype === 'session');
+  for (const ref of sessions) {
+    const key = cognitionSourceRefKey(ref);
+    if (!wanted.has(key) || disabled.has(key)) continue;
+    const row = await chats.getConversation(userId, ref.id);
+    if (row && !row.deleted_at) result.set(key, JSON.stringify({ sourceVersion: row.updated_at, subtype: 'session', scope: 'conversation' }));
+  }
+  for (const ref of refs.filter(ref => ref.locator)) {
+    const read = await readLocatedSource(userId, ref);
+    if (read.state === 'available') {
+      const { range: _range, ...locator } = ref.locator!;
+      result.set(cognitionSourceRefKey(ref), JSON.stringify({ sourceVersion: read.sourceVersion, locator }));
+    }
+  }
+  const kinds = [...new Set(refs.filter(ref => ref.taxonomyVersion === 2 && !ref.locator && !(ref.kind === 'conversation' && ref.subtype === 'session'))
+    .map(ref => ref.kind as CognitionCatalogKind))];
+  for (const kind of kinds) {
+    if (!COGNITION_CATALOG_KINDS.includes(kind)) continue;
+    const items = await discoverSelectedSources(userId, kind, { limit: Number.MAX_SAFE_INTEGER, disabledConversationIds });
+    for (const item of items) {
+      const key = cognitionSourceRefKey(item);
+      if (wanted.has(key) && !result.has(key) && !refs.some(ref => cognitionSourceRefKey(ref) === key && ref.locator) && !disabled.has(key)) result.set(key, JSON.stringify({ sourceVersion: item.sourceVersion, subtype: item.subtype, scope: item.scope }));
+    }
+  }
+  return result;
 }
 
 /** 单条形态。内部走同一条批量实现，不另写一份判据。 */

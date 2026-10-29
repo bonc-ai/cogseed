@@ -8,7 +8,8 @@
  *   ③ 沉淀只有 1 个候选写口（`saveRecallCandidate`），不出现第二个
  *     `save*Candidate` 实现；
  *   ④ `tool-catalog.ts` 的 `recall` 组工具数按源码常量计数（013 自身新增 0）；
- *   ⑤ 会议侧不出现 tags/category 写入、不出现 `familyName`。
+ *   ⑤ 会议侧不出现 tags/category 资产分类写入、不出现 `familyName`（2026-10
+ *     合并 develop 后，本体图谱自己的 `category` 是另一套结构，见 ⑤ 检测器）。
  *
  * T061（源码级边界断言，git 级"013 提交未触碰"的 diff 证据见
  * specs/013-会议引用层/implementation-log.md——git 历史无法在测试里派生，
@@ -21,9 +22,10 @@
  *
  * 反向自证（T059 验收"故意改坏一处应让它变红"）：下方所有检测器都实现为
  * **纯函数**（输入 `{ 相对路径 → 文件内容 }` 表），另有专门一例把真实源码的
- * **内存副本**注入违规（第二份词表定义 / familyName 写入 / meeting 工具行）
- * 后喂给检测器、断言检测器报红——不改 src/ 一行，验证的是检测器本身的判别力
- * （下一次有人在真实源码里做同样的事，同一检测器就会让本文件变红）。
+ * **内存副本**注入违规（第二份词表定义 / familyName + tags/category 写入 /
+ * meeting 工具行）后喂给检测器、断言检测器报红——不改 src/ 一行，验证的是
+ * 检测器本身的判别力（下一次有人在真实源码里做同样的事，同一检测器就会让
+ * 本文件变红）。
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -33,10 +35,6 @@ import * as path from 'node:path';
 import { QUOTE_MARKERS } from '../../../src/main/features/transcript_rewrite';
 import { isQuotedExampleSpan } from '../../../src/main/features/transcript_auto_correct';
 import { TOOL_CATALOG } from '../../../src/main/model/core-agent/tool-catalog';
-import {
-  buildConclusionCandidateInput,
-  precipitateMeetingConclusion,
-} from '../../../src/main/features/meeting_conclusions';
 import {
   saveActionDraft,
   confirmActionDraft,
@@ -195,10 +193,23 @@ function detectFamilyNameInMeetingLine(
 }
 
 /**
- * 非注释行的对象键 `tags:` / `category:`（"写入"的形态）。T048 的合法残留只有
- * 两形：入参接口的 `tags?: unknown;` / `category?: unknown;`（类型上保留键位
- * 只为"收到了"可判定、收到即拒）与拒绝循环里的 `['tags', 'category']` 字符串
- * 数组——两形都不是写入。其余任何键形态 = 违规。
+ * 本体图谱模块（2026-10 合并 develop 新增）。它们的 `category` 是本体图谱自己的
+ * 分类（`OntologyCategory` / `CategorySpec` / 查询入参 schema），和 012 资产管家
+ * 的 tags/category/familyName **资产分类轴**是两套不同结构：前者是实体所属的
+ * 本体分类节点，后者是资产的可检索标签。⑤ 只禁止会议侧写资产分类，不把本体分类
+ * 误报成违规；`tags` / `familyName` 在这两个文件里仍按全会议线口径零容忍。
+ */
+function isOntologyCategoryModule(file: string): boolean {
+  return file === 'src/main/features/meeting_ontology_projection.ts'
+    || file === 'src/main/model/core-agent/meeting-ontology-tools.ts';
+}
+
+/**
+ * 非注释行的对象键 `tags:` / `category:`（资产分类"写入"的形态）。T048 的合法
+ * 残留只有两形：入参接口的 `tags?: unknown;` / `category?: unknown;`（类型上保留
+ * 键位只为"收到了"可判定、收到即拒）与拒绝循环里的 `['tags', 'category']` 字符串
+ * 数组——两形都不是写入。其余任何键形态 = 违规，**本体分类模块的 `category` 除外**
+ * （见 `isOntologyCategoryModule`；同一行若还写了 `tags:`，仍按 tags 违规报出）。
  */
 function detectTagKeyWritesInMeetingLine(
   files: Map<string, string>,
@@ -206,9 +217,13 @@ function detectTagKeyWritesInMeetingLine(
   const out: Array<{ file: string; line: string }> = [];
   for (const [file, source] of meetingLineFiles(files)) {
     for (const line of stripCommentLines(source).split('\n')) {
-      if (!/\b(tags|category)\s*:/.test(line)) continue;
+      const writesTags = /\btags\s*:/.test(line);
+      const writesCategory = /\bcategory\s*:/.test(line);
+      if (!writesTags && !writesCategory) continue;
       if (/tags\?\s*:\s*unknown|category\?\s*:\s*unknown/.test(line)) continue; // T048 入参键位
       if (/\[\s*'tags'\s*,\s*'category'\s*\]/.test(line)) continue; // T048 拒绝循环
+      // 本体分类 ≠ 资产分类：只豁免 category，不豁免 tags。
+      if (writesCategory && !writesTags && isOntologyCategoryModule(file)) continue;
       out.push({ file, line: line.trim() });
     }
   }
@@ -316,20 +331,39 @@ describe('T059③ 候选写口唯一（saveRecallCandidate）', () => {
     expect(impls.length).toBeGreaterThan(0);
     for (const impl of impls) {
       if (impl.file === 'src/main/features/recall/candidate-service.ts') continue; // 本体（含其同文件锁内助手）
-      // 别处的同名形态实现（如 kstar 桥）必须是**委托**：函数体（其后 4000 字内）
-      // 调用唯一写口，而不是绕开它自写一套。
+      // 非本体实现必须委托统一候选入口。
       const body = (files.get(impl.file) ?? '').slice(impl.index, impl.index + 4000);
-      expect(body, `${impl.file} 的 ${impl.name} 必须委托 saveRecallCandidate`).toContain('saveRecallCandidate(');
+      if (impl.file === 'src/main/features/kstar/recall-bridge.ts') {
+        expect(body).toContain('return []');
+        expect(body).not.toMatch(/(?:saveRecallCandidate|submitCognitionCandidate|createAbilityAsset)\s*\(/);
+        continue;
+      }
+      const delegates = body.includes('saveRecallCandidate(') || body.includes('submitCognitionCandidate(');
+      expect(delegates, `${impl.file} 的 ${impl.name} 必须委托 saveRecallCandidate（直接或经统一提取入口 submitCognitionCandidate）`).toBe(true);
     }
   });
 
-  it('候选池记录写 API（write/updateRecallJsonRecord）不出 features/recall/；会议线只经唯一写口', () => {
+  it('生产候选写入只存在于候选服务和夜间形成入口', () => {
+    const callSites = [...allSourceFiles()].filter(([file, source]) =>
+      file.startsWith('src/main/') && /\bsaveRecallCandidate\s*\(/.test(stripCommentLines(source)),
+    ).map(([file]) => file).sort();
+    expect(callSites).toEqual([
+      'src/main/features/cognition/candidate-submission.ts',
+      'src/main/features/recall/candidate-service.ts',
+      // 夜间形成入口：内容整理（permit 门内）与存量整理（withStockOrganizationWrite
+      // 门内）都由受治理的夜间管线调用统一候选入口，不是新的旁路写口。
+      'src/main/features/recall/content-organization.ts',
+      'src/main/features/recall/stock-organization.ts',
+    ]);
+  });
+
+  it('候选池记录写 API（write/updateRecallJsonRecord）不出 features/recall/；会议线不写候选', () => {
     const files = allSourceFiles();
     const writers = detectRecallRecordWriteUsers(files).filter((file) => !file.startsWith('src/main/features/recall/'));
     expect(writers).toEqual([]);
-    // 会议沉淀线（meeting_conclusions）import 唯一写口，而不是第二套池子。
     const conclusions = files.get('src/main/features/meeting_conclusions.ts') ?? '';
-    expect(conclusions).toMatch(/import\s*\{\s*saveRecallCandidate\s*\}\s*from\s*'\.\/recall\/candidate-service'/);
+    expect(conclusions).not.toContain('saveRecallCandidate');
+    expect(conclusions).not.toContain('precipitateMeetingConclusion');
   });
 });
 
@@ -337,18 +371,22 @@ describe('T059③ 候选写口唯一（saveRecallCandidate）', () => {
 // T059 ④ tool-catalog 的 recall 组工具数（013 自身新增 0）
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('T059④ recall 组工具数（不新增模型工具）', () => {
-  it(`recall 组工具数 = 14，按源码常量 TOOL_CATALOG 计数（013 新增 0）`, () => {
-    // 计数从源码常量派生（import 后过滤 group），不是抄名单。
-    // 数值口径（git 可核）：tasks.md 立项时 recall 组 = 11（2 基础 + 008 资产管家 9）；
-    // 本合流分支上 016 经验目录（4d44add3，先于 013 首个提交 983ef317 落地）向同组
-    // 加了 list_task_experiences / read_task_experience 两件 ⇒ 13。013 会议线全程
-    // 未改 tool-catalog.ts（实现日志 T060 留证），自身新增 0。
-    // 2026-09-28：13⇒14——09-27 本体切片的 list_ontology_graph（工厂与 catalog
-    // 双侧注册），基线随树重算。
-    // 下一次有人往 recall 组加/删工具，这里会红——那是本断言的本意（逼基线显式更新）。
+describe('T059④ recall 组工具数（不新增会议模型工具）', () => {
+  it(`recall 组工具数 = 23，按源码常量 TOOL_CATALOG 计数（2026-10 合并 develop 本体工具 +3）`, () => {
+    // 用户授权撤掉对话即时形成工具；已有认知查询、管理与使用记账继续冻结。
+    // 2026-10-27：18⇒20——受治理的 create_cognition / edit_cognition 注册进 recall 组
+    // （完整预览确认后由宿主落盘）。
+    // 2026-10-27 合并 origin/develop：20⇒23——develop 本体线新增三个**不同**工具：
+    //   ontology_graph_read / ontology_projection_apply（53aa40e2「feat(meetings):
+    //   add ontology projection tools」）与 list_ontology_graph（develop 本体/
+    //   cognition 线的既有行，经 90552d7a 合并保留；origin/develop 4be1f879 的
+    //   catalog 同样含这一行）。下面同时断言名字唯一，确保 23 是合法新增而不是
+    //   合并重复计数。
+    // 会议引用线（013）全程未改 tool-catalog.ts，自身新增 0。
     const recallTools = TOOL_CATALOG.filter((entry) => entry.group === 'recall');
-    expect(recallTools).toHaveLength(14);
+    expect(recallTools).toHaveLength(23);
+    expect(new Set(recallTools.map((tool) => tool.name)).size).toBe(23);
+    expect(recallTools.map(tool => tool.name)).not.toContain('propose_ability_asset');
   });
 
   it('TOOL_CATALOG 不出现会议线工具（013 不新增任何模型工具）', () => {
@@ -362,7 +400,7 @@ describe('T059④ recall 组工具数（不新增模型工具）', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('T059⑤ 会议侧零 tags/category/familyName', () => {
-  it('源码派生：非注释处零 familyName；tags/category 键只出现在 T048 拒绝位', () => {
+  it('源码派生：非注释处零 familyName；tags/category 资产分类键零写入（本体分类 category 不算）', () => {
     const files = allSourceFiles();
     expect(detectFamilyNameInMeetingLine(files)).toEqual([]);
     expect(detectTagKeyWritesInMeetingLine(files)).toEqual([]);
@@ -372,37 +410,6 @@ describe('T059⑤ 会议侧零 tags/category/familyName', () => {
     expect(detectHookCodeInMeetingLine(allSourceFiles())).toEqual([]);
   });
 
-  it('运行时派生：buildConclusionCandidateInput 组装结果不带 tags/category/familyName 键', () => {
-    const input = buildConclusionCandidateInput(
-      {
-        id: 'mc_guard_1',
-        docId: 'kb/guard-privacy.md',
-        summary: '结论摘要：排期改为下周三',
-        transcriptRefs: [{ utteranceId: 'U0001', blockIndex: 0, from: 0, to: 6 }],
-        assetRefs: [],
-        status: 'confirmed',
-        createdAt: '2026-09-25T00:00:00.000Z',
-        updatedAt: '2026-09-25T00:00:00.000Z',
-      },
-      { docId: 'kb/guard-privacy.md', title: '守卫会议' },
-    );
-    const keys = Object.keys(input);
-    expect(keys).toEqual(expect.arrayContaining([
-      'judgment', 'suggestedAction', 'sourceRefs', 'evidenceRefs', 'captureKey',
-    ]));
-    for (const banned of ['tags', 'category', 'familyName']) {
-      expect(input, `候选组装不得带 ${banned} 键`).not.toHaveProperty(banned);
-    }
-  });
-
-  it('运行时派生：precipitate 收到 tags / category ⇒ field_not_available（先于条目存在性检查）', async () => {
-    const uid = `u_guard_${Date.now()}`;
-    // T048 的键拒绝在读取条目之前——不需要存在真实的结论即可验证。
-    await expect(precipitateMeetingConclusion(uid, 'kb/guard-privacy.md', 'mc_missing', { tags: ['急'] }))
-      .rejects.toThrowError(expect.objectContaining({ code: 'field_not_available' }));
-    await expect(precipitateMeetingConclusion(uid, 'kb/guard-privacy.md', 'mc_missing', { category: '工作' }))
-      .rejects.toThrowError(expect.objectContaining({ code: 'field_not_available' }));
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -504,12 +511,25 @@ describe('T059 反向自证（检测器判别力，src/ 零改动）', () => {
     expect(definitions.length).toBe(2); // 原唯一处 + 注入处 ⇒ 红
   });
 
-  it('注入 familyName 写入与 tags 键 ⇒ ⑤的检测器必须报出', () => {
+  it('注入 familyName 写入与 tags/category 键 ⇒ ⑤的检测器必须报出', () => {
     const files = allSourceFiles();
     const victim = 'src/main/features/meeting_conclusions.ts';
-    files.set(victim, `${files.get(victim)}\nconst tagWrite = { familyName: 'x', tags: ['急'] };\n`);
+    // 两行分开注入：一行 tags、一行 category，验证本体的 category 豁免没有把
+    // 会议记录模块里的资产分类写入一起放行。
+    files.set(victim, `${files.get(victim)}\nconst tagWrite = { familyName: 'x', tags: ['急'] };\nconst categoryWrite = { category: '工作' };\n`);
     expect(detectFamilyNameInMeetingLine(files).length).toBe(1);
-    expect(detectTagKeyWritesInMeetingLine(files).length).toBe(1);
+    expect(detectTagKeyWritesInMeetingLine(files).length).toBe(2);
+  });
+
+  it('注入 tags 到本体分类模块 ⇒ ⑤的检测器仍必须报出（category 豁免不放大到 tags）', () => {
+    const files = allSourceFiles();
+    const ontology = 'src/main/features/meeting_ontology_projection.ts';
+    files.set(ontology, `${files.get(ontology)}\nconst projection = { category: entity.categoryId, tags: ['越界'] };\n`);
+    // 同一行既写 tags 又写 category：tags 违规必须报，category 不额外豁免整行。
+    const violations = detectTagKeyWritesInMeetingLine(files);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.file).toBe(ontology);
+    expect(violations[0]?.line).toContain('tags');
   });
 
   it('注入 meeting 工具行 ⇒ ④的检测器必须报出（TOOL_CATALOG 层面）', () => {
@@ -517,7 +537,7 @@ describe('T059 反向自证（检测器判别力，src/ 零改动）', () => {
       ...TOOL_CATALOG,
       { name: 'list_meeting_refs', group: 'recall' as const, summary: 'injected' },
     ];
-    expect(injected.filter((entry) => entry.group === 'recall')).toHaveLength(15); // 14 基线 + 1 注入 ⇒ 红
+    expect(injected.filter((entry) => entry.group === 'recall')).toHaveLength(24); // 23 current tools + one injected tool
     expect(injected.filter((entry) => /meeting/i.test(entry.name)).map((entry) => entry.name))
       .toEqual(['list_meeting_refs']);
   });

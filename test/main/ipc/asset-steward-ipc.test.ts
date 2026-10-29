@@ -43,7 +43,6 @@ const assetMock = vi.hoisted(() => ({
 const candidateMock = vi.hoisted(() => ({
   promoteRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ asset: { id: `aa-${id}` }, candidate: { id } })),
   rejectRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ id, status: 'rejected' })),
-  deferRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ id, status: 'deferred' })),
   ignoreRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ id, status: 'ignored' })),
 }));
 
@@ -67,7 +66,6 @@ vi.mock('../../../src/main/features/recall/candidate-service', async (importOrig
   ...(await importOriginal<typeof import('../../../src/main/features/recall/candidate-service')>()),
   promoteRecallCandidate: candidateMock.promoteRecallCandidate,
   rejectRecallCandidate: candidateMock.rejectRecallCandidate,
-  deferRecallCandidate: candidateMock.deferRecallCandidate,
   ignoreRecallCandidate: candidateMock.ignoreRecallCandidate,
 }));
 
@@ -168,9 +166,9 @@ describe('ipc › cognition.inbox.resolve', () => {
     await expect(call('cognition.inbox.resolve', { id: 'reject-me', action: 'reject' }))
       .resolves.toMatchObject({ ok: false, code: 'unsupported_item_kind' });
 
+    // 候选类 defer 已删（2026-10-02 子安拍板）：收件箱不再分发该动作。
     await expect(call('cognition.inbox.resolve', { id: 'conflict:cand-2', action: 'defer', note: '回头再看' }))
-      .resolves.toMatchObject({ ok: true, status: 'deferred' });
-    expect(candidateMock.deferRecallCandidate).toHaveBeenCalledWith(UID, 'cand-2', '回头再看');
+      .resolves.toMatchObject({ ok: false, code: 'unsupported_action' });
 
     await expect(call('cognition.inbox.resolve', { id: 'evidence:cand-3', action: 'ignore' }))
       .resolves.toMatchObject({ ok: true, status: 'ignored' });

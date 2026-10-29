@@ -272,6 +272,16 @@ export interface ScanCoverage {
   derivedFindings?: number;
   /** `sandboxed` or `static` — see ScanTier. */
   scanTier?: ScanTier;
+  /**
+   * Native advisory snapshot that produced `dependency_vuln` findings.
+   *
+   * Without it the drawer's only dependency-related row is `osv_scanner`, whose
+   * value is `SKIPPED` on most machines — which reads as "CVE scanning did not
+   * run" even when the built-in snapshot just reported findings.
+   */
+  vulnerabilityDb?: { status: string; entries: number; asOf: string };
+  /** Native YARA signature pack that produced `source: "yara"` findings. */
+  signaturePack?: { status: string; rules: number; errors: number };
 }
 
 export interface FrameworkEntry {
@@ -783,6 +793,12 @@ export interface ScanOptions {
    * timeout — buys nothing.
    */
   detail?: boolean;
+  /**
+   * Cooperative cancellation. The scan kills its Python subprocess on abort and
+   * returns `unknown('canceled')` instead of a verdict — a canceled scan must
+   * never be recorded as "we looked and found nothing".
+   */
+  signal?: AbortSignal;
 }
 
 export async function scanSkillDir(
@@ -790,9 +806,10 @@ export async function scanSkillDir(
   source: SkillSource = 'thirdparty',
   options: ScanOptions = {},
 ): Promise<SentryScanResult> {
-  return _withInstructionRisk(
-    await _scanSkillCode(skillDir, source, options.detail === true), skillDir,
-  );
+  const code = await _scanSkillCode(skillDir, source, options.detail === true, options.signal);
+  // 已取消：不再做指令风险模型调用，也不把取消包装成任何结论。
+  if (options.signal?.aborted || code.unavailableReason === 'canceled') return code;
+  return _withInstructionRisk(code, skillDir);
 }
 
 /**
@@ -851,8 +868,10 @@ async function _scanSkillCode(
   skillDir: string,
   source: SkillSource = 'thirdparty',
   detail = false,
+  signal?: AbortSignal,
 ): Promise<SentryScanResult> {
   const root = enginePath();
+  if (signal?.aborted) return unknown('canceled');
   if (!fs.existsSync(skillDir)) return unknown('artifact_missing');
 
   // Run the local red lines first and unconditionally. They must apply even when
@@ -872,7 +891,7 @@ async function _scanSkillCode(
     const external = resolveExternalScanner(gateScript());
     if (external) {
       return withRedLines(
-        await runGate(external.gateScript, external.engineRoot, skillDir, source, redLines, detail),
+        await runGate(external.gateScript, external.engineRoot, skillDir, source, redLines, detail, signal),
       );
     }
 
@@ -891,7 +910,7 @@ async function _scanSkillCode(
     );
   }
 
-  return withRedLines(await runGate(gateScript(), root, skillDir, source, redLines, detail));
+  return withRedLines(await runGate(gateScript(), root, skillDir, source, redLines, detail, signal));
 }
 
 /**
@@ -915,6 +934,7 @@ async function runGate(
   source: SkillSource,
   redLines: string[],
   detail = false,
+  signal?: AbortSignal,
 ): Promise<SentryScanResult> {
   const thru = <T extends SentryScanResult>(r: T): T => r;
   const pythons = resolvePythonCandidates();
@@ -944,6 +964,19 @@ async function runGate(
         child.kill('SIGKILL');
         reject(new Error('timeout'));
       }, SCAN_TIMEOUT_MS);
+      // 取消要真的杀掉子进程：只是忽略结果的话，扫描仍在后台占 CPU / 读文件。
+      const onAbort = () => {
+        clearTimeout(timer);
+        child.kill('SIGKILL');
+        reject(new Error('canceled'));
+      };
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
+      const detachAbort = () => {
+        if (signal) signal.removeEventListener('abort', onAbort);
+      };
       // Output accumulation caps (W5/D4): the scanner's own report is a few KB.
       // A runaway engine (or a hostile payload making a parser print) must not
       // balloon the main process before the timeout fires. Overflow is a scan
@@ -968,9 +1001,10 @@ async function runGate(
         err += String(d);
         if (err.length > MAX_STDERR_BYTES) killOverflow();
       });
-      child.on('error', (e) => { clearTimeout(timer); reject(e); });
+      child.on('error', (e) => { clearTimeout(timer); detachAbort(); reject(e); });
       child.on('close', (code) => {
         clearTimeout(timer);
+        detachAbort();
         if (code === 0 && out.trim()) resolve(out);
         else reject(new ScannerProcessExitError(code, err.slice(0, 200)));
       });
@@ -995,6 +1029,11 @@ async function runGate(
     })();
   } catch (err) {
     const msg = (err as Error).message || 'spawn_failed';
+    // 取消不是故障：不写「扫描失败」日志，也不产出 verdict。
+    if (signal?.aborted || msg === 'canceled') {
+      log.warn('sentry scan canceled', { skillDir });
+      return thru(unknown('canceled'));
+    }
     log.warn('sentry scan could not run', { skillDir, error: msg });
     return thru(unknown(msg === 'timeout' ? 'timeout' : 'spawn_failed'));
   }
@@ -1170,6 +1209,26 @@ function parseDetail(parsed: Record<string, unknown>): Partial<SentryScanResult>
       derivedViews: (coverage.derived_views || {}) as Record<string, number>,
       derivedFindings: Number(coverage.derived_findings || 0),
       scanTier: coverage.scan_tier === 'sandboxed' ? 'sandboxed' : 'static',
+      ...(coverage.vulnerability_db && typeof coverage.vulnerability_db === 'object'
+        ? {
+          vulnerabilityDb: {
+            status: String((coverage.vulnerability_db as Record<string, unknown>).status || ''),
+            entries: Number((coverage.vulnerability_db as Record<string, unknown>).entries || 0),
+            asOf: String((coverage.vulnerability_db as Record<string, unknown>).as_of || ''),
+          },
+        }
+        : {}),
+      ...(coverage.signature_pack && typeof coverage.signature_pack === 'object'
+        ? {
+          signaturePack: {
+            status: String((coverage.signature_pack as Record<string, unknown>).status || ''),
+            rules: Number((coverage.signature_pack as Record<string, unknown>).rules || 0),
+            errors: Array.isArray((coverage.signature_pack as Record<string, unknown>).errors)
+              ? ((coverage.signature_pack as Record<string, unknown>).errors as unknown[]).length
+              : 0,
+          },
+        }
+        : {}),
     };
   }
 

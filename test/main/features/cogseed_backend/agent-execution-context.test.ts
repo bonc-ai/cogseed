@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import {
   buildCogSeedAgentRuntimeContext,
@@ -42,6 +45,78 @@ describe('CogSeed formal Agent execution context', () => {
       }),
     ]);
     expect(JSON.stringify(context)).toContain('skill-alpha');
+  });
+
+  it('injects a workspace-local ws- skill from the current workspace', async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-agent-skill-'));
+    const skill = path.join(workspace, '.cogseed', 'skills', 'demo');
+    fs.mkdirSync(skill, { recursive: true });
+    fs.writeFileSync(path.join(skill, 'SKILL.md'), '---\nname: demo\ndescription: Workspace demo.\n---\nUse the workspace demo.');
+    try {
+      const resolved = await resolveCogSeedAgentExecutionContext('user-context', 'agent-context', 'cid-context', {
+        getAgentForChatDispatch: vi.fn(async () => ({
+          agent_id: 'agent-context',
+          name: 'Context Agent',
+          workflow: 'Do the work.',
+          skill_list: ['ws-demo'],
+          runtime: { kind: 'in_process' as const },
+          profile: { role: 'Researcher', knowhow: [], standards: [] },
+        })) as any,
+        isAgentEnabled: () => true,
+        getWorkspacePath: async () => workspace,
+      });
+      expect(resolved.skillInstructions).toEqual([
+        expect.objectContaining({ label: 'Authorized skill instructions: ws-demo', content: expect.stringContaining('Use the workspace demo.') }),
+      ]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('injects workspace AGENTS.md after the Agent identity/instructions', async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-agent-context-'));
+    try {
+      fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'Always cite the source document.');
+      const resolved = await resolveCogSeedAgentExecutionContext('user-context', 'agent-context', 'cid-context', {
+        getAgentForChatDispatch: vi.fn(async () => ({
+          agent_id: 'agent-context',
+          name: 'Context Agent',
+          workflow: 'Do the work.',
+          runtime: { kind: 'in_process' as const },
+          profile: { role: 'Researcher', knowhow: [], standards: [] },
+        })) as any,
+        isAgentEnabled: () => true,
+        getWorkspacePath: async () => workspace,
+      });
+      expect(resolved.workspaceInstructions).toEqual([
+        expect.objectContaining({ label: 'Workspace instructions: AGENTS.md', content: 'Always cite the source document.' }),
+      ]);
+      expect(buildCogSeedAgentRuntimeContext(resolved)).toEqual([
+        expect.objectContaining({
+          content: expect.stringContaining('Always cite the source document.'),
+        }),
+      ]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('injects only enabled skills from the persisted allowlist so continuations need no discovery reads', async () => {
+    const skills = await import('../../../../src/main/features/skills');
+    const listing = vi.spyOn(skills, 'listSkillsForUser').mockResolvedValue([
+      { id: 'allowed', enabled: true, source: 'custom' },
+      { id: 'disabled', enabled: false, source: 'marketplace' },
+      { id: 'unrelated', enabled: true, source: 'marketplace' },
+    ] as any);
+    const read = vi.spyOn(skills, 'readSkillFileForUser').mockResolvedValue({ ok: true, content: 'Follow verified evidence.', path: 'SKILL.md', ext: 'md' });
+    try {
+      const resolved = await resolveCogSeedAgentExecutionContext('user-context', 'agent-context', 'cid-context', {
+        getAgentForChatDispatch: vi.fn(async () => ({ agent_id: 'agent-context', name: 'Agent', workflow: '', skill_list: ['allowed', 'disabled'] })) as any,
+        isAgentEnabled: () => true,
+      });
+      expect(read).toHaveBeenCalledExactlyOnceWith('user-context', 'custom', 'allowed');
+      expect(buildCogSeedAgentRuntimeContext(resolved)).toContainEqual(expect.objectContaining({ label: 'Authorized skill instructions: allowed', content: expect.stringContaining('Follow verified evidence.') }));
+    } finally { listing.mockRestore(); read.mockRestore(); }
   });
 
   it('rejects unavailable or management-only Agents before task admission', async () => {

@@ -130,14 +130,24 @@ describe('注入内容的安全处理', () => {
     expect(promptBlock).toContain('\\u003c');
   });
 
-  it('超长正文被截断，不把整份文档灌进提示词', () => {
+  it('keeps the complete cognition tail and every condition, or omits the whole asset', () => {
+    const statement = '方法步骤。'.repeat(500) + '\n尾部限制：未核验时不能称为通过。';
+    const forbiddenWhen = Array.from({ length: 12 }, (_, i) => `禁止条件 ${i + 1}`);
+    const item = selected({ id: 'aa-complete', content: { type: 'cognition', title: 'T', statement, scope: 'delivery' }, forbiddenWhen });
+    const rendered = buildInheritedCognitionPrompt([item]);
+    expect(rendered.promptBlock).toContain(JSON.stringify(statement).slice(1, -1));
+    expect(rendered.promptBlock).toContain('禁止条件 12');
+    expect(reuseRefsForTurn(rendered, [], truncatedByBudget([item], rendered))).toEqual({ reusedRefs: ['asset:aa-complete@v1'], omittedRefs: [] });
+  });
+
+  it('omits an over-budget record instead of supplying a truncated body', () => {
+    const item = selected({ id: 'aa-long', content: { type: 'cognition', title: 'T', statement: 'x'.repeat(15_000), scope: 'delivery' } });
     const { promptBlock } = buildInheritedCognitionPrompt([
-      selected({
-        id: 'aa-long',
-        content: { type: 'rule', title: 'T', statement: 'x'.repeat(5_000), scope: 'delivery' },
-      }),
+      item,
     ]);
-    expect(promptBlock.length).toBeLessThan(5_000);
+    expect(promptBlock).toBe('');
+    const rendered = buildInheritedCognitionPrompt([item]);
+    expect(reuseRefsForTurn(rendered, [], truncatedByBudget([item], rendered))).toEqual({ reusedRefs: [], omittedRefs: ['asset:aa-long@v1:truncated'] });
   });
 });
 
@@ -237,8 +247,8 @@ describe('回执引用的构造', () => {
   });
 });
 
-describe('出生继承术语表（N-3）', () => {
-  const glossary = [{ term: 'KSTAR', definition: '本团队指季度目标复盘流程，不是评分卡' }];
+describe('出生继承术语表', () => {
+  const glossary = [{ term: 'KSTAR', definition: '合成团队约定：指季度目标复盘流程，不是评分卡' }];
 
   it('术语表随继承一起注入，并说明它只用于消歧、不是指令', () => {
     const { promptBlock } = buildInheritedCognitionPrompt([selected({ id: 'aa-1' })], glossary);

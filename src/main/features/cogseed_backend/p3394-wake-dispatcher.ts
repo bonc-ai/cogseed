@@ -105,7 +105,10 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
             conversationId: request.conversation_id,
             agentId: request.agent_id,
           })
-        : undefined;
+        : await (await import('../group_chat/conv_workspace')).getConversationWorkspacePath(
+            userId,
+            request.conversation_id,
+          );
       // 网关预热：外接智能体（p3394-gateway）在任务真正 sendAndWait 之前就
       // 提前拉起托管 gateway 并开始注册（prewarmExternalGateway 幂等，已运行
       // 则复用）。这会把「spawn + hello 注册等待」前移到用户批准唤醒的时刻，
@@ -118,15 +121,24 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
           prewarmExternalGateway({
             cli: localCli.cli,
             ...(executionContext.agentName ? { alias: executionContext.agentName } : {}),
+            ...(workingDir ? { workspaceRoot: workingDir } : {}),
           });
         } catch { /* 预热失败不阻塞——发送时 recoverGateway 会兜底 */ }
       }
+      const conversation = await (await import('../chats')).getConversation(
+        userId,
+        request.conversation_id,
+      ).catch(() => null);
+      const spaceId = typeof conversation?.space_id === 'string' && conversation.space_id
+        ? conversation.space_id
+        : undefined;
       const task = await runtime.startCogSeedTask(userId, {
         requestId: `req-wake-${request.id}`,
         task: taskText(request),
         sessionId: `gconv-${request.conversation_id}`,
         agentId: request.agent_id,
         conversationId: request.conversation_id,
+        ...(spaceId ? { spaceId } : {}),
         executionKind: localCli ? 'local-cli' : 'cogseed-native',
         ...(request.dispatch_payload.run_id
           ? { groupChatRunId: request.dispatch_payload.run_id }
@@ -140,7 +152,17 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
           ? { abilityAssetIds: request.dispatch_payload.asset_ids }
           : {}),
         ...(workingDir ? { workingDir } : {}),
-        context: buildCogSeedAgentRuntimeContext(executionContext),
+        context: [
+          ...buildCogSeedAgentRuntimeContext(executionContext),
+          // File-typed item so normalizeContext derives a tool root for native
+          // runs. The merged workspace hardening resolves `workingDir` for both
+          // execution kinds; a native run still carries only text context
+          // otherwise. Keep both: `workingDir` scopes the runtime cwd, the file
+          // item is the explicit root the protocol normalizes.
+          ...(!localCli && workingDir
+            ? [{ type: 'file' as const, path: workingDir, label: 'working directory' }]
+            : []),
+        ],
         ...(request.dispatch_payload.attachments?.length ? { attachments: request.dispatch_payload.attachments } : {}),
       });
       if (task.status === 'failed' || task.status === 'cancelled') {

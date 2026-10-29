@@ -27,11 +27,22 @@ import { openclawBackend } from './backends/openclaw.js';
 import { opencodeBackend } from './backends/opencode.js';
 import { hermesBackend } from './backends/hermes.js';
 import { workbuddyBackend } from './backends/workbuddy.js';
-import { type LocalBackend, type LocalEvent } from './backends/base.js';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { type LocalBackend, type LocalEvent, killProcessTree } from './backends/base.js';
+import {
+  registerPromotedRun,
+  settlePromotedRun,
+} from './background_run_registry.js';
 import { resolveCliProviderEnv } from './provider_env.js';
 import * as persist from './persist.js';
 import { sessionToolResultsDir } from '../../paths.js';
 import { maybeSpillToolResult, toolResultRefForPath } from '../../util/tool-result-cap.js';
+import {
+  createBackgroundRun,
+  updateBackgroundRun,
+  type BackgroundRunRecord,
+  type BackgroundRunStatus,
+} from './background_runs.js';
 import type { ExecutionKind, ExecutionLifecycleSink } from '../execution-records.js';
 import type { PreparedExecutionContext } from '../p3394/execution-context.js';
 import { isPathAllowed } from '../../util/path-sandbox.js';
@@ -151,6 +162,23 @@ const BACKENDS: Partial<Record<LocalCliType, LocalBackend>> = {
   hermes: hermesBackend,
   workbuddy: workbuddyBackend,
 };
+
+/** CLIs that can be held to a `read-only` session on their own: codex gets a
+ *  scoped `readOnly` sandbox, claude gets a read/search tool surface plus
+ *  denied tool permissions. Anything else would have to drop its bypass flags,
+ *  which makes it block on an unanswerable permission prompt (see
+ *  `resolveCliSandboxPosture` in `backends/base.ts`). */
+const READ_ONLY_CAPABLE_CLIS: ReadonlySet<LocalCliType> = new Set<LocalCliType>(['codex', 'claude']);
+
+/** CLIs whose one-shot path can expose a true zero-tool surface. Only Claude
+ *  documents an empty `--tools` value plus strict MCP config; Codex/OpenCode
+ *  can only be narrowed to read-only (still file/shell capable), so an analysis
+ *  carrying source text must not fall back to them. */
+const NO_TOOL_CAPABLE_CLIS: ReadonlySet<LocalCliType> = new Set<LocalCliType>(['claude']);
+
+export function supportsNoTools(cli: LocalCliType): boolean {
+  return NO_TOOL_CAPABLE_CLIS.has(cli);
+}
 
 function executionKindForCli(cli: LocalCliType): ExecutionKind {
   if (cli === 'codex') return 'codex';
@@ -611,13 +639,22 @@ export interface RunCliAgentOpts {
    *  opt out of the chat-dispatch policy check explicitly; ordinary dispatch
    *  keeps the assertion. */
   skipDispatchCheck?: boolean;
+  /** Accept a wall-clock / idle deadline as a promotion instead of a kill: the
+   *  CLI keeps running, this turn returns a `background` handle, and the record
+   *  under `local/background_runs` follows the run to its real ending. Opt-in —
+   *  internal callers (import / capture / extraction) keep the killing default. */
+  promoteOnDeadline?: boolean;
+  /** `none` requires a zero-tool surface (no shell/files/skills/MCP). Used for
+   *  analyses whose prompt may contain user source text. Unsupported CLIs are
+   *  refused before any run record is created. */
+  toolPolicy?: 'default' | 'none';
   /** Forwarded each backend event verbatim, after persistence. */
   onEvent: (e: LocalEvent) => void;
 }
 
 export interface RunCliAgentResult {
   runId: string;
-  status: 'completed' | 'failed' | 'cancelled' | 'timeout' | 'missing_cli';
+  status: 'completed' | 'failed' | 'cancelled' | 'timeout' | 'missing_cli' | 'background';
   output?: string;
   error?: string;
   cliError?: LocalCliEntry['error'];
@@ -625,9 +662,40 @@ export interface RunCliAgentResult {
   cliVersion?: string;
   /** Real external CLI session/thread id returned by the backend. */
   sessionId?: string;
+  /** Set when a deadline was accepted as a promotion instead of a kill: the CLI
+   *  is still working, its output keeps filling `outputPath`, and the background
+   *  record under `local/background_runs` tracks its ending. */
+  background?: {
+    runId: string;
+    outputPath: string;
+    promotedBy: 'wall' | 'idle';
+  };
+}
+
+/** Backend terminal statuses map onto the background-run vocabulary one to one;
+ *  an unknown status must not masquerade as success. */
+function backgroundStatusFor(status: RunCliAgentResult['status']): BackgroundRunStatus {
+  switch (status) {
+    case 'completed': return 'completed';
+    case 'cancelled': return 'cancelled';
+    case 'timeout': return 'timeout';
+    default: return 'failed';
+  }
 }
 
 export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
+  // The typed contract requires a signal; internal callers are JS/dynamic
+  // imports and may omit it. A missing signal must not become a TypeError in
+  // the cancellation check below.
+  const signal = opts.signal ?? new AbortController().signal;
+  const toolPolicy = opts.toolPolicy === 'none' ? 'none' : 'default';
+  if (toolPolicy === 'none' && !supportsNoTools(opts.cli)) {
+    const error = `E_LOCAL_AGENT_NO_TOOL_UNSUPPORTED: ${opts.cli} cannot be held to a zero-tool session`;
+    opts.onEvent({ type: 'done', status: 'failed', error });
+    return { runId: '', status: 'failed', error };
+  }
+  const customArgs = toolPolicy === 'none' ? undefined : opts.customArgs;
+  const resumeSessionId = toolPolicy === 'none' ? undefined : opts.resumeSessionId;
   if (!opts.skipDispatchCheck) {
     await assertAgentChatDispatchable(opts.uid, opts.agentId);
   }
@@ -647,8 +715,8 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     projectId: opts.projectId,
     cli: opts.cli,
     model: opts.model,
-    customArgs: opts.customArgs,
-    resumeSessionId: opts.resumeSessionId,
+    customArgs,
+    resumeSessionId,
     prompt: opts.prompt,
     cwd: opts.cwd,
     bridgeSupported: _bridgeSupported(opts.cli),
@@ -670,7 +738,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   const flushLifecycle = (): Promise<void> => lifecycleTail;
   const lifecycleStart = {
     kind: executionKindForCli(opts.cli),
-    ...(opts.resumeSessionId ? { sessionId: opts.resumeSessionId } : {}),
+    ...(resumeSessionId ? { sessionId: resumeSessionId } : {}),
     conversationId: opts.cid,
     agentId: opts.agentId,
     cli: opts.cli,
@@ -724,8 +792,8 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     projectId: opts.projectId,
     cli: opts.cli,
     model: opts.model,
-    customArgs: opts.customArgs,
-    resumeSessionId: opts.resumeSessionId,
+    customArgs,
+    resumeSessionId,
     prompt: opts.prompt,
     cwd: opts.cwd,
     runId: handle.runId,
@@ -860,7 +928,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   // failures never fail the dispatch — the CLI just runs without the
   // `cogseed` MCP server, same as before the bridge existed.
   let bridge: import('./bridge').BridgeHandle | null = null;
-  if (_bridgeSupported(opts.cli) && process.env.COGSEED_BRIDGE_DISABLED !== '1') {
+  if (toolPolicy !== 'none' && _bridgeSupported(opts.cli) && process.env.COGSEED_BRIDGE_DISABLED !== '1') {
     try {
       const [{ startBridge }, { buildSkillSandboxEnv }] = await Promise.all([
         import('./bridge.js'),
@@ -886,6 +954,22 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     }
   }
 
+  // Promotion state (B) lives outside the try so the finally can consult it: a
+  // promoted run must NOT get the bridge torn down under it.
+  let promoted: { kind: 'wall' | 'idle'; idleMs: number } | null = null;
+  let acceptDeadline: ((kind: 'wall' | 'idle', idleMs: number, child: ChildProcessWithoutNullStreams) => boolean) | undefined;
+  // A promoted run outlives this turn, so the only way to stop it later is the
+  // child the watchdog hands us at promotion time (see background_run_registry).
+  let promotedChild: ChildProcessWithoutNullStreams | null = null;
+  const promotionGate = new Promise<{ kind: 'wall' | 'idle'; idleMs: number }>((resolve) => {
+    acceptDeadline = (kind, idleMs, child) => { promotedChild = child; resolve({ kind, idleMs }); return true; };
+  });
+  const closeBridge = async (): Promise<void> => {
+    if (!bridge) return;
+    try { await bridge.close(); }
+    catch (err) { log.warn('bridge close failed', { ...runLogContext, error: logErrorRef(err) }); }
+  };
+
   try {
     const providerEnv = resolveCliProviderEnv(opts.uid, opts.cli, opts.cliProviderId);
     if (providerEnv) {
@@ -895,15 +979,48 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
         env_keys: Object.keys(providerEnv).join(','),
       });
     }
-    await backend.run({
+    // This executor can run arbitrary nested CLI/Skill actions. Derive scope
+    // from the host conversation, never from CLI-produced labels or prompts.
+    // 会话已删除/读不到时降级为无 project/space 作用域预检（守卫仍跑，只是
+    // 精度降低），不再整单硬拒——否则恢复旧任务、续跑已删会话的运行全部失败。
+    const { getConversation } = await import('../chats');
+    const conversation = opts.cid ? await getConversation(opts.uid, opts.cid) : undefined;
+    if (opts.cid && !conversation) {
+      log.warn('local agent host conversation missing — ontology preflight runs unscoped', runLogContext);
+    }
+    const { checkOntologyUnverifiedAction } = await import('../cognition/ontology/operation-guard');
+    const decision = await checkOntologyUnverifiedAction(opts.uid, { operationKinds: ['local_agent', 'execute_shell', 'run_skill',
+      'write_file', 'edit_file', 'delete_file', 'connector_write', 'send_message', 'send_file'], context: {
+      agentId: opts.agentId, taskText: opts.prompt,
+      ...(conversation?.project_id ? { projectId: conversation.project_id } : {}),
+      ...(conversation?.space_id ? { workspaceId: conversation.space_id } : {}),
+    } });
+    if (!decision.allowed) throw new Error('E_ONTOLOGY_OPERATION_PRECONDITION: required conditions have no verified adapter for this CLI execution');
+    if (signal.aborted) throw new Error('local action cancelled');
+    // A `read-only` run (review / scan / import) must not let the child CLI
+    // change the workspace. Only codex (scoped `readOnly` sandbox) and claude
+    // (read-only tool surface + denied tool permissions) can be held to that;
+    // for every other CLI the only way to keep the flag would be to remove its
+    // bypass flags, which makes it block on an unanswerable permission prompt
+    // and hang the run. Refuse here — the single dispatch path — rather than
+    // silently granting write access in a read-only session.
+    const readOnlyRun = opts.preparedContext?.permissionMode === 'read-only';
+    if (readOnlyRun && !READ_ONLY_CAPABLE_CLIS.has(opts.cli)) {
+      throw new Error(
+        `E_LOCAL_AGENT_READ_ONLY_UNSUPPORTED: ${opts.cli} cannot be held to a read-only session yet `
+        + '(no sandbox or tool-surface scoping); run this task with a CLI that supports it or switch the session out of read-only',
+      );
+    }
+    const backendRun = backend.run({
       binPath: entry.path,
       prompt: opts.prompt,
       cwd: opts.cwd,
       model: opts.model,
-      customArgs: opts.customArgs,
+      customArgs,
       ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
-      resumeSessionId: opts.resumeSessionId,
-      signal: opts.signal,
+      resumeSessionId,
+      signal,
+      toolPolicy,
       onEvent,
       timeoutMs,
       idleKillMs,
@@ -925,7 +1042,92 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
           appendSystemPrompt: BRIDGE_SYSTEM_PROMPT,
         },
       } : {}),
+      // Deadline promotion (B): reachable only when the caller opted in; with no
+      // callback the watchdog keeps killing exactly as before.
+      ...(opts.promoteOnDeadline && acceptDeadline ? { onDeadline: acceptDeadline } : {}),
     });
+
+    // A deadline is a decision point: when the watchdog accepted it, hand the turn
+    // back now. The CLI keeps working, its own stream consumers keep draining into
+    // the persisted output, and the continuation below owns the run's ending.
+    const raced = await Promise.race([backendRun.then(() => null), promotionGate]);
+    if (raced) {
+      promoted = raced;
+      const promotedRecord: BackgroundRunRecord = {
+        runId: handle.runId,
+        kind: 'local-cli',
+        cli: opts.cli,
+        uid: opts.uid,
+        cwd: opts.cwd,
+        argv: [entry.path],
+        pid: promotedChild?.pid ?? null,
+        startedAt: new Date(startedAtMs).toISOString(),
+        promotedBy: raced.kind,
+        outputPath: handle.outputPath,
+        resultRef: `tool-result:${toolResultRefForPath(handle.outputPath)}`,
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+      };
+      createBackgroundRun(promotedRecord);
+      if (promotedChild) {
+        const survivor = promotedChild;
+        registerPromotedRun({
+          runId: handle.runId,
+          uid: opts.uid,
+          cli: opts.cli,
+          pid: survivor.pid ?? null,
+          stop: () => {
+            try { killProcessTree(survivor, 'SIGKILL'); }
+            catch (err) { log.warn('promoted run stop failed', { ...runLogContext, error: logErrorRef(err) }); }
+          },
+        });
+      }
+      onEvent({
+        type: 'log',
+        level: 'warn',
+        message: `promoted to background (${raced.kind} deadline): run ${handle.runId}; output keeps filling ${handle.outputPath}`,
+      });
+      // Detached: nothing awaits this continuation. It settles the persisted run
+      // and the record once the CLI really exits, and owns the bridge teardown.
+      void backendRun.then(async () => {
+        try {
+          await closeBridge();
+          const status = terminal?.status ?? 'timeout';
+          const output = terminal?.output ?? streamedOutput;
+          await persist.finalize(handle, {
+            status,
+            ...(output !== undefined ? { output } : {}),
+            ...(terminal?.error ? { error: terminal.error } : {}),
+            ...(terminal?.sessionId ? { sessionId: terminal.sessionId } : {}),
+            durationMs: Date.now() - startedAtMs,
+          });
+          updateBackgroundRun(opts.uid, handle.runId, {
+            status: backgroundStatusFor(status),
+            outputPath: handle.outputPath,
+            ...(terminal?.error ? { error: terminal.error } : {}),
+          });
+          settlePromotedRun(handle.runId);
+        } catch (err) {
+          log.warn('promoted run finalize failed', { ...runLogContext, error: logErrorRef(err) });
+          updateBackgroundRun(opts.uid, handle.runId, {
+            status: 'failed',
+            error: (err as Error).message || String(err),
+          });
+          settlePromotedRun(handle.runId);
+        }
+      });
+      clearInterval(idleTimer);
+      return {
+        runId: handle.runId,
+        status: 'background',
+        ...(streamedOutput ? { output: streamedOutput } : {}),
+        error: `moved to background after ${raced.kind === 'idle' ? `${raced.idleMs}ms without activity` : `the ${timeoutMs}ms wall-clock cap`}; the CLI keeps running and its output stays at ${handle.outputPath}`,
+        background: { runId: handle.runId, outputPath: handle.outputPath, promotedBy: raced.kind },
+      };
+    }
+    // Not promoted: the ordinary path, unchanged — including the bridge teardown
+    // in the finally below.
+    await backendRun;
   } catch (err) {
     const msg = (err as Error).message || String(err);
     log.error('local agent backend threw', { ...runLogContext, error: logErrorSummary(err) });
@@ -933,10 +1135,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
       onEvent({ type: 'done', status: 'failed', error: msg });
     }
   } finally {
-    if (bridge) {
-      try { await bridge.close(); }
-      catch (err) { log.warn('bridge close failed', { ...runLogContext, error: logErrorRef(err) }); }
-    }
+    if (!promoted) await closeBridge();
   }
 
   clearInterval(idleTimer);

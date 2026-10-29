@@ -24,6 +24,8 @@ import { userTranscriptRunDir, userTranscriptRunsDir } from '../paths';
 import { createLogger } from '../logger';
 import type { ApplyResult, AppliedSummary, OffsetSegment } from './transcript_auto_correct';
 import { loadGlossary } from './transcript_glossary';
+import { docKeyForDocId } from './meeting_doc';
+import { emitMeetingStage } from './meeting_stage_events';
 
 const log = createLogger('transcript_correction_runs');
 
@@ -175,7 +177,35 @@ export function createRun(userId: string, input: CreateRunInput): CorrectionRun 
     // 锚点：原稿块 → 合并块的时间区间与原文范围，供引用/时间戳回查
     anchors: Array.isArray(input.anchors) ? input.anchors : [],
   });
+
+  // 会议环节完成事件：纠错**已应用**时广播一次，供会议产物沉淀消费
+  // （specs/009-meeting-output-archive 契约 A4 / T017）。
+  // 位置纪律：必须在全部落盘**成功之后**才发。emitMeetingStage 自身永不抛异常，
+  // 因此本函数的返回值与副作用顺序不受影响（沉淀失败不得让纠错主流程失败）。
+  if (run.status === 'applied') {
+    emitMeetingStage({
+      stage: 'transcript_applied',
+      uid: userId,
+      docKey: docKeyForDocId(run.docId),
+      docId: run.docId,
+      artifactKind: 'corrected_transcript',
+      sourceAbsPath: path.join(dir, 'after.txt'),
+      confirmed: true,
+      version: run.runId,
+      at: new Date().toISOString(),
+    });
+  }
+
   return run;
+}
+
+/** 测试专用：暴露本模块**自己解析出的**某个 run 的目录与产物路径。
+ *  用途是让测试与实现使用同一个路径基准。本仓库测试普遍用 `vi.resetModules()` + 动态 import，
+ *  测试若另导入一份 `paths` 可能闭包到不同的 WS_ROOT，手工拼路径就会拼到别处 ——
+ *  那会让测试以 source_missing 假失败（实测踩过）。仅供测试与诊断，生产代码不应调用。 */
+export function runArtifactPathsForTest(userId: string, runId: string): { dir: string; before: string; after: string } {
+  const dir = runDir(userId, runId);
+  return { dir, before: path.join(dir, 'before.txt'), after: path.join(dir, 'after.txt') };
 }
 
 export function getRun(userId: string, runId: string): CorrectionRun | null {

@@ -1,210 +1,97 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-
-// 标题闸门（设计 3.2）后晋升链对不合规 summary 走 LLM 起标题；本文件走的是
-// 内生写入路径（summary＝正文首句/模板拼接），单测无模型，mock 出确定性
-// 合规标题（与 asset-title-suggestion.test.ts 同一边界口径）。
-vi.mock('../../../../src/main/features/recall/asset-title-suggestion', () => ({
-  suggestAbilityAssetTitle: async () => ({ title: '模型重起的样本标题' }),
-}))
-
-let tmpDir: string;
-let previousRoot: string | undefined;
-
-beforeEach(() => {
-  vi.resetModules();
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-teaching-'));
-  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
-  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
-});
-
-afterEach(() => {
-  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-describe('User teaching signals', () => {
-  it('classifies only explicit teaching language', async () => {
-    const teaching = await import('../../../../src/main/features/recall/teaching-service');
-    expect(teaching.classifyTeachingIntent('记住我更喜欢简短回答')).toBe('prefer');
-    expect(teaching.classifyTeachingIntent('不要再自动修改 KSTAR')).toBe('avoid');
-    expect(teaching.classifyTeachingIntent('纠正一下，不是 A 而是 B')).toBe('correct');
-    expect(teaching.classifyTeachingIntent('请继续处理这个任务')).toBeUndefined();
+vi.mock('../../../../src/main/features/recall/asset-title-suggestion', () => ({ suggestAbilityAssetTitle: async () => ({ title: '来源可追溯的结论' }) }));
+let root: string, previousRoot: string | undefined;
+beforeEach(() => { vi.resetModules(); root = fs.mkdtempSync(path.join(os.tmpdir(), 'historical-teaching-')); previousRoot = process.env.COGSEED_WORKSPACE_ROOT; process.env.COGSEED_WORKSPACE_ROOT = root; });
+afterEach(() => { if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT; else process.env.COGSEED_WORKSPACE_ROOT = previousRoot; fs.rmSync(root, { recursive: true, force: true }); });
+async function historicalSignal(id = 'legacy-teaching-a', candidateIds: string[] = [], conversationId = 'conv-a') {
+  const store = await import('../../../../src/main/features/recall/store');
+  const record = { schemaVersion: 1, taxonomyVersion: 2, ownerId: 'user-a', id,
+    conversationId, messageId: `message-${id}`, intent: 'remember', scope: 'project', status: 'active',
+    summary: '所有结论都附来源。', candidateIds, createdAt: '2026-09-28T10:00:00.000Z' };
+  await store.updateRecallJsonRecord('user-a', 'teaching-signals', id, () => record);
+  return record;
+}
+async function historicalCandidate(signalId: string) {
+  const store = await import('../../../../src/main/features/recall/store');
+  const candidates = await import('../../../../src/main/features/recall/candidate-service');
+  const id = `legacy-candidate-${signalId}`;
+  const now = new Date().toISOString();
+  const refs = [{ kind: 'user_teaching_signal', id: signalId, taxonomyVersion: 2, subtype: 'teaching', scope: 'project' }];
+  await store.writeRecallJsonRecord('user-a', 'candidates', id, {
+    schemaVersion: 2, ownerId: 'user-a', id, contentFormatVersion: 1, taxonomyVersion: 2,
+    judgment: '所有结论都附可核验的原始来源。', value: '让长期复核可以追溯原始依据。',
+    summary: '来源可追溯的结论', suggestedType: 'rule', suggestedScope: 'project', suggestedAction: 'create', risk: 'low',
+    applicableWhen: ['记录结论时'], forbiddenWhen: ['原始来源不可用时'],
+    origin: 'teaching', captureKey: `teaching-${signalId}`, sourceRefs: refs, evidenceRefs: refs,
+    status: 'pending_review', createdAt: now, updatedAt: now, expiresAt: '2099-01-01T00:00:00.000Z',
   });
-
-  it('标题与会话整理线统一（2026-09-29）：正文首句短标题，不再前 239 字截断', async () => {
-    const teaching = await import('../../../../src/main/features/recall/teaching-service');
-    const longMemory = '部署任何服务前先跑一遍冒烟清单，任何一步失败都停下来排查而不是带病上线。'.repeat(6);
-    const signal = await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
-      conversationId: 'conv-title',
-      messageId: 'message-title',
-      userMessage: '请记住：部署前先跑冒烟清单，任何一步失败都停下来排查而不是带病上线。',
-      memoryContent: longMemory,
-      memoryScope: 'personal' as const,
-    });
-    // 标题=正文首句截到 60 字（makeDisplayTitle），不再是 239 字的半行正文。
-    expect(signal!.summary.length).toBeLessThanOrEqual(60);
-    expect(signal!.summary).not.toContain('……');
+  return candidates.readRecallCandidate('user-a', id);
+}
+describe('historical teaching signals after formation retirement', () => {
+  it('has no public signal/candidate generation interface', async () => {
+    const service = await import('../../../../src/main/features/recall/teaching-service');
+    for (const name of ['recordTeachingSignalAfterMemoryWrite', 'recordUserTeachingSignal', 'classifyTeachingIntent', 'teachingSignalId', 'teachingMemoryRef']) expect(service).not.toHaveProperty(name);
   });
-
-  it('creates one idempotent pending candidate and revokes both review inputs', async () => {
-    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+  it('reads preserved historical records without creating new candidates or rewriting them', async () => {
+    const stored = await historicalSignal();
+    const service = await import('../../../../src/main/features/recall/teaching-service');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const input = {
-      conversationId: 'conv-a',
-      messageId: 'message-a',
-      userMessage: '请记住：以后所有结论都附来源。',
-      memoryContent: '所有结论都附来源。',
-      memoryScope: 'project' as const,
-    };
-    const signals = await Promise.all([
-      teaching.recordTeachingSignalAfterMemoryWrite('user-a', input),
-      teaching.recordTeachingSignalAfterMemoryWrite('user-a', input),
-      teaching.recordTeachingSignalAfterMemoryWrite('user-a', input),
-    ]);
-
-    expect(new Set(signals.map((signal) => signal?.id)).size).toBe(1);
-    expect(signals[0]).toMatchObject({ taxonomyVersion: 2, status: 'active', scope: 'project', candidateIds: [expect.stringMatching(/^cand-/)] });
-    const listedCandidates = await candidates.listRecallCandidates('user-a');
-    expect(listedCandidates).toHaveLength(1);
-    expect(listedCandidates[0]).toMatchObject({ status: 'pending_review', captureKey: `teaching-${signals[0]!.id}` });
-    expect(listedCandidates[0].sourceRefs.map((ref) => `${ref.kind}:${ref.subtype}`)).toEqual([
-      'conversation:session',
-      'conversation:message',
-      'user_teaching_signal:teaching',
-    ]);
-
-    const revoked = await teaching.revokeUserTeachingSignal('user-a', signals[0]!.id);
-    expect(revoked).toMatchObject({ status: 'revoked', revokedAt: expect.any(String) });
-    await expect(candidates.readRecallCandidate('user-a', revoked.candidateIds[0])).resolves.toMatchObject({ status: 'rejected' });
+    expect(await service.readUserTeachingSignal('user-a', stored.id)).toMatchObject(stored);
+    expect(await service.listUserTeachingSignals('user-a')).toHaveLength(1);
+    expect(await candidates.listRecallCandidates('user-a')).toEqual([]);
+    const store = await import('../../../../src/main/features/recall/store');
+    expect(await store.readRecallJsonRecord('user-a', 'teaching-signals', stored.id)).toEqual(stored);
   });
-
-  it('does not create a signal when a successful memory write was not explicitly requested', async () => {
-    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+  it('revokes an existing signal and its pending candidate, preserving their histories', async () => {
+    const signal = await historicalSignal(); const candidate = await historicalCandidate(signal.id);
+    await historicalSignal(signal.id, [candidate.id]);
+    const service = await import('../../../../src/main/features/recall/teaching-service');
+    expect(await service.revokeUserTeachingSignal('user-a', signal.id)).toMatchObject({ status: 'revoked', candidateIds: [candidate.id], revokedAt: expect.any(String) });
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    await expect(teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
-      conversationId: 'conv-a',
-      messageId: 'message-a',
-      userMessage: '继续完成数据接入。',
-      memoryContent: '当前项目使用 TypeScript。',
-      memoryScope: 'project',
-    })).resolves.toBeUndefined();
-    await expect(candidates.listRecallCandidates('user-a')).resolves.toEqual([]);
+    expect((await candidates.readRecallCandidate('user-a', candidate.id)).status).toBe('rejected');
   });
-
-  it('downgrades a promoted asset when its teaching Evidence is revoked', async () => {
-    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+  it('pauses and downgrades an already promoted asset when its historical evidence is revoked', async () => {
+    const signal = await historicalSignal(); const candidate = await historicalCandidate(signal.id);
+    await historicalSignal(signal.id, [candidate.id]);
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const assets = await import('../../../../src/main/features/recall/asset-service');
-    const signal = await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
-      conversationId: 'conv-a',
-      messageId: 'message-a',
-      userMessage: '请记住：所有结论都附来源。',
-      memoryContent: '所有结论都附来源。',
-      memoryScope: 'project',
-    });
-    const candidate = await candidates.readRecallCandidate('user-a', signal!.candidateIds[0]);
-    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' })).asset;
+    // This asset was already confirmed before producer retirement.
+    const asset = await seedStoredAbilityAsset('user-a', {
+      schemaVersion: 2, ownerId: 'user-a', id: 'legacy-teaching-asset', candidateId: candidate.id,
+      type: 'rule', title: candidate.summary, statement: candidate.judgment,
+      scope: 'project', status: 'active', lifecycleStatus: 'user_confirmed_unverified', maturity: 'bud', version: '1',
+      reviewDecisionId: 'legacy-teaching-confirmation', evidenceRefs: candidate.evidenceRefs,
+      applicableWhen: candidate.applicableWhen, forbiddenWhen: candidate.forbiddenWhen,
+      createdAt: '2026-09-28T10:00:00.000Z', updatedAt: '2026-09-28T10:00:00.000Z',
+    }, { actor: 'user', reason: 'pre-existing teaching asset' });
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('user-a', 'candidates', candidate.id, raw => ({ ...raw!, status: 'confirmed', promotedAssetId: asset.id }));
     await assets.setAbilityAssetMaturity('user-a', asset.id, 'transfer_validated');
-
-    await teaching.revokeUserTeachingSignal('user-a', signal!.id);
-
-    await expect(assets.readAbilityAsset('user-a', asset.id)).resolves.toMatchObject({
-      status: 'paused',
-      maturity: 'bud',
-    });
+    const service = await import('../../../../src/main/features/recall/teaching-service');
+    await service.revokeUserTeachingSignal('user-a', signal.id);
+    expect(await assets.readAbilityAsset('user-a', asset.id)).toMatchObject({ status: 'paused', maturity: 'bud' });
     const audit = await assets.listAbilityAssetAudit('user-a', asset.id);
-    expect(audit).toContainEqual(expect.objectContaining({
-      action: 'maturity_downgraded',
-      note: `evidence_revoked:user_teaching_signal:${signal!.id}`,
-    }));
-    expect(audit).toContainEqual(expect.objectContaining({
-      action: 'paused',
-      note: `evidence_revoked:user_teaching_signal:${signal!.id}`,
-    }));
-    // Paused assets no longer enter injection (injection only reads active).
-    expect(assets.readAbilityAsset).toBeDefined();
+    expect(audit).toContainEqual(expect.objectContaining({ action: 'maturity_downgraded', note: `evidence_revoked:user_teaching_signal:${signal.id}` }));
+    expect(audit).toContainEqual(expect.objectContaining({ action: 'paused', note: `evidence_revoked:user_teaching_signal:${signal.id}` }));
+    await service.revokeUserTeachingSignal('user-a', signal.id);
+    expect((await assets.readAbilityAsset('user-a', asset.id)).status).toBe('paused');
+    expect((await assets.listAbilityAssetAudit('user-a', asset.id)).filter(row => row.action === 'paused')).toHaveLength(1);
   });
-
-  it('keeps the system pause idempotent across repeated revocations', async () => {
-    const teaching = await import('../../../../src/main/features/recall/teaching-service');
-    const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const signal = await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
-      conversationId: 'conv-a',
-      messageId: 'message-a',
-      userMessage: '请记住：所有结论都附来源。',
-      memoryContent: '所有结论都附来源。',
-      memoryScope: 'project',
-    });
-    const candidate = await candidates.readRecallCandidate('user-a', signal!.candidateIds[0]);
-    await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
-
-    await teaching.revokeUserTeachingSignal('user-a', signal!.id);
-    // The teaching candidate itself is promoted: the asset stays paused once
-    // (idempotent second revoke changes nothing).
-    await teaching.revokeUserTeachingSignal('user-a', signal!.id);
-    const asset = (await assets.listAbilityAssets('user-a'))[0];
-    expect(asset.status).toBe('paused');
-  });
-});
-
-/**
- * 教学回执的真实总数。
- *
- * `listUserTeachingSignals` 的 limit 默认 20、上限 100，「待我处理」的指标此前
- * 取 `list(...).length`——超过 20 条那个数字就是错的，而且错得不可见。
- */
-describe('User teaching signals › items + total', () => {
-  async function seed(count: number) {
-    const teaching = await import('../../../../src/main/features/recall/teaching-service');
-    for (let i = 0; i < count; i += 1) {
-      await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
-        conversationId: 'conv-total',
-        messageId: `message-${i}`,
-        userMessage: '请记住：以后都要这样做。',
-        memoryContent: `长期约定第 ${i} 条。`,
-        memoryScope: 'project' as const,
-      });
-    }
-    return teaching;
-  }
-
-  /** Contract：items 受 limit 约束，total 是满足条件的真实条数。 */
-  it('limit 只截断 items，total 给出真实条数', async () => {
-    const teaching = await seed(25);
-
-    const page = await teaching.listUserTeachingSignalPage('user-a', { limit: 10 });
-
-    expect(page.items.length).toBeLessThanOrEqual(10);
-    expect(page.items).toHaveLength(10);
-    expect(page.total).toBe(25);
-    // 这正是修复前的错法：拿截断后的长度当总数。
-    expect(page.total).not.toBe(page.items.length);
-  });
-
-  /** total 与 items 必须走同一套过滤条件，否则两个数字互相对不上。 */
-  it('total 与 items 使用同一过滤条件', async () => {
-    const teaching = await seed(6);
-    const all = await teaching.listUserTeachingSignalPage('user-a', { limit: 100 });
-    const revoked = await teaching.revokeUserTeachingSignal('user-a', all.items[0].id);
-    expect(revoked.status).toBe('revoked');
-
-    const activeOnly = await teaching.listUserTeachingSignalPage('user-a', { status: 'active', limit: 2 });
-
-    expect(activeOnly.total).toBe(5);
-    expect(activeOnly.items).toHaveLength(2);
-    expect(activeOnly.items.every((signal) => signal.status === 'active')).toBe(true);
-  });
-
-  /** 旧出口的行为不能变——它仍是很多调用方的读口。 */
-  it('保留原列表出口的行为不变', async () => {
-    const teaching = await seed(3);
-    const list = await teaching.listUserTeachingSignals('user-a', { limit: 2 });
-    expect(Array.isArray(list)).toBe(true);
-    expect(list).toHaveLength(2);
+  it('preserves real totals, limit behavior, and conversation/status filtering', async () => {
+    for (let index = 0; index < 25; index++) await historicalSignal(`legacy-total-${index}`, [], index < 6 ? 'conv-subset' : 'conv-a');
+    const service = await import('../../../../src/main/features/recall/teaching-service');
+    expect(await service.listUserTeachingSignalPage('user-a', { limit: 10 })).toMatchObject({ total: 25, items: expect.any(Array) });
+    expect((await service.listUserTeachingSignalPage('user-a', { limit: 10 })).items).toHaveLength(10);
+    const subset = await service.listUserTeachingSignalPage('user-a', { conversationId: 'conv-subset', limit: 2 });
+    expect(subset.total).toBe(6); expect(subset.items).toHaveLength(2);
+    await service.revokeUserTeachingSignal('user-a', subset.items[0].id);
+    const active = await service.listUserTeachingSignalPage('user-a', { conversationId: 'conv-subset', status: 'active', limit: 2 });
+    expect(active.total).toBe(5); expect(active.items).toHaveLength(2);
+    expect(active.items.every(item => item.status === 'active')).toBe(true);
+    expect(await service.listUserTeachingSignals('user-a', { limit: 2 })).toHaveLength(2);
   });
 });

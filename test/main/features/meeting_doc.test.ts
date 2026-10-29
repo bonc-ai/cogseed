@@ -20,6 +20,8 @@ import {
   getMeetingDoc,
   listMeetingDocs,
   meetingDocFile,
+  readMeetingMinutes,
+  saveMeetingMinutes,
 } from '../../../src/main/features/meeting_doc';
 import { userMeetingDocsDir, userMeetingActionDraftsDir, userMeetingMetricsFile, userMeetingRefsDir, userTranscriptGlossaryDir, userTranscriptMetricsFile } from '../../../src/main/paths';
 
@@ -238,5 +240,32 @@ describe('degraded（T021）：no_speakers / no_scenario_tags / no_transcript_ru
     expect(degradedFlagsOf({ speakers: ['张磊'] })).toEqual(['no_scenario_tags', 'no_transcript_run']);
     expect(degradedFlagsOf({ speakers: ['张磊'], scenarioTags: ['组会'] })).toEqual(['no_transcript_run']);
     expect(degradedFlagsOf({ speakers: ['张磊'], scenarioTags: ['组会'], transcript: { runId: 'r', beforeSha1: 's', at: '' } })).toEqual([]);
+  });
+});
+
+describe('纪要正文 minutes（meeting.minutes.get/save 的 features 底座，2026-10-02）', () => {
+  it('保存后回读一致；空串清除字段不留空壳', () => {
+    expect(readMeetingMinutes(uid, 'kb/meetings/a.md')).toBe(''); // 未建档：空串不抛错
+    const doc = saveMeetingMinutes(uid, 'kb/meetings/a.md', '# 标题\n\n正文');
+    expect(doc.minutes).toBe('# 标题\n\n正文');
+    expect(readMeetingMinutes(uid, 'kb/meetings/a.md')).toBe('# 标题\n\n正文');
+    const cleared = saveMeetingMinutes(uid, 'kb/meetings/a.md', '');
+    expect(cleared.minutes).toBeUndefined();
+    expect(readMeetingMinutes(uid, 'kb/meetings/a.md')).toBe('');
+  });
+
+  it('保存复用同一文档（不另建文件）；旧文档（无 minutes 字段）天然兼容', () => {
+    const first = getMeetingDoc(uid, 'kb/meetings/b.md', { create: true, title: 'B' });
+    const after = saveMeetingMinutes(uid, 'kb/meetings/b.md', '正文B');
+    expect(after.createdAt).toBe(first.createdAt); // 同一条文档的延续
+    expect(after.title).toBe('B'); // 既有字段不被覆盖
+    expect(listMeetingDocs(uid).map((d) => d.docId)).toEqual(['kb/meetings/b.md']); // 仍只有一条
+  });
+
+  it('超长（>20000）与非 string 拒绝为 invalid_minutes（不截断——截断会静默丢内容）', () => {
+    saveMeetingMinutes(uid, 'kb/meetings/c.md', 'x'.repeat(20000)); // 恰好上限：允许
+    expect(() => saveMeetingMinutes(uid, 'kb/meetings/c.md', 'x'.repeat(20001))).toThrowError(MeetingDocError);
+    expect(() => saveMeetingMinutes(uid, 'kb/meetings/c.md', undefined as unknown as string)).toThrowError(/invalid_minutes|invalid meeting minutes/);
+    expect(() => readMeetingMinutes(uid, '')).toThrowError(MeetingDocError);
   });
 });

@@ -166,6 +166,19 @@ export function normalizeAbilityTagName(input: unknown): string {
   return name;
 }
 
+/** 标签集合比较：大小写不敏感、忽略顺序与重复。
+ *
+ *  标签更新不 bump 内容版本，`expectedVersion` 看不到标签维度的并发改动；
+ *  写入前的标签 CAS 只能用集合比较，不能用字符串数组相等（顺序变化会误判）。 */
+export function sameAbilityTagSet(left: readonly string[], right: readonly string[]): boolean {
+  const toSet = (list: readonly string[]) => new Set(list.map((name) => tagKey(String(name))));
+  const current = toSet(left);
+  const expected = toSet(right);
+  if (current.size !== expected.size) return false;
+  for (const key of current) if (!expected.has(key)) return false;
+  return true;
+}
+
 function asTag(value: RecallJsonRecord): AbilityTagRecord {
   if (
     typeof value.name !== 'string' || !value.name.trim() || value.name.length > ABILITY_TAG_NAME_MAX_LENGTH

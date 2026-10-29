@@ -1,10 +1,11 @@
+// 身份、发言与文件名均为合成测试样例；时间仅用于解析和顺序断言。
 /**
  * transcript_glossary — 词表模型/归一化/风险分级/迁移/台账
  *
- * 重点覆盖（对齐 AGENTS「测业务不变量、恢复路径、文本陷阱」）：
+ * 使用合成身份与词条，覆盖以下数据契约：
  *   - 全角/大小写归一化后仍能 1:1 定位（否则扫描器 span 会整体错位）；
- *   - 高危短词分级（真实事故：`for`/`model`/`cloud` 这类合法英文词被全局替换）；
- *   - 纯数字变体 / 单姓敬称拒绝入册（真实事故：姓氏变体被当全局规则）；
+ *   - 高危短词分级（`for`/`model`/`cloud` 等合法英文词不能被静默全局替换）；
+ *   - 纯数字变体 / 单姓敬称拒绝入册（避免将局部名称变体当作全局规则）；
  *   - v1→v2 迁移（老方案文件不能被读成空表）；
  *   - uid 不匹配、JSON 损坏时的降级路径；
  *   - 台账只追加（改写台账 = 审计失效）。
@@ -34,7 +35,6 @@ import {
   discardCandidate,
   recordCandidates,
   recordReplacement,
-  rememberConfirmedPairs,
   removeContextAllow,
   retargetEntry,
   setIgnored,
@@ -43,6 +43,7 @@ import {
   setEntryStatus,
   deleteEntry,
   upsertEntry,
+  updateEntry,
 } from '../../../src/main/features/transcript_glossary';
 import { scanText } from '../../../src/main/features/transcript_auto_correct';
 import { userTranscriptGlossaryFile } from '../../../src/main/paths';
@@ -150,7 +151,7 @@ describe('接受的三个动作（范围 / 忽略 / 加白）', () => {
     expect(setScope(uid, [a.id], { choice: 'task', scenarioTags: ['组会'] }).updated).toBe(1);
     expect(findEntry(uid, a.id)!.scope).toEqual({ docIds: [], scenarioTags: ['组会'], global: false });
 
-    // 高危词条拒绝全局：拒绝项如实回报，且原作用域不变（方案 §2.2 红线）
+    // 高危词条拒绝全局：拒绝项如实回报，且原作用域不变
     const before = findEntry(uid, risky.id)!.scope;
     const refused = setScope(uid, [a.id, risky.id], { choice: 'global' });
     expect(refused.updated).toBe(1);
@@ -211,10 +212,10 @@ describe('风险分级', () => {
   });
 
   it('单姓敬称 / 纯数字 / 显式 partial → high 或拒绝', () => {
-    expect(deriveRiskLevel({ wrong: '朱老师', correct: '朱明', action: 'replace' })).toBe('high');
+    expect(deriveRiskLevel({ wrong: '朱老师', correct: '示例甲', action: 'replace' })).toBe('high');
     expect(isSingleSurnameHonorific('王总')).toBe(true);
     expect(isSingleSurnameHonorific('王总工')).toBe(false);
-    expect(isPureDigits('20231080000006')).toBe(true);
+    expect(isPureDigits('00000000000042')).toBe(true);
     expect(isPureDigits('k42')).toBe(false);
     expect(deriveRiskLevel({ wrong: 'Coco', correct: 'Cogseed', action: 'replace', partial: true })).toBe('high');
   });
@@ -256,7 +257,7 @@ describe('CRUD 与不变量', () => {
   });
 
   it('纯数字变体拒绝入册', () => {
-    const res = upsertEntry(uid, { wrong: '20231080000006', correct: '某学号' });
+    const res = upsertEntry(uid, { wrong: '00000000000042', correct: '某学号' });
     expect(res.entry).toBeNull();
     expect(res.skippedReason).toBe('pure_digit_variant');
     expect(listEntries(uid)).toHaveLength(0);
@@ -362,7 +363,7 @@ describe('迁移与降级', () => {
 describe('导入导出', () => {
   it('导出默认剔除人名类；includePeople 才导出', () => {
     upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed' });
-    upsertEntry(uid, { wrong: '张旗康', correct: '张启康', kind: 'people' });
+    upsertEntry(uid, { wrong: '示例加', correct: '示例甲', kind: 'people' });
     expect(exportGlossary(uid).entries).toHaveLength(1);
     expect(exportGlossary(uid, { includePeople: true }).entries).toHaveLength(2);
   });
@@ -403,56 +404,18 @@ describe('entryId', () => {
   });
 });
 
-/**
- * 「勾选并应用 = 确认」的落表路径（D1=B：模型建议被采纳后成为词表规则）。
- *
- * 这里钉的是一个**真实陷阱**：`upsertEntry` 里 `source === 'meeting_accept'`
- * 只会把 `global` 置 false，却不动 `docIds` ⇒ 条目 `scopeAllows` 恒为 false，
- * 是一条永不命中的死规则（'meeting_accept' 一直没有调用方的原因）。
- */
-describe('rememberConfirmedPairs：确认的对才进词表，且只对本文档生效', () => {
-  it('按 meeting_accept 入册，作用域收窄到当前文档（不是全局）', () => {
-    const r = rememberConfirmedPairs(uid, [{ wrong: '付平', correct: '傅平' }], { docId: 'doc_1' });
-    expect(r).toMatchObject({ created: 1, skipped: 0 });
-    const entry = listEntries(uid, { status: 'active' })[0];
-    expect(entry).toMatchObject({ wrong: '付平', correct: '傅平', source: 'meeting_accept' });
-    expect(entry.scope.global).toBe(false);
-    expect(entry.scope.docIds).toEqual(['doc_1']);
-  });
-
-  it('该规则真的会命中本文档、且不影响别的文档（这条曾经是死规则）', () => {
-    rememberConfirmedPairs(uid, [{ wrong: '付平', correct: '傅平' }], { docId: 'doc_1' });
-    const entries = listEntries(uid, { status: 'active' });
-    const text = '这个方案要付平老师确认。';
-    const here = scanText(text, entries, { docId: 'doc_1' });
-    expect(here.candidates.map((c) => [c.wrong, c.correct])).toEqual([['付平', '傅平']]);
-    const other = scanText(text, entries, { docId: 'doc_2' });
-    expect(other.candidates).toEqual([]);
-  });
-
-  it('没有 docId 时如实跳过，不写"永不命中"的死条目', () => {
-    const r = rememberConfirmedPairs(uid, [{ wrong: 'a', correct: 'b' }], {});
-    expect(r).toMatchObject({ created: 0, skipped: 1 });
-    expect(listEntries(uid)).toEqual([]);
-  });
-
-  it('重复确认同一对是幂等更新，且同一批里的重复只算一条', () => {
-    rememberConfirmedPairs(uid, [{ wrong: '付平', correct: '傅平' }], { docId: 'doc_1' });
-    const again = rememberConfirmedPairs(uid, [
-      { wrong: '付平', correct: '傅平' },
-      { wrong: '付平', correct: '傅平' },
-    ], { docId: 'doc_1' });
-    expect(again).toMatchObject({ created: 0, updated: 1 });
-    expect(listEntries(uid, { status: 'active' })).toHaveLength(1);
-  });
-
-  it('空目标不写脏数据，且不因单条不合法让整批失败', () => {
-    const r = rememberConfirmedPairs(uid, [
-      { wrong: '', correct: 'x' },
-      { wrong: '付平', correct: '傅平' },
-    ], { docId: 'doc_1' });
-    expect(r).toMatchObject({ created: 1, skipped: 1 });
-    expect(listEntries(uid, { status: 'active' })).toHaveLength(1);
+describe('历史会议纠错词条继续按作用域读取和应用', () => {
+  it('原有 meeting_accept 词条只命中原文档，不改变词表', () => {
+    const original = upsertEntry(uid, { wrong: '例加', correct: '例甲', source: 'manual', docId: 'doc_1' }).entry!;
+    const file = loadGlossary(uid);
+    file.entries.find(entry => entry.id === original.id)!.source = 'meeting_accept';
+    saveGlossary(uid, file);
+    const before = JSON.stringify(loadGlossary(uid));
+    const entries = listEntries(uid);
+    const text = '这个方案要例加老师确认。';
+    expect(scanText(text, entries, { docId: 'doc_1' }).candidates.map(c => [c.wrong, c.correct])).toEqual([['例加', '例甲']]);
+    expect(scanText(text, entries, { docId: 'doc_2' }).candidates).toEqual([]);
+    expect(JSON.stringify(loadGlossary(uid))).toBe(before);
   });
 });
 
@@ -489,5 +452,153 @@ describe('新词条默认作用域（不得静默成为全局规则）', () => {
     const again = upsertEntry(uid, { wrong: 'baz term', correct: 'Baz Term' }).entry!;
     expect(again.id).toBe(first.id);
     expect(again.scope).toEqual({ docIds: ['doc-A'], scenarioTags: [], global: false });
+  });
+});
+
+/**
+ * updateEntry —— 词表面板的「编辑」入口（方案 §七人工维护）。
+ *
+ * 真实反馈（2026-10-15）：「发现有个地方明显有问题，但其实不能改，那这个路径是不通的」。
+ * 守的不变量：
+ *   - 编辑必须原子（一次读写），不能出现"删掉了但没建成"的中间态；
+ *   - 身份没变时走 retargetEntry 的语义（写法修正 ≠ 一次新确认，台账/统计不许动）；
+ *   - 身份变了时台账与统计必须跟着走（用户是在改这一条，不是新建一条）；
+ *   - 风险等级只升不降；
+ *   - 撞已有词条要拒绝，不静默合并。
+ */
+describe('updateEntry：编辑一条已有词条', () => {
+  it('只改正确写法 → 原地更新，id/createdAt 不变，台账与 freq 不动', () => {
+    const created = upsertEntry(uid, { wrong: '健全', correct: '鉴权', docId: 'doc-A' }).entry!;
+    recordReplacement(uid, [created.id], { docId: 'doc-A', runId: 'r1' });
+    const before = findEntry(uid, created.id)!;
+    expect(before.freq).toBe(1);
+
+    const res = updateEntry(uid, created.id, { correct: '权限校验' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.replacedId).toBeNull();
+    expect(res.entry.id).toBe(created.id);
+    expect(res.entry.correct).toBe('权限校验');
+    expect(res.entry.wrong).toBe('健全');
+    expect(res.entry.createdAt).toBe(before.createdAt);
+    // 写法修正不等于一次新确认：台账与统计必须原样
+    expect(res.entry.freq).toBe(1);
+    expect(res.entry.replacedIn.length).toBe(before.replacedIn.length);
+  });
+
+  it('改了错误写法 → 换身份，台账/freq/createdAt 全部继承过来', () => {
+    const created = upsertEntry(uid, { wrong: '章浩', correct: '张浩', docId: 'doc-A' }).entry!;
+    recordReplacement(uid, [created.id], { docId: 'doc-A', runId: 'r1' });
+    const before = findEntry(uid, created.id)!;
+
+    const res = updateEntry(uid, created.id, { wrong: '阿浩' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.replacedId).toBe(created.id);
+    expect(res.entry.wrong).toBe('阿浩');
+    expect(res.entry.correct).toBe('张浩');
+    // 是"改这一条"，不是"新建一条"：统计与台账跟着走
+    expect(res.entry.freq).toBe(before.freq);
+    expect(res.entry.replacedIn.length).toBe(before.replacedIn.length);
+    expect(res.entry.createdAt).toBe(before.createdAt);
+    // 旧身份必须消失，不能新旧并存
+    expect(listEntries(uid).filter((e) => e.wrong === '章浩')).toHaveLength(0);
+    expect(listEntries(uid)).toHaveLength(1);
+  });
+
+  it('风险等级只升不降：把高危短词改成更危险的形态，等级跟着升', () => {
+    const created = upsertEntry(uid, { wrong: 'redmi', correct: 'README', docId: 'doc-A' }).entry!;
+    expect(created.riskLevel).toBe('high');
+    const res = updateEntry(uid, created.id, { wrong: '模型' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // 中文两字必然是 high；不允许降到 low/medium
+    expect(res.entry.riskLevel).toBe('high');
+  });
+
+  it('用户显式改风险 → 按用户选择保存（可以调低）', () => {
+    const created = upsertEntry(uid, { wrong: '健全', correct: '鉴权', docId: 'doc-A' }).entry!;
+    expect(created.riskLevel).toBe('high');
+    const lowered = updateEntry(uid, created.id, { riskLevel: 'low' });
+    expect(lowered.ok).toBe(true);
+    if (!lowered.ok) return;
+    expect(lowered.entry.riskLevel).toBe('low');
+
+    const raised = updateEntry(uid, created.id, { riskLevel: 'high' });
+    expect(raised.ok).toBe(true);
+    if (!raised.ok) return;
+    expect(raised.entry.riskLevel).toBe('high');
+  });
+
+  it('非法风险值 → invalid_risk，不改动原词条', () => {
+    const created = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', docId: 'doc-A' }).entry!;
+    const res = updateEntry(uid, created.id, { riskLevel: 'critical' });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('invalid_risk');
+    expect(findEntry(uid, created.id)!.riskLevel).toBe(created.riskLevel);
+  });
+
+  it('人工新增可以用 riskOverride 指定低风险；导入路径仍保留安全下限', () => {
+    const manual = upsertEntry(uid, { wrong: '健全', correct: '鉴权', riskLevel: 'low', riskOverride: true }).entry!;
+    expect(manual.riskLevel).toBe('low');
+    const imported = upsertEntry(uid, { wrong: '完善', correct: '完成', riskLevel: 'low' }).entry!;
+    expect(imported.riskLevel).toBe('high');
+  });
+
+  it('改出来的新身份撞上已有词条 → 拒绝，不静默合并', () => {
+    const a = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', docId: 'doc-A' }).entry!;
+    upsertEntry(uid, { wrong: 'cox', correct: 'Cogseed', docId: 'doc-A' });
+    const res = updateEntry(uid, a.id, { wrong: 'cox' });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('duplicate');
+    // 原词条必须原样还在
+    expect(findEntry(uid, a.id)!.wrong).toBe('coxy');
+  });
+
+  it('纯数字变体被拒（与 upsert 同一条红线），且原词条不受影响', () => {
+    const created = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', docId: 'doc-A' }).entry!;
+    const res = updateEntry(uid, created.id, { wrong: '12345' });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('pure_digit_variant');
+    expect(findEntry(uid, created.id)!.wrong).toBe('coxy');
+  });
+
+  it('词条不存在 → not_found（不抛异常，界面好处理）', () => {
+    const res = updateEntry(uid, 'no-such-id', { correct: 'X' });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('not_found');
+  });
+
+  it('改成空串 → empty，不落盘', () => {
+    const created = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', docId: 'doc-A' }).entry!;
+    const res = updateEntry(uid, created.id, { correct: '   ' });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('empty');
+    expect(findEntry(uid, created.id)!.correct).toBe('Cogseed');
+  });
+
+  it('只改类别 → 其余字段不动', () => {
+    const created = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', kind: 'product', docId: 'doc-A' }).entry!;
+    const res = updateEntry(uid, created.id, { kind: 'term' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.entry.kind).toBe('term');
+    expect(res.entry.wrong).toBe('coxy');
+    expect(res.entry.correct).toBe('Cogseed');
+    expect(res.entry.id).toBe(created.id);
+  });
+
+  it('原子性：被拒的编辑不产生任何中间态（词条数与内容都不变）', () => {
+    const created = upsertEntry(uid, { wrong: 'coxy', correct: 'Cogseed', docId: 'doc-A' }).entry!;
+    const snapshot = JSON.stringify(listEntries(uid));
+    updateEntry(uid, created.id, { wrong: '999' });      // 纯数字，必被拒
+    updateEntry(uid, created.id, { correct: '' });        // 空，必被拒
+    updateEntry(uid, 'ghost', { correct: 'X' });          // 不存在
+    expect(JSON.stringify(listEntries(uid))).toBe(snapshot);
   });
 });

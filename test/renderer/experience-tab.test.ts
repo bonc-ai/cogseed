@@ -55,12 +55,14 @@ describe('经验入口：「我的认知」下的分类档（specs/017 整改一
   it('顶层页签是五个（无「经验」），经验收编为「我的认知」分类档；旧深链 name:experiences 归一化', () => {
     const html = renderCognition({ name: 'experiences' }, { experiences: loadedExperiences([]) });
     const ids = [...html.matchAll(/class="ca-tab[^"]*" data-act="tab" data-id="([a-z-]+)"/g)].map((m) => m[1]);
-    // specs/018 + 树恢复 + 2026-09-27 定序:六页签=认知树/我的认知/关于我/待我处理/系统活动/整理设置。
-    expect(ids).toEqual(['tree', 'overview', 'ontology', 'review', 'activity', 'settings']);
+    // 2026-10 认知资产壳：五页签=认知树/我的认知/本体/系统活动/资产设置；
+    // 旧「待我处理」整页已并入系统活动，不再单列导航。
+    expect(ids).toEqual(['tree', 'overview', 'ontology', 'activity', 'settings']);
     expect(html).not.toContain('data-act="tab" data-id="experiences"');
-    // 旧深链 { name: 'experiences' } 归一到「我的认知」：经验档选中、目录在页面内。
-    expect(html).toContain('data-act="filter-cat" data-id="experiences"');
+    // 旧深链 { name: 'experiences' } 归一化到「我的认知」下的经验目录；
+    // 经验档不再伪装成列表筛选 chip，改由目录页与迁移入口承载。
     expect(html).toContain('经验目录');
+    expect(html).toContain('data-act="experience-migration-preview"');
     // KSTAR 独立筛选档退役（出身徽章与「KSTAR 任务复盘」证据组保留，
     // 见 cognition-capture-log.test.ts）。
     expect(html).not.toContain('data-act="filter-cat" data-id="kstar"');

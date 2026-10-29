@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "id": "smoke-ui-design-executor",
+      "kind": "smoke",
+      "input": "A minimal valid HTML artifact directory with one inline script.",
+      "expected": "Validation passes with no errors and no writes."
+    }
+  ]
+}

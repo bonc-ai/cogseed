@@ -1,10 +1,13 @@
 import * as fs from 'node:fs/promises';
 
+import { safeId } from '../../storage';
+import { createLogger } from '../../logger';
 import { recallJsonRecordPath } from './paths';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 
 const COLLECTION = 'skill-bindings';
+const log = createLogger('recall.skill-binding');
 
 export interface RecallSkillBindingDecision {
   assetVersion: string;
@@ -117,10 +120,30 @@ export async function listSkillBindings(userId: string): Promise<RecallSkillBind
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
     throw error;
   }
-  const rows = await Promise.all(names
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => readSkillBinding(userId, name.slice(0, -5))));
-  return rows.filter((row): row is RecallSkillBindingRecord => !!row);
+  // 逐条降级，而不是让一条坏绑定把整份绑定集合读失败（照抄 listExperiences
+  // 的既有口径）：safeAssetId / validateRecallRecord / asBinding 任一层一抛，
+  // 列表就整体失败。只降级记录形状的错；真正的 IO 故障（带 errno code）照旧
+  // 上抛——静默少几条等于把磁盘问题伪装成「绑定变少了」。
+  const reads = await Promise.all(names
+    .filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5)))
+    .map(async (name) => {
+      const id = name.slice(0, -5);
+      try {
+        return { id, record: await readSkillBinding(userId, id) };
+      } catch (error) {
+        if (typeof (error as NodeJS.ErrnoException).code === 'string') throw error;
+        return { id, error: error as Error };
+      }
+    }));
+  const rows: RecallSkillBindingRecord[] = [];
+  for (const read of reads) {
+    if (read.error) {
+      log.warn('skipped an unreadable skill binding', { bindingId: read.id, error: read.error.message });
+      continue;
+    }
+    if (read.record) rows.push(read.record);
+  }
+  return rows;
 }
 
 export async function refreshBindingsForSkill(

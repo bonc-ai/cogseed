@@ -18,6 +18,10 @@ vi.mock('../../../../src/main/features/api_common', () => ({
 vi.mock('../../../../src/main/features/config', () => ({ getLanguage: () => 'zh-CN' }));
 
 const { fetchImmutableSource } = await import('../../../../src/main/features/marketplace/source-fetch');
+const { MarketplaceError } = await import('../../../../src/main/features/marketplace/errors');
+const { MarketplaceCancelled, isMarketplaceCancelled } = await import(
+  '../../../../src/main/features/marketplace/cancellation'
+);
 
 let tmpDir: string;
 let destPath: string;
@@ -123,6 +127,30 @@ describe('marketplace/source-fetch', () => {
 
     await expect(fetchImmutableSource(reqFor(Buffer.from('partial-complete'), { timeoutMs: 2_000 })))
       .rejects.toBeTruthy();
+    expect(fs.existsSync(destPath)).toBe(false);
+  });
+
+  /**
+   * 取消（登出/切号）必须穿过归一化层后仍然可辨。
+   *
+   * 回归背景：这一层对任何失败都套一层 `MarketplaceError`，原错误只留在 `cause` 里；
+   * 上层若按 `instanceof` 判定取消就会失配——一次主动放弃被记成「拉取失败」，界面
+   * 提示「1 项失败，下次启动会自动重试」，而这次 run 已经作废、重试毫无意义。
+   */
+  it('取消哨兵被归一化包了一层后仍可判定为取消（沿 cause 链）', async () => {
+    const body = Buffer.from('synthetic-bytes-cancelled');
+    vi.stubGlobal('fetch', vi.fn(async () => bytesResponse(body)));
+    let checks = 0;
+    const cancelled = new MarketplaceCancelled('reconcile cancelled');
+    const error = await fetchImmutableSource(reqFor(body, {
+      assertContinue: () => { checks += 1; throw cancelled; },
+    })).catch((err: unknown) => err);
+
+    expect(checks).toBeGreaterThan(0);
+    // 归一化照旧发生（信封语义不变）……
+    expect(error).toBeInstanceOf(MarketplaceError);
+    // ……但取消身份没有丢。
+    expect(isMarketplaceCancelled(error)).toBe(true);
     expect(fs.existsSync(destPath)).toBe(false);
   });
 

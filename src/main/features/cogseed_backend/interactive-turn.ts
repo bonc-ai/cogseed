@@ -5,7 +5,11 @@ import {
   type CogSeedAgentExecutionContext,
 } from './agent-execution-context';
 import { getOrCreateCogSeedAgentSession } from './session-store';
-import { readLatestCogSeedTaskForAgent } from './task-store';
+import { isRuntimeOwnedCogSeedTask, readLatestCogSeedTaskForAgent } from './task-store';
+import {
+  CogSeedFollowupNotRuntimeOwnedError,
+  isCogSeedGroupChatTaskAdmissionError,
+} from './followup-errors';
 import { assertCogSeedAgentId, assertCogSeedConversationId, assertCogSeedRequestId, assertCogSeedUserId } from './paths';
 import type { CogSeedTaskRecord } from './types';
 
@@ -17,12 +21,13 @@ export interface StartCogSeedInteractiveFollowupInput {
   requestId: string;
   task: string;
   visibleContext?: string;
+  groupChatRunId?: string;
   attachments?: unknown[];
   workingDir?: string;
 }
 
 export interface StartCogSeedInteractiveFollowupDeps {
-  runtimeController?: Pick<CogSeedRuntimeController, 'startCogSeedTask'>;
+  runtimeController?: Pick<CogSeedRuntimeController, 'startCogSeedTask'> & Partial<Pick<CogSeedRuntimeController, 'resumeCogSeedTask'>>;
   resolveExecutionContext?: (
     userId: string,
     agentId: string,
@@ -43,8 +48,18 @@ export async function startCogSeedInteractiveFollowup(
   if (!task) throw new Error('CogSeed follow-up task is required');
   const session = await getOrCreateCogSeedAgentSession(userId, conversationId, agentId);
   const parent = await readLatestCogSeedTaskForAgent(userId, conversationId, agentId);
+  // Owner principle: the executor that produced the asking turn continues it.
+  // A Group Chat projection task shares the task schema but is executed by the
+  // Group Chat bus; resuming it from the Runtime would be refused downstream
+  // and turn a valid answer into a failed turn. Signal the caller to dispatch
+  // through Group Chat instead (the bus falls back to its normal path).
+  if (parent && !isRuntimeOwnedCogSeedTask(parent)) {
+    throw new CogSeedFollowupNotRuntimeOwnedError('group-chat-owned', parent.taskId);
+  }
   const resolveContext = deps.resolveExecutionContext ?? resolveCogSeedAgentExecutionContext;
   const executionContext = await resolveContext(userId, agentId, conversationId);
+  const workingDir = input.workingDir || parent?.workingDir
+    || await (await import('../group_chat/conv_workspace')).getConversationWorkspacePath(userId, conversationId);
   const context: unknown[] = [...buildCogSeedAgentRuntimeContext(executionContext)];
   const visibleContext = String(input.visibleContext || '').trim();
   if (visibleContext) {
@@ -55,6 +70,25 @@ export async function startCogSeedInteractiveFollowup(
     });
   }
   const controller = deps.runtimeController ?? (await import('./runtime-controller')).cogseedRuntimeController;
+  if (parent && ['waiting_user', 'recoverable'].includes(parent.status) && controller.resumeCogSeedTask) {
+    try {
+      return await controller.resumeCogSeedTask(userId, parent.taskId, {
+        requestId, continuation: task, context,
+        ...(input.groupChatRunId ? { groupChatRunId: input.groupChatRunId } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        workingDir,
+      });
+    } catch (error) {
+      // Defence in depth: the pre-check above covers today's data shape; a
+      // concurrent task transition could still surface the Runtime refusal.
+      // Translate it into the same "let Group Chat own this" signal instead of
+      // failing the user's answer.
+      if (isCogSeedGroupChatTaskAdmissionError(error)) {
+        throw new CogSeedFollowupNotRuntimeOwnedError('group-chat-owned', parent.taskId);
+      }
+      throw error;
+    }
+  }
   // 执行后端判定与 wake-dispatcher 对齐：runtime.kind 归一后外接智能体一律
   // 'p3394-gateway'（legacy 'cli' 兼容）——只认 'cli' 会把网关型智能体误判
   // 成 cogseed-native 由内置模型代答（CLI 从未被调用：模型/强度控制全部
@@ -70,6 +104,7 @@ export async function startCogSeedInteractiveFollowup(
     conversationId,
     agentId,
     sessionId: session.sessionId,
+    ...(input.groupChatRunId ? { groupChatRunId: input.groupChatRunId } : {}),
     ...(parent ? { parentTaskId: parent.taskId } : {}),
     executionKind: isLocalCli ? 'local-cli' : 'cogseed-native',
     ...(isLocalCli ? {
@@ -86,6 +121,6 @@ export async function startCogSeedInteractiveFollowup(
     ...(executionContext.skillList !== undefined ? { allowedSkillIds: executionContext.skillList } : {}),
     context,
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-    ...(input.workingDir ? { workingDir: input.workingDir } : {}),
+    workingDir,
   });
 }

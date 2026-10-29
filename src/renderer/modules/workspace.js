@@ -3,10 +3,10 @@
 //   空间中心（我的空间 + 从模板创建）→ 空间详情（任务/产物/资产三页签 + 配置抽屉）
 //   → 任务页（对话 + 产物/资产面板 + composer）+ 新建空间弹窗 + 能力选择弹窗。
 // 接线状态：
-//   ✅ 空间列表 = spaces.list；模板/场景目录 = PO contract
+//  空间列表 = spaces.list；模板/场景目录 = PO contract
 //      （personalOntology.templates.catalog / personalOntology.scenarios.list）
-//   ✅ 能力配置 = 真实目录（role=角色模板、task=agents.list、skill=skills.list，bundle 预选+解析名字）
-//   ✅ 创建空间 = spaces.create + spaces.resources.add（额外勾选写入 extra_*）
+//  能力配置 = 真实目录（role=角色模板、task=agents.list、skill=skills.list，bundle 预选+解析名字）
+//  创建空间 = spaces.create + spaces.resources.add（额外勾选写入 extra_*）
 //   ⏳ 空间详情「任务/产物/资产」数据源 = 后端尚无「空间→任务→产物/资产」聚合模型，暂用空态
 //   ⏳ 任务页发送/保存 = _stub() 留空，待后端接入
 // 旧「情境空间」面板 spaces.js 已整体删除；本模块是工作空间唯一实现。
@@ -558,7 +558,7 @@
   }
 
   // ── 能力真实数据源（与 personal-ontology 的 skills.list/agents.list 同源）──
-  let _skillCatalog = [];       // [{ id, name, desc }]（技能库）
+  let _skillCatalog = [];       // [{ id, name, desc, category }]（技能库）
   let _agentCatalog = [];       // [{ id, name, desc }]（AI 团队）
   let _abilityPicks = { role: [], task: [], skill: [] }; // 新建空间弹窗已选（raw id；task=Task Agent）
 
@@ -567,6 +567,22 @@
     if (kind === 'role') return _templates.map((t) => ({ id: t.templateId, name: t.name, desc: t.description || '' }));
     if (kind === 'task') return _agentCatalog;
     return _skillCatalog;
+  }
+
+  const _WORKSPACE_SKILL_CATEGORY_ORDER = ['education', 'ecommerce', 'rnd', 'creation', 'data', 'office', 'general', 'external'];
+
+  function _workspaceSkillCategoryCode(skill) {
+    const code = String(skill && skill.category || '').trim().toLowerCase();
+    const normalized = code === 'writing' ? 'creation' : code;
+    return _WORKSPACE_SKILL_CATEGORY_ORDER.includes(normalized) ? normalized : 'general';
+  }
+
+  function _workspaceSkillCategoryLabel(code) {
+    const zh = typeof getLang !== 'function' || getLang() === 'zh';
+    const labels = zh
+      ? { education: '教育', ecommerce: '电商', rnd: '产研', creation: '创作', data: '数据', office: '办公', general: '通用', external: '外部导入' }
+      : { education: 'Education', ecommerce: 'E-commerce', rnd: 'R&D', creation: 'Creation', data: 'Data', office: 'Office', general: 'General', external: 'External' };
+    return labels[code] || labels.general;
   }
 
   /** 解析 raw id 列表 → [{id,name,desc}]；查不到回退显示 raw id（复用 personal-ontology 的解析范式）。 */
@@ -628,7 +644,8 @@
           _scenarios = results[1].scenarios.map(_localizeScenario);
         } else if (kind === 'skills') {
           _skillCatalog = results[0].skills.map((s) => ({ id: s.id, name: s.name || s.id,
-            desc: ((uiLang === 'zh' ? s.description_zh || s.description_en : s.description_en || s.description_zh) || '').trim() }));
+            desc: ((uiLang === 'zh' ? s.description_zh || s.description_en : s.description_en || s.description_zh) || '').trim(),
+            category: s.category || '' }));
         } else {
           _agentCatalog = results[0].agents.map((a) => ({ id: a.agent_id, name: a.name || a.agent_id,
             desc: ((uiLang === 'zh' ? a.description_zh || a.description_en : a.description_en || a.description_zh) || '').trim(),
@@ -749,8 +766,8 @@
   let _createBaseAgents = [];     // 弹窗选中的基础 Agent 列表（cli type；多选，探测结果首项为默认）
   let _createAgentTouched = false; // 用户是否手动改过基础 Agent 选择（探测合并时尊重，不回落首项）
   let _createAgentOpen = false;   // 新建空间弹窗内的基础 Agent 多选弹窗
-  let _createImportDir = null;    // 本地文件夹导入：弹窗内选择的本地文件夹（绝对路径；null=未选择）
-  let _importing = null;          // 本地文件夹导入：进行中的导入 {spaceId, done, total}（null=无导入）
+  let _createProjectDir = null;   // 弹窗内选择的本地项目目录（绝对路径；null=未选择）
+                                  // 语义：**绑定**该目录当空间工作区（原地干活，不复制）
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
   // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
@@ -769,6 +786,8 @@
   let _editAbilityKind = 'skill';  // 'task' | 'skill'
   let _editAbilityPicks = [];      // 调整中已选 raw ids（含模板 bundle 固定项）
   let _editAbilityBefore = [];     // 打开时的 extra（用于 diff 增删）
+  let _editSkillQuery = '';
+  let _editSkillCategory = '';
   let _mainSkillOpen = false;      // 主技能选择弹窗
   let _baseAgentEditOpen = false;  // 当前对话 Agent 选择弹窗
   let _baseAgentEditPicks = [];    // 调整中已选 cli type 列表（多选）
@@ -892,14 +911,22 @@
       ? _t('ws.refreshing', '正在刷新…') : _loadError)}</span>${retry}</div>`;
   }
 
+  // Loading / error / unavailable states keep the shared page header so the
+  // shell controls (search) stay in place (specs/008 D12).
+  function _statusPageHeader() {
+    return typeof window.uiPageHeader === 'function'
+      ? window.uiPageHeader({ title: _t('ws.center_title', '工作空间') })
+      : '';
+  }
+
   function _render() {
-    if (!_loaded) return _entryLoading ? _loadingHtml() : _renderLoadError();
+    if (!_loaded) return _entryLoading ? `${_statusPageHeader()}${_loadingHtml()}` : _renderLoadError();
     if (_view === 'space') return _renderSpace();
     return _renderCenter();
   }
 
   function _renderLoadError() {
-    return `<div class="ws-view ws-recovery-page">${_retryState('retry-load', _t('ws.load_error', '加载失败'))}</div>`;
+    return `${_statusPageHeader()}<div class="ws-view ws-recovery-page">${_retryState('retry-load', _t('ws.load_error', '加载失败'))}</div>`;
   }
 
   // ── 空间中心 ──────────────────────────────────────────────────────────────
@@ -1076,9 +1103,9 @@
   function _renderSpace() {
     const sp = _space();
     if (!sp) {
-      if (_entryLoading) return _loadingHtml();
+      if (_entryLoading) return `${_statusPageHeader()}${_loadingHtml()}`;
       if (_loadError) return _renderLoadError();
-      return `<div class="ws-view ws-recovery-page" data-ws-space-unavailable>${window.uiEmptyState({
+      return `${_statusPageHeader()}<div class="ws-view ws-recovery-page" data-ws-space-unavailable>${window.uiEmptyState({
         kind: 'actionable', title: _t('ws.space_unavailable', '该工作空间已删除或不可用'),
         hint: _t('ws.space_unavailable_hint', '请返回空间中心选择其他空间。'),
         action: { label: _t('ws.back_to_center', '返回空间中心'), role: 'secondary', attrs: { 'data-ws': 'back-to-center' } },
@@ -1095,6 +1122,7 @@
         <header class="ws-space-head">
           <div class="ws-space-head-row">
             <div class="ws-space-titlebar">
+              ${typeof window.uiShellHeaderSlot === 'function' ? window.uiShellHeaderSlot() : ''}
               ${window.uiIconButton({ label: _t('ws.back_to_center', '返回空间中心'), icon: 'chevron-left', className: 'ws-back', attrs: { 'data-ws': 'back-to-center' } })}
               <h1>${escapeHtml(_spaceDisplayName(sp))}</h1>
             </div>
@@ -2180,12 +2208,17 @@
     if (typeof setView === 'function') setView('conversation', cid, { skipLoad: true });
   }
 
-  /** 删除产物（破坏性操作品牌化确认；web artifact 删除整个产物目录）。 */
+  /** 删除产物（破坏性操作品牌化确认；web artifact 删除整个产物目录）。
+   *
+   *  确认文案**必须带完整路径**：空间绑定本地项目目录后，列表里的产物既可能是
+   *  CogSeed 自家目录里的副本，也可能是用户磁盘上的真文件。用户看到
+   *  `/Users/…/my-project/src/a.ts` 就知道那是什么，看到 CogSeed 数据目录下的
+   *  路径也知道那只是一份副本——路径自己说明分量，不需要程序分两套文案。 */
   async function _deleteArtifact(a) {
     if (!a || !a.path) return;
     const ok = await _wsConfirmDanger({
       title: _t('ws.art_delete_confirm_title', '删除产物'),
-      message: _t('ws.art_delete_confirm', '删除产物「{name}」？该操作会把文件移入废纸篓，无法撤销。', { name: a.name }),
+      message: _t('ws.art_delete_confirm', '删除「{name}」？\n\n{path}\n\n文件会被移入废纸篓（可从废纸篓恢复；未纳入版本管理的文件清空废纸篓后无法找回）。', { name: a.name, path: a.path }),
       dangerLabel: _t('ws.art_delete_confirm_btn', '删除'),
     });
     if (!ok) return;
@@ -2363,17 +2396,16 @@
           <div class="ws-form-grid">
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               ${_formInput({ id: 'ws-create-name', value: _createName, placeholder: _t('ws.space_name_ph', '请输入空间名称'), attrs: { 'data-ws': 'create-name', maxlength: '60', autocomplete: 'off', spellcheck: 'false', 'aria-label': _t('ws.space_name', '空间名称') } })}</label>
-            <label class="full"><span>${_t('ws.import_folder_label', '本地文件夹（可选）')}</span>
-              <div class="ws-import-picker" data-ws="pick-import-dir" role="button" tabindex="0"
-                title="${escapeHtml(_t('ws.import_folder_pick', '选择本地文件夹'))}">
+            <label class="full"><span>${_t('ws.project_dir_label', '本地项目目录（可选）')}</span>
+              <div class="ws-import-picker" data-ws="pick-project-dir" role="button" tabindex="0"
+                title="${escapeHtml(_t('ws.project_dir_pick', '选择本地项目目录'))}">
                 <span class="ws-import-icon">${_icon('folder', 'ui-icon')}</span>
-                <span class="ws-import-name${_createImportDir ? '' : ' is-empty'}">${_createImportDir ? escapeHtml(_importDirBasename(_createImportDir)) : escapeHtml(_t('ws.import_folder_none', '未选择——空间创建后为空'))}</span>
-                ${_createImportDir
-                  ? `<span class="ws-import-clear" data-ws="clear-import-dir" role="button" tabindex="0" title="${escapeHtml(_t('ws.import_folder_clear', '清除'))}">${_icon('x', 'ui-icon')}</span>
-                     <span class="ws-import-change">${escapeHtml(_t('ws.import_folder_change', '更换'))}</span>`
-                  : `<span class="ws-import-pick">${escapeHtml(_t('ws.import_folder_pick', '选择文件夹'))}</span>`}
+                <span class="ws-import-name${_createProjectDir ? '' : ' is-empty'}"${_createProjectDir ? ` title="${escapeHtml(_createProjectDir)}"` : ''}>${_createProjectDir ? escapeHtml(_dirBasename(_createProjectDir)) : escapeHtml(_t('ws.project_dir_none', '未选择'))}</span>
+                ${_createProjectDir
+                  ? `<span class="ws-import-clear" data-ws="clear-project-dir" role="button" tabindex="0" title="${escapeHtml(_t('ws.project_dir_clear', '清除'))}">${_icon('x', 'ui-icon')}</span>
+                     <span class="ws-import-change">${escapeHtml(_t('ws.project_dir_change', '更换'))}</span>`
+                  : `<span class="ws-import-pick">${escapeHtml(_t('ws.project_dir_pick_short', '选择文件夹'))}</span>`}
               </div>
-              ${_importing ? `<div class="ws-import-progress">${escapeHtml(_t('ws.importing_progress', '正在导入 {done}/{total} 个文件…', { done: _importing.done, total: _importing.total }))}</div>` : ''}
             </label>
             <div class="ws-tool-strip">
               <div class="ws-tool-strip-head"><strong>${_t('ws.collaborating_agents', '可协作 AI 工具 Agent')}</strong><small>${_t('ws.collaborating_agents_hint', '任务中可通过 @ 明确调用')}</small></div>
@@ -2531,6 +2563,20 @@
 
   // ── 空间设置抽屉配套：能力调整 / 主技能 / 失效清理 / 重命名 ─────────────
 
+  /**
+   * 「调整能力」弹窗里的能力选项卡（task agent 与 skill 两个面板共用同一张卡）。
+   *
+   * 选中态与模板内置标记是这里唯一的差异，逐面板各写一份控件只会让两处外观漂移
+   * （此前 skill 面板用文本 `✓`、agent 面板用共享 check 图标）。
+   */
+  function _abilityOptionCard(o, selected, bundled) {
+    return `
+      <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="toggle-edit-ability" data-id="${escapeHtml(o.id)}" ${bundled ? 'data-bundled="1"' : ''}>
+        <span class="ws-check">${selected ? _icon('check', '') : ''}</span>
+        <div><strong>${escapeHtml(o.name)}</strong>${bundled ? `<em>${_t('ws.template_builtin', '模板内置')}</em>` : ''}<p>${escapeHtml(o.desc)}</p></div>
+      </button>`;
+  }
+
   /** 详情页「调整」能力弹窗（task/skill；角色只读，新建时定）。模板 bundle 固定，extra 可勾选。 */
   function _renderEditAbilityModal() {
     const kind = _editAbilityKind;
@@ -2542,6 +2588,15 @@
       ? (kind === 'task' ? t.bundle.agentIds : t.bundle.skillIds) : [])));
     const picked = _editAbilityPicks || [];
     const kindLabel = kind === 'task' ? 'Task Agent' : 'Skill';
+    const body = kind === 'skill'
+      ? _renderEditSkillPicker(list, picked, bundleIds)
+      : `<div class="ws-ability-pane"><div class="ws-option-grid">
+          ${list.map((o) => {
+            const selected = picked.includes(o.id);
+            const bundled = bundleIds.has(o.id);
+            return _abilityOptionCard(o, selected, bundled);
+          }).join('')}
+        </div></div>`;
     return `
     <div class="ui-modal-overlay ws-scrim ws-ability-scrim" data-ws="close-edit-ability">
       <section class="ui-modal ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
@@ -2550,26 +2605,63 @@
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-edit-ability' } })}
         </header>
         <div class="ui-modal__body ws-ability-main ws-ability-main-solo">
-          <div class="ws-ability-pane">
-            <div class="ws-option-grid">
-              ${list.map((o) => {
-                const selected = picked.includes(o.id);
-                const bundled = bundleIds.has(o.id);
-                return `
-                <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="toggle-edit-ability" data-id="${escapeHtml(o.id)}" ${bundled ? 'data-bundled="1"' : ''}>
-                  <span class="ws-check">${selected ? '✓' : ''}</span>
-                  <div><strong>${escapeHtml(o.name)}</strong>${bundled ? `<em>${_t('ws.template_builtin', '模板内置')}</em>` : ''}<p>${escapeHtml(o.desc)}</p></div>
-                </button>`;
-              }).join('')}
-            </div>
-          </div>
+          ${body}
         </div>
         <footer class="ui-modal__footer ws-ability-foot">
-          <div></div>
+          <div>${kind === 'skill' ? `<span class="ws-config-hint">${_t('ws.selected_skills', '已选 {count} 个 Skill', { count: picked.length })}</span>` : ''}</div>
           <div>${window.uiButton({ label: _t('ws.cancel', '取消'), attrs: { 'data-ws': 'close-edit-ability' } })}${window.uiButton({ label: _t('ws.save_choice', '保存选择'), role: 'primary', attrs: { 'data-ws': 'save-edit-ability' } })}</div>
         </footer>
       </section>
     </div>`;
+  }
+
+  function _renderEditSkillPicker(list, picked, bundleIds) {
+    const query = String(_editSkillQuery || '').trim().toLocaleLowerCase();
+    const categoryCounts = new Map();
+    for (const skill of list) {
+      const code = _workspaceSkillCategoryCode(skill);
+      categoryCounts.set(code, (categoryCounts.get(code) || 0) + 1);
+    }
+    const categories = _WORKSPACE_SKILL_CATEGORY_ORDER.filter((code) => categoryCounts.has(code));
+    if (_editSkillCategory && !categoryCounts.has(_editSkillCategory)) _editSkillCategory = '';
+    const visible = list
+      .filter((skill) => !_editSkillCategory || _workspaceSkillCategoryCode(skill) === _editSkillCategory)
+      .filter((skill) => !query || `${skill.name || ''} ${skill.id || ''} ${skill.desc || ''}`.toLocaleLowerCase().includes(query))
+      .slice()
+      .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id), typeof getLang === 'function' && getLang() === 'zh' ? 'zh' : 'en'));
+    return `
+      <div class="ws-skill-picker">
+        <div class="ws-skill-picker-search">
+          <span class="ws-skill-picker-search-icon">${_icon('search', 'ui-icon')}</span>
+          ${_formInput({ id: 'ws-edit-skill-search', type: 'search', value: _editSkillQuery, placeholder: _t('ws.skill_search_placeholder', '搜索名称、用途或关键词'), attrs: { 'data-ws': 'edit-skill-search', autocomplete: 'off', spellcheck: 'false', 'aria-label': _t('ws.skill_search_aria', '搜索 Skill') } })}
+        </div>
+        <div class="ws-skill-picker-content">
+          <nav class="ws-skill-category-nav" aria-label="${escapeHtml(_t('ws.skill_category_filter', 'Skill 分类'))}">
+            ${window.uiChip({
+              label: _t('ws.skill_category_all', '全部'),
+              count: list.length,
+              selected: !_editSkillCategory,
+              attrs: { 'data-ws': 'edit-skill-category', 'data-category': '' },
+            })}
+            ${categories.map((code) => window.uiChip({
+              label: _workspaceSkillCategoryLabel(code),
+              count: categoryCounts.get(code),
+              selected: _editSkillCategory === code,
+              attrs: { 'data-ws': 'edit-skill-category', 'data-category': code },
+            })).join('')}
+          </nav>
+          <div class="ws-ability-pane ws-skill-picker-results" aria-live="polite">
+            <div class="ws-skill-picker-result-count">${_t('ws.skill_result_count', '{count} 个 Skill', { count: visible.length })}</div>
+            <div class="ws-option-grid">
+              ${visible.length ? visible.map((o) => {
+                const selected = picked.includes(o.id);
+                const bundled = bundleIds.has(o.id);
+                return _abilityOptionCard(o, selected, bundled);
+              }).join('') : window.uiEmptyState({ kind: 'quiet', title: _t('ws.skill_no_match', '没有匹配的 Skill') })}
+            </div>
+          </div>
+        </div>
+      </div>`;
   }
 
   /** 主技能选择弹窗（skills.list；单选，支持清除）。 */
@@ -2685,6 +2777,8 @@
     const extras = kind === 'task' ? (sp.extra_agents || []) : (sp.extra_skills || []);
     _editAbilityPicks = [...new Set([...bundleIds, ...extras])];
     _editAbilityBefore = extras.slice();
+    _editSkillQuery = '';
+    _editSkillCategory = '';
     _editAbilityOpen = true;
     _reRender();
   }
@@ -2895,19 +2989,7 @@
     _bindArtScroll();
   }
 
-  let _importProgressBound = false; // 本地文件夹导入：推送订阅只注册一次（onPushEvent 每次调用都新增 listener）
-
   function _bind(root) {
-    // 本地文件夹导入：导入进度推送（preload 白名单 workspace-import:）→ 弹窗内进度行实时刷新
-    if (!_importProgressBound && window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
-      _importProgressBound = true;
-      window.cogseed.onPushEvent('workspace-import:progress', (p) => {
-        if (!p || !_importing || p.spaceId !== _importing.spaceId) return;
-        _importing.done = Number(p.done) || 0;
-        _importing.total = Number(p.total) || 0;
-        _reRender();
-      });
-    }
     _bindMoreMenuDismiss();
     _bindArtifactGlobal();
     // 弹窗内层：阻止冒泡到 scrim（否则点 dialog 内部会触发关闭）
@@ -3060,6 +3142,15 @@
       _editAbilityPicks = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
       _reRender();
     }));
+    root.querySelectorAll('[data-ws="edit-skill-category"]').forEach((el) => el.addEventListener('click', () => {
+      _editSkillCategory = el.dataset.category || '';
+      _reRender();
+    }));
+    const editSkillSearch = root.querySelector('[data-ws="edit-skill-search"]');
+    if (editSkillSearch) editSkillSearch.addEventListener('input', () => {
+      _editSkillQuery = editSkillSearch.value;
+      _debouncedSearchReRender();
+    });
     root.querySelectorAll('[data-ws="save-edit-ability"]').forEach((el) => el.addEventListener('click', () => _saveEditAbility()));
     // ── 主技能弹窗 ──
     root.querySelectorAll('[data-ws="close-main-skill"]').forEach((el) => el.addEventListener('click', () => { _mainSkillOpen = false; _reRender(); }));
@@ -3137,21 +3228,30 @@
     // 表单输入持久化（调整能力会 _reRender，避免已填名称/指令被重置）
     const cnInput = root.querySelector('[data-ws="create-name"]');
     if (cnInput) cnInput.addEventListener('input', () => { _createName = cnInput.value; });
-    // 本地文件夹导入：本地文件夹选择 / 清除（整行为可点击选择区；取消对话框 → 保持未选择，不报错）
-    root.querySelectorAll('[data-ws="pick-import-dir"]').forEach((el) => el.addEventListener('click', async () => {
-      const res = await _invoke('common.pickDirectory', { title: _t('ws.import_folder_pick', '选择本地文件夹') });
-      if (res && !res.cancelled && res.path) { _createImportDir = res.path; _reRender(); }
-    }));
-    root.querySelectorAll('[data-ws="pick-import-dir"]').forEach((el) => el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
-    }));
-    root.querySelectorAll('[data-ws="clear-import-dir"]').forEach((el) => el.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _createImportDir = null;
+    // 本地项目目录：选择 / 清除（整行为可点击选择区；取消对话框 → 保持未选择，不报错）
+    root.querySelectorAll('[data-ws="pick-project-dir"]').forEach((el) => el.addEventListener('click', async () => {
+      const res = await _invoke('common.pickDirectory', { title: _t('ws.project_dir_pick', '选择本地项目目录') });
+      if (!res || res.cancelled || !res.path) return;
+      const trusted = await _wsConfirm({
+        title: _t('ws.project_dir_trust_title', '信任这个工作空间？'),
+        message: _t('ws.project_dir_trust_message', '确认后，Agent 会在该目录读写文件、执行命令，并读取其中的 Skill 与 AGENTS.md。只选择你信任的目录。'),
+        okLabel: _t('ws.project_dir_trust_ok', '信任并继续'),
+        cancelLabel: _t('ws.cancel', '取消'),
+      });
+      if (!trusted) return;
+      _createProjectDir = res.path;
       _reRender();
     }));
-    root.querySelectorAll('[data-ws="clear-import-dir"]').forEach((el) => el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); _createImportDir = null; _reRender(); }
+    root.querySelectorAll('[data-ws="pick-project-dir"]').forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+    }));
+    root.querySelectorAll('[data-ws="clear-project-dir"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _createProjectDir = null;
+      _reRender();
+    }));
+    root.querySelectorAll('[data-ws="clear-project-dir"]').forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); _createProjectDir = null; _reRender(); }
     }));
     const ciInput = root.querySelector('[data-ws="create-instruction"]');
     if (ciInput) ciInput.addEventListener('input', () => { _createInstruction = ciInput.value; });
@@ -3252,9 +3352,14 @@
         ...(secondary.length ? { secondary_template_ids: secondary } : {}),
         ...(instructions ? { instructions } : {}),
         ...(_createBaseAgents && _createBaseAgents.length ? { base_agents: _createBaseAgents } : {}),
+        ...(_createProjectDir ? { projectDir: _createProjectDir } : {}),
       });
       if (!res.error && res.space) { space = res.space; break; }
       if (res.error === 'name_dup') { name0 = `${name} ${i + 2}`; continue; }
+      // 绑定的本地项目目录被后端拒绝（不存在 / 不是目录 / 危险根）→ 停在弹窗上让用户
+      // 重选，绝不创建一个"看着建好了、其实没有工作区"的空间。
+      const projectDirError = _projectDirErrorMessage(res.error);
+      if (projectDirError) { _stub(projectDirError); return; }
       _stub(_t('ws.create_failed', '创建空间失败：{reason}', { reason: res.error || _t('ws.unknown_error', '未知错误') }));
       return;
     }
@@ -3262,29 +3367,7 @@
     // 额外技能/智能体绑定（复用 spaces.resources.add）
     for (const id of extraSkills) await _invoke('spaces.resources.add', { spaceId: space.space_id, kind: 'skill', id });
     for (const id of extraAgents) await _invoke('spaces.resources.add', { spaceId: space.space_id, kind: 'agent', id });
-    // 本地文件夹导入：选择了本地文件夹 → 创建完成后整体导入（弹窗停留显示进度，完成后进入空间）
-    if (_createImportDir) {
-      _importing = { spaceId: space.space_id, done: 0, total: 0 };
-      _reRender();
-      let importResult = null;
-      try {
-        importResult = await _invoke('workspace.importFolder', { spaceId: space.space_id, sourceDir: _createImportDir });
-      } catch (err) {
-        importResult = { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
-      _importing = null;
-      _createImportDir = null;
-      if (importResult && importResult.ok === false) {
-        if (typeof uiToast === 'function') uiToast(_t('ws.import_failed', '导入失败：{reason}', { reason: importResult.error || _t('ws.unknown_error', '未知错误') }), { variant: 'error' });
-      } else if (importResult && importResult.ok) {
-        const skippedN = Array.isArray(importResult.skipped) ? importResult.skipped.length : 0;
-        if (typeof uiToast === 'function') {
-          uiToast(skippedN
-            ? _t('ws.import_done_with_skips', '导入完成：{copied} 个文件成功，跳过 {skipped} 个（详见空间产物）', { copied: importResult.copied, skipped: skippedN })
-            : _t('ws.import_done', '导入完成：{copied} 个文件', { copied: importResult.copied }), { variant: 'success' });
-        }
-      }
-    }
+    _createProjectDir = null;
     _createOpen = false;
     _abilityOpen = false;
     _createAgentOpen = false;
@@ -3294,10 +3377,27 @@
     _go('space', { spaceId: space.space_id });
   }
 
-  /** 本地文件夹导入：绝对路径 → 显示用文件夹名（/ 与 \ 通吃）。 */
-  function _importDirBasename(p) {
+  /** 本地项目目录：绝对路径 → 显示用文件夹名（/ 与 \ 通吃）。 */
+  function _dirBasename(p) {
     const parts = String(p || '').split(/[\\/]+/).filter(Boolean);
     return parts[parts.length - 1] || p;
+  }
+
+  /** 绑定目录被后端拒绝时的用户可读原因；不是这几类 → 返回 ''（走通用失败文案）。
+   *  后端错误码见 features/spaces.ts::SpaceProjectDirError。 */
+  function _projectDirErrorMessage(code) {
+    switch (code) {
+      case 'project_dir_not_found':
+        return _t('ws.project_dir_err_not_found', '这个文件夹不存在或已被移动，请重新选择。');
+      case 'project_dir_not_directory':
+        return _t('ws.project_dir_err_not_dir', '选择的不是文件夹，请重新选择。');
+      case 'project_dir_unsafe':
+        return _t('ws.project_dir_err_unsafe', '这个位置不能作为项目目录（系统临时目录、整个用户主目录，或 CogSeed 自己的数据目录）。');
+      case 'invalid_project_dir':
+        return _t('ws.project_dir_err_invalid', '请选择一个文件夹（需要绝对路径）。');
+      default:
+        return '';
+    }
   }
 
   function _stubLabel(el) {

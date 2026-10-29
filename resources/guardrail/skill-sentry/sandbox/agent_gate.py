@@ -40,6 +40,34 @@ RECOMMENDATION_TO_VERDICT = {
     "DO_NOT_INSTALL": "deny",
 }
 
+#: 严格度排序。与 `engine.scanner_core.scoring.worst_recommendation` 和
+#: `skill_guard.install_gate` 的 fail_rank 是同一套语义，不要另立一套。
+RECOMMENDATION_RANK = {"ALLOW": 0, "CAUTION": 1, "DO_NOT_INSTALL": 2}
+
+
+def _recommendation_of(summary: dict[str, Any]) -> str:
+    """取一份裁决面的部署建议。多 Skill 聚合时读 aggregate_recommendation。"""
+    return (summary.get("deployment_recommendation")
+            or summary.get("aggregate_recommendation")
+            or "CAUTION")
+
+
+def _tier_evidence(tier: str, summary: dict[str, Any]) -> dict[str, Any]:
+    """记录某一层给出的是什么，供上层审计「这个结论是谁给的」。
+
+    `scanner_version` 是这里最要紧的一个字段：隔离层落版本时，只有把它带进
+    裁决面，「结论来自一个更旧的引擎」才是可看见的。
+    """
+    return {
+        "tier": tier,
+        "mode": summary.get("scan_mode"),
+        "isolated": summary.get("isolated"),
+        "recommendation": _recommendation_of(summary),
+        "verdict": summary.get("verdict"),
+        "security_score": summary.get("security_score"),
+        "scanner_version": summary.get("scanner_version"),
+    }
+
 
 def _summarize(report: dict[str, Any], isolated: bool, mode: str) -> dict[str, Any]:
     """把完整扫描报告压成 Agent 需要的最小裁决面（不含被测原始内容）。"""
@@ -64,6 +92,7 @@ def _summarize(report: dict[str, Any], isolated: bool, mode: str) -> dict[str, A
             "skill_count": report.get("skill_count"),
             "aggregate_recommendation": rec,
             "min_security_score": report.get("min_security_score"),
+            "scanner_version": report.get("scanner_version"),
             "per_skill": summaries,
         }
     rec = report.get("deployment_recommendation", "CAUTION")
@@ -72,6 +101,7 @@ def _summarize(report: dict[str, Any], isolated: bool, mode: str) -> dict[str, A
         "isolated": isolated,
         "scan_mode": mode,
         "skill": report.get("skill"),
+        "scanner_version": report.get("scanner_version"),
         "security_score": report.get("security_score"),
         "risk_classification": report.get("risk_classification"),
         "deployment_recommendation": rec,
@@ -135,6 +165,22 @@ def evaluate_skill(skill_path: str, require_isolation: bool = False) -> dict[str
     """
     Agent 调用的唯一入口。返回精简裁决面（不含被测 Skill 原始内容）。
 
+    两层取更严，而不是「沙箱优先」
+    ------------------------------
+    隔离层只有在**与本地引擎同版本**时才算一次更强的证据。镜像里的引擎落后时，
+    它给出的是更弱的裁决——实测 `skill-security-scanner:local` 内是 1.0.0，对
+    `os.system('rm -rf /')` 只给 CAUTION/HIGH，而当前引擎给 DO_NOT_INSTALL。
+    「沙箱优先」于是等于让一个更旧的引擎覆盖一个更新的引擎：装了 Docker 的机器
+    门禁比没装 Docker 的更弱，安全姿态被环境反转。
+
+    现在的规则是：隔离层可以加强结论，不能削弱结论。两层都算，取更严的那个，
+    并把两层的结论、隔离状态与 `scanner_version` 一起放进 `tier_evidence`，
+    让「这个结论是谁给的」可审计。
+
+    代价是有 Docker 时多跑一次本地静态扫描（`scan()` 只做静态分析，不执行被测
+    代码；被测内容在进程内被解析这一点与无 Docker 时的降级路径相同）。沙箱已经
+    判 DO_NOT_INSTALL 时直接返回，不再跑本地层——没有更严的结论可拿。
+
     参数:
       skill_path        被测 Skill 目录 / 含 SKILL.md 的目录 / zip 包
       require_isolation True 时若无法隔离直接拒绝（fail-closed），
@@ -145,26 +191,57 @@ def evaluate_skill(skill_path: str, require_isolation: bool = False) -> dict[str
         return {"verdict": "deny", "isolated": False, "error": f"path not found: {path}"}
 
     report = _run_sandboxed(path)
+    if report is None and require_isolation:
+        return {"verdict": "deny", "isolated": False, "scan_mode": "no-sandbox",
+                "reason": "要求隔离但沙箱不可用（未安装 Docker 或镜像未构建），fail-closed 拒绝"}
+
+    tiers: list[dict[str, Any]] = []
+    sandbox_summary: dict[str, Any] | None = None
     if report is not None:
         if report.get("status") == "ERROR":
             # 沙箱内出错：fail-closed，交人工复核而非放行
-            return {"verdict": "review", "isolated": True, "scan_mode": "sandbox-error",
-                    "error": report.get("error"), "detail": report.get("stderr")}
-        return _summarize(report, isolated=True, mode="sandbox")
+            sandbox_summary = {"verdict": "review", "isolated": True, "scan_mode": "sandbox-error",
+                               "error": report.get("error"), "detail": report.get("stderr"),
+                               "scanner_version": report.get("scanner_version")}
+        else:
+            sandbox_summary = _summarize(report, isolated=True, mode="sandbox")
+        tiers.append(_tier_evidence("sandbox", sandbox_summary))
+        if _recommendation_of(sandbox_summary) == "DO_NOT_INSTALL":
+            sandbox_summary["tier_evidence"] = tiers
+            sandbox_summary["strictest_tier"] = "sandbox"
+            return sandbox_summary
 
-    # 无法隔离
-    if require_isolation:
-        return {"verdict": "deny", "isolated": False, "scan_mode": "no-sandbox",
-                "reason": "要求隔离但沙箱不可用（未安装 Docker 或镜像未构建），fail-closed 拒绝"}
     degraded = _run_degraded(path)
     if degraded.get("status") == "ERROR":
         # 降级扫描内部异常：fail-closed，交人工复核，绝不放行
-        return {"verdict": "review", "isolated": False, "scan_mode": "degraded-error",
-                "error": degraded.get("error"),
-                "warning": "降级扫描执行异常，无法给出安全裁决，已转人工复核（fail-closed）"}
-    result = _summarize(degraded, isolated=False, mode="degraded-local")
-    result["warning"] = "未隔离运行，裁决可信度较低；核心环境请构建沙箱镜像后重试"
-    return result
+        local_summary: dict[str, Any] = {
+            "verdict": "review", "isolated": False, "scan_mode": "degraded-error",
+            "error": degraded.get("error"),
+            "warning": "降级扫描执行异常，无法给出安全裁决，已转人工复核（fail-closed）",
+            "scanner_version": degraded.get("scanner_version"),
+        }
+    else:
+        local_summary = _summarize(degraded, isolated=False, mode="degraded-local")
+        local_summary["warning"] = "未隔离运行，裁决可信度较低；核心环境请构建沙箱镜像后重试"
+    tiers.append(_tier_evidence("degraded-local", local_summary))
+
+    if sandbox_summary is None:
+        local_summary["tier_evidence"] = tiers
+        local_summary["strictest_tier"] = "degraded-local"
+        return local_summary
+
+    if (RECOMMENDATION_RANK[_recommendation_of(local_summary)]
+            > RECOMMENDATION_RANK[_recommendation_of(sandbox_summary)]):
+        # 本地引擎更严：隔离层落后于当前引擎时就走这里，结论不被拉低
+        local_summary["strictest_tier"] = "degraded-local"
+        local_summary["note"] = ("本地引擎给出的裁决比隔离层更严，已采用更严的那个："
+                                 "隔离层只有在与本地引擎同版本时才是更强的证据")
+        local_summary["tier_evidence"] = tiers
+        return local_summary
+
+    sandbox_summary["strictest_tier"] = "sandbox"
+    sandbox_summary["tier_evidence"] = tiers
+    return sandbox_summary
 
 
 if __name__ == "__main__":

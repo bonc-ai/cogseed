@@ -1,0 +1,28 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.seo.schema
+  name: seo-schema
+  version: 1.0.0
+  description: Validate a page's JSON-LD structured data, recommend types to add by
+    page role, and generate paste-ready JSON-LD templates (Organization/WebSite/SoftwareApplication/FAQPage/BreadcrumbList/Article/Product);
+    lint covers missing @type, missing required fields, deprecated rich-result
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: python
+    scripts:
+    - scripts/schema.py
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

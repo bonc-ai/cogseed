@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * Phase 1 状态矩阵 + 跨入口一致性。
  *
@@ -39,7 +40,7 @@ const caps = async () => import('../../../../src/main/features/recall/candidate-
 const service = async () => import('../../../../src/main/features/recall/candidate-service');
 
 const ACTIONABLE_STATUSES = ['observed', 'weak_observation', 'pending_review', 'deferred', 'failed'] as const;
-const TERMINAL_STATUSES = ['confirmed', 'rejected', 'ignored', 'expired', 'superseded'] as const;
+const TERMINAL_STATUSES = ['confirmed', 'integrated', 'rejected', 'ignored', 'expired', 'superseded'] as const;
 const ALL_STATUSES = [...ACTIONABLE_STATUSES, ...TERMINAL_STATUSES] as const;
 
 describe('Recall candidate capability matrix', () => {
@@ -48,20 +49,21 @@ describe('Recall candidate capability matrix', () => {
     const matrix = Object.fromEntries(ALL_STATUSES.map((status) => {
       const c = getRecallCandidateCapabilities({ status });
       return [status, [c.displayState, c.canEdit, c.canConfirm, c.canPromote, c.canReject,
-        c.canDefer, c.canRetry, c.canBatchSelect, c.needsUserAction, c.countsAsPending,
+        c.canRetry, c.canBatchSelect, c.needsUserAction, c.countsAsPending,
         c.isSnoozed, c.isTerminal, c.disabledReason ?? '-'].join('|')];
     }));
     expect(matrix).toEqual({
-      observed:         'needs_review|true|true|true|true|true|false|true|true|true|false|false|-',
-      weak_observation: 'weak_evidence|true|true|true|true|true|false|true|true|true|false|false|-',
-      pending_review:   'needs_review|true|true|true|true|true|false|true|true|true|false|false|-',
-      deferred:         'deferred|true|true|true|true|true|false|true|true|true|true|false|-',
-      failed:           'failed|true|true|true|true|true|true|true|true|true|false|false|-',
-      confirmed:        'confirmed|false|false|false|false|false|false|false|false|false|false|true|candidate_confirmed',
-      rejected:         'rejected|false|false|false|false|false|false|false|false|false|false|true|candidate_rejected',
-      ignored:          'ignored|false|false|false|false|false|false|false|false|false|false|true|candidate_ignored',
-      expired:          'expired|false|false|false|false|false|false|false|false|false|false|true|candidate_expired',
-      superseded:       'superseded|false|false|false|false|false|false|false|false|false|false|true|candidate_superseded',
+      observed:         'needs_review|true|true|true|true|false|true|true|true|false|false|-',
+      weak_observation: 'weak_evidence|true|true|true|true|false|true|true|true|false|false|-',
+      pending_review:   'needs_review|true|true|true|true|false|true|true|true|false|false|-',
+      deferred:         'deferred|true|true|true|true|false|true|true|true|true|false|-',
+      failed:           'failed|true|true|true|true|true|true|true|true|false|false|-',
+      confirmed:        'confirmed|false|false|false|false|false|false|false|false|false|true|candidate_confirmed',
+      integrated:       'integrated|false|false|false|false|false|false|false|false|false|true|candidate_integrated',
+      rejected:         'rejected|false|false|false|false|false|false|false|false|false|true|candidate_rejected',
+      ignored:          'ignored|false|false|false|false|false|false|false|false|false|true|candidate_ignored',
+      expired:          'expired|false|false|false|false|false|false|false|false|false|true|candidate_expired',
+      superseded:       'superseded|false|false|false|false|false|false|false|false|false|true|candidate_superseded',
     });
   });
 
@@ -100,6 +102,13 @@ describe('Recall candidate capability matrix', () => {
       .toBe('candidate_confirmed');
   });
 
+  it('allows a legacy weak manual candidate to be reviewed without fabricated references', async () => {
+    const { getRecallCandidateCapabilities } = await caps();
+    expect(getRecallCandidateCapabilities({
+      origin: 'manual', status: 'weak_observation', sourceRefs: [], evidenceRefs: [],
+    })).toMatchObject({ canPromote: true, countsAsPending: true, displayState: 'needs_review' });
+  });
+
   it('keeps high-risk candidates out of batch select but still individually actionable', async () => {
     const { getRecallCandidateCapabilities } = await caps();
     const high = getRecallCandidateCapabilities({ status: 'weak_observation', risk: 'high' });
@@ -117,7 +126,7 @@ describe('Recall candidate capability — cross-entry consistency', () => {
     const candidates = await service();
     const weak = [];
     for (const n of [1, 2, 3]) {
-      weak.push(await candidates.saveRecallCandidate(userId, {
+      weak.push(await createNightlyCandidateFixture(userId, {
         judgment: `弱证据判断 ${n}`,
         summary: `证据弱样本${n}`,
         suggestedType: 'rule',
@@ -135,7 +144,7 @@ describe('Recall candidate capability — cross-entry consistency', () => {
     }
     const settled = [];
     for (const n of [4, 5]) {
-      const saved = await candidates.saveRecallCandidate(userId, {
+      const saved = await createNightlyCandidateFixture(userId, {
         judgment: `已处理判断 ${n}`,
         summary: `处理过样本${n}`,
         suggestedType: 'rule',
@@ -199,7 +208,7 @@ describe('Recall candidate capability — cross-entry consistency', () => {
 
     // 系统不得替用户把弱证据候选变成资产。
     await expect(candidates.promoteRecallCandidate(userId, weak[1].id, { actor: 'system' }))
-      .rejects.toThrow('candidate evidence is insufficient for review');
+      .rejects.toMatchObject({ code: 'nightly_automatic_approval_held', reasons: expect.arrayContaining(['candidate_requires_individual_review']) });
 
     // 用户显式确认后可以沉淀，并且候选进入 confirmed 终态、能力随之收敛。
     const { getRecallCandidateCapabilities } = await caps();
@@ -235,7 +244,7 @@ describe('Recall candidate capability — normalize and persistence', () => {
     const { getRecallCandidateCapabilities } = await caps();
     const candidates = await service();
     const userId = 'u-legacy';
-    const saved = await candidates.saveRecallCandidate(userId, {
+    const saved = await createNightlyCandidateFixture(userId, {
       judgment: '旧数据候选',
       suggestedType: 'rule',
       suggestedScope: 'product',
@@ -260,7 +269,7 @@ describe('Recall candidate capability — normalize and persistence', () => {
     const { getRecallCandidateCapabilities } = await caps();
     const candidates = await service();
     const userId = 'u-restart';
-    const saved = await candidates.saveRecallCandidate(userId, {
+    const saved = await createNightlyCandidateFixture(userId, {
       judgment: '重启后仍应可处理',
       suggestedType: 'rule',
       suggestedScope: 'product',
@@ -282,7 +291,7 @@ describe('Recall candidate capability — normalize and persistence', () => {
     const { getRecallCandidateCapabilities, withRecallCandidateCapabilities } = await caps();
     const candidates = await service();
     const userId = 'u-dto';
-    const saved = await candidates.saveRecallCandidate(userId, {
+    const saved = await createNightlyCandidateFixture(userId, {
       judgment: 'DTO 投影不落盘',
       suggestedType: 'rule',
       suggestedScope: 'product',

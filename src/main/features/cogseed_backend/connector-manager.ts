@@ -23,6 +23,7 @@ export interface CogSeedConnectorManagerOptions {
 }
 
 export interface CogSeedConnectorCallOptions {
+  beforeDispatch?: () => Promise<void>;
   signal?: AbortSignal;
   scope?: CogSeedCapabilityScope;
 }
@@ -95,6 +96,8 @@ export function createCogSeedConnectorManager(options: CogSeedConnectorManagerOp
       if (connector.enabledSubtools !== null && !connector.enabledSubtools.includes(toolName)) throw new Error('CogSeed connector tool is not enabled');
       if (!canAccessConnectorTool(opts.scope, connector.id, toolName)) throw new Error('CogSeed connector tool is outside the current capability scope');
       if (!connector.toolsCache.length) await updateCogSeedConnectorTools(userId, connector.id, tools, 'connected');
+      await opts.beforeDispatch?.();
+      if (opts.signal?.aborted) throw new Error('connector action cancelled');
       const result = await current.callTool(toolName, args, opts);
       return capCapabilityValue(result, `${connector.id}.${toolName}`);
     },

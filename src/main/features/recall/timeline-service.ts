@@ -2,6 +2,25 @@ import { listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, rea
 import { listAllContextProjections, readContextProjection, type ProjectionAuthorization } from './context-projection';
 import { listEffectivenessProofs, listTransferProofs, transferReceiptIsProven, type TransferProofRecord } from './proof-service';
 import { listRecallUsage } from './usage-service';
+import { createLogger } from '../../logger';
+
+const log = createLogger('recall.timeline');
+
+/** 一条坏记录不应拖垮整个时间线：
+ *  集合读取对记录形状错误降级为空集、少几行事件；真正的 IO 故障（带 errno
+ *  code）照旧上抛——静默少几行等于把磁盘问题伪装成「时间线变短了」。 */
+async function readTimelineSet<T>(
+  label: string,
+  read: () => Promise<T[]>,
+): Promise<T[]> {
+  try {
+    return await read();
+  } catch (error) {
+    if (typeof (error as NodeJS.ErrnoException).code === 'string') throw error;
+    log.warn('timeline source degraded; events from it are skipped', { source: label, error: (error as Error).message });
+    return [];
+  }
+}
 
 export type RecallAssetTimelineKind =
   | 'asset_created'
@@ -24,13 +43,9 @@ export type RecallAssetTimelineKind =
   | 'transfer_completed'
   | 'effectiveness_recorded' | 'catalog_hint_unused';
 
-/** 「真实使用」白名单（2026-09-25 验收修复 US-602 / FR-004、FR-011）：
- *  列表与详情共用**同一份**定义，且下游（specs/012 排序因子等）MUST 直接引用本
- *  常量，不得另写一份。只含"被带入任务 / 被实际使用"两类事件——创建、版本、治理
- *  与撤销都不是使用，一律不抬高「最近使用」（此前列表侧对全部事件取 occurredAt
- *  最大值、未按 kind 过滤，正是缺陷本体）。
- *  注：「实际采用」另有权威口径 = usage 回执 `applied`（见 asset-usage-receipt）；
- *  本白名单只回答"哪些事件算真实使用"，不回答"是否被采用"。 */
+/** 真实使用事件的统一白名单，列表、详情和排序因子共用。
+ * 仅包含被带入任务或实际使用的事件；创建、版本、治理和撤销不抬高最近使用时间。
+ * 是否实际采用另按 applied/real 的使用回执判断，见 asset-usage-receipt。 */
 export const REAL_USAGE_KINDS: readonly RecallAssetTimelineKind[] = ['usage_recorded', 'projection_confirmed'];
 
 export interface RecallAssetTimelineItem {
@@ -44,10 +59,8 @@ export interface RecallAssetTimelineItem {
    * 效果评价的**结论**（better / no_improvement / worse / rework /
    * insufficient_evidence / invalid）。
    *
-   * 必须和 `status` 分开带：效果证明记录里 `status` 只回答"这次评价本身可不可
-   * 归因"（valid / invalid），结论在 `outcome` 上。此前只带 status，渲染层拿
-   * 'valid' 去匹配结论词表永远落空，于是退回英文原文，页面上显示成
-   * "Effectiveness recorded / User feedback: rework"。
+   * 与 `status` 分开传递：`status` 表示评价是否可归因（valid / invalid），
+   * `outcome` 表示评价结论，渲染层分别匹配各自的词表。
    */
   outcome?: string;
   refs?: {
@@ -59,17 +72,14 @@ export interface RecallAssetTimelineItem {
     conversationId?: string;
     transferProofId?: string;
     usageReceiptId?: string;
-    /** 使用记录自身 id（N-5: 不是回执 id，仅展示用，不参与回执索引）。 */
+    /** 使用记录自身 id（不是回执 id，仅展示用，不参与回执索引）。 */
     usage_id?: string;
     /** 已确认投影的原始授权/用途：详情页据此识别仍可撤销的长期挂载。 */
     authorization?: ProjectionAuthorization;
     purpose?: string;
     expiresAt?: string;
-    /** usage 记录的 outcome（2026-09-25 US-602）：injected / dispatched /
-     *  agent_read / succeeded|degraded|rejected / feedback_positive|negative。
-     *  渲染层据此把「宿主注入过」与「实际采用」分开措辞——不带这个字段就只能
-     *  把 injected 也写成"被实际使用"，正是 AC4/AC5 要禁的过度宣称。
-     *  **不复用顶层 `outcome`**：那是效果评价的结论（valid/invalid 语境）。 */
+    /** 使用记录的 outcome：injected/dispatched/agent_read、执行结果或用户反馈。
+     * 用于区分带入与实际采用；不复用顶层 outcome 的效果评价语义。 */
     usageOutcome?: string;
   };
 }
@@ -128,6 +138,7 @@ function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined
     case 'maturity_corrected':
     case 'merged_from':
     case 'merged_into':
+    case 'version_deleted':
       return 'asset_updated';
     default: return undefined;
   }
@@ -154,16 +165,12 @@ async function buildTransferProofIndex(userId: string, proofs: TransferProofReco
   return ids;
 }
 
-export async function listAbilityAssetTimeline(userId: string, assetId: string): Promise<RecallAssetTimelineItem[]> {
-  const asset = await readAbilityAsset(userId, assetId);
-  const items: RecallAssetTimelineItem[] = [];
-
-  // taskRunId → 会话 id：旧投影没有 conversationId 字段，用 KSTAR episode 的
-  // 会话归属回溯（sessionId 带 gconv- 前缀，去掉后与来源清单里的会话 id 对齐）。
-  // 注意：usage/投影事件里的 taskRunId 是**回合 run id**，落在 episode 的
-  // reuseTurnIds 数组里（episode.taskRunId 是 episode 自身 id，两者不同）——
-  // 两处都建索引，实测 bc8f09cc4d56 只在 reuseTurnIds 命中。
-  // 动态 import：recall 与 kstar 相互沉淀，静态 import 成环。
+/** Shared only by this timeline request. Writes and other users never share its read results. */
+function once<T>(read: () => Promise<T>): () => Promise<T> {
+  let result: Promise<T> | undefined;
+  return () => result ??= Promise.resolve().then(read);
+}
+async function readEpisodeConversations(userId: string): Promise<Map<string, string>> {
   const episodeConversationByRun = new Map<string, string>();
   try {
     const { listKstarEpisodes } = await import('../kstar/episode-store');
@@ -176,6 +183,39 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       }
     }
   } catch { /* kstar 不可用不阻断时间线 */ }
+  return episodeConversationByRun;
+}
+function createTimelineReads(userId: string) {
+  const transfers = once(() => readTimelineSet('transfer-proofs', () => listTransferProofs(userId)));
+  const projections = new Map<string, Promise<Awaited<ReturnType<typeof readContextProjection>>>>();
+  return {
+    episodes: once(() => readEpisodeConversations(userId)),
+    projections: once(() => listAllContextProjections(userId)),
+    injections: once(async () => {
+      try { return await (await import('./injection-receipt')).listInjectionReceipts(userId); }
+      catch { return []; } // Same optional audit source as the single-asset read.
+    }),
+    transfers,
+    transferIndex: once(async () => buildTransferProofIndex(userId, await transfers())),
+    transferById: once(async () => new Map((await transfers()).map(proof => [proof.id, proof]))),
+    effectiveness: once(() => readTimelineSet('effectiveness-proofs', () => listEffectivenessProofs(userId))),
+    usage: once(() => readTimelineSet('usage-records', () => listRecallUsage(userId))),
+    projection(id: string) {
+      let read = projections.get(id);
+      if (!read) { read = readContextProjection(userId, id); projections.set(id, read); }
+      return read;
+    },
+  };
+}
+
+export async function listAbilityAssetTimeline(userId: string, assetId: string): Promise<RecallAssetTimelineItem[]> {
+  return buildAssetTimeline(userId, await readAbilityAsset(userId, assetId), createTimelineReads(userId));
+}
+async function buildAssetTimeline(userId: string, asset: Awaited<ReturnType<typeof readAbilityAsset>>,
+  reads: ReturnType<typeof createTimelineReads>): Promise<RecallAssetTimelineItem[]> {
+  const assetId = asset.id;
+  const items: RecallAssetTimelineItem[] = [];
+  const episodeConversationByRun = await reads.episodes();
 
   for (const audit of await listAbilityAssetAudit(userId, assetId)) {
     const kind = auditTimelineKind(audit.action);
@@ -191,7 +231,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
     });
   }
 
-  for (const version of await listAbilityAssetVersions(userId, assetId)) {
+  for (const version of await listAbilityAssetVersions(userId, assetId, asset)) {
     pushSorted(items, {
       id: version.id,
       kind: 'asset_version',
@@ -203,10 +243,8 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   }
 
   // 资产事实链不能只看最近 20 条投影：较早但仍有效的固定版本仍可能被后续任务读取。
-  for (const projection of await listAllContextProjections(userId)) {
-    // 撤销的投影同样入时间线（2026-09-18 模型自选线；2026-09-25 补用户 @ 钉住线）：
-    // 用户撤销后原本"这件事消失得无影无踪"，只剩注入回执——现在给一条"已撤销"
-    // 事件，撤销动作可追溯（US-602 AC3）。
+  for (const projection of await reads.projections()) {
+    // 撤销的模型自选或用户钉住投影仍入时间线，保留历史授权与撤销记录。
     const isRevokedAttachment = projection.status === 'revoked'
       && (projection.authorization === 'model_selected'
         || (projection.authorization === 'user_confirmed' && projection.purpose === 'user_pinned'));
@@ -253,11 +291,10 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
     });
   }
 
-  // 漏取审计行（2026-09-19）：catalog_hint 回执（目录标★相关但该回合未被
+  // 漏取审计行：catalog_hint 回执（目录标★相关但该回合未被
   // 使用）→「相关而未被用」时间线行。只列该资产的，读回执流全量后过滤。
   try {
-    const { listInjectionReceipts } = await import('./injection-receipt');
-    for (const receipt of await listInjectionReceipts(userId)) {
+    for (const receipt of await reads.injections()) {
       if (receipt.channel !== 'catalog_hint' || receipt.status !== 'omitted') continue;
       if (String(receipt.assetId) !== asset.id) continue;
       pushSorted(items, {
@@ -285,7 +322,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
     const cached = projectionConversations.get(projectionId);
     if (cached !== undefined) return cached || undefined;
     try {
-      const projection = await readContextProjection(userId, projectionId);
+      const projection = await reads.projection(projectionId);
       const conversationId = projection.conversationId || '';
       projectionConversations.set(projectionId, conversationId);
       return conversationId || undefined;
@@ -294,11 +331,11 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       return undefined;
     }
   };
-  // 检修剪（2026-09-16）：proofs 只读一次，建投影索引供全部 usage 行查询
-  // （下方 transfer 段复用同一份，避免重复全量扫描）。
-  const transferProofs = await listTransferProofs(userId);
-  const transferProofByProjection = await buildTransferProofIndex(userId, transferProofs);
-  for (const usage of await listRecallUsage(userId, assetId)) {
+  // 证明集合只读一次，按投影建索引供使用和迁移事件共用。
+  // readTimelineSet 隔离坏记录，实际 IO 故障仍上抛。
+  const transferProofs = await reads.transfers();
+  const transferProofByProjection = await reads.transferIndex();
+  for (const usage of (await reads.usage()).filter(row => row.assetId === assetId)) {
     // 会话 id：新投影的 conversationId 优先；旧数据用 episode 的
     // taskRunId→sessionId 回溯——用户要求老记录也能看出"在哪个对话里被用"。
     const usageConversationId = (await conversationOfProjection(usage.projectionId))
@@ -317,7 +354,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       occurredAt: usage.createdAt,
       title: itemTitle('usage_recorded'),
       // taskRunId / projectionId 是定位键，已经在 refs 里；摘要不再把它们拼成
-      // 展示文案（§7：内部 id 不作主文案）。版本是用户看得懂的信息，留下。
+      // 展示文案。版本是用户看得懂的信息，留下。
       summary: usage.assetVersion ? `v${usage.assetVersion}` : '',
       refs: {
         assetId: asset.id,
@@ -326,10 +363,10 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         taskRunId: usage.taskRunId,
         ...(usageProofId ? { transferProofId: usageProofId } : {}),
         ...(usageConversationId ? { conversationId: usageConversationId } : {}),
-        // outcome 随行下发（2026-09-25 US-602）：让渲染层能按"怎么用到的"分开
+        // outcome 随行下发：让渲染层能按"怎么用到的"分开
         // 措辞，而不是把宿主注入也写成"被实际使用"。旧记录没有该字段就省略。
         ...(usage.outcome ? { usageOutcome: String(usage.outcome) } : {}),
-        // N-5: usage 行不再伪装 usageReceiptId。前端按 receiptId 索引回执，
+        // usage 行不使用 usageReceiptId。前端按 receiptId 索引回执，
         // usage 记录 id 不是回执 id——放了会让「详情/回执」在 usage 行恒查
         // 不到（口径漂移：transfer_completed 行的 usageReceiptId 才是真回执
         // id）。usage 行保留 usage_id 供展示，不参与回执索引。
@@ -340,11 +377,10 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
 
   const relevantTransfers = transferProofs.filter((proof: TransferProofRecord) => proof.assetVersions.some((entry) => entry.assetId === asset.id));
   for (const proof of relevantTransfers) {
-    // 兜底（2026-09-18 P0）：证明指向的投影记录可能已不存在（数据手术/清理遗留）。
-    // 一条坏记录不该把整个时间线拖垮——降级为不带投影上下文的事件，而不是抛错。
+    // 历史证明的投影可能已不存在；保留事件，省略不可恢复的投影上下文。
     let projection: Awaited<ReturnType<typeof readContextProjection>> | undefined;
     try {
-      projection = await readContextProjection(userId, proof.projectionId);
+      projection = await reads.projection(proof.projectionId);
     } catch {
       projection = undefined;
     }
@@ -379,8 +415,8 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
     }
   }
 
-  const effectivenessProofs = await listEffectivenessProofs(userId);
-  const transferById = new Map(transferProofs.map((proof) => [proof.id, proof]));
+  const effectivenessProofs = await reads.effectiveness();
+  const transferById = await reads.transferById();
   for (const proof of effectivenessProofs) {
     const transfer = transferById.get(proof.transferProofId);
     if (!transfer || !transfer.assetVersions.some((entry) => entry.assetId === asset.id)) continue;
@@ -411,7 +447,8 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
 export async function listRecallTimeline(userId: string, limit = 500): Promise<RecallAssetTimelineItem[]> {
   const boundedLimit = Math.max(1, Math.min(Math.floor(Number(limit) || 500), 500));
   const assets = await listAbilityAssets(userId);
-  const timelines = await Promise.all(assets.map((asset) => listAbilityAssetTimeline(userId, asset.id)));
+  const reads = createTimelineReads(userId);
+  const timelines = await Promise.all(assets.map((asset) => buildAssetTimeline(userId, asset, reads)));
   return timelines.flat()
     .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id))
     .slice(0, boundedLimit);

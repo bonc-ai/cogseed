@@ -74,15 +74,19 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
         sourceIssues: 0, failedTasks: 0, coveredAssets: 0, proofCount: 0, attention: 0,
       };
     },
+    // views.js 的骨架门控；本文件只关心候选详情，直接视为已加载。
+    isRouteLoading: () => false,
     store: { loaded: true, loading: false, errors: [], route: { name: 'activity' } },
   };
   domRoot = { innerHTML: '' };
   /* eslint-disable @typescript-eslint/no-require-imports */
-  const { uiInput, uiSwitch, uiTextarea } = require('../../src/renderer/modules/ui-form.js');
+  const { uiInput, uiSwitch, uiTextarea, uiSelect } = require('../../src/renderer/modules/ui-form.js');
   const { uiEmptyState } = require('../../src/renderer/modules/ui-empty.js');
   globalScope.window = {
     CogAssets: cogAssets,
     uiButton: require('../../src/renderer/modules/ui-button.js').uiButton,
+    uiCard: require('../../src/renderer/modules/ui-card.js').uiCard,
+    uiField: require('../../src/renderer/modules/ui-form.js').uiField,
     uiIconButton: require('../../src/renderer/modules/ui-button.js').uiIconButton,
     uiIconHtml: (() => {
       require('../../src/renderer/modules/icons.js');
@@ -90,6 +94,7 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
     })(),
     uiInput,
     uiSwitch,
+    uiSelect,
     uiTextarea,
     uiEmptyState,
   };
@@ -127,7 +132,7 @@ function renderPage(
     name: routeName, category: '', assetId: '', candidateId: '', proofEventId: '',
     captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '',
     assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '',
-    assetView: '', familyRename: '', ontologyBox: '',
+    assetView: '',
     ...routePatch,
   };
   rootEl.innerHTML = '';
@@ -349,195 +354,6 @@ const FOUR_OUTCOMES = [
   outcomeFixture({ id: 'kio-kse-3', episodeId: 'kse-3', conclusion: 'analysis_failed', reason: '读取实际采用证据失败。', failureCategory: 'evidence' }),
   outcomeFixture({ id: 'kio-kse-4', episodeId: 'kse-4', conclusion: 'submit_failed', reason: '改进提议提交失败（归因：data）。', failureCategory: 'data' }),
 ];
-
-describe('「改进分析」只读分区（T016 / US-701 AC3）', () => {
-  it('空态走共享 EmptyState，不是空白块', () => {
-    const html = renderPage('activity', { improvementOutcomes: { items: [], loading: false, failed: false } });
-    expect(html).toContain(zh['cognition.improvement_section']);
-    expect(html).toContain(zh['cognition.improvement_empty']);
-    expect(html).toContain(zh['cognition.improvement_empty_hint']);
-    expect(html).toContain('data-empty-kind="explained"');
-  });
-
-  it('四类结论各有可见措辞 + 人话原因 + 来源任务 + 时间；只读、不进待办', () => {
-    const html = renderPage('activity', {
-      assets: [targetAsset],
-      improvementOutcomes: { items: FOUR_OUTCOMES, loading: false, failed: false },
-      ...kstarStore,
-      kstarSummaries: { 'kse-1': { id: 'kse-1', goal: '第一次复盘任务' }, 'kse-ep1': { id: 'kse-ep1', goal: '把接口变更同步到文档' } },
-      kstarSummariesSettled: ['kse-1', 'kse-ep1'],
-    });
-    const tail = improvementTail(html);
-    expect(tail).not.toBe('');
-    for (const key of [
-      'cognition.improvement_conclusion_no_update',
-      'cognition.improvement_conclusion_insufficient_evidence',
-      'cognition.improvement_conclusion_analysis_failed',
-      'cognition.improvement_conclusion_submit_failed',
-    ]) {
-      expect(tail, key).toContain(zh[key]);
-    }
-    // 人话原因 + 来源任务（走唯一解析器）+ 时间（格式化，不是原始 ISO）。
-    expect(tail).toContain('这次没有达到沉淀门槛的内容。');
-    expect(tail).toContain(T('cognition.evidence_task_review', '', { title: '第一次复盘任务' }));
-    expect(tail).toMatch(/\d{4}\/\d{1,2}\/\d{1,2}/);
-    expect(tail).not.toContain(OUTCOME_ISO);
-    // 只读：没有决定按钮，也不进待办（「要你拍板」计数仍是 0；specs/018 v2 统计卡口径）。
-    expect(tail).not.toContain('<button');
-    expect(tail).not.toContain('data-act="cand-');
-    expect(tail).not.toContain('data-act="inbox-resolve"');
-    // 「不进待办」在待我处理页核对：改进结论不占「要你拍板」——页首导语的
-    // 拍板数保持 0（specs/018 T010 统计条收进导语后的新形状：没有待办时
-    // 直接落全清空态，而不是把改进结论数进拍板数）。
-    const reviewHtml = renderPage('review', {
-      improvementOutcomes: { items: FOUR_OUTCOMES, loading: false, failed: false },
-    });
-    expect(reviewHtml).toContain('没有需要你确认的事项。');
-    expect(reviewHtml).not.toMatch(/data-act="review-jump" data-id="ca-review-decide"[^>]*>[1-9]/);
-  });
-
-  it('结论原因里的内部 id 不上屏：换成资产名或泛称', () => {
-    const html = renderPage('activity', {
-      assets: [targetAsset],
-      improvementOutcomes: {
-        items: [outcomeFixture({
-          reason: '已核对：任务里存在「aa-t1」v1 的实际采用记录；详情见失败记录「ksf-abc123456」。',
-        })],
-        loading: false,
-        failed: false,
-      },
-      ...kstarStore,
-    });
-    const tail = improvementTail(html);
-    expect(tail).toContain(targetAsset.title);
-    expect(tail).toContain(zh['cognition.improvement_ref_generic']);
-    expect(visibleText(tail)).not.toContain('aa-t1');
-    expect(visibleText(tail)).not.toContain('ksf-abc123456');
-  });
-
-  it('失败类结论给就地失败详情：环节 / 时间 / 失败标识，不显示错误原文', () => {
-    const html = renderPage('activity', {
-      improvementOutcomes: { items: [FOUR_OUTCOMES[2], FOUR_OUTCOMES[3]], loading: false, failed: false },
-      kstarFailures: {
-        items: [
-          { id: 'ksf-1', stage: 'precipitation', errorCode: 'candidate_write_failed', errorMessage: 'internal failure detail', at: '2026-09-25T01:00:00.000Z', episodeId: 'kse-3' },
-          { id: 'ksf-2', stage: 'review_inference', errorCode: 'model_unavailable', errorMessage: 'internal failure detail', at: '2026-09-25T01:30:00.000Z', episodeId: 'kse-9' },
-        ],
-        loading: false,
-        failed: false,
-      },
-      ...kstarStore,
-    });
-    const tail = improvementTail(html);
-    expect(tail).toContain(zh['cognition.improvement_failure_detail']);
-    expect(tail).toContain(zh['cognition.improvement_failure_stage_precipitation']);
-    expect(tail).toContain(T('cognition.improvement_failure_code', '', { code: 'candidate_write_failed' }));
-    expect(tail).toMatch(/\d{4}\/\d{1,2}\/\d{1,2}/);
-    expect(tail).not.toContain('2026-09-25T01:00:00.000Z');
-    // 别的 episode 的失败记录不混进来（按 episodeId 归位）。
-    expect(tail).not.toContain('model_unavailable');
-    // 失败记录的错误原文不上屏（可能是内部措辞或夹带正文）。
-    expect(tail).not.toContain('internal failure detail');
-  });
-
-  it('同一 episode 已产出候选：不再摆该 episode 的「无需更新」（收敛语义，不自相矛盾）', () => {
-    const html = renderPage('activity', {
-      assets: [targetAsset],
-      candidates: [updateCandidate()],
-      improvementOutcomes: {
-        items: [
-          outcomeFixture({ episodeId: 'kse-ep1', conclusion: 'no_update', reason: '这次没有达到沉淀门槛的内容。' }),
-          outcomeFixture({ id: 'kio-kse-2', episodeId: 'kse-2', conclusion: 'no_update', reason: '这次没有达到沉淀门槛的内容。' }),
-        ],
-        loading: false,
-        failed: false,
-      },
-      ...kstarStore,
-    });
-    const tail = improvementTail(html);
-    // kse-ep1 的「无需更新」被收敛掉（该 episode 已有候选），另一条照旧可见。
-    expect(tail).toContain('<span class="n">1</span>');
-    expect(tail).toContain('kse-2');
-    expect(tail.split(zh['cognition.improvement_conclusion_no_update']).length - 1).toBe(1);
-  });
-
-  it('读取失败与空态分开：说读不到并给重试（既有 refresh 动作，不是新动作）', () => {
-    const failed = renderPage('activity', { improvementOutcomes: { items: [], loading: false, failed: true } });
-    expect(failed).toContain(zh['cognition.improvement_read_failed']);
-    expect(failed).toContain('data-act="refresh"');
-    expect(failed).not.toContain(zh['cognition.improvement_empty']);
-
-    const loading = renderPage('activity', { improvementOutcomes: null });
-    expect(loading).toContain(zh['cognition.improvement_loading']);
-    expect(loading).not.toContain(zh['cognition.improvement_empty']);
-  });
-
-  it('源码级：数据走两条只读通道，装载过程零写操作', () => {
-    expect(coreSource).toContain("api.call('kstar.improvement.outcomes.list', { limit: 50 })");
-    expect(coreSource).toContain("api.call('kstar.failures.list', {})");
-    // 依据链的采用证据复用既有只读口（与资产详情「实际采用记录」同一份缓存）。
-    expect(coreSource).toContain("api.call('recall.assets.adoptionReceipts', { assetId: id })");
-    const loaders = coreSource.slice(
-      coreSource.indexOf('NS.loadImprovementOutcomes'),
-      coreSource.indexOf('const IMPROVEMENT_FAILURE_CONCLUSIONS'),
-    );
-    expect(loaders.length).toBeGreaterThan(0);
-    for (const writeCall of ['promote', 'candidates.update', 'candidates.reject', 'candidates.defer', 'assets.update']) {
-      expect(loaders, writeCall).not.toContain(writeCall);
-    }
-    // 分区渲染侧同样零写通道。
-    const section = viewsSource.slice(
-      viewsSource.indexOf('function improvementFailureDetail'),
-      viewsSource.indexOf('function viewReview'),
-    );
-    expect(section).not.toContain('api.call');
-    expect(section).not.toContain('window.cogseed');
-  });
-});
-
-/* ─────────────────── 隐私：受限正文不进界面（T019 验收点） ─────────────────── */
-
-describe('受限正文不进界面（T019 验收点）', () => {
-  const MARKER = '内部受限正文绝不应上屏';
-  const RESTRICTED_BODY = `${MARKER}：${'这段正文只允许存在资产本体里。'.repeat(30)}`;
-
-  it('契约字段之外的长正文一律不上屏（候选 / 回执 / 结论 / 失败记录都不整条 dump）', () => {
-    // 候选详情页：候选与采用回执上的非契约字段。
-    const detail = renderUpdateDetail(
-      { restrictedBody: RESTRICTED_BODY, payload: { statement: RESTRICTED_BODY } },
-      { adoptionReceipts: { assetId: 'aa-t1', items: [{ ...appliedReceipt, excerpt: RESTRICTED_BODY }] } },
-    );
-    expect(detail).not.toContain(MARKER);
-    expect(detail).not.toContain(RESTRICTED_BODY);
-
-    // 待我处理列表页：结论与失败记录上的非契约字段。
-    const list = renderPage('activity', {
-      assets: [targetAsset],
-      candidates: [updateCandidate({ restrictedBody: RESTRICTED_BODY })],
-      improvementOutcomes: {
-        items: [outcomeFixture({
-          conclusion: 'analysis_failed',
-          reason: '读取实际采用证据失败。',
-          restrictedBody: RESTRICTED_BODY,
-          payload: { statement: RESTRICTED_BODY },
-          failureCategory: 'evidence',
-        })],
-        loading: false,
-        failed: false,
-      },
-      kstarFailures: {
-        items: [{ id: 'ksf-1', stage: 'precipitation', errorCode: 'candidate_write_failed', errorMessage: RESTRICTED_BODY, at: OUTCOME_ISO, episodeId: 'kse-1' }],
-        loading: false,
-        failed: false,
-      },
-      ...kstarStore,
-    });
-    expect(list).not.toContain(MARKER);
-    expect(list).not.toContain(RESTRICTED_BODY);
-    // 契约里明列的摘要字段照常可见（不是把整块都藏了）。
-    expect(list).toContain('读取实际采用证据失败。');
-  });
-});
 
 /* ─────────────────── 文案种子（T009 验收点） ─────────────────── */
 

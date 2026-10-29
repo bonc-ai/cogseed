@@ -1,23 +1,5 @@
-/**
- * 探针（状态机审计员 · 新循环第 1 轮）：purge 半途中断后重试被自己的墓碑挡住。
- *
- * 链路（读码 asset-service.ts:1345-1389 + store.ts:122-138）：
- * purgeAbilityAsset = setStatus('purged')（先落墓碑）→ removeRecallJsonlStream
- * （删版本流）→ cascadePurgeAssetReferences（清三个用量流 + 投影冻结副本）。
- * 三段之间都是独立 await，任一段 IO 故障/进程中断都会留下「墓碑已落、级联未清」
- * 的状态。而 setStatus 的 updater 首行 assertNotPurged(:1038) 对已 purged 记录
- * 直接 throw——重试 purge 在第一步就被挡，级联段永远执行不到。
- * store.ts:160 注释明说 removeRecallJsonlStream「清除要可重入，半路失败后重试
- * 不该被绊住」，但 purgeAbilityAsset 整体不可重入，设计意图与实现矛盾。
- *
- * 等价构造：第一次 purge 正常完成（= setStatus 已落墓碑的等价终态），再在投影
- * 目录放置含正文的冻结副本（= 级联未清的残留），断言第二次 purge 被拒、残留
- * 无法经任何产品通道清除（cascadePurgeAssetReferences 无独立入口，全仓仅
- * purgeAbilityAsset 一个调用方）。
- * 2026-09-30 r1 收尾（记账员）：对应待议 P-r1-1（与 probe-r5-purge-
- * nonretryable-cascade 用例 1 同题异构：r5 用 chmod 制造真实 IO 故障，本探针
- * 用等价构造测投影冻结副本残留通道）→ it.skip，断言锁定现状，拍板后反转。
- */
+/** 墓碑已提交但冻结副本未清理时的重试恢复边界（重入 + 通道）。 */
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -53,9 +35,9 @@ async function loadAssets() {
 }
 
 async function mkAsset(id: string) {
-  const assets = await loadAssets();
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(UID, {
+  // 直接落历史记录（test-only 种子）：本探针考重试通道，不考创建门。
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'personal', title: `资产 ${id}`, statement: `陈述 ${id}。`,
@@ -67,8 +49,26 @@ async function mkAsset(id: string) {
 
 const ACT = { actor: 'user' as const, reason: 'probe' };
 
-describe('probe-sm1 › purge 生命周期断链（待议 P-r1-1，拍板前 skip）', () => {
-  it.skip('墓碑已落、级联残留未清时：重试 purge 被 assertNotPurged 挡住，投影冻结副本无通道可清', async () => {
+/** 构造「级联中途失败」的等价残留：一个引用该资产的投影，冻结副本里带正文。 */
+function seedResidueProjection(id: string, suffix: string): string {
+  const projDir = path.join(tmpDir, UID, 'cloud', 'recall', 'records', 'projections');
+  fs.mkdirSync(projDir, { recursive: true });
+  const projPath = path.join(projDir, `pj-sm1-${suffix}.json`);
+  fs.writeFileSync(projPath, JSON.stringify({
+    schemaVersion: 1, ownerId: UID, id: `pj-sm1-${suffix}`,
+    taskRunId: `tr-sm1-${suffix}`, purpose: 'task', assetIds: [id],
+    // asProjection 必需字段：缺这三个会被整条跳过（清理面读不进来的投影
+    // 等于没构造出残留现场——原探针从未跑过，夹具一直缺这几项）。
+    sourceRefs: [], omittedRefs: [], authorization: 'user',
+    assetVersions: { [id]: '1' },
+    assetVersionSnapshots: { [id]: { version: '1', snapshot: { statement: '正文残留' } } },
+    status: 'confirmed', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }));
+  return projPath;
+}
+
+describe('purge 后冻结副本的重试与清扫通道', () => {
+  it('墓碑已落、投影冻结副本残留：同入口重试可重入并把副本清掉', async () => {
     const assets = await loadAssets();
     await mkAsset('aa-sm1');
     await assets.deleteAbilityAsset(UID, 'aa-sm1', ACT);
@@ -76,26 +76,33 @@ describe('probe-sm1 › purge 生命周期断链（待议 P-r1-1，拍板前 ski
     const purged = await assets.purgeAbilityAsset(UID, 'aa-sm1', ACT);
     expect(purged.status).toBe('purged');
 
-    // 构造「级联中途失败」的等价残留：一个引用该资产的投影文件，冻结副本里
-    // 带正文（对应第一次 purge 的 cascadePurgeAssetReferences 未完成状态）。
-    const projDir = path.join(tmpDir, UID, 'cloud', 'recall', 'records', 'projections');
-    fs.mkdirSync(projDir, { recursive: true });
-    const projPath = path.join(projDir, 'pj-sm1.json');
-    fs.writeFileSync(projPath, JSON.stringify({
-      schemaVersion: 1, ownerId: UID, id: 'pj-sm1',
-      taskRunId: 'tr-sm1', purpose: 'task', assetIds: ['aa-sm1'],
-      assetVersions: { 'aa-sm1': '1' },
-      assetVersionSnapshots: { 'aa-sm1': { version: '1', snapshot: { statement: '正文残留' } } },
-      status: 'confirmed', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    }));
+    const projPath = seedResidueProjection('aa-sm1', 'a');
 
-    // 重试 purge：在 setStatus 的 assertNotPurged 即被拒——级联段（含
-    // clearAssetFromAllProjections）永远执行不到。
-    await expect(assets.purgeAbilityAsset(UID, 'aa-sm1', ACT))
-      .rejects.toThrow(/has been purged/);
+    // 应然契约：重试同一 purge 入口不再被 assertNotPurged 挡住——墓碑已落
+    // 仍可重入级联清理，clearAssetFromAllProjections 随重入执行。
+    const retried = await assets.purgeAbilityAsset(UID, 'aa-sm1', ACT);
+    expect(retried.status).toBe('purged');
+    const left = JSON.parse(fs.readFileSync(projPath, 'utf8')) as Record<string, unknown>;
+    expect(left.assetIds).toEqual([]);
+    expect(left.assetVersionSnapshots).toBeUndefined();
+    expect(JSON.stringify(left)).not.toContain('正文残留');
+  });
 
-    // 残留原样滞留：没有第二个产品入口能清它。
-    const left = JSON.parse(fs.readFileSync(projPath, 'utf8'));
-    expect(left.assetVersionSnapshots['aa-sm1'].snapshot.statement).toBe('正文残留');
+  it('启动清扫兜底：purge 后仍残留的投影冻结副本被 sweep 清除（无人工入口也收口）', async () => {
+    const assets = await loadAssets();
+    await mkAsset('aa-sm1b');
+    await assets.deleteAbilityAsset(UID, 'aa-sm1b', ACT);
+    await assets.purgeAbilityAsset(UID, 'aa-sm1b', ACT);
+
+    // 模拟旁路残留（历史数据/级联半途失败的等价现场）：purge 完成后落进来的
+    // 引用该资产的投影冻结副本。
+    const projPath = seedResidueProjection('aa-sm1b', 'b');
+
+    const report = await assets.sweepPurgedAbilityAssetVersionStreams(UID);
+    expect(report.sweptProjectionAssets).toContain('aa-sm1b');
+    expect(report.clearedProjections).toBeGreaterThan(0);
+    const left = JSON.parse(fs.readFileSync(projPath, 'utf8')) as Record<string, unknown>;
+    expect(left.assetVersionSnapshots).toBeUndefined();
+    expect(JSON.stringify(left)).not.toContain('正文残留');
   });
 });

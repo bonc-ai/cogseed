@@ -45,6 +45,7 @@ vi.mock('../../../../src/main/features/recall/source-control', async (importOrig
 import {
   COGNITION_CATALOG_KINDS,
   cognitionArtifactSourceId,
+  cognitionAttachmentSourceId,
   cognitionContextFileSourceId,
   cognitionMessageSourceId,
   listCognitionSources,
@@ -110,6 +111,16 @@ beforeEach(() => {
 });
 
 describe('Recall cognition source catalog', () => {
+  it('discovers text attachment metadata without treating an absolute path or body as a source name', async () => {
+    mocks.getMessages.mockResolvedValue([{ id: 'message-a', ts: conversation.created_at, from: 'user',
+      text: 'Please organize the attachment.', attachments: ['transcript.txt', '/private/absolute/file.txt'] }]);
+    const groups = await listCognitionSources('user-a', { kinds: ['artifact_file'] });
+    const source = groups[0].items.find(item => item.id === cognitionAttachmentSourceId('conv-a', 'message-a', 'transcript.txt'));
+    expect(source).toMatchObject({ title: 'transcript.txt',
+      locator: { conversationId: 'conv-a', messageId: 'message-a', attachmentName: 'transcript.txt' } });
+    expect(JSON.stringify(groups)).not.toContain('/private/absolute');
+    expect(JSON.stringify(groups)).not.toContain('Please organize');
+  });
   it('lists every non-KSTAR adapter with stable metadata-only references', async () => {
     const groups = await listCognitionSources('user-a', { limit: 25 });
 

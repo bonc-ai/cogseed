@@ -87,8 +87,8 @@ const TOUR_STEPS = [
         // 属性随 skills.js 瘦身消失（2026-09-14 终审补，否则引导步骤永不推进）。
         document.querySelector('#panel-recall [data-act="cand-adopt-with-form"], #panel-recall [data-act="cand-decide"]')
         || document.querySelector('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')
-        || document.querySelector('#panel-recall [data-cognition-page-link="captures"]')
-        || document.querySelector('#panel-recall .ca-tab[data-id="review"]')
+        || document.querySelector('#sidebar-recall-nav [data-cognition-page-link="captures"]')
+        || document.querySelector('#sidebar-recall-nav .ca-tab[data-id="review"]')
       );
     },
     position: 'bottom',
@@ -106,7 +106,7 @@ const TOUR_STEPS = [
       if (!visible) return document.getElementById('recall-btn');
       return (
         document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="assets"]')
-        || document.querySelector('#panel-recall [data-cognition-page-link="assets"]')
+        || document.querySelector('#sidebar-recall-nav [data-cognition-page-link="assets"]')
       );
     },
     position: 'bottom',
@@ -262,12 +262,12 @@ function _setupTourListeners() {
       return;
     }
     // 无候选时点「待我处理」tab 也算展示了"审核候选"的位置（新 UI 的 tab）。
-    if (node.closest('#panel-recall [data-cognition-page-link="captures"], #panel-recall .ca-tab[data-id="review"]')) {
+    if (node.closest('#sidebar-recall-nav [data-cognition-page-link="captures"], #sidebar-recall-nav .ca-tab[data-id="review"]')) {
       _tourState.capturesTabClicked = true;
       _checkStepComplete();
       return;
     }
-    if (node.closest('#panel-recall [data-cognition-page-link="assets"], #panel-recall .ca-tab[data-id="overview"]')) {
+    if (node.closest('#sidebar-recall-nav [data-cognition-page-link="assets"], #sidebar-recall-nav .ca-tab[data-id="overview"]')) {
       _tourState.assetsOpened = true;
       _checkStepComplete();
       return;

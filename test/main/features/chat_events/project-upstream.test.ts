@@ -164,3 +164,20 @@ describe('projectUpstreamEvent', () => {
     expect(endItem.payload.output!.length).toBeLessThanOrEqual(4000);
   });
 });
+
+
+describe('machine-only metadata streaming', () => {
+  it.each([1, 3, 17, 200])('never exposes patch JSON across chunks of %i characters', size => {
+    const state = newState();
+    const text = 'Visible<context-patch>{"base_context_revision":2,"facts_add":[{"text":"private metadata"}]}</context-patch><agent-result status="waiting_input" /><commander-result status="success"></commander-result>Tail';
+    const out: any[] = [];
+    for (let i = 0; i < text.length; i += size) out.push(...projectUpstreamEvent(state, { type: 'delta', text: text.slice(i, i + size) }));
+    expect(out.filter(e => e.kind === 'text').map(e => e.payload.delta).join('')).toBe('VisibleTail');
+  });
+  it('hides unfinished metadata while retaining look-alike tags', () => {
+    const out: any[] = projectUpstreamEvent(newState(), { type: 'text-segment', text: 'Visible<context-patch>{"facts_add":' });
+    expect(out.find(e => e.kind === 'text').payload.delta).toBe('Visible');
+    const look: any[] = projectUpstreamEvent(newState(), { type: 'delta', text: '<context-patches>sample</context-patches>' });
+    expect(look.find(e => e.kind === 'text').payload.delta).toBe('<context-patches>sample</context-patches>');
+  });
+});

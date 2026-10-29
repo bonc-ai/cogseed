@@ -1,12 +1,6 @@
-/**
- * 资产审批卡片（specs/008 US-406）的真实渲染与处置测试。
- *
- * 为什么要有这个文件：卡片原先长在 `conversation.js` 里，只能做"源码里出现过这行"的
- * 断言；于是 `uiTextarea` 少传 id（共享组件强制要求 id、会抛错）没有任何测试挡住——
- * 待处理卡片的可编辑区在真机上一直是空白，异常还被 `.catch(() => {})` 吞掉
- * （2026-09-25 子安复现）。这里加载**真的共享组件 + 真的中文词条**去拼卡片：
- * 组件用错会当场抛错，渲染结果、编辑回传、三态处置都按输出断言。
- */
+/** Real approval-card rendering and disposition tests. Load shared controls
+ * and locale strings so invalid component arguments fail visibly; assert the
+ * complete current/proposed content, typed edits and terminal states. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -41,9 +35,10 @@ const card = loadRendererModule('chat-asset-approval.js') as {
   mount: (host: any, payload: any) => any;
   collectEdits: (payload: any, controls: any[]) => Record<string, unknown>;
   editableKeysOf: (payload: any) => string[];
+  applyChipEdit: (values: string[], edit: any, options?: any) => string[];
 };
 
-const LONG_TEXT = '一句话：同一并行批次里 ≥2 个工具、其中 read_file 返回图片且不是批次最后一条时，该批次会报 400。'.repeat(14);
+const LONG_TEXT = '合成批处理说明：同一并行组内保留每条输入与输出的绑定；读取图片、文字或其他结果时，不得把不同工具的响应归到同一条记录。'.repeat(14);
 const PROPOSAL_ID = 'ap-0123456789abcdef01234567';
 
 function payloadFixture(over: Record<string, unknown> = {}) {
@@ -51,7 +46,7 @@ function payloadFixture(over: Record<string, unknown> = {}) {
     kind: 'asset_change_approval',
     proposalId: PROPOSAL_ID,
     assetId: 'aa-fixture-1',
-    assetTitle: 'CogSeed 已知缺陷（定位证据）',
+    assetTitle: '合成并行结果绑定规则',
     baselineVersion: '3',
     diff: { before: 'statement=1014 字:…', after: 'statement=1117 字:…', fields: ['statement', 'applicableWhen'] },
     reason: 'AI 自主判断发起：正文全挤在一段，没有可扫读的结论。',
@@ -62,19 +57,20 @@ function payloadFixture(over: Record<string, unknown> = {}) {
 
 const proposalFixture = {
   state: 'pending',
-  payload: { statement: LONG_TEXT, applicableWhen: ['写并行批次工具时', '排查 400 报错时'] },
+  payload: { statement: LONG_TEXT, applicableWhen: ['整理合成并行结果时', '核对响应绑定时'] },
   beforeValues: { statement: `旧正文：${'原始段落。'.repeat(60)}`, applicableWhen: ['旧场景'] },
 };
 
 /** 提议记录（IPC `recall.assets.approval.read` 的返回形状）。 */
 function recordFixture(over: Record<string, unknown> = {}) {
-  return { state: proposalFixture.state, payload: proposalFixture.payload, beforeValues: proposalFixture.beforeValues, ...over };
+  return { id: PROPOSAL_ID, assetId: 'aa-fixture-1', baselineVersion: '3', state: proposalFixture.state, payload: proposalFixture.payload, beforeValues: proposalFixture.beforeValues, ...over };
 }
 
 /** 卡片视图 = 从提议记录映射出来的渲染输入（proposed/current），不是消息载荷的 diff 摘要。 */
 function viewFixture(over: Record<string, unknown> = {}) {
   return {
     state: proposalFixture.state,
+    readState: 'ready',
     proposed: proposalFixture.payload,
     current: proposalFixture.beforeValues,
     ...over,
@@ -100,13 +96,22 @@ function fakePort(result: unknown) {
   return { invoke: vi.fn(async () => result), alert: vi.fn(async () => {}) };
 }
 
+/** 手控 promise：让 `recall.assets.approval.read` 想多晚回来就多晚回来，
+ *  才能摆出「用户已经处置、hydrate 结果才迟到」的竞态。 */
+function deferred<T = unknown>() {
+  let settled!: (value: T) => void;
+  let failed!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => { settled = resolve; failed = reject; });
+  return { promise, resolve: settled, reject: failed };
+}
+
 beforeEach(() => {
   warnCalls.length = 0;
   root.cogseed = { invoke: vi.fn(async () => ({ ok: true })) };
 });
 
 describe('chat asset approval card — 渲染', () => {
-  it('渲染出可编辑的拟生效内容，并把"当前"值摆在同一行（2026-09-25 空白缺陷回归）', () => {
+  it('渲染出可编辑的拟生效内容，并把"当前"值摆在同一行', () => {
     const el = fakeCard();
     card.render(el, payloadFixture(), viewFixture());
 
@@ -179,6 +184,94 @@ describe('chat asset approval card — 渲染', () => {
     expect(el.innerHTML).toContain(payloadFixture().diff.before);
     expect(el.innerHTML).toContain('AI 自主判断发起');
   });
+
+  // tags 字段标签须使用词条，不能裸显内部键名。
+  it('AI 提议改 tags 时字段标签走词条，不裸显键名', () => {
+    const el = fakeCard();
+    card.render(el, payloadFixture({
+      diff: { before: 'tags=2 项', after: 'tags=3 项', fields: ['tags'] },
+    }), viewFixture({
+      proposed: { tags: ['沟通', '决策'] },
+      current: { tags: ['沟通'] },
+    }));
+    // 四语词条存在（zh 在这里直接取用；en/ja/pt 由 cognition-i18n-coverage 门禁钉住）。
+    expect(locale['cognition.asset_edit_field_tags']).toBe('标签');
+    // 上屏标签与可编辑控件的 aria-label 都用译文，而不是裸键名。
+    expect(el.innerHTML).toContain('chat-asset-approval-label">标签</span>');
+    expect(el.innerHTML).toContain('aria-label="标签"');
+    expect(el.innerHTML).not.toContain('chat-asset-approval-label">tags</span>');
+    // tags 是字符串数组：照常作为可编辑字段渲染。
+    expect(el.innerHTML).toContain('data-asset-approval-field="tags"');
+  });
+
+  it('加载骨架用紧凑形态，确认按钮同步渲染并禁用', () => {
+    const html = card.cardHtml(payloadFixture(), { state: 'pending', readState: 'loading' });
+    expect(html).toContain('ui-skeleton');
+    expect(html).toContain('合成并行结果绑定规则');
+    expect(html).toMatch(/disabled[^>]*data-asset-approval-action="confirm"|data-asset-approval-action="confirm"[^>]*disabled/);
+    expect(html).not.toContain('data-asset-approval-field');
+    expect(html).not.toContain('data-asset-approval-row');
+  });
+
+  it('短值字段用 chip 编辑，不再渲染整块文本框', () => {
+    const el = fakeCard();
+    card.render(el, payloadFixture({
+      diff: { before: 'tags=2 项', after: 'tags=2 项', fields: ['tags'] },
+    }), viewFixture({
+      proposed: { tags: ['沟通', '决策'] },
+      current: { tags: [] },
+    }));
+    expect(el.innerHTML).not.toContain('<textarea');
+    expect(el.innerHTML).toContain('data-asset-approval-field="tags"');
+    expect(el.innerHTML).toContain('data-asset-approval-encoding="json"');
+    expect(el.innerHTML).not.toContain('value="沟通、决策"');
+    expect(el.innerHTML).toContain('data-asset-approval-chip-remove="tags"');
+    expect(el.innerHTML).toContain('data-asset-approval-chip-add="tags"');
+    expect(el.innerHTML).not.toContain(locale['recall.asset_approval.edit_hint']);
+    expect(el.innerHTML).not.toContain(locale['recall.asset_approval.pending_note']);
+  });
+
+  it('chip 增删按分隔符切分并去重，不改原数组', () => {
+    const original = ['沟通'];
+    expect(card.applyChipEdit(original, { kind: 'add', text: '决策；沟通\n评审' }, { caseInsensitive: true }))
+      .toEqual(['沟通', '决策', '评审']);
+    expect(original).toEqual(['沟通']);
+    expect(card.applyChipEdit(['沟通', '决策'], { kind: 'remove', index: 0 }, { caseInsensitive: true }))
+      .toEqual(['决策']);
+    expect(card.applyChipEdit(['沟通'], { kind: 'remove', index: 9 }, {})).toEqual(['沟通']);
+  });
+
+  it('已处置卡收起为一行，正文仍留在 DOM 里', () => {
+    const el = fakeCard();
+    card.render(el, payloadFixture(), viewFixture({
+      state: 'confirmed',
+      appliedVersion: '4',
+      decidedAt: '2026-10-22T03:48:53.397Z',
+    }));
+    expect(el.innerHTML).toContain('<details');
+    expect(el.innerHTML).toContain('datetime="2026-10-22T03:48:53.397Z"');
+    expect(el.innerHTML).toContain('合成并行结果绑定规则');
+    expect(el.innerHTML).toContain(locale['recall.asset_approval.tag_confirmed']);
+    expect(el.innerHTML).toContain(LONG_TEXT.slice(0, 60));
+    expect(el.innerHTML).not.toContain('data-asset-approval-field');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action');
+    expect(el.innerHTML).not.toContain(locale['recall.asset_approval.current_label']);
+  });
+
+  it('chip 文案四语齐全且占位符一致', () => {
+    const keys = ['chip_add', 'chip_entry', 'chip_placeholder', 'chip_remove'];
+    const locales = ['zh', 'en', 'ja', 'pt'].map(code => JSON.parse(
+      fs.readFileSync(path.join(rendererRoot, 'locales', `${code}.json`), 'utf8'),
+    ) as Record<string, string>);
+    const placeholders = (text: string) => [...String(text).matchAll(/\{([a-zA-Z]+)\}/g)]
+      .map(match => match[1]).sort().join(',');
+    for (const key of keys) {
+      const prefixed = `recall.asset_approval.${key}`;
+      for (const table of locales) expect(typeof table[prefixed]).toBe('string');
+      const expected = placeholders(locales[0][prefixed]);
+      for (const table of locales.slice(1)) expect(placeholders(table[prefixed])).toBe(expected);
+    }
+  });
 });
 
 describe('chat asset approval card — 编辑回传', () => {
@@ -191,6 +284,35 @@ describe('chat asset approval card — 编辑回传', () => {
       statement: '改过的正文',
       applicableWhen: ['写工具时', '排查报错时', '看日志时'],
     });
+  });
+
+  it('chip 的 JSON 隐藏值原样保留标签里的分隔符', () => {
+    const controls = [
+      {
+        dataset: { assetApprovalField: 'tags' },
+        value: JSON.stringify(['沟通、协作', 'A;B']),
+        getAttribute: (name: string) => name === 'data-asset-approval-encoding' ? 'json' : null,
+      },
+      { dataset: { assetApprovalField: 'applicableWhen' }, value: '写工具时；排查报错时\n看日志时' },
+    ];
+    expect(card.collectEdits({ tags: ['占位'], applicableWhen: ['占位'] }, controls)).toEqual({
+      tags: ['沟通、协作', 'A;B'],
+      applicableWhen: ['写工具时', '排查报错时', '看日志时'],
+    });
+  });
+
+  it('标签在决定期间被改过：落作废终态并说明原因', async () => {
+    const el = fakeCard();
+    card.render(el, payloadFixture(), viewFixture());
+    const port = fakePort({
+      ok: false,
+      state: 'superseded',
+      tagConflict: { baselineTags: [], currentTags: ['重要'] },
+    });
+    await card.resolve(el, payloadFixture(), 'confirm', port);
+    expect(el.dataset.status).toBe('superseded');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action');
+    expect(port.alert).toHaveBeenCalledWith(locale['recall.asset_approval.tag_conflict_superseded']);
   });
 
   it('确认时把编辑后的内容一起回传，并按结果落到已确认状态', async () => {
@@ -214,16 +336,24 @@ describe('chat asset approval card — 编辑回传', () => {
     expect(el.innerHTML).toContain('已按你确认的内容生效（v4）');
   });
 
-  it('版本重检不一致：卡片保持待处理并说明，不静默套用', async () => {
+  it('版本重检不一致：冲突即作废——卡片落作废终态并说明会重提，不再可确认', async () => {
     const el = fakeCard([]);
     card.render(el, payloadFixture(), viewFixture());
-    const port = fakePort({ ok: false, versionConflict: { baselineVersion: '3', currentVersion: '5' } });
+    const port = fakePort({ ok: false, state: 'superseded', versionConflict: { baselineVersion: '3', currentVersion: '5' } });
     await card.resolve(el, payloadFixture(), 'confirm', port);
 
-    expect(el.dataset.status).toBe('pending');
+    // 卡片落作废终态：没有再让用户「重新看一眼再决定」的死路按钮。
+    expect(el.dataset.status).toBe('superseded');
     expect(el.dataset.busy).toBe('');
-    expect(el.innerHTML).toContain('data-asset-approval-action="confirm"');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action="confirm"');
+    expect(el.innerHTML).toContain(locale['recall.asset_approval.tag_superseded']);
+    expect(el.innerHTML).toContain(locale['recall.asset_approval.state_superseded']);
     expect(String(port.alert.mock.calls[0][0])).toContain('v3 → v5');
+    // 弹窗文案与词条同源：把 {a}/{b} 替换成同样的版本号后应完全一致。
+    const expectedAlert = locale['recall.asset_approval.version_conflict_superseded']
+      .split('{a}').join('3')
+      .split('{b}').join('5');
+    expect(String(port.alert.mock.calls[0][0])).toContain(expectedAlert);
   });
 
   it('处置失败如实说，不吞', async () => {
@@ -232,10 +362,95 @@ describe('chat asset approval card — 编辑回传', () => {
     const port = fakePort({ ok: false, error: 'proposal not found' });
     await card.resolve(el, payloadFixture(), 'reject', port);
     expect(String(port.alert.mock.calls[0][0])).toContain('proposal not found');
+    // 「处置失败：」前缀只包一次——旧实现 throw 里先包
+    // 一层、catch 再包一层，用户看到「处置失败：处置失败：」。
+    expect(String(port.alert.mock.calls[0][0])).not.toContain('处置失败：处置失败');
+  });
+
+  it('已处置回执——卡片落终态不再可点、回执 message 不丢、提示单层', async () => {
+    const el = fakeCard([]);
+    card.render(el, payloadFixture(), viewFixture());
+    const port = fakePort({ ok: false, state: 'rejected', message: '这条提议已经处置过了。' });
+    await card.resolve(el, payloadFixture(), 'reject', port);
+    // 卡片按回执终态收口：dataset.status=rejected，按钮不再渲染（可再点=反复报错）。
+    expect(el.dataset.status).toBe('rejected');
+    expect(el.dataset.busy).toBe('');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action="confirm"');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action="reject"');
+    // message 不丢（旧实现读不存在的 result.error，弹的是「处置失败：」空尾巴），
+    // 且「处置失败：」只包一层。
+    const alertText = String(port.alert.mock.calls[0][0]);
+    expect(alertText).toContain('这条提议已经处置过了。');
+    expect(alertText).not.toContain('处置失败：处置失败');
+  });
+
+  it('并发补偿回滚回执——state 与差异化 message 都如实呈现', async () => {
+    const el = fakeCard([]);
+    card.render(el, payloadFixture(), viewFixture());
+    const rollbackMessage = '这条提议在你确认的同时已被拒绝，刚应用的内容已按提议前的值回滚。';
+    const port = fakePort({ ok: false, state: 'rejected', message: rollbackMessage });
+    await card.resolve(el, payloadFixture(), 'confirm', port);
+    expect(el.dataset.status).toBe('rejected');
+    // 回滚说明有安全语义（内容已回滚），不能一刀切成「已经处置过了」。
+    expect(String(port.alert.mock.calls[0][0])).toContain(rollbackMessage);
+    expect(String(port.alert.mock.calls[0][0])).not.toContain('处置失败：处置失败');
+  });
+
+  it('弹框机制自身同步抛错不升级——留痕后正常返回，处置流程不被二次炸掉', async () => {
+    const el = fakeCard([]);
+    card.render(el, payloadFixture(), viewFixture());
+    root.cogseed = { invoke: vi.fn(async () => ({ ok: false, error: 'decision channel down' })) };
+    root.uiAlert = () => { throw new Error('alert mechanism broken'); };
+    try {
+      // 旧实现：alertUser 同步 throw → resolve 的 catch 再弹一次又 throw →
+      // 冒到 void 调用点成 unhandled rejection。修后：机制失败只留痕。
+      await expect(card.resolve(el, payloadFixture(), 'reject')).resolves.toBeUndefined();
+      expect(warnCalls.some((args) => String(args[0]).includes('uiAlert threw'))).toBe(true);
+    } finally {
+      delete root.uiAlert;
+    }
+  });
+
+  it('uiAlert 返回 rejected promise 同样兜住（.catch 全兜底半边）', async () => {
+    const el = fakeCard([]);
+    card.render(el, payloadFixture(), viewFixture());
+    root.cogseed = { invoke: vi.fn(async () => ({ ok: false, error: 'decision channel down' })) };
+    root.uiAlert = async () => { throw new Error('alert async broken'); };
+    try {
+      await expect(card.resolve(el, payloadFixture(), 'reject')).resolves.toBeUndefined();
+      expect(warnCalls.some((args) => String(args[0]).includes('uiAlert threw'))).toBe(true);
+    } finally {
+      delete root.uiAlert;
+    }
   });
 });
 
 describe('chat asset approval card — 挂载', () => {
+  it('读取未完成、失败或身份不符时，即便直接调用处理器也不能确认', async () => {
+    for (const result of ['pending', 'failed', 'wrong-id'] as const) {
+      const host = fakeHost();
+      root.document = { createElement: () => fakeCard() };
+      const gate = deferred();
+      root.cogseed = { invoke: vi.fn(() => gate.promise) };
+      const el = card.mount(host, payloadFixture());
+      const port = fakePort({ ok: true, state: 'confirmed' });
+      await card.resolve(el, payloadFixture(), 'confirm', port);
+      expect(port.invoke).not.toHaveBeenCalled();
+      expect(el.innerHTML).toMatch(/disabled[^>]*data-asset-approval-action="confirm"|data-asset-approval-action="confirm"[^>]*disabled/);
+      if (result === 'pending') gate.resolve({ proposal: recordFixture() });
+      else if (result === 'failed') gate.reject(new Error('read unavailable'));
+      else gate.resolve({ proposal: recordFixture({ id: 'ap-other' }) });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (result === 'pending') {
+        await card.resolve(el, payloadFixture(), 'confirm', port);
+        expect(port.invoke).toHaveBeenCalledOnce();
+      } else {
+        await card.resolve(el, payloadFixture(), 'confirm', port);
+        expect(port.invoke).not.toHaveBeenCalled();
+        expect(el.dataset.readState).toBe('failed');
+      }
+    }
+  });
   function fakeHost() {
     const children: any[] = [];
     return {
@@ -255,7 +470,7 @@ describe('chat asset approval card — 挂载', () => {
     };
     const el = card.mount(host, payloadFixture());
     expect(el).toBeTruthy();
-    expect(el.innerHTML).toContain('AI 想改这条资产');
+    expect(el.innerHTML).toContain(payloadFixture().assetTitle);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(root.cogseed.invoke).toHaveBeenCalledWith('recall.assets.approval.read', { proposalId: PROPOSAL_ID });
     expect(el.innerHTML).toContain('<textarea');
@@ -281,5 +496,132 @@ describe('chat asset approval card — 挂载', () => {
     expect(second).toBe(first);
     expect(host.children.length).toBe(1);
     expect(root.cogseed.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  // 迟到读取不得把终态卡改回 pending，也不得打断进行中的处置。
+  // 守卫口径与 conversation.js 的 kstar 复查卡一致：正忙或不待处理时不插手。
+  it('处置进行中（busy）：迟到的 read 不把卡重渲染、还原成可点', async () => {
+    const host = fakeHost();
+    root.document = { createElement: () => fakeCard() };
+    const readGate = deferred();
+    const decideGate = deferred();
+    root.cogseed = {
+      invoke: vi.fn((channel: string) => (
+        channel === 'recall.assets.approval.read' ? readGate.promise : decideGate.promise
+      )),
+    };
+    const el = card.mount(host, payloadFixture());
+    // An earlier complete read is ready; the outstanding request is a refresh.
+    card.render(el, payloadFixture(), viewFixture());
+    const readyHtml = el.innerHTML;
+    // 用户点了「保存更新」，decide 还挂起：卡片处于 busy。
+    const settling = card.resolve(el, payloadFixture(), 'confirm');
+    expect(el.dataset.busy).toBe('1');
+    // read 这时才回来（载荷齐全、状态 pending）：不许趁乱重渲染。
+    readGate.resolve({ proposal: recordFixture({ state: 'pending' }) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(el.innerHTML).toBe(readyHtml);
+    decideGate.resolve({ ok: true, state: 'confirmed', appliedVersion: '4' });
+    await settling;
+    expect(el.dataset.status).toBe('confirmed');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action');
+  });
+
+  it('已处置成终态（rejected）：迟到的 read 不把卡复活回 pending', async () => {
+    const host = fakeHost();
+    root.document = { createElement: () => fakeCard() };
+    const readGate = deferred();
+    root.cogseed = {
+      invoke: vi.fn((channel: string) => (
+        channel === 'recall.assets.approval.read' ? readGate.promise : Promise.resolve({ ok: true })
+      )),
+    };
+    const el = card.mount(host, payloadFixture());
+    // 用户已点了「拒绝」并落定：卡片是终态。
+    const port = fakePort({ ok: true, state: 'rejected' });
+    await card.resolve(el, payloadFixture(), 'reject', port);
+    expect(el.dataset.status).toBe('rejected');
+    // 迟到的 read 又回来说 pending：不许复活、按钮不许再点。
+    readGate.resolve({ proposal: recordFixture({ state: 'pending' }) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(el.dataset.status).toBe('rejected');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action');
+  });
+
+  it('已处置成终态（confirmed）：迟到的 read 失败也不把卡打回 pending', async () => {
+    const host = fakeHost();
+    root.document = { createElement: () => fakeCard() };
+    const readGate = deferred();
+    root.cogseed = {
+      invoke: vi.fn((channel: string) => (
+        channel === 'recall.assets.approval.read' ? readGate.promise : Promise.resolve({ ok: true })
+      )),
+    };
+    const el = card.mount(host, payloadFixture());
+    const port = fakePort({ ok: true, state: 'confirmed', appliedVersion: '4' });
+    card.render(el, payloadFixture(), viewFixture());
+    await card.resolve(el, payloadFixture(), 'confirm', port);
+    expect(el.dataset.status).toBe('confirmed');
+    readGate.reject(new Error('late ipc failure'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(warnCalls.length).toBeGreaterThan(0);
+    expect(el.dataset.status).toBe('confirmed');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action');
+    expect(el.innerHTML).not.toContain(locale['recall.asset_approval.read_failed']);
+  });
+
+  // busy 期间的完整读取暂存；处置失败回 pending 时回放，
+  // 处置成功进入终态时丢弃，避免无内容的可操作骨架。
+  it('busy 窗口内到达的 hydrate 被暂存：处置失败回 pending 后回放，卡片不再停在骨架态', async () => {
+    const host = fakeHost();
+    root.document = { createElement: () => fakeCard() };
+    const readGate = deferred();
+    const decideGate = deferred();
+    root.cogseed = {
+      invoke: vi.fn((channel: string) => (
+        channel === 'recall.assets.approval.read' ? readGate.promise : decideGate.promise
+      )),
+    };
+    const el = card.mount(host, payloadFixture());
+    card.render(el, payloadFixture(), viewFixture());
+    const readyHtml = el.innerHTML;
+    // 用户点了「保存更新」，decide 挂起：卡片处于 busy。
+    const settling = card.resolve(el, payloadFixture(), 'confirm');
+    expect(el.dataset.busy).toBe('1');
+    // read 在 busy 窗口内回来（载荷齐全、状态 pending）：不渲染但暂存。
+    readGate.resolve({ proposal: recordFixture({ state: 'pending' }) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(el.innerHTML).toBe(readyHtml);
+    expect(el._assetApprovalPendingHydration).toBeTruthy();
+    // decide 失败：卡片回 pending，此刻回放暂存的拟生效内容。
+    decideGate.resolve({ ok: false, error: 'write failed' });
+    await settling;
+    expect(el.dataset.busy).toBe('');
+    expect(el.dataset.status).toBe('pending');
+    expect(el.innerHTML).toContain('<textarea');
+    expect(el.innerHTML).toContain(LONG_TEXT.slice(0, 60));
+    expect(el._assetApprovalPendingHydration).toBeFalsy();
+  });
+
+  it('busy 窗口内暂存的 hydrate 在处置成功后作废：终态卡不回放', async () => {
+    const host = fakeHost();
+    root.document = { createElement: () => fakeCard() };
+    const readGate = deferred();
+    const decideGate = deferred();
+    root.cogseed = {
+      invoke: vi.fn((channel: string) => (
+        channel === 'recall.assets.approval.read' ? readGate.promise : decideGate.promise
+      )),
+    };
+    const el = card.mount(host, payloadFixture());
+    const settling = card.resolve(el, payloadFixture(), 'reject');
+    readGate.resolve({ proposal: recordFixture({ state: 'pending' }) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(el._assetApprovalPendingHydration).toBeTruthy();
+    decideGate.resolve({ ok: true, state: 'rejected' });
+    await settling;
+    expect(el.dataset.status).toBe('rejected');
+    expect(el.innerHTML).not.toContain('data-asset-approval-action');
+    expect(el._assetApprovalPendingHydration).toBeFalsy();
   });
 });

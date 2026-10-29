@@ -62,6 +62,18 @@ export type AgentRunParams = {
    * (the runner calls it between awaits); return `[]`/undefined for no steer.
    */
   drainSteer?: () => string[] | undefined;
+  /** Optional host gate for evidence-sensitive final responses. When required,
+   * the runner withholds the terminal text from the event stream until the
+   * host returns the approved replacement. Tool-using intermediate turns are
+   * unaffected. */
+  finalResponseGate?: {
+    isRequired(): boolean;
+    validate(input: {
+      text: string;
+      content: MessageContent[];
+      signal?: AbortSignal;
+    }): Promise<{ text: string; content?: MessageContent[] }>;
+  };
 };
 
 /** Result of a single agent run. */

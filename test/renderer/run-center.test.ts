@@ -26,12 +26,12 @@ describe('Run Center renderer contract', () => {
     const manifest = read('src/renderer/modules/lazy-features.js');
     const sidebarTools = read('src/renderer/modules/ui-sidebar-tools.js');
 
-    expect(html).toContain('id="run-center-btn"');
+    expect(read('src/renderer/modules/ui-app-rail.js')).toContain("id: 'run-center-btn'");
     expect(html).toContain('id="app-shell-tools"');
-    expect(sidebarTools).toContain('id="run-center-global-entry"');
-    expect(html).not.toMatch(/<button[^>]*id="run-center-global-btn"/);
+    expect(sidebarTools).not.toContain('run-center-global-entry');
+    expect(html).not.toMatch(/id="run-center-global-btn"/);
     expect(html).toContain('id="panel-run-center"');
-    expect(html).toMatch(/id="panel-run-center"[\s\S]*?class="app-top-drag-strip"/);
+    expect(html).not.toContain('app-top-drag-strip');
     expect(html).not.toContain('id="dashboard-btn"');
     expect(html).not.toContain('id="panel-dashboard"');
     expect(boot).toContain("view === 'run-center' ? 'panel-run-center'");
@@ -61,8 +61,9 @@ describe('Run Center renderer contract', () => {
     expect(css).toMatch(/\.is-macos \.run-center-header\s*{[\s\S]*?-webkit-app-region:\s*drag;/);
     expect(css).toMatch(/\.is-macos \.run-center-header-actions button\s*{[\s\S]*?-webkit-app-region:\s*no-drag;/);
     expect(css).toMatch(/\.is-macos \.run-center-navigation button\s*{[\s\S]*?-webkit-app-region:\s*no-drag;/);
-    expect(source).toContain('<header class="run-center-header is-compact"><h1 class="ui-visually-hidden">');
-    expect(source).toMatch(/<header class="run-center-header is-compact">[\s\S]*?<nav class="run-center-navigation">[\s\S]*?<div class="run-center-header-actions">/);
+    expect(source).toContain('<header class="run-center-header is-compact">${typeof rootWindow.uiShellHeaderSlot === \'function\' ? rootWindow.uiShellHeaderSlot() : \'\'}<h1 class="run-center-title">');
+    expect(source).toMatch(/<header class="run-center-header is-compact">[\s\S]*?\$\{taskScopeHtml\(\)\}<div class="run-center-header-actions">/);
+    expect(source).toContain("document.getElementById('sidebar-run-center-nav')");
     expect(source).toContain("const statusFilters = ['all', 'pending', 'running', 'attention', 'completed']");
     expect(source).toContain('statusFilters.map((filter)');
   });
@@ -1020,6 +1021,7 @@ describe('Run Center renderer contract', () => {
       if (channel === 'p3394.external.stop') return { ok: true };
       throw new Error(`unexpected channel: ${channel}`);
     });
+    const sidebarNav: any = { innerHTML: '', firstElementChild: null, addEventListener: vi.fn(), querySelector: () => null };
     const context: any = {
       conversations: [
         { conversation_id: task.conversationId, title: 'CogSeed task' },
@@ -1039,7 +1041,7 @@ describe('Run Center renderer contract', () => {
         setView: vi.fn(), activateSettingsTab: vi.fn(), activateConnectionsTab: vi.fn(), uiToast: vi.fn(),
         uiIconHtml: (name: string) => `<i>${name}</i>`,
       },
-      document: Object.assign(documentState, { getElementById: () => panel, addEventListener: (type: string, listener: (event: any) => void) => documentListeners.set(type, listener) }),
+      document: Object.assign(documentState, { getElementById: (id: string) => id === 'sidebar-run-center-nav' ? sidebarNav : panel, addEventListener: (type: string, listener: (event: any) => void) => documentListeners.set(type, listener) }),
       t: (key: string, vars?: Record<string, unknown>) => key === 'run_center.error_help_provider_error'
         ? 'Check the provider configuration.'
         : vars ? `${key}:${JSON.stringify(vars)}` : key,
@@ -1061,9 +1063,11 @@ describe('Run Center renderer contract', () => {
       throw new Error('renderer action did not settle');
     };
     await waitFor(() => calls.some((call) => call.channel === 'cogseed.agent.list'));
-    expect(html.match(/role="tab"/g)).toHaveLength(5);
+    // View tabs render into the sidebar host; the page keeps only the scope tabs.
+    expect(html.match(/role="tab"/g)).toHaveLength(2);
     expect(html.match(/role="tabpanel"/g)).toHaveLength(3);
-    expect(html).toContain('id="run-center-tab-tasks" role="tab" aria-controls="run-center-panel-tasks" aria-selected="true" tabindex="0"');
+    expect(sidebarNav.innerHTML.match(/role="tab"/g)).toHaveLength(3);
+    expect(sidebarNav.innerHTML).toContain('id="run-center-tab-tasks" role="tab" aria-controls="run-center-panel-tasks" aria-selected="true" tabindex="0"');
     expect(html).toContain('id="run-center-panel-tasks" role="tabpanel" aria-labelledby="run-center-tab-tasks run-center-task-scope-current"');
     expect(html).toContain('data-run-center-task-scope="current" aria-controls="run-center-panel-tasks" aria-selected="true" tabindex="0"');
     expect(html).toContain('class="run-center-layout is-runs is-board-mode"');
@@ -1106,7 +1110,7 @@ describe('Run Center renderer contract', () => {
     await waitFor(() => html.includes('data-run-center-task-scope="history" aria-controls="run-center-panel-tasks" aria-selected="true" tabindex="0"'));
     expect(html).toContain('class="run-center-layout is-runs is-history is-queue-mode"');
     expect(html).toContain('data-run-center-search');
-    expect(html).toContain('id="run-center-tab-tasks" role="tab"');
+    expect(sidebarNav.innerHTML).toContain('id="run-center-tab-tasks" role="tab"');
     click({ runCenterView: 'collaboration' });
     await waitFor(() => html.includes('id="run-center-panel-collaboration" role="tabpanel"'));
     expect(html).toContain('class="run-center-layout is-collaboration"');

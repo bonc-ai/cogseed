@@ -25,7 +25,7 @@ import {
 export type AssetRuntimeMode =
   /** 不得进入本次运行。 */
   | 'blocked'
-  /** 只有用户主动挑选才能用，不得静默默认注入。 */
+  /** 本次任务明确选用或按需查阅；不得静默默认注入。 */
   | 'manual_only'
   /** 可在同作用域权限内默认注入。 */
   | 'default_allowed'
@@ -79,7 +79,13 @@ export interface AssetRuntimeCandidate extends AssetPolicyInput {
   targetAgents?: readonly string[];
 }
 
+/** 查阅不等于选用，显式选用不等于允许后台自动带入。 */
+export type AssetRuntimeOperation = 'inspect' | 'explicit_use' | 'default_injection';
+export type AssetRuntimeRelevance = 'unspecified' | 'matched' | 'mismatched' | 'unknown';
+
 export interface AssetRuntimeContext extends AssetScopeContext {
+  /** 新消费者必须明确操作；旧调用以 silentDefaultInjection 映射兼容。 */
+  operation?: AssetRuntimeOperation;
   /** 目的地作用域。undefined = 不限定，视为同作用域。 */
   scope?: string;
   /** 来源是否仍然可读。false = 授权已撤回或来源失效。 */
@@ -91,6 +97,12 @@ export interface AssetRuntimeContext extends AssetScopeContext {
 }
 
 export interface AssetRuntimeEligibility {
+  operation: AssetRuntimeOperation;
+  /** 状态、来源、权限与禁止条件的共同边界，不混入任务相关性和默认策略。 */
+  accessAllowed: boolean;
+  relevance: AssetRuntimeRelevance;
+  /** 自动带入策略；查阅或明确选用不修改此策略。 */
+  defaultUsePolicy: AbilityAssetUsePolicy;
   eligible: boolean;
   mode: AssetRuntimeMode;
   reasons: AssetRuntimeBlockReason[];
@@ -118,61 +130,49 @@ export function evaluateAssetRuntimeEligibility(
   context: AssetRuntimeContext = {},
 ): AssetRuntimeEligibility {
   const reasons: AssetRuntimeBlockReason[] = [];
+  const operation = context.operation ?? (context.silentDefaultInjection === true ? 'default_injection' : 'explicit_use');
   const sameScope = context.scope === undefined || context.scope === asset.scope;
-  const usePolicy = resolveAssetUsePolicy(asset, sameScope);
+  const defaultUsePolicy = resolveAssetUsePolicy(asset, sameScope);
 
   if (asset.status !== 'active') reasons.push('status_not_active');
-
-  // 来源撤权后停止新的读取与默认注入（PRD 3.4）。
   if (context.sourceAvailable === false) reasons.push('source_unavailable');
-
   if (!isAssetScopeAllowed(asset.scopePolicy, context)) reasons.push('scope_mismatch');
-
-  // 禁止范围命中即出局，优先于适用范围——"哪里不能用"比"哪里能用"更强。
   if (matchesAnyCondition(asset.forbiddenWhen, context.taskText)) reasons.push('forbidden_context');
-
-  // 声明了适用范围却对不上当前任务：不阻断人工选择，但不能自动带入。
-  const declaredApplicable = (asset.applicableWhen?.length || 0) > 0;
-  const applicableMatched = matchesAnyCondition(asset.applicableWhen, context.taskText);
-
-  // 注入白名单（PRD 3.5 target_agents）。缺失 = 没限制过，不拦；
-  // 一旦声明，未列出的 Agent 就不得注入。
   if ((asset.targetAgents?.length || 0) > 0
     && (!context.agentId || !asset.targetAgents!.includes(context.agentId))) {
     reasons.push('target_agent_not_allowed');
   }
 
-  // 静默默认注入以「适合度」为准，不以成熟度为硬门槛：
-  // - 适合度 = status / scope / forbidden / applicable / target_agent
-  //   （上方已全部检查）+ 调用方的语义匹配分（投影双信号门槛）。
-  // - 成熟度（置信度）不再是注入与否的依据——未验证资产（seed）的诚实性
-  //   由注入标注承担（prompt 块里带 lifecycle 提示，模型知道这是系统自评、
-  //   参考不盲从），而不是把资产完全排除（旧逻辑下 seed 永远无法被使用、
-  //   自进化闭环断裂——沉淀了却永远用不上）。
-  // - applicableWhen 声明却对不上当前任务：不适合 → 不注入（适合度维度）。
-  if (context.silentDefaultInjection === true) {
-    if (declaredApplicable && !applicableMatched) {
-      reasons.push('not_applicable_context');
+  const declaredApplicable = (asset.applicableWhen?.length || 0) > 0;
+  const relevance: AssetRuntimeRelevance = !declaredApplicable ? 'unspecified'
+    : matchesAnyCondition(asset.applicableWhen, context.taskText) ? 'matched' : 'unknown';
+  // These are free-text guidance conditions, not a typed operation predicate.
+  // Missing the exact wording does not establish non-applicability: semantic
+  // retrieval may find a paraphrase, and the answering model receives the full
+  // condition/exception text for actual use and persisted-result assessment.
+  // Scope, grants, explicit prohibitions and typed required operation checks
+  // remain independent hard gates; unknown never means a condition was met.
+  const accessAllowed = reasons.length === 0;
+
+  if (operation === 'default_injection') {
+    // 证明带入成功不等于效果成功；自动使用仍服从共同默认策略。
+    // 跨场景确认只授权明确使用，不把 prompt/confirm 偷升为 auto。
+    if (asset.status === 'active' && defaultUsePolicy !== 'auto') {
+      if (!sameScope) reasons.push('scope_mismatch');
+      else reasons.push('maturity_below_default_use');
     }
-    // 适合度含作用域维度：跨作用域且无确认 → 不注入（不比同作用域宽松）。
-    if (!sameScope && !asset.crossScopeConfirmedAt) {
-      reasons.push('scope_mismatch');
-    }
-    if (reasons.length) return { eligible: false, mode: 'blocked', reasons, usePolicy };
-    const mode: AssetRuntimeMode = asset.maturity === 'effectiveness_validated'
-      ? 'preferred'
-      : 'default_allowed';
-    return { eligible: true, mode, reasons: [], usePolicy };
   }
 
-  // 非静默路径（用户主动选择）保留原语义：maturity 只影响使用策略提示。
-  if (usePolicy === 'never' && asset.status === 'active') {
-    reasons.push('maturity_below_default_use');
-  }
-  if (reasons.length) return { eligible: false, mode: 'blocked', reasons, usePolicy };
-
-  const mode: AssetRuntimeMode = usePolicy === 'auto'
-    ? (asset.maturity === 'effectiveness_validated' ? 'preferred' : 'default_allowed')
-    : 'manual_only';
-  return { eligible: true, mode, reasons: [], usePolicy };
+  // seed 是未验证内容，不是“禁止查原文”。明确选用可带着未验证标签
+  // 进入任务；所有硬边界仍成立，且不能据此将默认策略或成熟度升档。
+  const usePolicy = !accessAllowed ? 'never'
+    : operation !== 'default_injection' && defaultUsePolicy === 'never' ? 'prompt'
+      : defaultUsePolicy;
+  const uniqueReasons = [...new Set(reasons)];
+  const eligible = uniqueReasons.length === 0;
+  const mode: AssetRuntimeMode = !eligible ? 'blocked'
+    : usePolicy === 'auto'
+      ? asset.maturity === 'effectiveness_validated' ? 'preferred' : 'default_allowed'
+      : 'manual_only';
+  return { operation, accessAllowed, relevance, defaultUsePolicy, eligible, mode, reasons: uniqueReasons, usePolicy };
 }

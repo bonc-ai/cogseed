@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "skill_id": "cognition-editor",
+  "schema_version": "cognition-editor/2",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "task_id",
+      "owner_context"
+    ],
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "owner_context": {
+        "type": "object",
+        "required": [
+          "owner_id",
+          "role",
+          "authorization_scope"
+        ],
+        "properties": {
+          "owner_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "authorization_scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "create_payload": {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+          "request": { "type": "string", "minLength": 1 },
+          "target": { "enum": ["cognition", "ontology", "joint"] },
+          "expected_ontology_revision": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": true
+      },
+      "edit_payload": {
+        "type": "object",
+        "required": [
+          "request"
+        ],
+        "properties": {
+          "request": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "expected_version": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "oneOf": [
+      { "required": ["edit_payload"] },
+      { "required": ["create_payload"] }
+    ],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "status",
+      "result",
+      "audit_refs"
+    ],
+    "properties": {
+      "status": {
+        "enum": [
+          "applied",
+          "pending_confirmation",
+          "blocked"
+        ]
+      },
+      "result": {
+        "type": "string"
+      },
+      "audit_refs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

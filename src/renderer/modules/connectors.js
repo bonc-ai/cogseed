@@ -4,10 +4,9 @@
 // available below. No tab switching; same shape as the Skills panel's
 // Custom / Built-in split. Both groups hide themselves when empty.
 //
-// Click model: only the action buttons on a card are clickable. Clicking elsewhere on a card
-// does nothing — users routinely hovered over cards to read descriptions and the old whole-card
-// click handler was firing OAuth flows by accident. Buttons stop propagation as a defence in
-// depth.
+// Cards with a registered popup use a native title button stretched across the card.
+// It opens usage guidance; authorization still requires the explicit Connect action. Other card
+// buttons sit above the stretched target and retain their independent actions.
 //
 // OAuth flow UX: clicking Connect asks main to open the system browser, then the IPC returns
 // immediately. The custom-scheme callback finishes exchange + provisioning independently and
@@ -16,7 +15,7 @@
 // abandonment, not a connector failure; a second click simply supersedes the earlier flow.
 
 const _connectorsLog = createLogger('connectors');
-const _CONNECTORS_RENDER_CACHE_VERSION = 2;
+const _CONNECTORS_RENDER_CACHE_VERSION = 3;
 const _CONNECTORS_RENDER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 let _connectorsLegacyCachePurged = false;
 let _connectorsSearchQuery = '';
@@ -121,6 +120,16 @@ let _connectorsState = {
 // and wall duration. Entries intentionally remain when no callback arrives: that is an abandoned
 // browser flow, so there is no fabricated terminal result to report.
 const _pendingConnectAttempts = new Map();
+// Keyed by account as an install may finish after the user switches accounts.
+const _connectorRuntimePreparing = new Map();
+const _connectorRuntimeErrors = new Map();
+function _connectorRuntimeKey(id) { return _connectorsRenderCacheKey() + ':' + id; }
+function _connectorRuntimeProgress(entry) { return _connectorRuntimePreparing.get(_connectorRuntimeKey(entry.id)) || entry.runtime_progress; }
+function _connectorManagedRuntime(entry) { return ['feishu', 'dingtalk', 'wecom'].includes(entry.id); }
+function _connectorRuntimeLabel(progress) {
+  const label = t('connectors.runtime.' + progress.phase);
+  return progress.phase === 'downloading' && Number.isFinite(progress.percent) ? label + ' ' + progress.percent + '%' : label;
+}
 let _connectorsLoadSeq = 0;
 
 function _connectorsRenderCacheKey() {
@@ -176,7 +185,7 @@ function _persistConnectorsRenderCache() {
     localStorage.setItem(_connectorsRenderCacheKey(), JSON.stringify({
       version: _CONNECTORS_RENDER_CACHE_VERSION,
       updated_at: Date.now(),
-      catalog: _connectorsState.catalog,
+      catalog: _connectorsState.catalog.map(({ runtime_progress, ...entry }) => entry),
       instances: _sanitizeConnectorArray(_connectorsState.instances, { dropErrored: true }),
     }));
   } catch (_) { /* localStorage unavailable / quota — skip */ }
@@ -324,8 +333,8 @@ function _showConnectorUnsupportedToast() {
   else uiAlert(message);
 }
 
-function _showConnectorCliMissingToast() {
-  const message = t('connectors.toast.cli_missing');
+function _showConnectorCliMissingToast(entry) {
+  const message = t(entry && _connectorManagedRuntime(entry) ? 'connectors.runtime.platform_unavailable' : 'connectors.toast.cli_missing');
   if (typeof uiToast === 'function') uiToast(message, { variant: 'warning' });
   else uiAlert(message);
 }
@@ -333,7 +342,7 @@ function _showConnectorCliMissingToast() {
 /** Single entry point for a card / detail action that cannot run because the provider is
  *  unavailable — keeps the CLI-missing branch ahead of the generic unsupported path. */
 function _showConnectorUnavailableToast(entry) {
-  if (_isConnectorCliMissing(entry)) _showConnectorCliMissingToast();
+  if (_isConnectorCliMissing(entry)) _showConnectorCliMissingToast(entry);
   else _showConnectorUnsupportedToast();
 }
 
@@ -355,6 +364,13 @@ function _connectorErrorFallback(kind) {
 }
 
 function _formatConnectorStatusError(message) {
+  if (/^survey_[a-z_]+$/.test(String(message || ''))) return t('connectors.survey.' + message);
+  const emailCode = String(message || '').match(/\bemail_[a-z_]+\b/);
+  if (emailCode) {
+    const key = 'connectors.email.' + emailCode[0];
+    const value = t(key);
+    return value !== key ? value : t('connectors.email.email_connection_failed');
+  }
   const msg = String(message || '');
   if (/fetch failed|network|timeout|timed out|econnreset|econnrefused|eai_again|enotfound|socket|connection (closed|reset|dropped)|terminated|\brefresh_failed\b|刷新授权失败|failed to refresh authorization|認証の更新に失敗|Falha ao atualizar a autorização/i.test(msg)) {
     return _connectorErrorFallback('network');
@@ -362,6 +378,9 @@ function _formatConnectorStatusError(message) {
   if (/invalid_grant|connector_reconnect_required|reconnect required|grant not found|授权已失效|Authorization expired|認証の有効期限|A autorização expirou/i.test(msg)) {
     return _connectorErrorFallback('reconnect');
   }
+  // The provider answered, and its answer was "this credential is no good". Mapped to an
+  // instruction instead of the raw JSON the MCP client relays.
+  if (_isCredentialRejection(msg)) return t('connectors.errors.credential_rejected');
   return msg;
 }
 
@@ -471,6 +490,7 @@ function _connectorMatchesSearch(item, query, lang) {
     entry.id,
     pickDesc(entry, lang),
     instance.account_label,
+    instance.display_name,
   ].filter(Boolean).join(' ').toLocaleLowerCase();
   return haystack.includes(query);
 }
@@ -497,16 +517,18 @@ function _renderConnectorsEmptyState(empty, kind) {
   });
 }
 
+// Enterprise integrations and Tencent Meeting lead the available
+// inventory. Keep the policy on stable catalog ids so localization cannot change membership.
+const _CONNECTOR_AVAILABLE_FEATURED_IDS = new Set([
+  'email-163', 'email-qq', 'email-enterprise', 'tencent-survey', 'tencent-meeting',
+  'tencent-docs', 'feishu', 'dingtalk', 'wecom', 'wps',
+]);
+
 function _renderConnectorsGrid() {
   const gridView = document.getElementById('connectors-grid-view');
   if (!gridView) return;
-  // The detail view owns the pane while it is open. Everything below still runs: one repaint
-  // path keeps the card grid and the open detail body consistent after a connect, disconnect or
-  // verify settles.
-  const detailOpen = _connectorsDetailOpen();
-  gridView.style.display = detailOpen ? 'none' : '';
-  const detailView = document.getElementById('connectors-detail-view');
-  if (detailView) detailView.style.display = detailOpen ? '' : 'none';
+  // Keep the grid and any open usage popup consistent when a connection or recovery settles.
+  gridView.style.display = '';
   _ensureConnectorsToolbar();
 
   const groupConn = document.getElementById('connectors-group-connected');
@@ -556,10 +578,12 @@ function _renderConnectorsGrid() {
     if (inst.status && (inst.status.kind === 'connected' || inst.status.kind === 'degraded')) connectedItems.push(item);
     else availableItems.push(item);
   }
-  // A→Z within each group (CLAUDE.md §8 inventory ordering).
+  // Connected inventory remains A→Z; available inventory leads with enterprise integrations,
+  // then uses the same name ordering within each tier.
   const cmp = (a, b) => (a.entry.display_name || '').localeCompare(b.entry.display_name || '', undefined, { sensitivity: 'base', numeric: true });
   connectedItems.sort(cmp);
-  availableItems.sort(cmp);
+  availableItems.sort((a, b) => Number(_CONNECTOR_AVAILABLE_FEATURED_IDS.has(b.entry.id))
+    - Number(_CONNECTOR_AVAILABLE_FEATURED_IDS.has(a.entry.id)) || cmp(a, b));
   const lang = (typeof getLang === 'function') ? getLang() : 'en';
   const query = _connectorsSearchQuery.trim().toLocaleLowerCase();
   const visibleConnectedItems = connectedItems.filter((item) => _connectorMatchesSearch(item, query, lang));
@@ -590,7 +614,7 @@ function _renderConnectorsGrid() {
   const availCountEl = document.getElementById('connectors-group-available-count');
   if (availCountEl) availCountEl.textContent = visibleAvailableItems.length > 0 ? String(visibleAvailableItems.length) : '';
 
-  if (detailOpen) _renderConnectorDetail();
+  if (_connectorPopupState) _renderConnectorPopup();
 }
 
 function _renderCatalogCard(entry, instance) {
@@ -612,6 +636,15 @@ function _renderCatalogCard(entry, instance) {
   const card = document.createElement('div');
   card.className = `connector-card ui-resource-card${connected && !enabledFlag ? ' is-disabled' : ''}${degraded ? ' is-unverified' : ''}`;
   card.dataset.id = e.id;
+  const hasDetail = !!_connectorHasPopup(e.id);
+  if (hasDetail) card.classList.add('has-detail');
+  const cardName = e.auth_mode === 'credentials' ? t('connectors.email.' + e.id) : e.display_name;
+  const nameHtml = hasDetail ? _connectorUiButton({
+    label: cardName,
+    role: 'ghost',
+    className: 'connector-card-popup-entry',
+    attrs: { 'data-act': 'open-popup', 'aria-label': `${cardName} · ${t('connectors.action.details')}`, 'aria-haspopup': 'dialog', 'aria-controls': 'connector-use-popup' },
+  }) : escapeHtml(cardName);
 
   // Brand-color square per design (Surface E) — applied ONLY to the
   // fallback letter glyph (no icon_svg shipped). When a real icon_svg is
@@ -621,7 +654,7 @@ function _renderCatalogCard(entry, instance) {
   // surface instead.
   const brandTint = _CONNECTOR_BRAND_TINT[e.id] || '#16181d';
   const safeIconSvg = typeof sanitizeSvgIconHtml === 'function' ? sanitizeSvgIconHtml(e.icon_svg) : '';
-  const iconHtml = safeIconSvg
+  const iconHtml = e.icon_name ? `<div class="connector-card-icon is-svg">${uiIconHtml(e.icon_name)}</div>` : safeIconSvg
     ? `<div class="connector-card-icon is-svg">${safeIconSvg}</div>`
     : `<div class="connector-card-icon is-fallback" style="background:${brandTint}">${escapeHtml((e.display_name || '?').slice(0, 1).toUpperCase())}</div>`;
   // Custom cards have no authored description — show the server summary
@@ -630,8 +663,16 @@ function _renderCatalogCard(entry, instance) {
     ? _customTransportSummary(instance)
     : pickDesc(e, (typeof getLang === 'function') ? getLang() : 'en');
 
-  const accountLabel = (instance && instance.oauth_grant && instance.oauth_grant.account_label) || '';
-  const errorMsg = errored && instance && instance.status && instance.status.message;
+  // Every live card starts with the same status; only actual account metadata follows it.
+  const accountLabel = String((instance && instance.email_settings && instance.email_settings.address)
+    || (instance && instance.oauth_grant && instance.oauth_grant.account_label) || '').trim();
+  const connectedLabel = t('connectors.group.connected');
+  const connectedText = accountLabel ? `${connectedLabel} · ${accountLabel}` : connectedLabel;
+  // Routed through the formatter: the raw vendor string ("Streamable HTTP error: Error POSTing to
+  // endpoint: {"error":"invalid_token",…}") names no cause and no next step.
+  const errorMsg = errored && instance && instance.status
+    ? _formatConnectorStatusError(instance.status.message)
+    : '';
   const degradedMsg = degraded && instance && instance.status && instance.status.message;
   const degradedSince = degraded && instance && instance.status
     ? instance.status.last_verified_at
@@ -663,16 +704,24 @@ function _renderCatalogCard(entry, instance) {
   //   - oauth_pending: disabled unavailable button
   //   - default (uninstalled): connect (start OAuth)
   let action = '';
-  const isConnecting = _connectorsState.connecting && _connectorsState.connecting.has(e.id);
-  if (isConnecting) {
+  const isSurveyAuthorizing = e.id === 'tencent-survey' && _surveyAuthorizing;
+  const isConnecting = isSurveyAuthorizing || (_connectorsState.connecting && _connectorsState.connecting.has(e.id));
+  const runtimeProgress = _connectorRuntimeProgress(e);
+  if (runtimeProgress) {
+    action = _connectorUiButton({ label: _connectorRuntimeLabel(runtimeProgress), role: 'primary', size: 'sm', icon: 'download', loading: true, attrs: { 'data-act': 'runtime-progress' } })
+      + _connectorUiButton({ label: t('common.cancel'), role: 'secondary', size: 'sm', attrs: { 'data-act': 'cancel-runtime' } });
+  } else if (isConnecting) {
     action = _connectorUiButton({ label: t('connectors.action.connecting'), role: 'primary', size: 'sm', loading: true, attrs: { 'data-act': 'connect' } });
   } else if (isOAuthPending) {
     action = _connectorUiButton({ label: t('connectors.action.unavailable'), role: 'secondary', size: 'sm', disabled: true });
+  } else if (_isConnectorCliMissing(e) && e.runtime_installable) {
+    action = _connectorUiButton({ label: t(_connectorRuntimeErrors.has(_connectorRuntimeKey(e.id)) ? 'connectors.runtime.retry' : 'connectors.runtime.install_connect'), role: 'primary', size: 'sm', icon: 'download', attrs: { 'data-act': 'connect' } });
   } else if (isVisibleDisabled) {
     action = _connectorUiButton({ label: t('connectors.action.connect'), role: 'primary', size: 'sm', icon: 'plug', attrs: { 'data-act': 'unsupported-connect' } });
   } else if (connected) {
     const useTitle = formatChatUseLabel({ kind: 'connector', id: e.id, name: e.display_name || e.id });
     action = _connectorUiButton({ label: t('common.use'), role: 'primary', size: 'sm', className: 'connector-card-use', disabled: !enabledFlag, attrs: { 'data-act': 'use-connector', title: useTitle } });
+    if (e.auth_mode === 'credentials') action += _connectorUiButton({ label: t('connectors.email.edit'), role: 'secondary', size: 'sm', attrs: { 'data-act': 'connect' } });
   } else if (degraded) {
     // Retry re-runs connect + token refresh (`connectors.refresh`) — NOT OAuth. The grant is fine;
     // what failed was reaching the backend. Offering "连接" here would send the user through a
@@ -685,12 +734,21 @@ function _renderCatalogCard(entry, instance) {
     action = `
       ${_connectorUiButton({ label: t('connectors.action.retry'), role: 'secondary', size: 'sm', icon: 'refresh', attrs: { 'data-act': 'retry-custom' } })}
       ${_connectorUiButton({ label: t('connectors.action.disconnect'), role: 'danger', size: 'sm', attrs: { 'data-act': 'disconnect' } })}`;
+  } else if (e.auth_mode === 'credentials' && instance) {
+    action = _connectorUiButton({ label: t('connectors.action.retry'), role: 'secondary', size: 'sm', icon: 'refresh', attrs: { 'data-act': 'retry-custom' } })
+      + _connectorUiButton({ label: t('connectors.email.edit'), role: 'primary', size: 'sm', attrs: { 'data-act': 'connect' } })
+      + _connectorUiButton({ label: t('connectors.action.disconnect'), role: 'danger', size: 'sm', attrs: { 'data-act': 'disconnect' } });
   } else if (_isReconnectableError(e, instance)) {
     action = _connectorUiButton({ label: t('connectors.action.connect'), role: 'primary', size: 'sm', icon: 'plug', attrs: { 'data-act': 'connect' } });
   } else if (errored) {
     action = _connectorUiButton({ label: t('connectors.action.disconnect'), role: 'danger', size: 'sm', attrs: { 'data-act': 'disconnect' } });
   } else {
     action = _connectorUiButton({ label: t('connectors.action.connect'), role: 'primary', size: 'sm', icon: 'plug', attrs: { 'data-act': 'connect' } });
+  }
+
+  if (isSurveyAuthorizing) {
+    action += _connectorUiButton({ label: t('common.cancel'), role: 'secondary', size: 'sm', attrs: { 'data-act': 'cancel-survey-auth' } });
+    if (_connectorAuthorizationUrl && _connectorAuthorizationUrl.catalog_id === e.id) action += _connectorUiButton({ label: t('connectors.survey.copy_link'), role: 'ghost', size: 'sm', attrs: { 'data-act': 'copy-auth-url' } });
   }
 
   let secondaryHtml = '';
@@ -701,36 +759,26 @@ function _renderCatalogCard(entry, instance) {
   } else if (_isConnectorCliMissing(e)) {
     // The reason is machine-dependent and actionable, so it replaces the account line rather
     // than hiding behind the generic "unsupported" toast.
-    secondaryHtml = '<div class="connector-card-cli-missing muted"></div>';
-  } else if (accountLabel) {
-    secondaryHtml = '<div class="connector-card-account muted"></div>';
+    const runtimeText = runtimeProgress ? _connectorRuntimeLabel(runtimeProgress) : _connectorRuntimeErrors.get(_connectorRuntimeKey(e.id)) || t(e.runtime_installable ? 'connectors.runtime.required' : 'connectors.runtime.platform_unavailable');
+    secondaryHtml = _connectorManagedRuntime(e)
+      ? uiStatusDot({ label: runtimeText, tone: _connectorRuntimeErrors.has(_connectorRuntimeKey(e.id)) ? 'attention' : 'idle', className: 'connector-card-runtime connector-card-account', attrs: { title: runtimeText, 'aria-live': 'polite' } })
+      : '<div class="connector-card-cli-missing muted"></div>';
+  } else if (connected) {
+    secondaryHtml = uiStatusDot({ label: connectedText, tone: 'success', className: 'connector-card-account', attrs: { title: connectedText } });
   }
-
-  // Detail entry point. Only connectors with a registered detail profile get one, so the rest of
-  // the grid keeps its current shape and its "no whole-card click" behaviour (see the module
-  // header): the transition is an explicit, keyboard-reachable control.
-  const detailAction = _connectorDetailProfile(e.id)
-    ? _connectorUiButton({
-        label: t('connectors.action.details'),
-        role: 'ghost',
-        size: 'sm',
-        attrs: { 'data-act': 'open-detail' },
-      })
-    : '';
 
   card.innerHTML = `
     <div class="connector-card-top">
       ${iconHtml}
       <div class="connector-card-headline">
-        <div class="connector-card-name"></div>
+        <div class="connector-card-name">${nameHtml}</div>
         ${secondaryHtml}
       </div>
       ${menuHtml}
     </div>
     <div class="connector-card-desc muted"></div>
-    <div class="connector-card-foot">${detailAction}${action}</div>
+    <div class="connector-card-foot">${action}</div>
   `;
-  card.querySelector('.connector-card-name').textContent = e.display_name;
   card.querySelector('.connector-card-desc').textContent = desc;
   if (errorMsg) {
     const el = card.querySelector('.connector-card-error');
@@ -745,26 +793,25 @@ function _renderCatalogCard(entry, instance) {
       : `${t('connectors.status.unverified')}: ${_formatConnectorStatusError(degradedMsg)}`;
     el.textContent = text;
     el.title = text;
-  } else if (_isConnectorCliMissing(e)) {
+  } else if (_isConnectorCliMissing(e) && !_connectorManagedRuntime(e)) {
     const el = card.querySelector('.connector-card-cli-missing');
-    const text = t('connectors.toast.cli_missing');
+    const text = t('connectors.tencent.runtime_unavailable');
     el.textContent = text;
     el.title = text;
-  } else if (accountLabel) {
-    const el = card.querySelector('.connector-card-account');
-    el.textContent = accountLabel;
-    el.title = accountLabel;
   }
 
   card.querySelectorAll('button[data-act]').forEach((btn) => {
     btn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       const act = btn.dataset.act;
-      if (act === 'connect') _runConnect(e);
+      if (act === 'open-popup') _openConnectorPopup(e, instance);
+      else if (act === 'cancel-runtime') window.cogseed.invoke('connectors.cancel_runtime', { catalog_id: e.id }).catch(() => uiAlert(t('connectors.runtime.failed')));
+      else if (act === 'cancel-survey-auth') window.cogseed.invoke('connectors.cancel_oauth', { catalog_id: e.id }).catch(err => uiAlert(_formatConnectError(err)));
+      else if (act === 'copy-auth-url') _copyConnectorAuthorizationUrl(e);
+      else if (act === 'connect') _runConnect(e);
       else if (act === 'unsupported-connect') _showConnectorUnavailableToast(e);
       else if (act === 'disconnect') _quickDisconnect(e, instance);
       else if (act === 'menu') _openCardMenu(btn, e, instance);
-      else if (act === 'open-detail') _openConnectorDetail(e, instance, btn);
       else if (act === 'use-connector' && enabledFlag) _useConnector(e, instance);
       else if (act === 'retry-custom') _retryConnect(e, 'connector_custom_retry');
       else if (act === 'retry-degraded') _retryConnect(e, 'connector_degraded_retry');
@@ -842,7 +889,7 @@ function _openCardMenu(anchorBtn, entry, instance) {
   });
 }
 
-function _useConnector(entry, instance) {
+function _useConnector(entry, instance, prefill) {
   if (!instance || !instance.status || instance.status.kind !== 'connected' || instance.enabled === false) return;
   const id = String((instance && instance.id) || (entry && entry.id) || '').trim();
   const name = String((instance && instance.display_name) || (entry && entry.display_name) || id).trim();
@@ -852,11 +899,18 @@ function _useConnector(entry, instance) {
   if (typeof setChatRecipient === 'function') {
     setChatRecipient('new-chat', { kind: 'commander' });
   }
+  if (prefill !== undefined) {
+    const input = document.getElementById('new-chat-input');
+    if (input) {
+      input.value = prefill;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
   setChatConnector('new-chat', id || name, name || id);
   setTimeout(() => document.getElementById('new-chat-input')?.focus(), 50);
 }
 
-async function _toggleConnectorEnabled(entry, instance, nextEnabled) {
+async function _toggleConnectorEnabled(entry, instance, nextEnabled, reportError = uiAlert) {
   // Bundle entry: fan out the toggle to every member id; bundle itself isn't an instance.
   const ids = Array.isArray(entry.bundle_member_ids) && entry.bundle_member_ids.length
     ? entry.bundle_member_ids.slice()
@@ -877,7 +931,7 @@ async function _toggleConnectorEnabled(entry, instance, nextEnabled) {
           result: 'failure',
           duration_ms: Math.round(performance.now() - startedAt),
         });
-        uiAlert((res && res.error) || t('component.toggle_failed'));
+        reportError((res && res.error) || t('component.toggle_failed'));
         return;
       }
     }
@@ -897,7 +951,7 @@ async function _toggleConnectorEnabled(entry, instance, nextEnabled) {
       ...payload,
       error_type: _connectorTrackErrorType(err),
     });
-    uiAlert((err && err.message) || t('component.toggle_failed'));
+    reportError((err && err.message) || t('component.toggle_failed'));
   }
 }
 
@@ -924,7 +978,7 @@ async function _quickDisconnect(entry, instance) {
   const name = (instance && instance.display_name) || entry.display_name || entry.id;
   const ok = await uiConfirmDanger({
     title: t('connectors.confirm_disconnect_title', { name }),
-    message: t('connectors.confirm_disconnect_msg'),
+    message: t(entry.id === 'tencent-survey' ? 'connectors.survey.disconnect_note' : 'connectors.confirm_disconnect_msg'),
     dangerLabel: t('connectors.action.disconnect'),
   });
   if (!ok) return;
@@ -972,120 +1026,51 @@ async function _quickDisconnect(entry, instance) {
   }
 }
 
-// ─── Connector detail view (grid ⇄ detail) ─────────────────────────────
-//
-// Registered page-local structural composition: docs/renderer-structural-registry.md ›
-// CONN-PV-001. It exists for one business surface (the Tencent Meeting connector, whose
-// connection is only half the job — the other half is creating an automation task), so it is
-// keyed by catalog id rather than extracted into a shared primitive. Only ids present in
-// `_CONNECTOR_DETAIL_PROFILES` get a detail entry point, which is what keeps the rest of the
-// grid untouched.
-//
-// No new persisted field: the three-step indicator derives steps 2 and 3 from the same live
-// `connected` flag the card uses, and step 1 (`接入前`) is always complete because the user can
-// only reach this view from inside the product.
-const _CONNECTOR_DETAIL_PROFILES = {
-  'tencent-meeting': {
-    /** Auto-task template the primary CTA pre-fills (`_AUTO_TEMPLATES` in auto.js). */
-    template_id: 'meeting_digest',
-    /** Fallback letter-square tint, used only when the catalog ships no `icon_svg`. */
-    brand_tint: '#006EFF',
-  },
+// ─── Connector usage popup (registry CONN-PV-003) ──────────────────────
+// Only registered connectors expose this business composition. uiModal owns the overlay,
+// keyboard behavior and focus trap; all controls reuse the shared factories.
+const _CONNECTOR_POPUP_PROFILES = {
+  'tencent-meeting': { prefix: 'connectors.tencent.examples', keys: ['query', 'summary', 'schedule'], note: 'connectors.tencent.connected.note' },
+  'email-163': { prefix: 'connectors.popup.email.examples', note: 'connectors.popup.email.note' },
+  'email-enterprise': { prefix: 'connectors.popup.email.examples', note: 'connectors.popup.email.note' },
+  'email-qq': { prefix: 'connectors.popup.email.examples', note: 'connectors.popup.email.note' },
+  wps: { prefix: 'connectors.popup.wps.examples' },
+  wecom: { prefix: 'connectors.popup.wecom.examples' },
+  'tencent-docs': { prefix: 'connectors.popup.tencent_docs.examples' },
+  'tencent-survey': { prefix: 'connectors.popup.survey.examples', note: 'connectors.popup.survey.note' },
+  dingtalk: { prefix: 'connectors.popup.dingtalk.examples' },
+  feishu: { prefix: 'connectors.popup.feishu.examples' },
 };
-
-function _connectorDetailProfile(id) {
-  return _CONNECTOR_DETAIL_PROFILES[String(id || '')] || null;
-}
-
-let _connectorDetailState = { id: '', originEl: null };
-/** Last `connectors:authorization-url` notice. A `local_cli` connect produces the URL on this
- *  machine instead of going through a deep link, so when the automatic browser launch fails this
- *  is the only recovery path and the user must be able to copy it. */
+let _connectorPopupState = null;
 let _connectorAuthorizationUrl = null;
+let _surveyAuthorizing = false;
 
-function _connectorsDetailOpen() {
-  return !!(_connectorDetailState.id && _connectorDetailProfile(_connectorDetailState.id));
+function _connectorHasPopup(id) {
+  return Object.prototype.hasOwnProperty.call(_CONNECTOR_POPUP_PROFILES, String(id || ''));
 }
 
-function _connectorDetailInstanceConnected(instance) {
-  return !!(instance && instance.status && instance.status.kind === 'connected');
+function _connectorPopupName(entry) {
+  return entry.auth_mode === 'credentials' ? t('connectors.email.' + entry.id) : entry.display_name || entry.id;
 }
 
-function _connectorDetailTopbarHtml(entry) {
-  return [
-    _connectorUiButton({
-      label: t('common.back'),
-      role: 'ghost',
-      size: 'sm',
-      icon: 'arrow-left',
-      attrs: { 'data-connectors-detail-back': '1' },
-    }),
-    _connectorUiIconButton({
-      label: t('connectors.tencent.help_label'),
-      title: t('connectors.tencent.help'),
-      icon: 'info',
-      className: 'connectors-detail-info-btn',
-      attrs: { 'data-connectors-detail-help': '1' },
-    }),
-  ].join('');
+function _connectorPopupExampleKeys(entry) {
+  return _CONNECTOR_POPUP_PROFILES[entry.id]?.keys || ['query', 'summary', 'task'];
 }
 
-function _connectorDetailIdentityHtml(entry) {
-  const e = entry || {};
-  const name = String(e.display_name || e.id || '');
-  const desc = e._custom ? '' : pickDesc(e, (typeof getLang === 'function') ? getLang() : 'en');
-  const profile = _connectorDetailProfile(e.id) || {};
-  const safeIconSvg = typeof sanitizeSvgIconHtml === 'function' ? sanitizeSvgIconHtml(e.icon_svg) : '';
-  const iconHtml = safeIconSvg
-    ? `<div class="connectors-detail-identity-icon">${safeIconSvg}</div>`
-    : `<div class="connectors-detail-identity-icon is-fallback" style="background:${escapeHtml(profile.brand_tint || _CONNECTOR_BRAND_TINT[e.id] || '#16181d')}">${escapeHtml(name.slice(0, 1).toUpperCase())}</div>`;
-  return `
-    <div class="connectors-detail-identity">
-      ${iconHtml}
-      <div class="connectors-detail-identity-heading">
-        <h2 class="connectors-detail-identity-name">${escapeHtml(name)}</h2>
-        <p class="connectors-detail-identity-subtitle">${escapeHtml(desc)}</p>
-      </div>
-    </div>`;
+function _connectorPopupExample(entry, key) {
+  const profile = _CONNECTOR_POPUP_PROFILES[entry.id];
+  return profile && _connectorPopupExampleKeys(entry).includes(key) ? t(profile.prefix + '.' + key) : '';
 }
 
-/** Three-step progress indicator. Native `<ol>`/`<li>` semantics with `aria-current="step"` on
- *  the live step, plus a visually hidden state word so the marker's meaning does not depend on
- *  colour or on the icon alone. Not interactive — nothing here needs a keyboard contract. */
-function _connectorDetailStepsHtml(connected) {
-  const stateOf = ['done', connected ? 'done' : 'current', connected ? 'current' : 'todo'];
-  const labels = [
-    t('connectors.tencent.step.before'),
-    t('connectors.tencent.step.authorize'),
-    t('connectors.tencent.step.connected'),
-  ];
-  const stateWords = {
-    done: t('connectors.tencent.step.done'),
-    current: t('connectors.tencent.step.current'),
-    todo: t('connectors.tencent.step.todo'),
-  };
-  const items = stateOf.map((state, index) => {
-    const mark = state === 'done'
-      ? uiIconHtml('check-circle', 'ui-icon connectors-detail-step-glyph')
-      : '<span class="connectors-detail-step-dot" aria-hidden="true"></span>';
-    return `<li class="connectors-detail-step is-${state}"${state === 'current' ? ' aria-current="step"' : ''}>`
-      + `<span class="connectors-detail-step-mark">${mark}</span>`
-      + `<span class="connectors-detail-step-label">${escapeHtml(labels[index])}</span>`
-      + `<span class="ui-visually-hidden">${escapeHtml(stateWords[state])}</span>`
-      + '</li>';
-  }).join('');
-  return `<ol class="connectors-detail-steps" aria-label="${escapeHtml(t('connectors.tencent.steps.aria'))}">${items}</ol>`;
-}
-
-function _connectorDetailAuthUrlHtml(entry) {
+function _connectorPopupAuthUrlHtml(entry) {
   const notice = _connectorAuthorizationUrl;
   if (!notice || !entry || notice.catalog_id !== entry.id) return '';
   return `
     <div class="connectors-detail-auth-url">
-      <p class="connectors-detail-auth-url-label">${escapeHtml(t('connectors.tencent.auth_url.label'))}</p>
+      <p class="connectors-detail-auth-url-label">${escapeHtml(t('connectors.popup.auth_url.label'))}</p>
       <code class="connectors-detail-auth-url-value">${escapeHtml(notice.url)}</code>
       ${_connectorUiButton({
-        label: t('connectors.tencent.auth_url.copy'),
+        label: t('connectors.popup.auth_url.copy'),
         role: 'secondary',
         size: 'sm',
         attrs: { 'data-act': 'copy-auth-url' },
@@ -1093,287 +1078,277 @@ function _connectorDetailAuthUrlHtml(entry) {
     </div>`;
 }
 
-function _connectorDetailMainPanelHtml(entry, instance) {
-  const status = (instance && instance.status) || null;
-  const kind = (status && status.kind) || '';
-  const connected = kind === 'connected';
-  const degraded = kind === 'degraded';
-  const errored = kind === 'error';
-  const cliMissing = _isConnectorCliMissing(entry);
-  const unavailable = _isConnectorVisibleDisabled(entry);
-  let tone = 'is-idle';
-  let iconName = 'plug';
-  let title = t('connectors.tencent.pending.title');
-  let desc = t('connectors.tencent.pending.desc');
-  let cta = _connectorUiButton({
-    label: t('connectors.tencent.pending.cta'),
-    role: 'primary',
-    size: 'md',
-    icon: 'plug',
-    disabled: unavailable,
-    attrs: { 'data-act': 'connect' },
-  });
-  let note = '';
-
-  if (connected) {
-    tone = 'is-ok';
-    iconName = 'check-circle';
-    title = t('connectors.tencent.connected.title');
-    desc = t('connectors.tencent.connected.desc');
-    note = t('connectors.tencent.connected.note');
-    cta = _connectorUiButton({
-      label: t('connectors.tencent.connected.cta'),
-      role: 'primary',
-      size: 'md',
-      attrs: { 'data-act': 'create-automation' },
-    });
-  } else if (degraded || errored) {
-    // An installed-but-broken connector must not be described as "not connected yet": the user
-    // would be told to do the one thing they already did. Same truthfulness rule the card
-    // follows, and the same recovery actions (`connectors.refresh` for degraded, disconnect for
-    // an errored row).
-    iconName = 'info';
-    title = degraded ? t('connectors.status.unverified') : t('connectors.status.error');
-    desc = _formatConnectorStatusError(status && status.message);
-    note = degraded ? _formatLastVerified(status && status.last_verified_at) : '';
-    cta = degraded
-      ? _connectorUiButton({
-          label: t('connectors.action.retry'),
-          role: 'primary',
-          size: 'md',
-          icon: 'refresh',
-          attrs: { 'data-act': 'retry-degraded' },
-        })
-      : _connectorUiButton({
-          label: t('connectors.action.disconnect'),
-          role: 'danger',
-          size: 'md',
-          attrs: { 'data-act': 'disconnect' },
-        });
-  } else if (cliMissing) {
-    iconName = 'info';
-    title = t('connectors.tencent.cli_missing.title');
-    desc = t('connectors.tencent.cli_missing.desc');
-  } else if (unavailable) {
-    iconName = 'info';
-    title = t('connectors.tencent.unavailable.title');
-    desc = t('connectors.tencent.unavailable.desc');
-  }
-
-  return uiCard({
-    className: 'connectors-detail-panel',
-    attrs: { 'data-connectors-detail-main': '1' },
-    bodyHtml: `
-      <div class="connectors-detail-hero">
-        <span class="connectors-detail-hero-icon ${tone}">${uiIconHtml(iconName, 'ui-icon connectors-detail-hero-glyph')}</span>
-        <h3 class="connectors-detail-hero-title">${escapeHtml(title)}</h3>
-        <p class="connectors-detail-hero-desc">${escapeHtml(desc)}</p>
-        <div class="connectors-detail-hero-actions">
-          ${cta}
-          ${note ? `<p class="connectors-detail-hero-note">${escapeHtml(note)}</p>` : ''}
-        </div>
-        ${_connectorDetailAuthUrlHtml(entry)}
-      </div>`,
-  });
+/** Pick this entry's onboarding guidance in the current UI language.
+ *
+ *  Guidance is product content that travels with the catalog entry (`setup`), the same way
+ *  `description_zh` / `description_en` do — an enterprise user must not be left guessing
+ *  `npm install -g @larksuite/cli`, and an English user must not be shown Chinese steps. */
+function _connectorSetupText(entry) {
+  const setup = entry && entry.setup;
+  if (!setup) return null;
+  const lang = String(typeof getLang === 'function' ? getLang() : 'zh').toLowerCase();
+  const zh = lang.startsWith('zh');
+  return {
+    steps: (zh ? setup.steps_zh : setup.steps_en) || [],
+    docsUrl: setup.docs_url || '',
+    docsLabel: (zh ? setup.docs_label_zh : setup.docs_label_en) || t('connectors.setup.open_docs'),
+    install: setup.install_command || '',
+    note: (zh ? setup.credential_note_zh : setup.credential_note_en) || '',
+  };
 }
 
-function _connectorDetailStatusPanelHtml(entry, instance) {
-  const status = (instance && instance.status) || null;
-  const kind = (status && status.kind) || '';
-  const connected = kind === 'connected';
-  const degraded = kind === 'degraded';
-  const errored = kind === 'error';
-  const pill = connected
-    ? uiStatusPill({ label: t('connectors.tencent.status.connected'), tone: 'success', check: true })
-    : (degraded
-      ? uiStatusPill({ label: t('connectors.status.unverified'), tone: 'attention' })
-      : (errored
-        ? uiStatusPill({ label: t('connectors.status.error'), tone: 'critical' })
-        : uiStatusPill({ label: t('connectors.tencent.status.disconnected'), tone: 'neutral' })));
-  const actions = [
-    // `查看会议资料` has no target page yet. Rendering it disabled with a visible reason keeps it
-    // discoverable and honest instead of shipping a dead link or hiding the row.
-    _connectorUiButton({
-      label: t('connectors.tencent.status.view_materials'),
-      role: 'ghost',
-      size: 'sm',
-      disabled: true,
-      attrs: { 'data-act': 'view-materials', 'aria-disabled': 'true' },
-    }),
-    `<span class="connectors-detail-soon-hint">${escapeHtml(t('connectors.tencent.status.view_materials_soon'))}</span>`,
-  ];
-  // Disconnect removes the connector instance. It is offered whenever an instance exists, and it
-  // must never sign the user out of the provider CLI — `_quickDisconnect` calls
-  // `connectors.remove`, which drops our instance and nothing else.
-  if (connected || degraded || errored) {
-    actions.push(_connectorUiButton({
-      label: t('connectors.tencent.status.disconnect'),
-      role: 'danger',
-      size: 'sm',
-      attrs: { 'data-act': 'disconnect' },
-    }));
-  }
-  return uiCard({
-    className: 'connectors-detail-panel',
-    attrs: { 'data-connectors-detail-status': '1' },
-    bodyHtml: `
-      <div class="connectors-detail-panel-head">
-        <h3 class="connectors-detail-panel-title">${escapeHtml(t('connectors.tencent.status.title'))}</h3>
-        ${pill}
-      </div>
-      <p class="connectors-detail-panel-scope">${escapeHtml(t('connectors.tencent.status.scope'))}</p>
-      <div class="connectors-detail-panel-actions">${actions.join('')}</div>`,
-  });
-}
-
-function _connectorDetailHtml(entry, instance) {
-  const connected = _connectorDetailInstanceConnected(instance);
-  return `
-    <div class="connectors-detail-column">
-      ${_connectorDetailIdentityHtml(entry)}
-      ${_connectorDetailStepsHtml(connected)}
-      ${_connectorDetailMainPanelHtml(entry, instance)}
-      ${_connectorDetailStatusPanelHtml(entry, instance)}
+/** The onboarding block shown in the detail panel: what to install, what will happen, and where the
+ *  credential comes from. Rendered for every entry that ships `setup`; entries without it render
+ *  nothing and keep the previous behaviour. */
+function _connectorPopupSetupHtml(entry) {
+  const text = _connectorSetupText(entry);
+  if (!text) return '';
+  const steps = text.steps.length
+    ? `<ol class="connectors-detail-setup-steps">${text.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
+    : '';
+  const install = text.install
+    ? `<div class="connectors-detail-setup-install">
+        <p class="connectors-detail-setup-install-label">${escapeHtml(t('connectors.setup.install_label'))}</p>
+        <code class="connectors-detail-setup-install-value">${escapeHtml(text.install)}</code>
+        ${_connectorUiButton({
+          label: t('connectors.setup.copy_command'),
+          role: 'secondary',
+          size: 'sm',
+          attrs: { 'data-act': 'copy-setup-command' },
+        })}
+      </div>`
+    : '';
+  const docs = text.docsUrl
+    ? `<div class="connectors-detail-setup-docs">${_connectorUiButton({
+        label: text.docsLabel,
+        role: 'secondary',
+        size: 'sm',
+        attrs: { 'data-act': 'open-setup-docs' },
+      })}</div>`
+    : '';
+  const note = text.note ? `<p class="connectors-detail-setup-note">${escapeHtml(text.note)}</p>` : '';
+  if (!steps && !install && !docs && !note) return '';
+  return `<div class="connectors-detail-setup">
+      <p class="connectors-detail-setup-title">${escapeHtml(t('connectors.setup.title'))}</p>
+      ${steps}${install}${docs}${note}
     </div>`;
 }
 
-function _renderConnectorDetail() {
-  const topbar = document.getElementById('connectors-detail-topbar');
-  const body = document.getElementById('connectors-detail-body');
-  if (!topbar || !body) return;
-  const id = _connectorDetailState.id;
-  const instance = _instanceById(id);
-  const entry = _connectorsState.catalog.find((item) => item && item.id === id)
-    || (instance ? _entryFromInstance(instance) : { id, display_name: id });
-  topbar.innerHTML = _connectorDetailTopbarHtml(entry);
-  body.innerHTML = _connectorDetailHtml(entry, instance);
-  _bindConnectorDetailActions(topbar, entry, instance);
-  _bindConnectorDetailActions(body, entry, instance);
-  if (typeof hydrateUiIcons === 'function') {
-    hydrateUiIcons(topbar);
-    hydrateUiIcons(body);
+function _connectorPopupPresentation(entry, instance) {
+  const kind = instance && instance.status && instance.status.kind;
+  const connected = kind === 'connected';
+  const usable = connected && instance.enabled !== false;
+  const preparing = _connectorRuntimeProgress(entry);
+  const authorizing = (_connectorAuthorizationUrl && _connectorAuthorizationUrl.catalog_id === entry.id)
+    || _connectorsState.connecting.has(entry.id)
+    || [..._pendingConnectAttempts.values()].some(attempt => attempt.payload.connector_id === entry.id && attempt.ownerKey === _connectorRuntimeKey(entry.id));
+  const busy = !!(_connectorPopupState && _connectorPopupState.busy);
+  let label = t('connectors.popup.not_connected');
+  let message = '';
+  let tone = 'idle';
+  const connectUnavailable = _isConnectorVisibleDisabled(entry) && !(_isConnectorCliMissing(entry) && entry.runtime_installable);
+  let action = { label: t('connectors.action.connect'), role: 'primary', attrs: { 'data-act': 'connect' }, disabled: connectUnavailable };
+  if (connected) {
+    label = t('connectors.group.connected');
+    tone = 'success';
+    message = usable ? '' : t('connectors.popup.disabled');
+    action = { label: t('connectors.popup.use'), role: 'primary', disabled: !usable || busy, attrs: { 'data-act': 'use-connector' } };
+  } else if (preparing) {
+    label = _connectorRuntimeLabel(preparing);
+    action = { label, role: 'primary', loading: true };
+  } else if (authorizing) {
+    label = t('connectors.popup.authorizing.title');
+    message = t('connectors.popup.authorizing.desc');
+    action = { label: t('connectors.action.connecting'), role: 'primary', loading: true };
+  } else if (kind === 'degraded' || kind === 'error') {
+    label = t(kind === 'degraded' ? 'connectors.status.unverified' : 'connectors.status.error');
+    tone = kind === 'degraded' ? 'attention' : 'critical';
+    message = _formatConnectorStatusError(instance.status.message);
+    action = { label: t(kind === 'degraded' ? 'connectors.action.retry' : 'connectors.popup.reconnect'), role: 'primary', disabled: busy || connectUnavailable, attrs: { 'data-act': kind === 'degraded' ? 'retry-degraded' : 'connect' } };
+  } else if (_isConnectorCliMissing(entry)) {
+    label = t('connectors.onboarding.cli_missing_title', { name: entry.display_name || entry.id });
+    message = _connectorRuntimeErrors.get(_connectorRuntimeKey(entry.id)) || t(entry.runtime_installable ? 'connectors.runtime.required' : 'connectors.runtime.platform_unavailable');
+    action = { label: t(entry.runtime_installable ? 'connectors.runtime.install_connect' : 'connectors.action.unavailable'), role: 'primary', disabled: !entry.runtime_installable, attrs: { 'data-act': 'connect' } };
+  } else if (_isConnectorVisibleDisabled(entry)) {
+    label = t('connectors.popup.unavailable.title');
+    message = t('connectors.popup.unavailable.desc');
+  }
+  const account = String(instance && (instance.email_settings?.address || instance.oauth_grant?.account_label) || '').trim();
+  const switchHtml = connected ? `<div class="connector-popup-enable"><span>${escapeHtml(t('connectors.popup.enable'))}</span>${uiSwitch({ label: t('connectors.popup.enable'), checked: instance.enabled !== false, disabled: busy, attrs: { 'data-act': 'toggle-enabled' } })}</div>` : '';
+  const examples = _connectorPopupExampleKeys(entry).map(key => _connectorUiButton({
+    label: _connectorPopupExample(entry, key), role: 'secondary', iconEnd: 'arrow-right',
+    className: 'connector-popup-example', disabled: !usable || busy,
+    attrs: { 'data-act': 'example', 'data-example': key },
+  })).join('');
+  const setup = _connectorPopupSetupHtml(entry);
+  const guidance = !connected && setup ? uiAccordion({
+    className: 'connector-popup-guidance', defaultOpen: [],
+    items: [{ title: t('connectors.setup.title'), bodyHtml: setup }],
+  }) : '';
+  const bodyHtml = `<div class="connector-popup-content">
+    <p class="connector-popup-description">${escapeHtml(pickDesc(entry, typeof getLang === 'function' ? getLang() : 'en'))}</p>
+    <div class="connector-popup-status" role="status" aria-live="polite">${uiStatusPill({ label, tone })}${account ? `<span>${escapeHtml(account)}</span>` : ''}</div>
+    ${switchHtml}${message ? `<p class="connector-popup-note">${escapeHtml(message)}</p>` : ''}
+    ${_connectorPopupAuthUrlHtml(entry)}
+    <section class="connector-popup-examples"><h3>${escapeHtml(t('connectors.popup.examples.title'))}</h3>${examples}</section>
+    ${_CONNECTOR_POPUP_PROFILES[entry.id]?.note ? `<p class="connector-popup-note">${escapeHtml(t(_CONNECTOR_POPUP_PROFILES[entry.id].note))}</p>` : ''}
+    ${guidance}
+  </div>`;
+  const more = instance ? `<div class="connector-popup-more">
+    ${_connectorUiIconButton({ label: t('common.more'), icon: 'more-horizontal', attrs: { id: 'connector-popup-more', 'data-act': 'more', 'aria-expanded': 'false', 'aria-controls': 'connector-popup-menu' } })}
+    <div id="connector-popup-menu" class="ui-modal__popover" data-ui-modal-popover data-open="false" data-trigger-id="connector-popup-more" hidden>
+      ${_connectorUiButton({ label: t('connectors.action.disconnect'), role: 'danger', size: 'sm', disabled: busy, attrs: { 'data-act': 'disconnect' } })}
+    </div></div>` : '';
+  const cancel = preparing ? _connectorUiButton({ label: t('common.cancel'), role: 'secondary', attrs: { 'data-act': 'cancel-runtime' } })
+    : authorizing ? _connectorUiButton({ label: t('common.cancel'), role: 'secondary', attrs: { 'data-act': 'cancel-authorization' } }) : '';
+  return { bodyHtml, footerHtml: more + cancel + _connectorUiButton(action) };
+}
+
+function _connectorPopupEntry(id) {
+  return _connectorsState.catalog.find(entry => entry && entry.id === id) || { id, display_name: id };
+}
+
+function _renderConnectorPopup() {
+  const state = _connectorPopupState;
+  if (!state) return;
+  const entry = _connectorPopupEntry(state.id);
+  const instance = _instanceById(state.id);
+  const modal = state.modal;
+  const active = document.activeElement;
+  const focusedAction = active && modal.dialog.contains(active) && active.dataset && active.dataset.act;
+  const focusedExample = active && active.dataset && active.dataset.example;
+  const body = modal.dialog.querySelector('.ui-modal__body');
+  const scrollTop = body.scrollTop;
+  const guidanceOpen = !!body.querySelector('.ui-accordion__item[open]');
+  const presentation = _connectorPopupPresentation(entry, instance);
+  body.innerHTML = presentation.bodyHtml;
+  if (guidanceOpen) body.querySelector('.ui-accordion__item')?.setAttribute('open', '');
+  body.scrollTop = scrollTop;
+  modal.dialog.querySelector('.ui-modal__title').textContent = _connectorPopupName(entry);
+  const close = modal.dialog.querySelector('[data-ui-modal-close]');
+  close.setAttribute('aria-label', t('common.close'));
+  close.setAttribute('title', t('common.close'));
+  state.footer.innerHTML = presentation.footerHtml;
+  modal.dialog.onclick = event => {
+    if (event.target.closest('.connector-popup-more')) return;
+    const menu = modal.dialog.querySelector('[data-ui-modal-popover]');
+    if (menu) { menu.hidden = true; menu.dataset.open = 'false'; }
+    modal.dialog.querySelector('[data-act="more"]')?.setAttribute('aria-expanded', 'false');
+  };
+  _bindConnectorPopupActions(modal.dialog, entry, instance);
+  if (focusedAction) {
+    const selector = `[data-act="${focusedAction}"]${focusedExample ? `[data-example="${focusedExample}"]` : ''}`;
+    const replacement = modal.dialog.querySelector(selector);
+    if (replacement && !replacement.disabled) replacement.focus({ preventScroll: true });
+    else modal.dialog.querySelector('[data-ui-modal-close]')?.focus({ preventScroll: true });
   }
 }
 
-function _bindConnectorDetailActions(host, entry, instance) {
-  if (!host) return;
-  const back = host.querySelector('[data-connectors-detail-back]');
-  if (back) back.addEventListener('click', () => _closeConnectorDetail());
-  // The "(i)" disclosure: a shared icon button plus the shared alert surface. Deliberately no
-  // page-local overlay — the accessible name and the native tooltip both carry the help text, so
-  // the explanation is reachable from the keyboard without opening anything.
-  const help = host.querySelector('[data-connectors-detail-help]');
-  if (help) help.addEventListener('click', () => uiAlert(t('connectors.tencent.help')));
-  host.querySelectorAll('[data-act]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const act = btn.dataset.act;
-      if (act === 'connect') _runConnect(entry);
-      else if (act === 'create-automation') _openConnectorAutomation(entry);
-      else if (act === 'disconnect') _quickDisconnect(entry, instance);
-      else if (act === 'retry-degraded') _retryConnect(entry, 'connector_degraded_retry');
-      else if (act === 'copy-auth-url') _copyConnectorAuthorizationUrl(entry);
-    });
-  });
-}
-
-function _focusConnectorDetailBack() {
-  const body = document.getElementById('connectors-detail-body');
-  const topbar = document.getElementById('connectors-detail-topbar');
-  const btn = (topbar && topbar.querySelector('[data-connectors-detail-back]'))
-    || (body && body.querySelector('[data-connectors-detail-back]'));
-  if (btn && typeof btn.focus === 'function') btn.focus({ preventScroll: true });
-}
-
-function _openConnectorDetail(entry, instance, originEl) {
-  const id = String((entry && entry.id) || (instance && instance.id) || '');
-  if (!id || !_connectorDetailProfile(id)) return;
-  const view = document.getElementById('connectors-detail-view');
-  // No detail host (partial DOM, e.g. a test double): leave the grid working rather than hiding it.
-  if (!view) return;
-  if (_connectorDetailState.id !== id) {
-    _connectorsTrackClick('connector_detail_open', _connectorTrackPayload(entry, instance));
-  }
-  _connectorDetailState.id = id;
-  _connectorDetailState.originEl = originEl || _connectorDetailState.originEl || null;
-  const gridView = document.getElementById('connectors-grid-view');
-  if (gridView) gridView.style.display = 'none';
-  view.style.display = '';
-  _renderConnectorDetail();
-  _focusConnectorDetailBack();
-}
-
-/** Grid ⇄ detail return. Focus goes back to the card control that opened the view; because the
- *  grid repaint below rebuilds the card, the original node is normally detached and the lookup
- *  falls back to the same control on the re-rendered card. */
-function _closeConnectorDetail() {
-  const id = _connectorDetailState.id;
-  if (!id) return;
-  const origin = _connectorDetailState.originEl;
-  _connectorDetailState.id = '';
-  _connectorDetailState.originEl = null;
-  const view = document.getElementById('connectors-detail-view');
-  const topbar = document.getElementById('connectors-detail-topbar');
-  const body = document.getElementById('connectors-detail-body');
-  if (topbar) topbar.innerHTML = '';
-  if (body) body.innerHTML = '';
-  if (view) view.style.display = 'none';
-  _renderConnectorsGrid();
-  const target = (origin && origin.isConnected) ? origin : _connectorDetailReturnTarget(id);
-  if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
-}
-
-function _connectorDetailReturnTarget(id) {
-  const cards = document.querySelectorAll('.connector-card[data-id]');
-  for (const card of cards) {
-    if (card.dataset && card.dataset.id === id) return card.querySelector('[data-act="open-detail"]');
+function _connectorPopupReturnTarget(id) {
+  for (const card of document.querySelectorAll('.connector-card[data-id]')) {
+    if (card.dataset.id === id) return card.querySelector('[data-act="open-popup"]');
   }
   return null;
 }
 
-/** Escape leaves the detail view for the grid — the same document-level pattern the marketplace
- *  detail view uses. IME composition is ignored, and an open shared modal keeps its own Escape
- *  handling so one Escape never both dismisses a dialog and changes the page. */
-function _connectorDetailKeydown(event) {
-  if (!_connectorDetailState.id || !_connectorsViewActive()) return;
-  if (!event || event.isComposing || event.keyCode === 229) return;
-  if (event.key !== 'Escape') return;
-  // Only when the detail view is the surface the user is actually looking at: the selection
-  // survives a tab or sub-view switch, and Escape there belongs to whatever replaced it.
-  const view = document.getElementById('connectors-detail-view');
-  if (!view || view.style.display === 'none') return;
-  const pane = document.getElementById('connections-pane-mcp');
-  if (pane && pane.hidden) return;
-  const target = event.target;
-  if (target && typeof target.closest === 'function' && target.closest('.ui-modal-overlay')) return;
-  event.stopPropagation();
-  _closeConnectorDetail();
+function _closeConnectorPopup(restoreFocus = true) {
+  const state = _connectorPopupState;
+  if (!state) return;
+  _connectorPopupState = null;
+  state.modal.close(null, 'close');
+  if (restoreFocus) _connectorPopupReturnTarget(state.id)?.focus({ preventScroll: true });
 }
 
-/** Primary CTA: land on the automation page with the meeting-digest template pre-filled.
- *  The template grid only exists in the empty state, so the dialog pre-fill path is the only
- *  reliable route. auto.js is a lazily loaded feature, hence the loader hop before reaching into
- *  it; `_autoApplyTemplate` opens the dialog itself, so calling `openAutoTaskDialog` too would
- *  open it twice. */
-function _openConnectorAutomation(entry) {
-  const profile = _connectorDetailProfile(entry && entry.id);
-  const templateId = (profile && profile.template_id) || '';
-  _connectorsTrackClick('connector_detail_automation', _connectorTrackPayload(entry, _instanceById(entry && entry.id)));
-  if (typeof setView === 'function') setView('auto');
-  const run = () => {
-    if (templateId && typeof window.applyAutoTemplate === 'function') {
-      window.applyAutoTemplate(templateId);
+function _openConnectorPopup(entry, instance) {
+  const id = String(entry && entry.id || instance && instance.id || '');
+  if (!_connectorHasPopup(id)) return;
+  if (_connectorPopupState && _connectorPopupState.id === id) { _renderConnectorPopup(); return; }
+  _closeConnectorPopup();
+  const modal = uiModal({ title: _connectorPopupName(entry), closeLabel: t('common.close'), size: 'lg', bodyHtml: '', dismissOnBackdrop: true });
+  modal.overlay.id = 'connector-use-popup';
+  modal.dialog.classList.add('connector-popup');
+  const icon = document.createElement('span');
+  icon.className = 'connector-popup-icon';
+  icon.innerHTML = uiIconHtml(entry.icon_name || 'plug');
+  modal.dialog.querySelector('.ui-modal__header').prepend(icon);
+  const footer = document.createElement('footer');
+  footer.className = 'ui-modal__footer';
+  modal.dialog.appendChild(footer);
+  const state = { id, modal, footer, busy: false };
+  _connectorPopupState = state;
+  _renderConnectorPopup();
+  modal.then(() => {
+    if (_connectorPopupState !== state) return;
+    _connectorPopupState = null;
+    if (_connectorsViewActive()) _connectorPopupReturnTarget(id)?.focus({ preventScroll: true });
+  });
+}
+
+function _useConnectorFromPopup(entry, exampleKey) {
+  const instance = _instanceById(entry.id);
+  if (!instance || instance.status.kind !== 'connected' || instance.enabled === false) return;
+  const text = exampleKey ? _connectorPopupExample(entry, exampleKey) : '';
+  if (exampleKey && !text) return;
+  _closeConnectorPopup(false);
+  _useConnector(entry, instance, text);
+}
+
+async function _connectFromConnectorPopup(entry) {
+  const needsForm = entry.auth_mode === 'credentials'
+    || (entry.auth_mode === 'interactive_token' && entry.interactive_auth?.kind === 'paste');
+  if (!needsForm) return _runConnect(entry);
+  // Transfer ownership to the existing credential dialog; never stack modal keyboard scopes.
+  const ownerKey = _connectorRuntimeKey(entry.id);
+  _closeConnectorPopup(false);
+  await _runConnect(entry);
+  if (!_connectorsViewActive() || _connectorPopupState || ownerKey !== _connectorRuntimeKey(entry.id)) return;
+  await loadConnectors();
+  if (_connectorsViewActive() && !_connectorPopupState && ownerKey === _connectorRuntimeKey(entry.id)) _openConnectorPopup(_connectorPopupEntry(entry.id), _instanceById(entry.id));
+}
+
+function _bindConnectorPopupActions(host, entry, instance) {
+  const more = host.querySelector('[data-act="more"]');
+  if (more) more.addEventListener('focus', () => {
+    more.setAttribute('aria-expanded', String(host.querySelector('[data-ui-modal-popover]').dataset.open === 'true'));
+  });
+  host.querySelectorAll('[data-act]').forEach(button => button.addEventListener('click', async () => {
+    const state = _connectorPopupState;
+    if (!state || state.busy || button.disabled) return;
+    const action = button.dataset.act;
+    if (action === 'more') {
+      const menu = host.querySelector('[data-ui-modal-popover]');
+      const open = menu.dataset.open !== 'true';
+      menu.dataset.open = String(open); menu.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+      if (open) menu.querySelector('button')?.focus();
       return;
     }
-    if (typeof window.openAutoTaskDialog === 'function') window.openAutoTaskDialog({});
-  };
-  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
-  if (typeof loader !== 'function') {
-    run();
-    return;
-  }
-  Promise.resolve(loader('auto')).then(run).catch((err) => {
-    _connectorsLog.warn('auto feature load failed', { error: (err && err.message) || String(err) });
-  });
+    if (action === 'use-connector' || action === 'example') return _useConnectorFromPopup(entry, button.dataset.example);
+    if (action === 'copy-auth-url') return _copyConnectorAuthorizationUrl(entry);
+    if (action === 'copy-setup-command') return _copyConnectorSetupCommand(entry);
+    if (action === 'open-setup-docs') return _openConnectorSetupDocs(entry);
+    if (action === 'connect') return _connectFromConnectorPopup(entry);
+    if (action === 'retry-degraded') return _retryConnect(entry, 'connector_degraded_retry');
+    if (action === 'cancel-authorization' || action === 'cancel-runtime') {
+      const channel = action === 'cancel-runtime' ? 'connectors.cancel_runtime' : 'connectors.cancel_oauth';
+      try { await window.cogseed.invoke(channel, { catalog_id: entry.id }); }
+      catch (err) { uiToast(_formatConnectError(err), { variant: 'error' }); }
+      return;
+    }
+    if (action === 'disconnect') {
+      // The confirmation owns its modal keyboard scope. Re-open usage with the resulting live state.
+      _closeConnectorPopup();
+      await _quickDisconnect(entry, instance);
+      if (_connectorsViewActive() && !_connectorPopupState) _openConnectorPopup(entry, _instanceById(entry.id));
+      return;
+    }
+    if (action === 'toggle-enabled') {
+      state.busy = true;
+      _renderConnectorPopup();
+      try { await _toggleConnectorEnabled(entry, instance, instance.enabled === false, message => uiToast(message, { variant: 'error' })); }
+      finally { state.busy = false; if (_connectorPopupState === state) _renderConnectorPopup(); }
+    }
+  }));
 }
 
 /** A `local_cli` connect produces its authorization URL here rather than through a deep link. The
@@ -1383,16 +1358,55 @@ function _handleAuthorizationUrl(notice) {
   if (!notice || typeof notice.catalog_id !== 'string' || typeof notice.url !== 'string') return;
   const url = notice.url.trim();
   if (!notice.catalog_id || !url) return;
+  if (notice.catalog_id === 'tencent-survey') {
+    let parsed;
+    try { parsed = new URL(url); } catch (_) { return; }
+    if (parsed.origin !== 'https://wj.qq.com' || parsed.pathname !== '/oauth/authorize' || parsed.username || parsed.password) return;
+    if (!_surveyAuthorizing) return;
+    _connectorAuthorizationUrl = { catalog_id: notice.catalog_id, url };
+    if (_connectorsViewActive()) _renderConnectorsGrid();
+    return;
+  }
   _connectorAuthorizationUrl = { catalog_id: notice.catalog_id, url };
-  if (_connectorDetailState.id === notice.catalog_id) {
-    _renderConnectorDetail();
+  if (_connectorPopupState && _connectorPopupState.id === notice.catalog_id) {
+    _renderConnectorPopup();
     return;
   }
-  if (_connectorsViewActive() && _connectorDetailProfile(notice.catalog_id)) {
-    _openConnectorDetail({ id: notice.catalog_id }, _instanceById(notice.catalog_id), null);
+  if (_connectorsViewActive() && _connectorHasPopup(notice.catalog_id)) {
+    _openConnectorPopup(_connectorPopupEntry(notice.catalog_id), _instanceById(notice.catalog_id));
     return;
   }
-  if (typeof uiToast === 'function') uiToast(t('connectors.tencent.auth_url.toast'), { variant: 'warning' });
+  if (typeof uiToast === 'function') uiToast(t('connectors.popup.auth_url.toast'), { variant: 'warning' });
+}
+
+async function _copyConnectorSetupCommand(entry) {
+  const text = _connectorSetupText(entry);
+  if (!text || !text.install) return;
+  try {
+    if (typeof navigator === 'undefined' || !navigator.clipboard
+      || typeof navigator.clipboard.writeText !== 'function') {
+      throw new Error('clipboard unavailable');
+    }
+    await navigator.clipboard.writeText(text.install);
+    if (typeof uiToast === 'function') uiToast(t('connectors.setup.copied'), { variant: 'success' });
+  } catch (err) {
+    _connectorsLog.warn('setup command copy failed', { error: (err && err.message) || String(err) });
+    uiAlert(t('connectors.setup.copy_failed'));
+  }
+}
+
+/** Open the provider's console/docs for this connector. Goes through `auth.openExternal` so the
+ *  https-only validation and the OS handler stay in one place. */
+async function _openConnectorSetupDocs(entry) {
+  const text = _connectorSetupText(entry);
+  if (!text || !text.docsUrl) return;
+  try {
+    const res = await window.cogseed.invoke('auth.openExternal', { url: text.docsUrl });
+    if (res && res.ok === false) throw new Error(res.error || 'open failed');
+  } catch (err) {
+    _connectorsLog.warn('setup docs open failed', { error: (err && err.message) || String(err) });
+    uiAlert(t('connectors.setup.open_failed'));
+  }
 }
 
 async function _copyConnectorAuthorizationUrl(entry) {
@@ -1404,21 +1418,364 @@ async function _copyConnectorAuthorizationUrl(entry) {
       throw new Error('clipboard unavailable');
     }
     await navigator.clipboard.writeText(notice.url);
-    if (typeof uiToast === 'function') uiToast(t('connectors.tencent.auth_url.copied'), { variant: 'success' });
+    if (typeof uiToast === 'function') uiToast(t('connectors.popup.auth_url.copied'), { variant: 'success' });
   } catch (err) {
     _connectorsLog.warn('authorization url copy failed', { error: (err && err.message) || String(err) });
-    uiAlert(t('connectors.tencent.auth_url.copy_failed'));
+    uiAlert(t('connectors.popup.auth_url.copy_failed'));
+  }
+}
+
+// UI owns credentials. Never persist them in renderer state or forward them to a conversation.
+function _openEmailConnectDialog(entry) {
+  const enterprise = entry.id === 'email-enterprise';
+  const helpUrls = {
+    'email-qq': 'https://wx.mail.qq.com/list/readtemplate?name=app_intro.html#/agreement/authorizationCode',
+    'email-163': 'https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac2a5feb28b66796d3b',
+  };
+  const hint = () => {
+    const url = helpUrls[entry.id];
+    if (!url) return escapeHtml(t('connectors.email.hint'));
+    const key = 'connectors.email.' + entry.id;
+    const guide = `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t(key + '.guide'))}</a>`;
+    return escapeHtml(t(key + '.hint')).replace('{guide}', () => guide);
+  };
+  const installed = _connectorsState.instances.find(row => row.id === entry.id);
+  const saved = installed && installed.email_settings || {};
+  let savedPasswordAvailable = saved.has_saved_password === true;
+  let canReusePassword = savedPasswordAvailable;
+  let security = saved.security || 'tls';
+  const inputIds = ['email-address', 'email-password'].concat(enterprise ? ['email-host', 'email-port', 'email-username'] : []);
+  let busy = false;
+  let closed = false;
+  const form = () => uiForm({ columns: enterprise ? 2 : 1, ariaLabel: t('connectors.email.title'), fields: [
+    { wide: true, html: uiField({ id: 'email-address', label: t('connectors.email.address'), required: true,
+      control: { kind: 'input', type: 'email', attrs: { type: 'email', autocomplete: 'username', maxlength: 254 } } }) },
+    { wide: true, html: uiField({ id: 'email-password', label: t(entry.id === 'email-enterprise' ? 'connectors.email.password' : 'connectors.email.auth_code'), required: !canReusePassword,
+      optionalLabel: t('connectors.email.credential_saved'),
+      hint: saved.has_saved_password ? t(canReusePassword ? 'connectors.email.credential_saved_hint' : 'connectors.email.credential_reenter_hint') : undefined,
+      control: { kind: 'input', type: 'password', placeholder: canReusePassword ? '••••••••' : '',
+        attrs: { type: 'password', autocomplete: 'new-password', maxlength: 2048 } } }) },
+    ...(enterprise ? [
+      { wide: true, html: uiField({ id: 'email-host', label: t('connectors.email.host'), required: true,
+        control: { kind: 'input', placeholder: 'imap.example.com', attrs: { autocomplete: 'off', maxlength: 253 } } }) },
+      { html: uiField({ id: 'email-security', label: t('connectors.email.security'), required: true,
+        control: { kind: 'select', value: security, options: [
+          { value: 'tls', label: 'SSL/TLS' }, { value: 'starttls', label: 'STARTTLS' },
+        ] } }) },
+      { html: uiField({ id: 'email-port', label: t('connectors.email.port'), required: true,
+        control: { kind: 'input', type: 'number', attrs: { min: 1, max: 65535, step: 1 } } }) },
+      { wide: true, html: uiField({ id: 'email-username', label: t('connectors.email.username'),
+        control: { kind: 'input', placeholder: t('connectors.email.username_hint'), attrs: { autocomplete: 'off', maxlength: 254 } } }) },
+      { wide: true, html: `<p class="ui-field__hint">${escapeHtml(t('connectors.email.server_hint'))}</p>` },
+    ] : []),
+    { wide: true, html: `<p class="ui-field__hint" data-email-hint>${hint()}</p>` },
+  ] });
+  const ownerKey = _connectorRuntimeKey(entry.id);
+  const labels = () => ({ title: t('connectors.email.title') + ' · ' + t('connectors.email.' + entry.id),
+    closeLabel: t('common.close'), submitLabel: t('connectors.email.submit'), busyLabel: t('connectors.email.connecting') });
+  const modal = uiFormModal({ ...labels(), bodyHtml: form(), initialFocus: '#email-address', onSubmit: submit,
+    submitAttrs: { 'data-email-submit': 'true' }, feedbackAttrs: { 'data-email-feedback': 'true' } });
+  const field = id => modal.dialog.querySelector('#' + id);
+  function syncSavedPasswordState() {
+    const address = field('email-address').value.trim();
+    canReusePassword = savedPasswordAvailable && address === saved.address && (!enterprise || (
+      field('email-host').value.trim().toLowerCase() === saved.host
+      && Number(field('email-port').value) === saved.port
+      && security === saved.security
+      && (field('email-username').value.trim() || address) === saved.username
+    ));
+    const password = field('email-password');
+    // A fixed visual mask is a placeholder, never a credential or a clue to its length.
+    password.setAttribute('placeholder', canReusePassword ? '••••••••' : '');
+    password.setAttribute('aria-required', String(!canReusePassword));
+    if (canReusePassword) password.removeAttribute('required');
+    else password.setAttribute('required', '');
+    const wrapper = password.closest('.ui-field');
+    wrapper.querySelector('.ui-field__requirement').textContent = t(canReusePassword ? 'connectors.email.credential_saved' : 'common.required');
+    const note = wrapper.querySelector('.ui-field__hint');
+    if (note) note.textContent = t(canReusePassword ? 'connectors.email.credential_saved_hint' : 'connectors.email.credential_reenter_hint');
+  }
+  async function refreshAndReturnFocus() {
+    if (!_connectorsViewActive() || _connectorPopupState || ownerKey !== _connectorRuntimeKey(entry.id)) return;
+    await loadConnectors();
+    if (!_connectorsViewActive() || _connectorPopupState || ownerKey !== _connectorRuntimeKey(entry.id)) return;
+    const card = document.querySelector(`.connector-card[data-id="${entry.id}"]`);
+    const trigger = card && (card.querySelector('[data-act="connect"]') || card.querySelector('[data-act="use-connector"]'));
+    if (trigger) trigger.focus();
+  }
+  function renderLabels() {
+    if (closed) return;
+    const values = inputIds.map(id => field(id).value);
+    if (enterprise) field('email-security')._uiSelectApi?.close();
+    modal.update({ ...labels(), bodyHtml: form() });
+    inputIds.forEach((id, index) => { field(id).value = values[index]; });
+    bind();
+  }
+  function setBusy() { modal.setBusy(busy); }
+  async function submit(event) {
+    event.preventDefault();
+    if (busy || closed) return;
+    syncSavedPasswordState();
+    const address = field('email-address').value.trim();
+    let password = field('email-password').value;
+    if (!address || (!password && !canReusePassword)) return;
+    const settings = enterprise ? { host: field('email-host').value.trim(), port: Number(field('email-port').value),
+      security, username: field('email-username').value.trim() } : undefined;
+    if (enterprise && (!settings.host || !Number.isInteger(settings.port) || settings.port < 1 || settings.port > 65535)) {
+      modal.setFeedback(t('connectors.email.email_invalid_server'));
+      return;
+    }
+    modal.setFeedback('');
+    busy = true;
+    _connectorsState.connecting.add(entry.id);
+    setBusy();
+    try {
+      const response = password
+        ? await window.cogseed.invoke('connectors.connect_email', { catalog_id: entry.id, address, password, ...(settings ? { settings } : {}) })
+        : await window.cogseed.invoke('connectors.refresh', { id: entry.id });
+      password = '';
+      field('email-password').value = '';
+      const status = response && response.instance && response.instance.status;
+      if (response && response.ok && status && status.kind === 'connected') {
+        modal.close(true, 'connected');
+        uiToast(t('connectors.email.success'), { variant: 'success' });
+      } else if (!closed) {
+        savedPasswordAvailable = false;
+        syncSavedPasswordState();
+        busy = false;
+        setBusy();
+        field('email-password').focus();
+        modal.setFeedback(_formatConnectorStatusError((status && status.message) || (response && response.error) || 'email_connection_failed'));
+      }
+    } catch (_) {
+      password = '';
+      if (!closed) {
+        savedPasswordAvailable = false;
+        syncSavedPasswordState();
+        field('email-password').value = '';
+        busy = false;
+        setBusy();
+        field('email-password').focus();
+        modal.setFeedback(t('connectors.email.email_connection_failed'));
+      }
+    } finally {
+      busy = false;
+      _connectorsState.connecting.delete(entry.id);
+      if (closed) await refreshAndReturnFocus();
+    }
+  }
+  function bind() {
+    if (enterprise) hydrateUiFormSelects(modal.dialog, { 'email-security': value => {
+      if (busy) return;
+      const oldDefault = security === 'tls' ? '993' : '143';
+      security = value;
+      if (field('email-port').value === oldDefault) field('email-port').value = security === 'tls' ? '993' : '143';
+      syncSavedPasswordState();
+    } });
+    inputIds.filter(id => id !== 'email-password').forEach(id => field(id).addEventListener('input', syncSavedPasswordState));
+    syncSavedPasswordState();
+    setBusy();
+  }
+  field('email-address').value = saved.address || '';
+  if (enterprise) {
+    field('email-host').value = saved.host || '';
+    field('email-port').value = String(saved.port || (security === 'tls' ? 993 : 143));
+    field('email-username').value = saved.username || '';
+  }
+  bind();
+  window.addEventListener('i18n-change', renderLabels);
+  modal.then(async () => {
+    closed = true;
+    if (enterprise) field('email-security')._uiSelectApi?.close();
+    field('email-password').value = '';
+    window.removeEventListener('i18n-change', renderLabels);
+    if (!busy) await refreshAndReturnFocus();
+  });
+  return modal;
+}
+
+/** Connect an `interactive_token` connector whose credential only the user can supply (the `paste`
+ *  variant, e.g. Tencent Docs, where the provider issues a token in its own console).
+ *
+ *  Deliberately separate from `_runConnect`'s normal path: `local_cli` and `browser_poll` both start
+ *  work in main and finish asynchronously, while this one cannot even begin until the user has
+ *  pasted something — so there is nothing to hand off and the outcome is known when the IPC returns.
+ *
+ *  The dialog stays in the app: short numbered steps, a button that opens the provider page only when
+ *  the user asks for it (never on its own — a browser window popping up before the user has read
+ *  anything was the friction this replaced), and the token field. Failures are shown inline so the
+ *  user can correct the paste without redoing the flow. */
+function _runInteractiveTokenConnect(entry) {
+  let setup = _connectorSetupText(entry) || { steps: [], docsUrl: '', docsLabel: '', note: '' };
+  const name = entry.display_name || entry.id;
+  const fieldId = 'connector-token';
+  let busy = false;
+  let closed = false;
+  const ownerKey = _connectorRuntimeKey(entry.id);
+  const body = () => {
+    const steps = setup.steps.length
+      ? `<ol class="connectors-detail-setup-steps">${setup.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
+      : `<p>${escapeHtml(t('connectors.interactive_token.prompt'))}</p>`;
+    const open = setup.docsUrl
+      ? `<div>${_connectorUiButton({
+          label: setup.docsLabel,
+          role: 'secondary',
+          iconEnd: 'external',
+          attrs: { 'data-token-open': 'true' },
+        })}</div>`
+      : '';
+    const form = uiForm({
+      ariaLabel: t('connectors.interactive_token.title', { name }),
+      fields: [
+        { wide: true, html: `<div class="connector-token-guidance">${steps}${open}</div>` },
+        { wide: true, html: uiField({ id: fieldId, label: t('connectors.interactive_token.field'), required: true, showRequirement: false,
+          hint: setup.note || undefined,
+          control: { kind: 'input', type: 'password', placeholder: t('connectors.interactive_token.placeholder'),
+            attrs: { type: 'password', autocomplete: 'off', spellcheck: 'false', maxlength: 4096 } } }) },
+      ],
+    });
+    return form;
+  };
+  const labels = () => ({ title: t('connectors.interactive_token.title', { name }), closeLabel: t('common.close'),
+    submitLabel: t('connectors.action.connect'), busyLabel: t('connectors.interactive_token.connecting') });
+  const modal = uiFormModal({
+    ...labels(),
+    size: 'md',
+    bodyHtml: body(),
+    initialFocus: '[data-token-open], #' + fieldId, onSubmit: submit,
+    submitAttrs: { 'data-token-submit': 'true' }, feedbackAttrs: { 'data-token-feedback': 'true' },
+  });
+  modal.dialog.classList.add('connector-token-dialog');
+  const input = () => modal.dialog.querySelector('#' + fieldId);
+  const setFeedback = message => modal.setFeedback(message);
+  const setBusy = value => { busy = value; modal.setBusy(value); };
+  async function openPage() {
+    try {
+      const res = await window.cogseed.invoke('auth.openExternal', { url: setup.docsUrl });
+      if (res && res.ok === false) throw new Error(res.error || 'open failed');
+    } catch (err) {
+      _connectorsLog.warn('token page open failed', { error: (err && err.message) || String(err) });
+      if (!closed) setFeedback(t('connectors.setup.open_failed'));
+    }
+  }
+  async function submit(event) {
+    event.preventDefault();
+    if (busy || closed) return;
+    const credential = String(input().value || '').trim();
+    if (!credential) { input().focus(); return; }
+    const payload = _connectorTrackPayload(entry, null);
+    const startedAt = performance.now();
+    _connectorsTrackClick('connector_connect', payload);
+    setFeedback('');
+    setBusy(true);
+    _connectorsState.connecting.add(entry.id);
+    _renderConnectorsGrid();
+    let connected = false;
+    let failure = null;
+    try {
+      const res = await window.cogseed.invoke('connectors.connect_interactive_token', { catalog_id: entry.id, credential });
+      const status = res && res.status;
+      if (res && res.ok && status && status.kind === 'connected') connected = true;
+      else failure = res && res.ok === false
+        ? res
+        : { code: 'mcp_connect_failed', error: (status && status.message) || t('connectors.errors.connect_failed') };
+    } catch (err) {
+      failure = err || {};
+    } finally {
+      _connectorsState.connecting.delete(entry.id);
+      _renderConnectorsGrid();
+    }
+    if (connected) {
+      _connectorsTrackEvent('connector_connect_result', { ...payload, result: 'success', duration_ms: Math.round(performance.now() - startedAt) });
+      if (!closed) modal.close(true, 'connected');
+      uiToast(t('connectors.interactive_token.success', { name }), { variant: 'success' });
+    } else if (!closed) {
+      // The pasted value stays in the field: a near-miss (wrong block, stray whitespace) is easier
+      // to fix by re-copying than by retyping, and the dialog is the only place the user sees why.
+      setBusy(false);
+      if (!_reportConnectOutcome(payload, startedAt, failure)) setFeedback(_formatConnectError(failure));
+      input().focus();
+    }
+    if (_connectorsViewActive()) loadConnectors();
+  }
+  function bind() {
+    const open = modal.dialog.querySelector('[data-token-open]');
+    if (open) open.addEventListener('click', openPage);
+  }
+  function renderLabels() {
+    if (closed) return;
+    const value = input().value;
+    setup = _connectorSetupText(entry) || { steps: [], docsUrl: '', docsLabel: '', note: '' };
+    modal.update({ ...labels(), bodyHtml: body() });
+    input().value = value;
+    bind();
+    setBusy(busy);
+  }
+  bind();
+  window.addEventListener('i18n-change', renderLabels);
+  modal.then(async () => {
+    closed = true;
+    input().value = '';
+    window.removeEventListener('i18n-change', renderLabels);
+    // A failed attempt refreshes the card grid, so uiModal's original trigger may be detached.
+    if (!_connectorsViewActive() || _connectorPopupState || ownerKey !== _connectorRuntimeKey(entry.id)) return;
+    await loadConnectors();
+    if (!_connectorsViewActive() || _connectorPopupState || ownerKey !== _connectorRuntimeKey(entry.id)) return;
+    const card = document.querySelector(`.connector-card[data-id="${entry.id}"]`);
+    (card?.querySelector('[data-act="connect"]') || card?.querySelector('[data-act="use-connector"]'))?.focus();
+  });
+  return modal;
+}
+
+async function _prepareConnectorAndConnect(entry) {
+  const key = _connectorRuntimeKey(entry.id);
+  if (_connectorRuntimePreparing.has(key)) return;
+  _connectorRuntimeErrors.delete(key);
+  _connectorRuntimePreparing.set(key, { phase: 'downloading' });
+  _renderConnectorsGrid();
+  let ready = false;
+  try {
+    const res = await window.cogseed.invoke('connectors.prepare_runtime', { catalog_id: entry.id });
+    if (!res || !res.ok || !res.ready) throw res || {};
+    ready = true;
+  } catch (err) {
+    const code = String(err && (err.code || err.error || err.message) || '');
+    const message = t(code.includes('connector_runtime_cancelled') ? 'connectors.runtime.cancelled' : code.includes('connector_runtime_integrity_failed') ? 'connectors.runtime.integrity_failed' : 'connectors.runtime.failed');
+    _connectorRuntimeErrors.set(key, message);
+  } finally {
+    _connectorRuntimePreparing.delete(key);
+  }
+  // Account changes must not authorize the newly active account on completion of an old request.
+  if (key !== _connectorRuntimeKey(entry.id)) return;
+  await loadConnectors();
+  _renderConnectorsGrid();
+  if (ready) {
+    const refreshed = _connectorsState.catalog.find(e => e.id === entry.id);
+    if (refreshed && !_isConnectorVisibleDisabled(refreshed) && key === _connectorRuntimeKey(entry.id)) await _runConnect(refreshed);
   }
 }
 
 async function _runConnect(entry) {
+  if (_connectorRuntimeProgress(entry)) return;
+  if (_isConnectorCliMissing(entry) && entry.runtime_installable) return _prepareConnectorAndConnect(entry);
+  if (entry.id === 'tencent-survey' && _surveyAuthorizing) return;
+  if (entry.auth_mode === 'credentials') return _openEmailConnectDialog(entry);
   if (_isConnectorVisibleDisabled(entry)) {
     _showConnectorUnavailableToast(entry);
     return;
   }
+  // `interactive_token` splits by how the credential is obtained. `paste` needs the user first (and
+  // is handled here); `browser_poll` authorizes itself in main, so it falls through to the normal
+  // long-running start below and needs no prompt.
+  const interactiveAuth = entry.interactive_auth;
+  if (entry.auth_mode === 'interactive_token' && interactiveAuth && interactiveAuth.kind === 'paste') {
+    return _runInteractiveTokenConnect(entry);
+  }
   const payload = _connectorTrackPayload(entry, null);
   const startedAt = performance.now();
   _connectorsTrackClick('connector_connect', payload);
+  if (entry.id === 'tencent-survey') _surveyAuthorizing = true;
+  let accepted = false;
   // Show a spinner only while main validates and accepts the launch. The renderer must not hold
   // the card in a ten-minute "connecting" state while the user is in an external browser.
   _connectorsState.connecting.add(entry.id);
@@ -1426,7 +1783,8 @@ async function _runConnect(entry) {
   try {
     const res = await window.cogseed.invoke('connectors.start_oauth', { catalog_id: entry.id });
     if (res && res.ok && res.started && typeof res.attempt_id === 'string' && res.attempt_id) {
-      _pendingConnectAttempts.set(res.attempt_id, { payload, startedAt });
+      accepted = true;
+      _pendingConnectAttempts.set(res.attempt_id, { payload, startedAt, ownerKey: _connectorRuntimeKey(entry.id) });
     } else if (res && !res.ok) {
       _handleConnectFailure(payload, startedAt, res);
     } else {
@@ -1435,6 +1793,7 @@ async function _runConnect(entry) {
   } catch (err) {
     _handleConnectFailure(payload, startedAt, err);
   } finally {
+    if (entry.id === 'tencent-survey' && !accepted) _surveyAuthorizing = false;
     _connectorsState.connecting.delete(entry.id);
     _renderConnectorsGrid();
   }
@@ -1442,6 +1801,10 @@ async function _runConnect(entry) {
 
 function _handleOAuthConnectResult(info) {
   if (!info || typeof info.attempt_id !== 'string' || typeof info.catalog_id !== 'string') return;
+  if (info.catalog_id === 'tencent-survey') _surveyAuthorizing = false;
+  if (_connectorAuthorizationUrl && _connectorAuthorizationUrl.catalog_id === info.catalog_id) {
+    _connectorAuthorizationUrl = null;
+  }
   const pending = _pendingConnectAttempts.get(info.attempt_id) || null;
   if (pending) _pendingConnectAttempts.delete(info.attempt_id);
   const entry = _connectorsState.catalog.find((item) => item && item.id === info.catalog_id) || { id: info.catalog_id };
@@ -1554,9 +1917,10 @@ function _parseEnvLines(text) {
 // and the warning line states that plainly. Submission funnels into the
 // single validated IPC route `connectors.add_custom`.
 function _openAddCustomDialog() {
-  const overlay = document.createElement('div');
-  overlay.className = 'ui-modal-overlay';
-  const formHtml = uiForm({
+  let kind = 'streamable-http';
+  let busy = false;
+  let closed = false;
+  const formHtml = () => uiForm({
     ariaLabel: t('connectors.custom.title'),
     fields: [
       {
@@ -1576,7 +1940,7 @@ function _openAddCustomDialog() {
           required: true,
           control: {
             kind: 'select',
-            value: 'streamable-http',
+            value: kind,
             options: [
               { value: 'streamable-http', label: t('connectors.custom.kind_http') },
               { value: 'stdio', label: t('connectors.custom.kind_stdio') },
@@ -1639,64 +2003,47 @@ function _openAddCustomDialog() {
         </div>`,
       },
     ],
-    actions: [
-      { label: t('common.cancel'), role: 'secondary', attrs: { 'data-act': 'cancel' } },
-      { label: t('connectors.custom.submit'), role: 'primary', icon: 'plug', attrs: { 'data-act': 'ok' } },
-    ],
   });
-  overlay.innerHTML = `
-    <section class="ui-modal connector-custom-dialog" role="dialog" aria-modal="true" aria-labelledby="connector-custom-title">
-      <header class="ui-modal__header">
-        <div class="ui-modal__heading">
-          <h2 class="ui-modal__title" id="connector-custom-title">${escapeHtml(t('connectors.custom.title'))}</h2>
-        </div>
-      </header>
-      <div class="ui-modal__body">
-        ${formHtml}
-      </div>
-    </section>
-  `;
-  document.body.appendChild(overlay);
-
-  const f = (name) => overlay.querySelector(`[data-f="${name}"]`);
-  const secHttp = overlay.querySelector('[data-sec="http"]');
-  const secStdio = overlay.querySelector('[data-sec="stdio"]');
-  const syncKindSections = (value) => {
-    const stdio = value === 'stdio';
-    secHttp.hidden = stdio;
-    secStdio.hidden = !stdio;
-  };
-  const kindHost = overlay.querySelector('#connector-custom-kind');
-  let kindSelect = null;
-  if (typeof hydrateUiFormSelects === 'function') {
-    hydrateUiFormSelects(overlay, { 'connector-custom-kind': syncKindSections });
-    kindSelect = kindHost && kindHost._uiSelectApi;
+  const labels = () => ({ title: t('connectors.custom.title'), closeLabel: t('common.close'),
+    submitLabel: t('connectors.custom.submit'), busyLabel: t('connectors.action.connecting'), cancelLabel: t('common.cancel') });
+  const modal = uiFormModal({ ...labels(), bodyHtml: formHtml(), initialFocus: '[data-f="name"]',
+    submitIcon: 'plug', submitAttrs: { 'data-act': 'ok' }, onSubmit: submit });
+  const f = name => modal.dialog.querySelector(`[data-f="${name}"]`);
+  const kindHost = () => modal.dialog.querySelector('#connector-custom-kind');
+  function syncKindSections(value) {
+    kind = value;
+    for (const section of modal.dialog.querySelectorAll('[data-sec]')) {
+      const inactive = section.getAttribute('data-sec') !== (kind === 'stdio' ? 'stdio' : 'http');
+      section.hidden = inactive;
+      section.closest('.ui-form__item').hidden = inactive;
+      // Inactive required fields must not block native form submission.
+      section.querySelectorAll('input, textarea').forEach(control => { control.disabled = inactive || busy; });
+    }
   }
-  const readKind = () => (kindSelect && typeof kindSelect.getValue === 'function'
-    ? kindSelect.getValue()
-    : 'streamable-http');
-  syncKindSections(readKind());
-  const form = overlay.querySelector('form');
-  if (form) form.addEventListener('submit', (event) => event.preventDefault());
-
-  // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
-  const dialog = overlay.querySelector('[role="dialog"]');
-  const controller = typeof uiModalController === 'function'
-    ? uiModalController({ overlay, dialog, initialFocus: '[data-f="name"]', onClose: () => overlay.remove() })
-    : null;
-  const close = () => {
-    if (controller) controller.close('action');
-    else overlay.remove();
-  };
-  overlay.querySelector('[data-act="cancel"]').addEventListener('click', close);
-
-  const okBtn = overlay.querySelector('[data-act="ok"]');
-  okBtn.addEventListener('click', async () => {
-    const kind = readKind();
+  function bind() {
+    hydrateUiFormSelects(modal.dialog, { 'connector-custom-kind': value => {
+      if (!busy) syncKindSections(value);
+    } });
+    syncKindSections(kind);
+    modal.setBusy(busy);
+  }
+  function renderLabels() {
+    if (closed) return;
+    const names = ['name', 'url', 'headers', 'command', 'args', 'env'];
+    const values = names.map(name => f(name).value);
+    kindHost()._uiSelectApi?.close();
+    modal.setBusy(false);
+    modal.update({ ...labels(), bodyHtml: formHtml() });
+    names.forEach((name, index) => { f(name).value = values[index]; });
+    bind();
+  }
+  async function submit(event) {
+    event.preventDefault();
+    if (closed || busy) return;
     let transport;
     if (kind === 'stdio') {
       const env = _parseEnvLines(f('env').value);
-      if (env === null) { uiAlert(t('connectors.custom.bad_env')); return; }
+      if (env === null) { modal.setFeedback(t('connectors.custom.bad_env')); return; }
       transport = {
         kind: 'stdio',
         command: f('command').value.trim(),
@@ -1705,13 +2052,12 @@ function _openAddCustomDialog() {
       };
     } else {
       const headers = _parseHeaderLines(f('headers').value);
-      if (headers === null) { uiAlert(t('connectors.custom.bad_headers')); return; }
+      if (headers === null) { modal.setFeedback(t('connectors.custom.bad_headers')); return; }
       transport = { kind: 'streamable-http', url: f('url').value.trim(), headers };
     }
-    okBtn.disabled = true;
-    okBtn.classList.add('is-loading');
-    okBtn.setAttribute('aria-busy', 'true');
-    _setConnectorButtonPresentation(okBtn, t('connectors.action.connecting'));
+    modal.setFeedback('');
+    busy = true;
+    modal.setBusy(true);
     const payload = { transport_kind: kind };
     const startedAt = performance.now();
     _connectorsTrackClick('connector_custom_add', payload);
@@ -1726,7 +2072,7 @@ function _openAddCustomDialog() {
           result: 'success',
           duration_ms: Math.round(performance.now() - startedAt),
         });
-        close();
+        modal.close(true, 'connected');
         const st = res.instance.status || {};
         if (st.kind === 'connected') {
           if (typeof uiToast === 'function') uiToast(t('connectors.custom.added'), { variant: 'success' });
@@ -1744,7 +2090,7 @@ function _openAddCustomDialog() {
           result: 'failure',
           duration_ms: Math.round(performance.now() - startedAt),
         });
-        uiAlert((res && res.error) || t('connectors.errors.connect_failed'));
+        if (!closed) modal.setFeedback((res && res.error) || t('connectors.errors.connect_failed'));
       }
     } catch (err) {
       _connectorsTrackEvent('connector_custom_add_result', {
@@ -1756,26 +2102,68 @@ function _openAddCustomDialog() {
         ...payload,
         error_type: _connectorTrackErrorType(err),
       });
-      uiAlert((err && err.message) || t('connectors.errors.connect_failed'));
+      if (!closed) modal.setFeedback((err && err.message) || t('connectors.errors.connect_failed'));
     } finally {
-      okBtn.disabled = false;
-      okBtn.classList.remove('is-loading');
-      okBtn.removeAttribute('aria-busy');
-      _setConnectorButtonPresentation(okBtn, t('connectors.custom.submit'));
+      busy = false;
+      if (!closed) {
+        modal.setBusy(false);
+        syncKindSections(kind);
+      }
     }
+  }
+  bind();
+  window.addEventListener('i18n-change', renderLabels);
+  modal.then(() => {
+    closed = true;
+    kindHost()._uiSelectApi?.close();
+    ['headers', 'env'].forEach(name => { f(name).value = ''; });
+    window.removeEventListener('i18n-change', renderLabels);
   });
-  if (controller) controller.open();
-  else setTimeout(() => f('name').focus(), 0);
+  return modal;
+}
+
+/** Does this message mean the provider rejected the credential itself?
+ *
+ *  Matched on the MCP endpoint's own vocabulary, which is stable across providers: an absent header
+ *  yields `Bearer token required` / `missing_token`, a bad one `invalid_token` /
+ *  `invalid or expired token` / `unauthorized`. */
+function _isCredentialRejection(message) {
+  return /invalid_token|invalid or expired token|missing_token|bearer token required|unauthorized|token.*(expired|revoked|invalid)/i
+    .test(String(message || ''));
 }
 
 function _formatConnectError(errLike) {
   const code = errLike && errLike.code;
   const msg = (errLike && (errLike.error || errLike.message)) || '';
+  if (/^survey_[a-z_]+$/.test(msg)) return t('connectors.survey.' + msg);
+  if (code === 'flow_timeout') return t('connectors.survey.expired');
   if (code === 'connector_unsupported' || /connector_unsupported/i.test(String(msg))) {
     return t('connectors.toast.unsupported');
   }
   if (code === 'missing_required_scopes' || /missing_required_scopes|missing required scopes/i.test(String(msg))) {
     return t('connectors.errors.missing_required_scopes');
+  }
+  // Credential-shape failures. These used to reach the user as engine internals ("Cannot convert
+  // argument to a ByteString because the character at index 58 has a value of 19979"), which named
+  // neither the cause nor the fix, so they are mapped to an instruction instead.
+  if (code === 'credential_not_a_token' || /no token found in the pasted text/i.test(String(msg))) {
+    return t('connectors.errors.credential_not_a_token');
+  }
+  if (code === 'credential_too_long' || /credential is unreasonably long/i.test(String(msg))) {
+    return t('connectors.errors.credential_too_long');
+  }
+  if (code === 'credential_empty' || /credential is empty/i.test(String(msg))) {
+    return t('connectors.errors.credential_empty');
+  }
+  // `invalid_token` / `invalid or expired token` is the MCP endpoint's own wording (verified against
+  // Tencent Docs: an absent header says "Bearer token required", a bad one says "invalid or expired
+  // token"). Either way the user's next move is the same: fetch a fresh token and paste it.
+  if (_isCredentialRejection(String(msg))) return t('connectors.errors.credential_rejected');
+  // The CLI refused outright (organisation policy, revoked app). The vendor's own sentence is the
+  // actionable part, so it is carried through verbatim under a localised lead-in.
+  if (code === 'authorization_blocked' || /authorization is blocked|authorization was refused/i.test(String(msg))) {
+    // Drop the CLI's English "device authorization failed:" lead-in; the localised one replaces it.
+    return t('connectors.errors.authorization_blocked', { reason: String(msg).replace(/^device authorization failed:\s*/i, '') });
   }
   if (/fetch failed|network|timeout|timed out|econnreset|econnrefused|eai_again|enotfound/i.test(String(msg))) {
     return _connectorErrorFallback('network');
@@ -1797,8 +2185,6 @@ window.addEventListener('i18n-change', () => {
   if (_connectorsViewActive()) _renderConnectorsGrid();
 });
 
-// Escape returns from the detail view to the grid (see `_connectorDetailKeydown`).
-document.addEventListener('keydown', _connectorDetailKeydown);
 
 // Refresh the grid when a connector or client-config push arrives. Right now the
 // only consumer is the connectors panel itself, but registering at module load lets future
@@ -1809,6 +2195,26 @@ if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
       if (_connectorsViewActive()) loadConnectors();
     });
     window.cogseed.onPushEvent('connectors:oauth-result', _handleOAuthConnectResult);
+    window.cogseed.onPushEvent('connectors:runtime-progress', (info) => {
+      if (!info || typeof info.catalog_id !== 'string' || typeof info.user_id !== 'string') return;
+      const key = 'cogseed.connectors.renderCache.v' + _CONNECTORS_RENDER_CACHE_VERSION + '.' + info.user_id + ':' + info.catalog_id;
+      if (key !== _connectorRuntimeKey(info.catalog_id) || !_connectorRuntimePreparing.has(key)) return;
+      if (!['downloading', 'verifying', 'installing'].includes(info.phase)) return;
+      _connectorRuntimePreparing.set(key, { phase: info.phase, percent: info.percent });
+      // Updating the label in place preserves keyboard focus on Cancel during downloads.
+      document.querySelectorAll('.connector-card[data-id]').forEach((card) => {
+        if (card.dataset.id !== info.catalog_id) return;
+        const label = _connectorRuntimeLabel(info);
+        _setConnectorButtonPresentation(card.querySelector('[data-act="runtime-progress"]'), label);
+        const status = card.querySelector('.connector-card-runtime');
+        if (status) {
+          const text = status.querySelector('.ui-status-dot__label');
+          if (text) text.textContent = label;
+          status.setAttribute('aria-label', label);
+          status.title = label;
+        }
+      });
+    });
     // `local_cli` connects produce their authorization URL on this machine instead of through a
     // deep link, so the renderer has to be able to show it as a copyable fallback.
     window.cogseed.onPushEvent('connectors:authorization-url', _handleAuthorizationUrl);
