@@ -91,6 +91,7 @@ describe('Run Center run and attempt identity', () => {
 
   it('uses queue and board modes, embeds summary/history, reveals collaboration on demand, and retains stable selection', async () => {
     const panelListeners = new Map<string, (event: any) => void>();
+    const navListeners = new Map<string, (event: any) => void>();
     const documentListeners = new Map<string, (event: any) => void>();
     const calls: Array<{ channel: string; payload: any }> = [];
     const documentState: any = { hidden: false, activeElement: null };
@@ -190,6 +191,24 @@ describe('Run Center run and attempt identity', () => {
     };
     let controls: any[] = [];
 
+    // 视图 tab 在 1.4.0 搬到了 shell 侧栏（`#sidebar-run-center-nav`，specs/008 D5），
+    // renderSidebarNav() 会单独写它。所有 id 都返回同一个 panel 会让这段导航覆盖 panel
+    // 的 innerHTML，因此这里给它一个独立宿主（只需容纳按钮与 focus 查询）。
+    let navHtml = '';
+    let navControls: any[] = [];
+    const navHost: any = {
+      addEventListener: (type: string, listener: (event: any) => void) => navListeners.set(type, listener),
+      querySelector: (selector: string) => navControls.find((control) => matchesSelector(control, selector)) || null,
+      querySelectorAll: (selector: string) => navControls.filter((control) => matchesSelector(control, selector)),
+      contains: (element: unknown) => navControls.includes(element),
+      get firstElementChild() { return navControls[0] || null; },
+      get innerHTML() { return navHtml; },
+      set innerHTML(value: string) {
+        navHtml = value;
+        navControls = Array.from(value.matchAll(/<button\b[^>]*>/g), (match) => makeControl(match[0], 'button'));
+      },
+    };
+
     const detailFor = (task: any, marker = '') => {
       const selected = { ...task, ...(marker ? { worktreeName: marker } : {}) };
       const isTeam = selected.taskId === taskC.taskId;
@@ -253,7 +272,7 @@ describe('Run Center run and attempt identity', () => {
         uiIconHtml: (name: string) => `<i>${name}</i>`, confirm: vi.fn(() => true), localStorage,
       },
       document: Object.assign(documentState, {
-        getElementById: () => panel,
+        getElementById: (id: string) => (id === 'sidebar-run-center-nav' ? navHost : panel),
         addEventListener: (type: string, listener: (event: any) => void) => documentListeners.set(type, listener),
       }),
       t: (key: string, vars?: Record<string, unknown>) => vars ? `${key}:${JSON.stringify(vars)}` : key,
@@ -279,6 +298,11 @@ describe('Run Center run and attempt identity', () => {
     const click = (control: any) => {
       expect(control, 'expected control to exist').toBeTruthy();
       panelListeners.get('click')?.({ target: control });
+    };
+    // 视图 tab 住在 shell 侧栏（navHost），点击也必须走侧栏自己的监听器。
+    const clickNav = (control: any) => {
+      expect(control, 'expected nav control to exist').toBeTruthy();
+      navListeners.get('click')?.({ target: control });
     };
     const queueKey = (key: string) => panel.querySelector(`[data-run-center-queue-run-key="${key}"]`);
     const boardKey = (key: string) => panel.querySelector(`[data-dashboard-board-run-key="${key}"]`);
@@ -427,7 +451,7 @@ describe('Run Center run and attempt identity', () => {
     expect(html).toContain('class="run-center-layout is-runs is-queue-mode"');
     expect(html).not.toContain('class="run-center-layout is-runs is-queue-mode is-detail-open"');
 
-    click(panel.querySelector('[data-run-center-view="collaboration"]'));
+    clickNav(navHost.querySelector('[data-run-center-view="collaboration"]'));
     expect(html).toContain('class="run-center-layout is-collaboration"');
     scrollKey('collaboration-runs').scrollTop = 180;
     scrollKey('collaboration-detail').scrollTop = 215;
@@ -475,7 +499,7 @@ describe('Run Center run and attempt identity', () => {
     // Simulate a new renderer module instance after the user chose Board.
     // `runs` and `tasks` name the destination; neither may override the
     // persisted display mode with Queue.
-    click(panel.querySelector('[data-run-center-view="tasks"]'));
+    clickNav(navHost.querySelector('[data-run-center-view="tasks"]'));
     click(panel.querySelector('[data-run-center-mode="board"]'));
     expect(localStorage.setItem).toHaveBeenLastCalledWith('cogseed.run-center.run-mode.v1', 'board');
     vm.runInContext(read('src/renderer/modules/run-center.js'), context);

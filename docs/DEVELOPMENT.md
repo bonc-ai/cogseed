@@ -87,17 +87,16 @@ English · [简体中文](./DEVELOPMENT.zh-CN.md)
 
 ## Cognition and Recall
 
-CogSeed treats reusable experience as governed state rather than automatically promoting every conversation summary.
+Nightly discovery reads new conversation content, summarizes its context, judges
+future value, and proposes complete cognition and related ontology changes.
+Human confirmation, or the configured automatic-confirmation policy, precedes
+formal saving. Content retains its identity, source, scope, and version.
 
-| Stage | Meaning |
-|---|---|
-| Candidate | A captured lesson or reusable pattern waiting for review. |
-| Confirmed asset | A user-approved capability asset with stable identity, version, scope, and provenance. |
-| Projection | A prepared asset reference made available to a later task. |
-| Transfer evidence | Evidence that the projected asset entered the target execution. |
-| Effectiveness evidence | Feedback or outcome information used to assess whether the reuse helped. |
-
-Assets can be paused, resumed, revised, or rolled back through the established Cognition workflows. Personal Ontology organizes confirmed concepts and relationships without granting agents unrestricted access to private data directories.
+Task-time selection independently checks whether saved content may be used.
+Reading, actual adoption, output checks, and demonstrated effectiveness are
+separate records; saving a rule does not grant tool permissions or prove that it
+has been applied. Related cognition and ontology changes share the established
+storage and version checks.
 
 ## Data and Security
 
@@ -151,6 +150,8 @@ Pinned runtime downloads are described and checksummed in `resources/runtime/man
 
 ## Repository Layout
 
+This checkout contains release source, tests, build tools, product resources and public documentation. Keep design drafts, historical plans, meeting records, private workflow tools and verification reports outside the repository. Downloaded dependencies, runtime binaries and generated output are local build material; prepare them when developing and remove them before handing off a source-only tree. Git metadata stays local and is never part of a source upload.
+
 | Path | Purpose |
 |---|---|
 | `bootstrap.cjs` | Electron entry shim, runtime identity selection, and TypeScript loader registration |
@@ -159,7 +160,7 @@ Pinned runtime downloads are described and checksummed in `resources/runtime/man
 | `src/core-agent/` | Core Agent sessions, providers, tool orchestration, and execution loop |
 | `src/main/features/group_chat/` | Conversation bus, plan execution, worker scheduling, and abort handling |
 | `src/main/features/local_agents/` | Supported CLI detection, adapters, sessions, and centralized runner |
-| `src/main/features/recall/` | Candidate capture, formal assets, projections, proofs, and effectiveness feedback |
+| `src/main/features/recall/` | Nightly discovery, proposals, assets, task-time selection, and usage evidence |
 | `src/main/features/connectors/` | Connector metadata, authorization state, MCP clients, and tool exposure |
 | `resources/builtin/` | Platform agents, skills, and marketplace seed content |
 | `resources/runtime/` | Pinned runtime manifests and platform assets |
@@ -265,10 +266,17 @@ and resource suites reliably.
 
 ### Pull Request Verification
 
-Run `npm run typecheck`, `npm run lint`, `npm test`, and `npm run readme:check`,
-plus the checks relevant to your change. Describe results and unverified
-platforms in the PR. Public CI is governed by its actual repository settings;
-these instructions do not assert that a particular remote check is enabled.
+Follow the verification necessity and cost rules in `AGENTS.md`. Before running
+a check, identify the uncertainty, why existing evidence is insufficient, the
+smallest useful scope, expected cost, and how the result will affect the work.
+Reuse applicable results and prefer focused checks. A full regression needs a
+specific cross-module risk that focused checks cannot resolve; do not repeat
+runs without a relevant change or diagnosis. A user's stop request remains in
+effect until they explicitly authorize verification again.
+
+Describe the checks actually run and unverified platforms in the PR. Public CI
+is governed by its actual repository settings; this guide does not assert that
+a particular remote check is enabled.
 
 Submit external PRs against public `main`. Reviewed patches are imported into
 private development, preserving author attribution and DCO sign-offs. The
@@ -284,6 +292,7 @@ those checks and the internal records they verify are not part of public exports
 ### Development Rules
 
 - Shared Renderer changes must reuse existing APIs; do not raise the raw-control baseline in `test/renderer/shared-ui-adoption-guard.test.ts` to bypass a regression.
+- Shell header actions are rendered by `uiShellHeaderTools()`, wrapped by `uiShellHeaderSlot()`; hydrate the static `[data-shell-header-slot]` placeholders instead of duplicating header markup.
 - Renderer layers use the named `--z-*` tokens; keyboard shortcuts must ignore IME composition.
 - Visible strings use locale files and `t(...)`; dynamic chrome updates on `i18n-change`.
 - File tools enforce path sandboxing, and tool results use the existing result caps.
@@ -294,9 +303,10 @@ those checks and the internal records they verify are not part of public exports
   - Feedback and decisions: `uiEmptyState(...)`, `uiToast(...)`, `uiAlert(...)`, `uiConfirm(...)`, `uiConfirmDanger(...)`, `uiChoice(...)`, and `uiPrompt(...)`.
   - Navigation and shell: `uiSegmentedControl(...)` for compact filters, `uiTabs(...)` plus `hydrateUiTabs(...)` for same-object views, `uiPageHeader(...)`, `uiSidebarTools(...)`, `uiUserMenuTrigger(...)`, and `uiUserMenuPanel(...)`.
   - Data and status: `uiTag(...)` for non-interactive metadata, `uiChip(...)` for interactive filters, `uiBadge(...)` for compact counts or labels, `uiStatusPill(...)` and `uiStatusDot(...)` for state, `uiProgressBar(...)` for measurable work, and `uiSkeleton(...)` for unknown-duration content loading.
-  - Structure: `uiCard(...)` adopts business-owned card content into the shared shell, `uiResourceCard(...)` renders the standard titled resource card, and `uiResourceGrid(...)` owns the responsive card grid.
+  - Structure: `uiCard(...)` adopts business-owned card content into the shared shell, `uiResourceCard(...)` renders the standard titled resource card (`layout: 'compact-row'` accepts one title, one description and a `menu` trigger; no body or footer), and `uiResourceGrid(...)` owns the responsive card grid.
   - Structured data: `uiDataTable(...)` for native tabular data, `uiAccordion(...)` for independent disclosure sections, and `uiTree(...)` plus `hydrateUiTrees(...)` for hierarchical navigation with shared keyboard behavior. Business-specific graph or mind-map canvases remain page-owned.
-  - Overlays: `uiModal(...)` for new decision dialogs and `uiModalController(...)` when adopting existing business-owned dialog DOM; `uiDrawer(...)` for new side panels and `uiDrawerController(...)` when adopting an existing business-owned drawer without changing its data or event wiring.
+  - Menus: `uiDropdownMenu({ trigger, items })` reuses the `showContextMenu(...)` runtime for anchored actions, separators, disabled/loading/destructive states, keyboard navigation and focus return. `items` may be a function for current state; destroy controllers before removing their triggers.
+  - Overlays: `uiModal(...)` for new decision dialogs and `uiModalController(...)` when adopting existing business-owned dialog DOM; `uiFormModal(...)` for async form dialogs with shared submission, busy state and inline errors; `uiDrawer(...)` for new side panels and `uiDrawerController(...)` when adopting an existing business-owned drawer without changing its data or event wiring.
   - Icons: `uiIconHtml(...)` for generated markup and `hydrateUiIcons(...)` for existing DOM placeholders.
 
 - Keep IPC handlers focused on validation and feature delegation.

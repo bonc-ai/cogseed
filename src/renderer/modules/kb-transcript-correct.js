@@ -1745,12 +1745,16 @@
         state.cleanedText = String(result?.result?.text || '');
         // 【specs/013 T030】回执上屏：apply 返回的 receipts（entryRef + decisionId）。
         state.receipts = Array.isArray(result?.receipts) ? result.receipts : [];
-        // 勾选并应用 = 确认：主进程会把被应用的模型建议记进词表（source: meeting_accept，
-        // 只对本文档生效）。这件事必须说出来——否则用户不知道词表被改了。
-        const written = Number(result?.glossaryWrites?.created || 0) + Number(result?.glossaryWrites?.updated || 0);
+        // 勾选并应用 = 确认：同一对词累计确认达到阈值后，宿主自动加入全局词表。
+        // 这件事必须说出来——否则用户不知道词表被改了，也不知道可以撤销。
+        const learned = Array.isArray(result?.learned) ? result.learned : [];
         const dropped = Number(result?.droppedModels || 0);
         setStatus(t('kb.transcriptCorrect.apply_done', '清理版已生成（原文未改动）', {})
-          + (written ? t('kb.transcriptCorrect.apply_wrote_glossary', '；已把 {count} 条模型建议记入词表（仅本文档生效）', { count: written }) : '')
+          + (learned.length && result?.learningSettings?.notify !== false
+            ? t('kb.transcriptCorrect.apply_learned', '；已自动加入词表：{terms}（以后都生效，可在词表设置中撤销）', {
+              terms: learned.map((l) => `${l.wrong} → ${l.correct}`).join('、'),
+            })
+            : '')
           + (dropped ? t('kb.transcriptCorrect.apply_dropped_models', '；{count} 条模型建议因位置对不上被丢弃', { count: dropped }) : ''), '');
       } catch (error) {
         log?.warn('transcript apply failed', { error: error?.message || String(error) });

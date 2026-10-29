@@ -1,0 +1,3 @@
+cases:
+- id: smoke-ui-artifact-workspace
+  kind: manual-smoke

@@ -1,0 +1,29 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.geo.score
+  name: geo-score
+  version: 1.0.0
+  description: 'Compute a GEO (Generative Engine Optimization) score from seo-crawl
+    data: a 5-dimension weighted score (Citability/Structure/Multimodal/Authority&Brand/Technical-access),
+    an entity-resolution status (recognized/partial/unrecognized), and ranked recommendations;
+    reported separatel'
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: python
+    scripts:
+    - scripts/geo_score.py
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

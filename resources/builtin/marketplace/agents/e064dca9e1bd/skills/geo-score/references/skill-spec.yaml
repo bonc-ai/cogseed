@@ -1,0 +1,11 @@
+name: geo-score
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'Compute a GEO (Generative Engine Optimization) score from seo-crawl data:
+  a 5-dimension weighted score (Citability/Structure/Multimodal/Authority&Brand/Technical-access),
+  an entity-resolution status (recognized/partial/unrecognized), and ranked recommendations;
+  reported separatel'
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

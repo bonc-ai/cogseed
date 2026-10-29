@@ -450,3 +450,84 @@ describe('spaces › 兜底遍历护栏（工作目录解析异常防全盘遍�
     }
   });
 });
+
+describe('spaces › 绑定本地项目目录（原地工作区）的产物口径', () => {
+  /** 用户自己的项目目录：必须在数据根之外（否则会被当 CogSeed 自身数据目录拒绝）。 */
+  function makeProjectDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-inplace-'));
+  }
+
+  it('isOutOfSpaceWorkspace：空间内容目录内 false，之外（用户项目）true', async () => {
+    const arts = await import('../../../src/main/features/spaces_artifacts');
+    const paths = await import('../../../src/main/paths');
+    const spaces = await import('../../../src/main/features/spaces');
+    const created = await spaces.createSpace(UID, { name: '判定空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const contentDir = paths.spaceContentDir(UID, sid);
+
+    expect(arts.isOutOfSpaceWorkspace(UID, sid, path.join(contentDir, 'workspace', 'abc'))).toBe(false);
+    expect(arts.isOutOfSpaceWorkspace(UID, sid, contentDir)).toBe(false);
+    const proj = makeProjectDir();
+    try {
+      expect(arts.isOutOfSpaceWorkspace(UID, sid, proj)).toBe(true);
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  it('绑定项目目录后：工作区 = 用户项目；只列登记产物，不把用户自己的文件扫进产物', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const proj = makeProjectDir();
+    try {
+      fs.writeFileSync(path.join(proj, 'mine.md'), 'user file');        // 用户自己的文件
+      fs.writeFileSync(path.join(proj, 'ai-made.md'), 'agent output');  // AI 产出（登记）
+
+      const created = await spaces.createSpace(UID, { name: '原地空间', projectDir: proj });
+      if (!created.ok) throw new Error('create failed');
+      const sid = created.space.space_id;
+      const conv = await chats.createConversation(UID, { title: '原地任务', spaceId: sid });
+
+      // 1) 工作区解析 = 用户项目目录（不复制、不落空间子目录）
+      const { getConversationWorkspacePath } = await import('../../../src/main/features/group_chat/conv_workspace');
+      expect(await getConversationWorkspacePath(UID, conv.conversation_id)).toBe(fs.realpathSync(proj));
+
+      // 2) 登记的产物照常出现——哪怕它落在用户自己的项目里
+      const msgFile = path.join(tmpDir, UID, 'cloud', 'chats', `${conv.conversation_id}.jsonl`);
+      fs.appendFileSync(msgFile, JSON.stringify({
+        id: 'm1', from: 'commander', ts: new Date().toISOString(),
+        text: 'x', produced: [path.join(proj, 'ai-made.md')],
+      }) + '\n');
+
+      const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, sid);
+      const names = artifacts.map((a) => a.name);
+      expect(names).toContain('ai-made.md');
+      // 3) 未登记的用户文件不被兜底遍历收进来（原地模式不扫用户仓库）
+      expect(names).not.toContain('mine.md');
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  it('绑定目录消失（外接盘未挂载）→ 回退空间工作区，会话不会跑在不存在的 cwd 上', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const paths = await import('../../../src/main/paths');
+    const proj = makeProjectDir();
+
+    const created = await spaces.createSpace(UID, { name: '消失空间', projectDir: proj });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(UID, { title: '消失任务', spaceId: sid });
+
+    const { getConversationWorkspacePath } = await import('../../../src/main/features/group_chat/conv_workspace');
+    expect(await getConversationWorkspacePath(UID, conv.conversation_id)).toBe(fs.realpathSync(proj));
+
+    // 绑定目录被删掉（外接盘拔了 / 用户手动删了）
+    fs.rmSync(proj, { recursive: true, force: true });
+    const fallback = await getConversationWorkspacePath(UID, conv.conversation_id);
+    expect(fallback).not.toBe(fs.realpathSync(tmpDir));
+    expect(fallback.startsWith(paths.spaceContentDir(UID, sid))).toBe(true);
+  });
+});

@@ -54,6 +54,9 @@ let _settingsState = {
   ccswitchPreviewSelectedModels: [],
   ccswitchPreviewGeneration: 0,
   ccswitchPreviewBound: false,
+  semantica: null,
+  semanticaDemo: null,
+  semanticaBusy: false,
 };
 
 function _settingsTrackClick() {}
@@ -104,6 +107,8 @@ async function loadSettings(options = {}) {
     _settingsSafeCall('settings task notifications refresh', _settingsRefreshTaskNotifications),
     _settingsSafeCall('settings metacognition refresh', _settingsRefreshMetacognition),
     _settingsSafeCall('settings close-to-tray refresh', _settingsRefreshCloseToTray),
+    _settingsSafeCall('settings a2a refresh', _settingsRefreshA2A),
+    _settingsSafeCall('settings semantica refresh', _settingsRefreshSemantica),
     _settingsSafeCall('settings data root refresh', _settingsRefreshDataRoot),
     _settingsSafeCall('settings commander backend refresh', _settingsRefreshCommanderBackend),
     _settingsSafeCall('settings auth profiles status refresh', _settingsRefreshAuthProfilesStatus),
@@ -128,6 +133,8 @@ async function loadSettings(options = {}) {
   await _settingsSafeCall('settings task notifications render', _settingsRenderTaskNotifications);
   await _settingsSafeCall('settings metacognition render', _settingsRenderMetacognition);
   await _settingsSafeCall('settings close-to-tray render', _settingsRenderCloseToTray);
+  await _settingsSafeCall('settings a2a render', _settingsRenderA2A);
+  await _settingsSafeCall('settings semantica render', _settingsRenderSemantica);
   await _settingsSafeCall('settings data root render', _settingsRenderDataRoot);
   await _settingsSafeCall('settings commander backend render', _settingsRenderCommanderBackend);
   await _settingsSafeCall('settings auth profiles recovery render', _settingsRenderAuthProfilesRecovery);
@@ -142,6 +149,122 @@ async function loadSettings(options = {}) {
   // which only fires on state changes — for a Free user with no transitions the
   // listener never fires after boot, leaving the button bound to whatever its
   // first render captured).
+}
+
+function _settingsSemanticaText(key, fallback) {
+  const translated = t(key);
+  return translated && translated !== key ? translated : fallback;
+}
+
+async function _settingsRefreshSemantica() {
+  const res = await window.cogseed.invoke('semantica.settings.get');
+  _settingsState.semantica = res && res.ok && res.settings ? res.settings : null;
+  _settingsState.semanticaDemo = res && res.ok && res.demo ? res.demo : null;
+}
+
+function _settingsSemanticaStatusLabel(kind) {
+  const labels = {
+    disabled: _settingsSemanticaText('settings.semantica.status.disabled', 'Disabled'),
+    running: _settingsSemanticaText('settings.semantica.status.running', 'Running'),
+  };
+  return labels[kind] || kind || labels.disabled;
+}
+
+function _settingsSemanticaPayload(host) {
+  return {
+    semanticaEnabled: host.querySelector('#settings-semantica-enabled')?.getAttribute('aria-checked') === 'true',
+  };
+}
+
+async function _settingsSaveSemantica(host, patch) {
+  if (_settingsState.semanticaBusy) return;
+  _settingsState.semanticaBusy = true;
+  try {
+    const payload = { ..._settingsSemanticaPayload(host), ...(patch || {}) };
+    const res = await window.cogseed.invoke('semantica.settings.save', payload);
+    if (!res || !res.ok || !res.settings) throw new Error((res && res.error) || 'save failed');
+    _settingsState.semantica = res.settings;
+    _settingsRenderSemantica();
+  } catch (err) {
+    _settingsLog.warn('semantica settings save failed', { error: (err && err.message) || String(err) });
+    await _settingsRefreshSemantica();
+    _settingsRenderSemantica();
+  } finally {
+    _settingsState.semanticaBusy = false;
+  }
+}
+
+async function _settingsRunSemanticaDemo(action) {
+  if (_settingsState.semanticaBusy) return;
+  _settingsState.semanticaBusy = true;
+  const channel = action === 'clear' ? 'semantica.demo.clear' : 'semantica.demo.seed';
+  const status = document.getElementById('settings-semantica-demo-action-status');
+  const button = document.getElementById(action === 'clear'
+    ? 'settings-semantica-demo-clear'
+    : 'settings-semantica-demo-seed');
+  if (button) button.disabled = true;
+  if (status) status.textContent = _settingsSemanticaText('settings.semantica.demo.working', 'Working...');
+  try {
+    const res = await window.cogseed.invoke(channel);
+    if (!res || !res.ok || !res.status) throw new Error((res && res.error) || 'demo action failed');
+    _settingsState.semanticaDemo = res.status;
+    _settingsRenderSemantica();
+    const nextStatus = document.getElementById('settings-semantica-demo-action-status');
+    if (nextStatus) nextStatus.textContent = action === 'clear'
+      ? _settingsSemanticaText('settings.semantica.demo.clear_success', 'Demo assets removed')
+      : _settingsSemanticaText('settings.semantica.demo.seed_success', 'Demo assets ready');
+  } catch (err) {
+    _settingsLog.warn('semantica demo action failed', { action, error: (err && err.message) || String(err) });
+    if (status) status.textContent = _settingsSemanticaText('settings.semantica.demo.failure', 'Operation failed');
+    if (button) button.disabled = false;
+  } finally {
+    _settingsState.semanticaBusy = false;
+  }
+}
+
+function _settingsRenderSemantica() {
+  const host = document.getElementById('settings-semantica-host');
+  if (!host) return;
+  const s = _settingsState.semantica || { semanticaEnabled: false, semanticaStatus: 'disabled' };
+  const demo = _settingsState.semanticaDemo || { ready: false, assetCount: 0, expectedAssetCount: 14 };
+  const semanticaAvailable = !!s.semanticaEnabled;
+  const demoStatus = demo.ready
+    ? _settingsSemanticaText('settings.semantica.demo.ready', 'Ready')
+    : `${demo.assetCount || 0}/${demo.expectedAssetCount || 14}`;
+  host.innerHTML = `
+    <div class="settings-group ui-settings-section settings-semantica-group">
+      <div class="settings-group-head settings-semantica-heading">
+        <div>
+          <div class="settings-group-title">${escapeHtml(_settingsSemanticaText('settings.semantica.title', 'Ability assets and ontology query'))}</div>
+          <div class="settings-group-sub">${escapeHtml(_settingsSemanticaText('settings.semantica.sub', 'Use governed ontology relations to find reusable ability assets.'))}</div>
+        </div>
+        <span class="settings-status">${escapeHtml(_settingsSemanticaStatusLabel(s.semanticaStatus))}</span>
+      </div>
+      <div class="settings-semantica-switch-row">
+        <div><strong>Semantica</strong><span>${escapeHtml(_settingsSemanticaText('settings.semantica.toggle_sub', 'Enable ontology-driven ability asset queries.'))}</span></div>
+        ${uiSwitch({ id: 'settings-semantica-enabled', label: 'Semantica', checked: !!s.semanticaEnabled })}
+      </div>
+      <div class="settings-semantica-demo">
+        <div class="settings-semantica-demo-head">
+          <div>
+            <strong>${escapeHtml(_settingsSemanticaText('settings.semantica.demo.title', 'Acceptance demo assets'))}</strong>
+            <span>${escapeHtml(_settingsSemanticaText('settings.semantica.demo.sub', 'Create 14 governed assets across three scenarios for relation-query and reuse testing.'))}</span>
+          </div>
+          <span class="settings-status">${escapeHtml(demoStatus)}</span>
+        </div>
+        <div class="settings-semantica-actions">
+          ${uiButton({ label: _settingsSemanticaText('settings.semantica.demo.seed', 'Initialize demo assets'), role: 'primary', attrs: { id: 'settings-semantica-demo-seed' }, disabled: !semanticaAvailable || !!demo.ready })}
+          ${uiButton({ label: _settingsSemanticaText('settings.semantica.demo.clear', 'Remove demo assets'), attrs: { id: 'settings-semantica-demo-clear' }, disabled: !semanticaAvailable || !(demo.assetCount > 0) })}
+          <span class="settings-status" id="settings-semantica-demo-action-status"></span>
+        </div>
+      </div>
+    </div>`;
+  const semanticaSwitch = host.querySelector('#settings-semantica-enabled');
+  semanticaSwitch?.addEventListener('click', () => _settingsSaveSemantica(host, {
+    semanticaEnabled: semanticaSwitch.getAttribute('aria-checked') !== 'true',
+  }));
+  host.querySelector('#settings-semantica-demo-seed')?.addEventListener('click', () => _settingsRunSemanticaDemo('seed'));
+  host.querySelector('#settings-semantica-demo-clear')?.addEventListener('click', () => _settingsRunSemanticaDemo('clear'));
 }
 
 // ── Native task notifications ──
@@ -326,11 +449,26 @@ function _settingsRenderLocalExec() {
 async function _settingsRefreshMetacognition() {
   try {
     const res = await window.cogseed.invoke('prefs.getMetacognition');
-    _settingsState.metacognition = (res && res.ok)
-      ? { enabled: !!res.enabled, envForcedOff: !!res.envForcedOff }
-      : { enabled: true, envForcedOff: false };
-  } catch (_) {
+    if (res && res.ok) {
+      _settingsState.metacognition = { enabled: !!res.enabled, envForcedOff: !!res.envForcedOff };
+    } else {
+      // 读回执不带 ok 时与 throw 半边对称：留日志+遥测，UI 形态不变（回默认开）。
+      _settingsState.metacognition = { enabled: true, envForcedOff: false };
+      _settingsLog.warn('getMetacognition rejected', res);
+      _settingsTrackEvent('metacognition_read_result', { result: 'failure' });
+      _settingsTrackError('metacognition_read', {
+        error_type: 'operation',
+        error_message: 'metacognition_read_rejected',
+      });
+    }
+  } catch (err) {
     _settingsState.metacognition = { enabled: true, envForcedOff: false };
+    _settingsLog.warn('getMetacognition failed', err);
+    _settingsTrackEvent('metacognition_read_result', { result: 'failure' });
+    _settingsTrackError('metacognition_read', {
+      error_type: 'operation',
+      error_message: (err && err.message) || 'metacognition_read_failed',
+    });
   }
 }
 
@@ -379,6 +517,60 @@ function _settingsRenderMetacognition() {
 // ── Close to tray (background run) ──
 // Stored at preferences.json::close_to_tray_enabled (per-uid, same file as
 // metacognition_enabled). Main owns the behaviour; this is only the switch.
+
+// ── A2A「Agent 通信」两个开关（FR-33）──────────────────────────────
+// 本机偏好；服务端权威在 consent_records（H-11/H-12），关闭后的拒绝行为由主进程/
+// 服务端执行，这里只负责开关本身。
+async function _settingsRefreshA2A() {
+  try {
+    const res = await window.cogseed.invoke('prefs.getA2A');
+    // 默认关（PRD FR-33）：读不到就按「关」显示，别把没开过说成已开启。
+    _settingsState.a2aDiscoverable = !!(res && res.discoverable === true);
+    _settingsState.a2aQuestions = !!(res && res.assistantQuestions === true);
+  } catch (_) {
+    _settingsState.a2aDiscoverable = false;
+    _settingsState.a2aQuestions = false;
+  }
+}
+
+function _settingsRenderA2A() {
+  const pairs = [
+    ['settings-a2a-discoverable-toggle', 'settings-a2a-discoverable-switch', 'discoverable', 'a2aDiscoverable', 'settings.a2a.discoverable'],
+    ['settings-a2a-questions-toggle', 'settings-a2a-questions-switch', 'assistantQuestions', 'a2aQuestions', 'settings.a2a.questions'],
+  ];
+  for (const [hostId, switchId, key, stateKey, labelKey] of pairs) {
+    const host = document.getElementById(hostId);
+    if (!host || document.getElementById(switchId)) continue;
+    const created = _settingsElementFromSharedMarkup(uiSwitch({
+      id: switchId,
+      label: t(labelKey),
+      checked: _settingsState[stateKey] !== false,
+    }));
+    if (!created) continue;
+    host.appendChild(created);
+    created.addEventListener('click', async () => {
+      const previous = _settingsSwitchIsChecked(created);
+      const next = !previous;
+      _settingsSetSwitchChecked(created, next);
+      created.disabled = true;
+      try {
+        const res = await window.cogseed.invoke('prefs.setA2A', { key, enabled: next });
+        if (res && res.ok) _settingsState[stateKey] = res.enabled !== false;
+        else {
+          // 服务端没接受（例如授权没同步上）时回滚开关并说明原因：开关必须代表真实生效的授权。
+          _settingsSetSwitchChecked(created, previous);
+          _settingsLog.warn('setA2A rejected', res);
+          if (typeof uiToast === 'function') uiToast(t('settings.a2a.sync_failed'), { variant: 'warning' });
+        }
+      } catch (err) {
+        _settingsSetSwitchChecked(created, previous);
+        _settingsLog.warn('setA2A failed', err);
+      } finally {
+        created.disabled = false;
+      }
+    });
+  }
+}
 
 async function _settingsRefreshCloseToTray() {
   try {
@@ -615,7 +807,9 @@ window.addEventListener('i18n-change', () => {
   _settingsRenderSearchSection();
   _settingsRenderImageSection();
   _settingsRenderMetacognition();
+  _settingsRenderA2A();
   _settingsRenderCloseToTray();
+  _settingsRenderA2A();
   _settingsRenderCommanderBackend();
   _settingsRenderCustomProviders();
   _settingsRenderCcswitchStatus();

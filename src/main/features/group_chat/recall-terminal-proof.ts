@@ -1,7 +1,7 @@
 import { readMessages } from './index';
 import { subscribeTaskNotificationTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../task_notification_terminal_source';
 import { handleRecallTaskTerminal } from '../recall/terminal-proof';
-import { listContextProjections } from '../recall/context-projection';
+import { listAllConfirmedProjections } from '../recall/context-projection';
 import type { GroupMessage } from './visibility';
 import { createLogger } from '../../logger';
 
@@ -31,7 +31,7 @@ async function turnProjectionIds(
 ): Promise<string[]> {
   if (!reuseTurnIds?.length) return [];
   try {
-    const projections = await listContextProjections(userId);
+    const projections = await listAllConfirmedProjections(userId);
     const turns = new Set(reuseTurnIds);
     return projections
       .filter((projection) => projection.status === 'confirmed'

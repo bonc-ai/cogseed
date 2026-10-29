@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -9,6 +10,8 @@ afterEach(async () => {
   try {
     await drainMainRuntimeForTest('user-a');
   } finally {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
     else process.env.COGSEED_WORKSPACE_ROOT = previous;
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -23,14 +26,39 @@ async function elevateToTransferVerified(assetId: string) {
 }
 
 async function modules() { const [candidates, assets, refs, projection] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/asset-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection')]); return { candidates, assets, refs, projection }; }
-async function createAsset(spaceId?: string) { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', summary: 'Evidence preservation rule', suggestedType: 'rule', applicableWhen: ['Formal review with traceable evidence'], forbiddenWhen: ['Informal discussion without a review decision'], suggestedScope: 'review,project', ...(spaceId ? { spaceId } : {}), sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
+it('six-node closure: retrieves full asset content and accepts a long ordinary task without losing its final condition', async () => {
+  vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '1');
+  const { candidates, assets, projection } = await modules();
+  const judgment = 'Review evidence carefully. '.repeat(65) + 'Keep the signed decision and rollback evidence together.';
+  const candidate = await createNightlyCandidateFixture('user-a', { judgment, summary: 'Evidence review', value: 'Reusable source review guidance.',
+    suggestedType: 'cognition', suggestedAction: 'create', suggestedScope: 'general', sourceRefs: [],
+    applicableWhen: ['governed review'], forbiddenWhen: ['discarding a signed decision'] });
+  const saved = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await assets.setAbilityAssetMaturity('user-a', saved.asset.id, 'transfer_validated');
+  const unrelated = await createNightlyCandidateFixture('user-a', { judgment: 'Plan mountain routes before climbing.', summary: 'Mountain navigation',
+    value: 'Reusable route guidance.', suggestedType: 'cognition', suggestedScope: 'general', suggestedAction: 'create', sourceRefs: [], applicableWhen: ['mountain journeys'] });
+  const other = await candidates.promoteRecallCandidate('user-a', unrelated.id, { actor: 'user' });
+  await assets.setAbilityAssetMaturity('user-a', other.asset.id, 'transfer_validated');
+  const task = 'Read the supplied context. '.repeat(100) + 'Review the signed decision; preserve rollback evidence.';
+  const embedTexts = vi.fn(async (texts: string[]) => texts.map(text => text.includes('Plan mountain routes') ? [0, 1] : [1, 0]));
+  const result = await projection.createAutomaticContextProjection('user-a', { taskRunId: 'long-task', taskText: task },
+    { embedTexts, assessApplicability: fakeApplicabilityAssessment });
+  expect(result?.assetIds).toEqual([saved.asset.id]);
+  expect(result?.omittedRefs).toContainEqual({ assetId: other.asset.id, reason: 'low_relevance' });
+  const embedded = embedTexts.mock.calls[0][0];
+  expect(embedded[0]).toBe(task);
+  const relevantProfile = embedded.find(text => text.includes('Keep the signed decision and rollback evidence together.'));
+  expect(relevantProfile).toContain('Keep the signed decision and rollback evidence together.');
+  expect(relevantProfile).toContain('discarding a signed decision');
+});
+async function createAsset(spaceId?: string) { const { candidates } = await modules(); const candidate = await createNightlyCandidateFixture('user-a', { judgment: 'Preserve source evidence in reviews.', summary: 'Evidence preservation rule', suggestedType: 'rule', applicableWhen: ['Formal review with traceable evidence'], forbiddenWhen: ['Informal discussion without a review decision'], suggestedScope: 'review,project', ...(spaceId ? { spaceId } : {}), sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
 
   await elevateToTransferVerified(promoted.asset.id);
   return promoted; }
 
 async function createAssetWith(input: { judgment: string; summary: string; scope?: string; sourceId: string; spaceId?: string }) {
   const { candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate('user-a', {
+  const candidate = await createNightlyCandidateFixture('user-a', {
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',
@@ -55,7 +83,7 @@ async function createAutomaticAssetWith(input: {
 }) {
   const { candidates } = await modules();
   const sourceKind = input.sourceKind || 'conversation';
-  const candidate = await candidates.saveRecallCandidate('user-a', {
+  const candidate = await createNightlyCandidateFixture('user-a', {
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',
@@ -75,6 +103,25 @@ async function createAutomaticAssetWith(input: {
   return promoted;
 }
 
+/** 歧义裁决双打：未在任务文本中字面命中的 applicable/forbidden 条件会被判为
+ * 歧义并交模型裁决；单测没有模型，不补双打就 fail-closed 成
+ * semantic_applicability_unresolved、整次自动投影返回 undefined。
+ * decisions 需逐字引用任务与资产内容各恰好一处（解析器的字面证据校验），
+ * 故引用任务与 statement 的收尾片段（夹具的结尾句均只出现一次）。 */
+const fakeApplicabilityAssessment = async (message: string) => {
+  const request = JSON.parse(message) as { currentTask: string;
+    candidates: Array<{ assetId: string; version: string; statement: string }> };
+  const taskQuote = request.currentTask.slice(-60) || request.currentTask;
+  return JSON.stringify({ decisions: request.candidates.map((candidate, index) => ({
+    assetId: candidate.assetId,
+    version: candidate.version,
+    verdict: 'applicable',
+    reason: 'Synthetic fixture adjudication for automatic projection tests.',
+    taskQuote,
+    assetQuote: candidate.statement.slice(-60) || candidate.statement,
+    rank: index,
+  })) });
+};
 const fakeSemanticOptions = {
   embedTexts: async (texts: string[]) => texts.map((text) => {
     const lower = text.toLowerCase();
@@ -82,12 +129,13 @@ const fakeSemanticOptions = {
     if (lower.includes('database')) return [0, 1];
     return [0.2, 0.2];
   }),
+  assessApplicability: fakeApplicabilityAssessment,
 };
 
 describe('Recall context projection scope policy', () => {
   async function promoteScopedAsset(judgment: string, sourceId: string) {
     const { candidates } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment,
       summary: 'Review knowledge fixture',
       suggestedType: 'rule',
@@ -198,15 +246,30 @@ describe('RecallView and ContextProjection', () => {
     const { asset } = await createAsset('workspace-a');
     const { refs, assets, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
-    const otherCandidate = await (await modules()).candidates.saveRecallCandidate('user-a', { judgment: 'Only use archived data with confirmation.', summary: 'Archived data confirmation', suggestedType: 'rule', applicableWhen: ['Archive restoration and audit'], forbiddenWhen: ['Live operational changes'], suggestedScope: 'archive', sourceRefs: [{ kind: 'memory', id: 'mem-b' }] });
+    const otherCandidate = await createNightlyCandidateFixture('user-a', { judgment: 'Only use archived data with confirmation.', summary: 'Archived data confirmation', suggestedType: 'rule', applicableWhen: ['Archive restoration and audit'], forbiddenWhen: ['Live operational changes'], suggestedScope: 'archive', sourceRefs: [{ kind: 'memory', id: 'mem-b' }] });
     const other = await (await modules()).candidates.promoteRecallCandidate('user-a', otherCandidate.id, { actor: 'user' });
     await assets.pauseAbilityAsset('user-a', other.asset.id, { actor: 'user', reason: 'not ready' });
 
     const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed' });
     expect(preview.status).toBe('preview');
     expect(preview.assetIds).toEqual([asset.id]);
-    expect(preview.sourceRefs.map((ref) => ref.id)).toEqual(['exec-a', 'mem-a']);
+    expect(preview.sourceRefs.map((ref) => ref.id)).toEqual(asset.evidenceRefs.map(ref => ref.id));
+    expect(preview.sourceRefs.map((ref) => ref.id)).toEqual(expect.arrayContaining(['exec-a', 'mem-a']));
     expect(preview.omittedRefs).toEqual(expect.arrayContaining([expect.objectContaining({ assetId: other.asset.id, reason: 'asset_paused' })]));
+  });
+
+  it('gives unconfirmed previews a default 7-day expiry and leaves confirmed projections without one', async () => {
+    const { projection } = await modules();
+    const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-preview-default-expiry', purpose: 'review' });
+    expect(preview.status).toBe('preview');
+    expect(preview.expiresAt).toBeDefined();
+    const ttlMs = Date.parse(preview.expiresAt!) - Date.parse(preview.createdAt);
+    expect(ttlMs).toBeGreaterThan(6.9 * 864e5);
+    expect(ttlMs).toBeLessThan(7.1 * 864e5);
+
+    const confirmed = await projection.previewContextProjection('user-a', { taskRunId: 'task-confirmed-no-expiry', purpose: 'review', confirm: true });
+    expect(confirmed.status).toBe('confirmed');
+    expect(confirmed.expiresAt).toBeUndefined();
   });
 
   it('excludes archived, deleted, and purged assets from a projection preview', async () => {
@@ -263,7 +326,7 @@ describe('RecallView and ContextProjection', () => {
     expect(preview.assetIds).not.toContain(scopeMismatch.asset.id);
   });
 
-  it('automatic full-text injection stays OFF by default (2026-09-22 反转)', async () => {
+  it('automatic full-text injection stays OFF by default', async () => {
     const { createAutomaticContextProjection } = await import('../../../../src/main/features/recall/context-projection');
     const users = await import('../../../../src/main/features/users');
     users.activateUser('user-baseline-off');
@@ -280,8 +343,8 @@ describe('RecallView and ContextProjection', () => {
   });
 
   it('creates one confirmed automatic projection from only high-relevance active assets', async () => {
-    // 2026-09-22 起正文自动注入默认关闭；这两条锁定选择机制本身的测试显式
-    // 打开旧行为（COGSEED_RECALL_BASELINE_TOP>0），机制代码保留作回滚通道。
+    // Explicitly enable baseline injection to exercise selection independently
+    // of the default-off configuration.
     vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
     const oauth = await createAutomaticAssetWith({
       judgment: 'Review OAuth callback and token exchange security.',
@@ -566,12 +629,38 @@ describe('RecallView and ContextProjection', () => {
       expect.objectContaining({ id: first.id }),
     ]);
   });
+
+  it('treats an unparseable expiresAt as malformed and skips the projection fail-closed', async () => {
+    const { projection } = await modules();
+    const recallStore = await import('../../../../src/main/features/recall/store');
+    // 损坏/手改的过期串会让 Date.parse 得 NaN，使所有过期比较恒 false——
+    // confirmed 投影将永不过期、每轮继续注入。读侧必须与其他损坏字段一样 fail-closed。
+    await recallStore.writeRecallJsonRecord('user-a', 'projections', 'proj-bad-expiry', {
+      schemaVersion: 2, ownerId: 'user-a', id: 'proj-bad-expiry', taskRunId: 'task-bad-expiry',
+      purpose: 'review', authorization: 'user_confirmed', assetIds: [], sourceRefs: [], omittedRefs: [],
+      status: 'confirmed', confirmedAt: '2026-09-01T00:00:00.000Z', decidedAt: '2026-09-01T00:00:00.000Z',
+      expiresAt: 'not-a-date', createdAt: '2026-09-01T00:00:00.000Z',
+    });
+    await recallStore.writeRecallJsonRecord('user-a', 'projections', 'proj-good-expiry', {
+      schemaVersion: 2, ownerId: 'user-a', id: 'proj-good-expiry', taskRunId: 'task-good-expiry',
+      purpose: 'review', authorization: 'user_confirmed', assetIds: [], sourceRefs: [], omittedRefs: [],
+      status: 'preview', expiresAt: '2000-01-01T00:00:00.000Z', createdAt: '2026-09-02T00:00:00.000Z',
+    });
+
+    await expect(projection.listContextProjections('user-a', { includeExpired: true })).resolves.toEqual([
+      expect.objectContaining({ id: 'proj-good-expiry', status: 'expired' }),
+    ]);
+    await expect(projection.readContextProjection('user-a', 'proj-bad-expiry'))
+      .rejects.toThrow(/malformed context projection expiry/i);
+    await expect(projection.readContextProjection('user-a', 'proj-good-expiry'))
+      .resolves.toMatchObject({ id: 'proj-good-expiry', status: 'preview' });
+  });
 });
 
 describe('Recall projection auto-confirm and semantic Top-N', () => {
   async function promoteAsset(judgment: string, sourceId: string, scope: string) {
     const { candidates } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment,
       summary: 'Fixture lesson',
       suggestedType: 'rule',
@@ -627,6 +716,338 @@ describe('Recall projection auto-confirm and semantic Top-N', () => {
     expect(preview.omittedRefs.some((ref) => ref.assetId === third.id)).toBe(true);
   });
 
+  it('keeps relationship expansion isolated when Semantica is disabled', async () => {
+    const { projection, assets } = await modules();
+    const entry = (await promoteAsset('周末买菜清单：先按一周菜单整理食材。', 'exec-sem-off-entry', 'review')).asset;
+    const related = (await promoteAsset('家庭一周晚餐计划：先确定每天的菜品。', 'exec-sem-off-related', 'review')).asset;
+    await assets.updateAbilityAsset('user-a', entry.id, {
+      relations: [{ kind: 'depends_on', assetId: related.id }],
+      reason: 'Semantica toggle isolation fixture',
+      actor: 'user',
+    });
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '0');
+    vi.stubEnv('COGSEED_JEV_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_ENDPOINT', 'https://jev.invalid/v1/systemone');
+    vi.stubEnv('COGSEED_JEV_API_KEY', 'test-only-key');
+    const fetchSpy = vi.fn(async () => { throw new Error('Jev must not run while Semantica is disabled'); });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-semantica-off-relation',
+      purpose: 'review',
+      taskText: '周末买菜',
+    }, {
+      minScore: 0.3,
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.includes('周末买菜') || text.includes('买菜清单') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.assetIds).toEqual([entry.id]);
+    expect(preview.assetMatches).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: related.id, entryAssetId: entry.id }),
+    ]));
+    expect(preview.semanticaTrace).toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('expands governed relations from one semantic entry when Semantica is enabled', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    const { projection, assets } = await modules();
+    const entry = (await promoteAsset('家庭一周晚餐计划：确定每天的菜品。', 'exec-sem-on-entry', 'review')).asset;
+    const shopping = (await promoteAsset('周末买菜清单：按晚餐计划整理食材。', 'exec-sem-on-shopping', 'review')).asset;
+    const prep = (await promoteAsset('工作日晚餐备餐：按买菜清单提前准备。', 'exec-sem-on-prep', 'review')).asset;
+    const unrelated = (await promoteAsset('旅行路线规划：安排周末交通。', 'exec-sem-on-unrelated', 'review')).asset;
+    for (const asset of [entry, shopping, prep, unrelated]) {
+      await assets.updateAbilityAsset('user-a', asset.id, {
+        relations: [],
+        reason: 'Clear automatic family relations for Semantica fixture',
+        actor: 'user',
+      });
+    }
+    await assets.updateAbilityAsset('user-a', shopping.id, {
+      relations: [{ kind: 'depends_on', assetId: entry.id }],
+      reason: 'Semantica expansion fixture',
+      actor: 'user',
+    });
+    await assets.updateAbilityAsset('user-a', prep.id, {
+      relations: [{ kind: 'depends_on', assetId: shopping.id }],
+      reason: 'Semantica expansion fixture',
+      actor: 'user',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-semantica-on-relation',
+      purpose: 'review',
+      taskText: '家庭一周晚餐计划',
+    }, {
+      minScore: 0.3,
+      embedTexts: async (texts: string[]) => texts.map((text) => {
+        if (text.includes('家庭一周晚餐计划')) return [1, 0];
+        if (text.includes('旅行路线')) return [0, 1];
+        return [0.1, 1];
+      }),
+    });
+
+    expect(preview.assetIds).toEqual(expect.arrayContaining([entry.id, shopping.id, prep.id]));
+    expect(preview.assetIds).not.toContain(unrelated.id);
+    expect(preview.assetMatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetId: shopping.id,
+        matchMethod: 'ontology',
+        entryAssetId: entry.id,
+        distance: 1,
+        relationKind: 'depends_on',
+        evidencePath: [expect.objectContaining({ fromAssetId: shopping.id, toAssetId: entry.id, kind: 'depends_on' })],
+      }),
+      expect.objectContaining({
+        assetId: prep.id,
+        matchMethod: 'ontology',
+        entryAssetId: entry.id,
+        distance: 2,
+      }),
+    ]));
+  });
+
+  it('ignores legacy Jev environment settings and keeps local bounded relation expansion', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_GATES', 'intent');
+    vi.stubEnv('COGSEED_JEV_ENDPOINT', 'https://jev.invalid/v1/systemone');
+    vi.stubEnv('COGSEED_JEV_API_KEY', 'test-only-key');
+    vi.stubEnv('COGSEED_JEV_MAX_RETRIES', '0');
+    const fetchSpy = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      expect(body.state).toContain('关系=depends_on');
+      const criteria = body.questions.decision.criteria as Record<string, string>;
+      const directPlan = Object.entries(criteria).find(([, summary]) => (
+        summary.includes('关系=depends_on')
+        && summary.includes('方向=incoming')
+        && summary.includes('最大跳数=1')
+      ));
+      expect(directPlan).toBeDefined();
+      return new Response(JSON.stringify({
+        model: 'jev-test',
+        answers: {
+          decision: {
+            type: 'choice', choice: directPlan![0], confidence: 0.9,
+            probabilities: { [directPlan![0]]: 0.9, none: 0.1 },
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const { projection, assets } = await modules();
+    const entry = (await promoteAsset('家庭一周晚餐计划：确定每天的菜品。', 'exec-intent-entry', 'review')).asset;
+    const shopping = (await promoteAsset('周末买菜清单：按晚餐计划整理食材。', 'exec-intent-shopping', 'review')).asset;
+    const prep = (await promoteAsset('工作日晚餐备餐：按买菜清单提前准备。', 'exec-intent-prep', 'review')).asset;
+    for (const asset of [entry, shopping, prep]) {
+      await assets.updateAbilityAsset('user-a', asset.id, { relations: [], reason: 'intent fixture reset', actor: 'user' });
+    }
+    await assets.updateAbilityAsset('user-a', shopping.id, {
+      relations: [{ kind: 'depends_on', assetId: entry.id }], reason: 'intent fixture', actor: 'user',
+    });
+    await assets.updateAbilityAsset('user-a', prep.id, {
+      relations: [{ kind: 'depends_on', assetId: shopping.id }], reason: 'intent fixture', actor: 'user',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-jev-intent-one-hop', purpose: 'review', taskText: '家庭一周晚餐计划',
+    }, {
+      minScore: 0.3,
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.includes('家庭一周晚餐计划') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(preview.assetIds).toContain(shopping.id);
+    expect(preview.assetIds).toContain(prep.id);
+    expect(preview.assetMatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: shopping.id, distance: 1, relationKind: 'depends_on' }),
+    ]));
+  });
+
+  it('persists a content-free local deterministic trace even when legacy Jev settings remain', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_GATES', 'intent');
+    vi.stubEnv('COGSEED_JEV_ENDPOINT', 'https://jev.invalid/v1/systemone');
+    vi.stubEnv('COGSEED_JEV_API_KEY', 'test-only-key-that-must-not-be-recorded');
+    vi.stubEnv('COGSEED_JEV_MAX_RETRIES', '0');
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      const criteria = body.questions.decision.criteria as Record<string, string>;
+      const semanticPlan = Object.entries(criteria).find(([, summary]) => summary.includes('路由=semantic'));
+      expect(semanticPlan).toBeDefined();
+      return new Response(JSON.stringify({
+        model: 'jev-test',
+        answers: {
+          decision: {
+            type: 'choice', choice: semanticPlan![0], confidence: 0.91,
+            probabilities: { [semanticPlan![0]]: 0.91, none: 0.09 },
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    const { projection, assets } = await modules();
+    const entry = (await promoteAsset('家庭一周晚餐计划入口。', 'exec-semantic-intent-entry', 'review')).asset;
+    const shopping = (await promoteAsset('周末买菜清单依赖晚餐计划。', 'exec-semantic-intent-shopping', 'review')).asset;
+    await assets.updateAbilityAsset('user-a', entry.id, { relations: [], reason: 'semantic route fixture reset', actor: 'user' });
+    await assets.updateAbilityAsset('user-a', shopping.id, {
+      relations: [{ kind: 'depends_on', assetId: entry.id }], reason: 'semantic route fixture', actor: 'user',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-jev-intent-semantic', purpose: 'review', taskText: '家庭一周晚餐计划敏感查询标记',
+    }, {
+      minScore: 0.3,
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.includes('家庭一周晚餐计划') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.assetIds).toContain(shopping.id);
+    expect(preview.semanticaTrace).toMatchObject({
+      enabled: true,
+      entryAssetIds: [entry.id],
+      deterministicExpansionCount: 1,
+      finalExpansionCount: 1,
+      intentGate: { status: 'selected', selectedRoute: 'hybrid', direction: 'both', maxHops: 2 },
+      candidateGate: { status: 'selected', inputCount: 2, outputCount: 2 },
+    });
+    const read = await projection.readContextProjection('user-a', preview.id);
+    expect(read.semanticaTrace).toEqual(preview.semanticaTrace);
+    const traceJson = JSON.stringify(read.semanticaTrace);
+    expect(traceJson).not.toContain('家庭一周晚餐计划敏感查询标记');
+    expect(traceJson).not.toContain('test-only-key-that-must-not-be-recorded');
+  });
+
+  it('does not let a legacy Jev none response affect local deterministic expansion', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_GATES', 'intent');
+    vi.stubEnv('COGSEED_JEV_ENDPOINT', 'https://jev.invalid/v1/systemone');
+    vi.stubEnv('COGSEED_JEV_API_KEY', 'test-only-key');
+    vi.stubEnv('COGSEED_JEV_MAX_RETRIES', '0');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      model: 'jev-test',
+      answers: { decision: { type: 'choice', choice: 'none', confidence: 0.8 } },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    const { projection, assets } = await modules();
+    const entry = (await promoteAsset('周末短途出行方案。', 'exec-none-entry', 'review')).asset;
+    const budget = (await promoteAsset('交通预算依赖短途出行方案。', 'exec-none-budget', 'review')).asset;
+    await assets.updateAbilityAsset('user-a', entry.id, { relations: [], reason: 'none fixture reset', actor: 'user' });
+    await assets.updateAbilityAsset('user-a', budget.id, {
+      relations: [{ kind: 'depends_on', assetId: entry.id }], reason: 'none fixture', actor: 'user',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-jev-intent-none', purpose: 'review', taskText: '周末短途出行方案',
+    }, {
+      minScore: 0.3,
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.includes('周末短途出行方案') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.assetIds).toContain(budget.id);
+    expect(preview.semanticaTrace).toMatchObject({
+      deterministicExpansionCount: 1,
+      finalExpansionCount: 1,
+      intentGate: { status: 'selected', selectedRoute: 'hybrid' },
+    });
+  });
+
+  it('does not contact a legacy Jev endpoint or mark local expansion degraded', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_ENABLED', '1');
+    vi.stubEnv('COGSEED_JEV_GATES', 'intent');
+    vi.stubEnv('COGSEED_JEV_ENDPOINT', 'https://jev.invalid/v1/systemone');
+    vi.stubEnv('COGSEED_JEV_API_KEY', 'test-only-key');
+    vi.stubEnv('COGSEED_JEV_TIMEOUT_MS', '1');
+    vi.stubEnv('COGSEED_JEV_MAX_RETRIES', '0');
+    const fetchSpy = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const { projection, assets } = await modules();
+    const entry = (await promoteAsset('家庭旅行行程入口。', 'exec-timeout-entry', 'review')).asset;
+    const booking = (await promoteAsset('住宿预订依赖旅行行程。', 'exec-timeout-booking', 'review')).asset;
+    await assets.updateAbilityAsset('user-a', entry.id, { relations: [], reason: 'timeout fixture reset', actor: 'user' });
+    await assets.updateAbilityAsset('user-a', booking.id, {
+      relations: [{ kind: 'depends_on', assetId: entry.id }], reason: 'timeout fixture', actor: 'user',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-jev-intent-timeout', purpose: 'review', taskText: '家庭旅行行程',
+    }, {
+      minScore: 0.3,
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.includes('家庭旅行行程') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.assetIds).toContain(booking.id);
+    expect(preview.selectionDegraded).toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(preview.semanticaTrace).toMatchObject({
+      deterministicExpansionCount: 1,
+      finalExpansionCount: 1,
+      intentGate: { status: 'selected', selectedRoute: 'hybrid' },
+    });
+  });
+
+  it('does not restore a governance-rejected asset through Semantica relations', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    const { projection, assets } = await modules();
+    const entry = (await promoteAsset('家庭晚餐安排入口。', 'exec-sem-governed-entry', 'review')).asset;
+    const paused = (await promoteAsset('被暂停的备餐经验。', 'exec-sem-governed-paused', 'review')).asset;
+    await assets.updateAbilityAsset('user-a', entry.id, {
+      relations: [{ kind: 'depends_on', assetId: paused.id }],
+      reason: 'Semantica governance fixture',
+      actor: 'user',
+    });
+    await assets.pauseAbilityAsset('user-a', paused.id, { actor: 'user', reason: 'governance fixture' });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-semantica-governance',
+      purpose: 'review',
+      taskText: '家庭晚餐安排',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.includes('家庭晚餐安排') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.assetIds).toEqual([entry.id]);
+    expect(preview.assetIds).not.toContain(paused.id);
+    expect(preview.omittedRefs).toContainEqual({ assetId: paused.id, reason: 'asset_paused' });
+  });
+
+  it('falls back to ordinary semantic results when the entry has no graph coverage', async () => {
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
+    const { projection } = await modules();
+    const first = (await promoteAsset('OAuth 回调状态校验。', 'exec-sem-fallback-first', 'review')).asset;
+    const second = (await promoteAsset('OAuth 令牌刷新流程。', 'exec-sem-fallback-second', 'review')).asset;
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-semantica-no-graph',
+      purpose: 'review',
+      taskText: 'OAuth 登录流程检查',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.toLocaleLowerCase().includes('oauth') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.assetIds).toEqual(expect.arrayContaining([first.id, second.id]));
+    expect(preview.assetMatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: first.id, matchMethod: 'semantic' }),
+      expect.objectContaining({ assetId: second.id, matchMethod: 'semantic' }),
+    ]));
+  });
+
   it('does not force-fill Top-N from a weak pool (relative-significance gate)', async () => {
     const { projection } = await modules();
     const { asset: strong } = await createAssetWith({ judgment: 'OAuth callback state check.', summary: 'State check rule', sourceId: 'exec-rel-1' });
@@ -675,7 +1096,7 @@ describe('Recall projection auto-confirm and semantic Top-N', () => {
 describe('Recall retrieval quality regression', () => {
   async function promoteAsset(judgment: string, sourceId: string, scope: string) {
     const { candidates } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment,
       summary: 'Fixture lesson',
       suggestedType: 'rule',
@@ -798,7 +1219,7 @@ describe('Recall ontology-assisted hybrid retrieval', () => {
     sourceId: string;
   }) {
     const { candidates } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: input.judgment,
       summary: `${input.field}守则`,
       suggestedType: 'rule',
@@ -852,7 +1273,7 @@ describe('Recall ontology-assisted hybrid retrieval', () => {
       judgment: '验证 OAuth 回调目标。',
       sourceId: 'exec-dual',
     });
-    const semanticOnly = await (await modules()).candidates.saveRecallCandidate('user-a', {
+    const semanticOnly = await createNightlyCandidateFixture('user-a', {
       judgment: '验证 OAuth token exchange。',
       summary: 'OAuth token exchange',
       suggestedType: 'rule',
@@ -884,12 +1305,14 @@ describe('Recall ontology-assisted hybrid retrieval', () => {
 describe('Recall retrieval refinement', () => {
   async function promoteAsset(judgment: string, sourceId: string, scope: string, type: 'rule' | 'template' | 'skill_method' | 'personal' = 'rule') {
     const { candidates } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment,
       summary: 'Fixture lesson',
       suggestedType: type,
       ...(type === 'rule' ? {
-        applicableWhen: ['OAuth review and callback validation'],
+        // applicableWhen 现已进入语义匹配文本（#98 设计：内容维度参与相似度），
+        // 措辞不能撞上 type/scope 标签词（rule/review），否则标签断言自相矛盾。
+        applicableWhen: ['OAuth callback and consent validation'],
         forbiddenWhen: ['Unrelated casual conversation'],
       } : {}),
       suggestedScope: scope,
@@ -929,7 +1352,7 @@ describe('Recall retrieval refinement', () => {
     const { candidates, projection } = await modules();
     const groups = await import('../../../../src/main/features/personal_ontology_groups');
     const group = await groups.createGroup('user-a', '代码审查规范');
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'OAuth callback review must check state.',
       summary: 'Callback review checklist',
       suggestedType: 'rule',
@@ -1040,7 +1463,7 @@ describe('committed projection knowledge boundary', () => {
 
   it('includes a space-attributed asset in its own workspace without an explicit workspace reference', async () => {
     const { candidates, projection, refs } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Space-owned OAuth lesson injects in its own space.',
       summary: 'Lesson scoped by space',
       suggestedType: 'rule',
@@ -1066,7 +1489,7 @@ describe('committed projection knowledge boundary', () => {
 
   it('includes assets from OTHER workspaces in a space conversation (资产池全局共享)', async () => {
     const { candidates, projection, refs } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Workspace-B lesson is part of the shared pool for workspace-a.',
       summary: 'Shared pool lesson',
       suggestedType: 'rule',
@@ -1093,7 +1516,7 @@ describe('committed projection knowledge boundary', () => {
   it('real-world shape: scope=space / scope=general assets pass the purpose gate in previews', async () => {
     const { candidates, projection, refs } = await modules();
     // 真实资产形态：suggestedScope='space'（发布公告五段式、信息架构四层法）
-    const spaceAsset = await candidates.saveRecallCandidate('user-a', {
+    const spaceAsset = await createNightlyCandidateFixture('user-a', {
       judgment: '发布类公告应包含：背景、变更点、影响范围、生效时间、联系方式五段。',
       summary: '公告五段式规范',
       suggestedType: 'rule',
@@ -1105,7 +1528,7 @@ describe('committed projection knowledge boundary', () => {
     await elevateToTransferVerified(spacePromoted.asset.id);
     await refs.removeWorkspaceAssetReference('user-a', `war-${spacePromoted.asset.id}-workspace-a`);
     // 真实资产形态：scope='general'（KSTAR gap 资产，无空间归属）
-    const generalAsset = await candidates.saveRecallCandidate('user-a', {
+    const generalAsset = await createNightlyCandidateFixture('user-a', {
       judgment: '编号/短码缺少项目上下文时应先向用户确认所指目标。',
       summary: '待修正经验：短码缺上下文',
       suggestedType: 'rule',
@@ -1135,7 +1558,7 @@ describe('committed projection knowledge boundary', () => {
 
   it('a disabled workspace reference still blocks a space-attributed asset', async () => {
     const { candidates, projection, refs } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Disabled lesson stays out.',
       summary: 'Lesson that stays out',
       suggestedType: 'rule',
@@ -1159,7 +1582,7 @@ describe('committed projection knowledge boundary', () => {
   });
 });
 
-describe('模型自选投影的撤销（2026-09-18）', () => {
+describe('模型自选投影的撤销', () => {
   it('撤销幂等；不存在/非模型自选各给明确拒绝', async () => {
     const projection = await import('../../../../src/main/features/recall/context-projection');
     const created = await projection.previewContextProjection('user-a', {
@@ -1189,13 +1612,13 @@ describe('模型自选投影的撤销（2026-09-18）', () => {
       .rejects.toThrow('not model-selected');
   });
 
-describe('撤销在时间线里可见（2026-09-18）', () => {
+describe('撤销在时间线里可见', () => {
   it('已撤销的模型自选投影产生"已撤销"事件，未撤销的仍是"已带入"', async () => {
     const projection = await import('../../../../src/main/features/recall/context-projection');
     const timeline = await import('../../../../src/main/features/recall/timeline-service');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
 
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: '撤销可见性用例：这条资产要被挂上一次再撤销。',
       summary: 'revoke-visibility',
       suggestedType: 'rule',
@@ -1220,7 +1643,7 @@ describe('撤销在时间线里可见（2026-09-18）', () => {
   });
 });
 
-describe('用户 @ 钉住投影的撤销（2026-09-25 验收修复 US-601 AC3 / US-602 AC3）', () => {
+describe('用户 @ 钉住投影的撤销', () => {
   async function pinAsset(purposeTaskRun: string) {
     const { projection } = await modules();
     const promoted = await createAsset();
@@ -1239,7 +1662,7 @@ describe('用户 @ 钉住投影的撤销（2026-09-25 验收修复 US-601 AC3 / 
     const { projection, pinned } = await pinAsset('user-attach-pin-a');
     expect(pinned.status).toBe('confirmed');
 
-    // 引用回执必须可撤销（US-601 AC3）：否则"我挂上去的就下不来"。
+    // 用户钉住的引用回执必须支持撤销。
     const first = await projection.revokeUserPinnedProjection('user-a', pinned.id);
     expect(first.status).toBe('revoked');
     // 幂等：重复撤销返回同一终态，不报错、不产生第二份状态。
@@ -1283,14 +1706,14 @@ describe('用户 @ 钉住投影的撤销（2026-09-25 验收修复 US-601 AC3 / 
   });
 });
 
-describe('注入体量对比（2026-09-18，可用高效）：模型自选的增量必须远小于整块上限', () => {  it('带一条会话投影时的提示词块，比不带多出的是"这几条资产的正文"，且整块仍 ≤ 14000', async () => {
+describe('注入体量对比：模型自选的增量必须远小于整块上限', () => {  it('带一条会话投影时的提示词块，比不带多出的是"这几条资产的正文"，且整块仍 ≤ 14000', async () => {
     const promptInjection = await import('../../../../src/main/features/recall/prompt-injection');
     const projection = await import('../../../../src/main/features/recall/context-projection');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
 
     // 造一条有正文体积的资产
     const body = '性能类提问必须用真实日志做分层归因：先拆链路、再定位瓶颈、最后只给一个可优化项。'.repeat(8);
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: `${body}（体积对比用例）`,
       summary: 'volume',
       suggestedType: 'rule',
@@ -1381,4 +1804,23 @@ describe('model-selected projection accounting', () => {
     const revokedCard = await buildProjectionCard('user-a', repeated.id);
     expect(revokedCard.status).toBe('revoked');
   });
+});
+
+it('records an all-unassessed semantic result without creating an empty projection or calling a model', async () => {
+  vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '1');
+  const { candidates, assets, projection } = await modules();
+  const candidate = await createNightlyCandidateFixture('user-a', { judgment: 'Review the signed evidence before deciding.',
+    summary: 'Synthetic evidence review', value: 'Reusable decision method.', suggestedType: 'cognition',
+    contentCategory: 'method', suggestedAction: 'create', suggestedScope: 'general', sourceRefs: [], applicableWhen: ['governed reviews'] });
+  const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await assets.setAbilityAssetMaturity('user-a', asset.id, 'transfer_validated');
+  const assessApplicability = vi.fn();
+  const result = await projection.createAutomaticContextProjection('user-a', {
+    taskRunId: 'unassessed-task', taskText: 'Review the signed evidence. ' + 'Context. '.repeat(11_000),
+  }, { embedTexts: async texts => texts.map(() => [1, 0]), assessApplicability });
+  expect(result).toBeUndefined(); expect(assessApplicability).not.toHaveBeenCalled();
+  const { listInjectionReceipts } = await import('../../../../src/main/features/recall/injection-receipt');
+  expect(await listInjectionReceipts('user-a', 'unassessed-task')).toEqual([
+    expect.objectContaining({ assetId: asset.id, assetVersion: asset.version, status: 'omitted', reason: 'prompt_budget' }),
+  ]);
 });

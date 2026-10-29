@@ -103,6 +103,28 @@ async function drain(opts: Record<string, unknown>): Promise<{ events: DrainedEv
 }
 
 describe('streamChatWithModel — phase-aware idle watchdog (Phase 1)', () => {
+  it('cancels a routing request before its first event even when the provider ignores abort', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const controller = new AbortController();
+    h.makeStream = () => (async function* () {
+      await new Promise(() => {});
+    })();
+    const run = drain({ sessionId: 'kstar-routing-cold-stop', abortSignal: controller.signal });
+    await waitUntil(() => h.runStreamCalls === 1);
+    controller.abort();
+    const { events } = await run;
+
+    expect(events).toContainEqual(expect.objectContaining({ type: 'error', aborted: true }));
+    expect(events.at(-1)?.type).toBe('done');
+    expect(events.some((event) => event.type === 'delta' || event.type === 'final')).toBe(false);
+    expect(client.hasActiveSession('kstar-routing-cold-stop')).toBe(false);
+    expect(h.lastBuildRunnerParams?.providerFirstEventTimeoutMs).toBe(180_000);
+
+    h.makeStream = () => (async function* () { yield { type: 'text_delta', text: 'next request' }; })();
+    const next = await drain({ sessionId: 'kstar-routing-cold-stop' });
+    expect(next.events).toContainEqual(expect.objectContaining({ type: 'final', text: 'next request' }));
+  });
+
   it('uses the exact visible source text for teaching intent instead of augmented model input', async () => {
     h.makeStream = () => (async function* () {
       yield { type: 'text_delta', text: 'done' };

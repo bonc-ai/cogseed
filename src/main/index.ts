@@ -25,6 +25,7 @@
  */
 
 import * as path from 'node:path';
+import { killAllPromotedRuns } from './features/local_agents/background_run_registry';
 import { pathToFileURL } from 'node:url';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -72,10 +73,9 @@ if (IS_PACKAGED_STT_SMOKE) {
   app.commandLine.appendSwitch('use-file-for-fake-audio-capture', PACKAGED_STT_SMOKE_WAV);
 }
 const MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
-// ── Hub 内容检查节奏（specs/010 FR-034 `[FROZEN]`；PRD doc-v0.5 §7.3 第 212 行）──
-// 契约原文：「启动后 60 秒、在线期间每 6 小时、用户打开目录页时……失败 30 分钟后重试一次，
-// 再失败等下一周期。检查不打断用户，不弹阻断式窗口。」
-// ⚠️ 基线实测为 12 小时且无周期定时器、无失败重试——**未满足该冻结要求**，此处改为契约值。
+// Check Hub content 60 seconds after startup, every 6 hours while online,
+// and when opening the catalog. Retry a failed check once after 30 minutes,
+// then wait for the next cycle. Checks must not interrupt the user.
 const MARKETPLACE_SERVER_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** 启动后首次检查的延迟。 */
 const MARKETPLACE_STARTUP_CHECK_DELAY_MS = 60 * 1000;
@@ -84,7 +84,7 @@ const MARKETPLACE_CHECK_RETRY_DELAY_MS = 30 * 60 * 1000;
 /**
  * 版本副本回收的启动期延迟。
  *
- * 刻意排在检查之后：`specs/010` FR-052 要求**不在检查周期或使用高峰内触发**，
+ * 刻意排在检查之后，避免与检查或使用高峰重叠；
  * 回收是纯磁盘清理，没有任何时效性。
  */
 const MARKETPLACE_VERSION_GC_DELAY_MS = 5 * 60 * 1000;
@@ -159,6 +159,7 @@ import {
   registerImmediate,
   runBootPhases,
 } from './util/boot_init';
+import { primeLoginShellPathDirs } from './util/login-shell-env';
 import { getBootDeviceProfile } from './util/boot-device-profile';
 import * as updaterClient from './features/updater/client';
 import { evaluateBootGuard, markBootHealthy } from './features/updater/boot_guard';
@@ -181,6 +182,12 @@ initLogger();
 const log = createLogger('cogseed');
 const marketplaceBootLog = createLogger('marketplace_boot');
 
+// Make SIGTERM / SIGINT / SIGHUP a first-class quit path instead of relying on
+// Electron's internal signal handling: 信号 → app.quit() → 有界 before-quit →
+// watchdog。没有这段时，一次挂住的 flush 就能让进程只能被 kill -9（CLIENT-1）。
+import { QUIT_PHASE_TIMEOUT_MS, QUIT_WATCHDOG_MS, createQuitWatchdog, installQuitSignalHandlers, withDeadline } from './util/quit-guard';
+installQuitSignalHandlers({ log, onSignal: () => app.quit() });
+
 // Replay any pin / migration warnings buffered by install-data-root
 // (which runs before logger.ts can be imported) into the daily log.
 import { flushEarlyDiagnostics } from './install-data-root.cjs';
@@ -198,6 +205,11 @@ installSdkTimeoutPatch();
 // response-header failfast preempt CogSeed' own turn-level abort/watchdog policy.
 import { installSseHeaderTimeoutPatch } from './model/core-agent/sse-header-timeout-patch';
 installSseHeaderTimeoutPatch();
+
+// Install the stable fetch router before diagnostics/provider imports capture
+// fetch. Electron's system-proxy route becomes available after app-ready.
+import { installEnvProxyDispatcher, installSystemProxyDispatcher } from './util/proxy-dispatcher';
+void installEnvProxyDispatcher();
 
 // Provider-fetch diagnostics: dump the real undici cause chain for model
 // endpoint failures.
@@ -234,12 +246,32 @@ import * as clientConfigFeature from './features/client_config';
 import * as connectorsFeature from './features/connectors';
 import * as messagingFeature from './features/messaging';
 import * as taskNotifications from './features/task_notifications';
+import * as contactsNotifications from './features/contacts/notifications';
 import { shouldHideOnClose, startBackgroundRun, type BackgroundRun, type TrayMenuItemSpec } from './features/background_run';
 import * as cogseedBackend from './features/cogseed_backend';
-import { recoverRecallCaptures, startRecallCaptureOrchestrator } from './features/recall/capture-service';
-import { startAutoCloseRecovery, startGroupKstarClosure } from './features/kstar/task-closure';
+import { recoverRecallCaptures, startNightlyCaptureSweepLoop, startRecallCaptureOrchestrator } from './features/recall/capture-service';
+// Load KSTAR closure orchestration dynamically so its absence does not block
+// main-process startup or cognition workflows.
+type KstarClosureStoppers = Array<() => void>;
+let kstarClosureStoppers: KstarClosureStoppers = [];
+async function startKstarClosureOrchestrators(): Promise<KstarClosureStoppers> {
+  try {
+    const { startAutoCloseRecovery, startGroupKstarClosure } = await import('./features/kstar/task-closure');
+    return [startGroupKstarClosure(), startAutoCloseRecovery()];
+  } catch (error) {
+    log.warn('kstar closure orchestrators unavailable', { error: (error as Error).message });
+    return [];
+  }
+}
 import { startGroupChatRecallTerminalProofs } from './features/group_chat/recall-terminal-proof';
 import { startTaskAutoArchiveOrchestrator } from './features/kb_task_auto_archive';
+import { subscribeTaskTerminals } from './features/group_chat/bus';
+import {
+  startMeetingPrecipitationOrchestrator,
+  startMeetingTerminalSweep,
+  rememberPrecipitationFailure,
+  startProducedOutputsPrecipitation,
+} from './features/meeting_kb_precipitate';
 import * as notificationPermissions from './features/notification_permissions';
 import {
   consumeColdLaunchConnectorCallback,
@@ -645,7 +677,7 @@ function registerIpc(): void {
     // dev 半更新检测：bootstrap.cjs 用 tsx 在进程启动时加载 src/main/**/*.ts，
     // 而渲染层的 .js 每次刷新窗口都会重读磁盘。若磁盘上的 main 源码比本进程启动
     // 还新，就说明"界面已是新代码、主进程还是旧代码"——此时新参数会被旧主进程
-    // 静默忽略（真机事故：kb.mindmap 的 doc 参数被忽略 → 整库脑图冒充本文档脑图）。
+    // 静默忽略，导致界面请求的范围与主进程实际处理的范围不一致。
     // 详见 util/source-stamp.ts。
     const staleMain = buildStaleMainReport({ pcRoot: paths.PC_ROOT, isPackaged: app.isPackaged });
     return {
@@ -933,7 +965,7 @@ const marketplaceDefaultsRetryTimers = new Map<string, ReturnType<typeof setTime
 let marketplaceCheckRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * 安排一次失败重试（FR-034）。
+ * 安排一次失败重试。
  *
  * **只重试一次**：重试自身产生的失败不再安排新的重试，等下一个 6 小时周期。
  */
@@ -951,7 +983,7 @@ function scheduleMarketplaceCheckRetry(reason: string): void {
 const marketplaceDefaultsRetryAttempts = new Map<string, number>();
 
 function subscribeMarketplaceReconcileStatus(m: typeof import('./features/marketplace_reconcile')): void {
-  // 目录页打开时的检查触发点（FR-034）：编排在本文件，IPC 够不到，故在此注册进接缝。
+  // 目录页打开时的检查触发点：编排在本文件，IPC 够不到，故在此注册进接缝。
   // 与状态订阅同一时机注册——两者都只需要「reconcile 模块已装载」这一个前提。
   m.setInstallReconcileRunner((reason) => runMarketplaceInstallReconcile(reason));
   if (marketplaceReconcileStatusSubscribed) return;
@@ -1104,7 +1136,18 @@ async function runMarketplaceInstallReconcile(reason: string): Promise<void> {
       });
       if (seeded.failed) {
         clearDefaultSeedStatus();
-        scheduleMarketplaceDefaultsRetry(runKey, uid, seeded.error || 'unknown error');
+        const seedError = seeded.error || 'unknown error';
+        if (mp.isRetryableMarketplaceError(seedError)) {
+          scheduleMarketplaceDefaultsRetry(runKey, uid, seedError);
+        } else {
+          // Permanent failure (e.g. HTTP 403): the fixed [3s,3s,3s] schedule
+          // would burn three more requests and dozens of log lines on every
+          // launch for an error that cannot succeed by retrying.
+          marketplaceBootLog.warn('marketplace default installs not retried (permanent error)', {
+            error: seedError,
+          });
+          clearMarketplaceDefaultsRetry(runKey);
+        }
       } else {
         clearMarketplaceDefaultsRetry(runKey);
       }
@@ -1118,11 +1161,20 @@ async function runMarketplaceInstallReconcile(reason: string): Promise<void> {
         return;
       }
 
-      await m.checkServerUpdatesForInstalls(uid, {
+      const serverCheck = await m.checkServerUpdatesForInstalls(uid, {
         shouldContinue,
-        minIntervalMs: MARKETPLACE_SERVER_CHECK_INTERVAL_MS,
+        ...m.serverCheckGateForReason(reason, MARKETPLACE_SERVER_CHECK_INTERVAL_MS, MARKETPLACE_CHECK_RETRY_DELAY_MS),
       });
+      // 拉取 Hub 目录失败在核对函数里被吞掉、不会抛出，这里显式安排那一次重试。
+      if (serverCheck.failed) scheduleMarketplaceCheckRetry(reason);
       const result = await m.reconcileInstalls(uid, { shouldContinue });
+      // 只改状态（Hub 停用、要求的客户端版本变化）不会走"拉取新内容"，界面原来不刷新；
+      // 本机安装记录有任何变化都通知渲染进程重读列表，卡片才能及时显示"已停用"之类的状态。
+      // 不含 patched_*：它是对每条记录的幂等元数据补丁，每轮都非零，会让界面反复无谓刷新。
+      const installsChanged = (serverCheck.updated_agents || 0) + (serverCheck.updated_skills || 0)
+        + result.pulled_agents + result.pulled_skills + result.pruned_agents + result.pruned_skills
+        + result.restored_agents + result.restored_skills;
+      if (installsChanged > 0) ipc.broadcastToRenderer('marketplace:installs-changed', { reason, changed: installsChanged });
       if (
         result.pulled_agents || result.pulled_skills
         || result.pruned_agents || result.pruned_skills
@@ -1583,6 +1635,7 @@ if (!gotLock) {
     showMainWindow();
   });
   void app.whenReady().then(async () => {
+    await installSystemProxyDispatcher();
     await runBootSelfCheck();
 
     // 版本迁移：检测版本变化，自动清理旧数据
@@ -1646,7 +1699,40 @@ if (!gotLock) {
       },
       openConversation: openConversationFromTaskNotification,
     });
-    app.once('before-quit', stopTaskNotifications);
+    // ---------------------------------------------------------------------
+    // 退出时的"停表"钩子。全部是同步的 stop 函数，聚合到一个 before-quit
+    // 监听器上注册——见下方聚合器处的说明。
+    const quitStopHooks: Array<() => void> = [];
+    quitStopHooks.push(stopTaskNotifications);
+    // A2A 联系人申请的系统通知（FR-11/FR-21）：只在窗口不在前台时提醒，
+    // 点击后跳到通讯录（应用内角标另行维护，见 AC-01）。
+    const stopContactNotifications = contactsNotifications.startContactNotifications({
+      runtime: {
+        getActiveUserId: () => users.getActiveUserId(),
+        isEnabled: () => appConfig.getTaskNotificationsEnabled(),
+        hasFocusedWindow: () => BrowserWindow.getAllWindows().some((win) => (
+          !win.isDestroyed() && win.isFocused()
+        )),
+        isSupported: () => Notification.isSupported(),
+        createNotification: (options) => {
+          const notification = new Notification(options);
+          notification.on('failed', (_event, error) => {
+            log.warn('native contact notification rejected by OS', { error: error || 'unknown' });
+          });
+          return {
+            onClick: (listener) => { notification.on('click', listener); },
+            show: () => { notification.show(); },
+          };
+        },
+        openContacts: () => {
+          const win = BrowserWindow.getAllWindows().find((item) => !item.isDestroyed());
+          if (!win) return;
+          win.show();
+          win.webContents.send('contacts:open', {});
+        },
+      },
+    });
+    quitStopHooks.push(stopContactNotifications);
     // 托盘只在 macOS/Windows 上启动：只有这两个平台有可用的呼出入口（Windows 的
     // `right-click`、macOS 的 contextMenu；`popUpContextMenu` 本身也是 darwin/win32
     // 限定）。Linux 上偏好默认是开的、`isAvailable()` 会返回 true，close 就会把
@@ -1712,15 +1798,49 @@ if (!gotLock) {
       });
     }
     const stopRecallCapture = startRecallCaptureOrchestrator();
-    app.once('before-quit', stopRecallCapture);
-    const stopGroupKstarClosure = startGroupKstarClosure();
-    app.once('before-quit', stopGroupKstarClosure);
-    const stopAutoCloseRecovery = startAutoCloseRecovery();
-    app.once('before-quit', stopAutoCloseRecovery);
+    quitStopHooks.push(stopRecallCapture);
+    void startKstarClosureOrchestrators().then((stoppers) => {
+      kstarClosureStoppers = stoppers;
+    });
+    quitStopHooks.push(() => { for (const stop of kstarClosureStoppers) stop(); });
     const stopGroupChatRecallTerminalProofs = startGroupChatRecallTerminalProofs();
-    app.once('before-quit', stopGroupChatRecallTerminalProofs);
+    quitStopHooks.push(stopGroupChatRecallTerminalProofs);
+    // Promoted (background) CLI runs outlive their turn on purpose, so nothing in
+    // the dispatch path can reach them any more — and Node would refuse to exit
+    // while their children live. Stop their process trees here; each one's
+    // detached continuation still records the terminal state afterwards.
+    quitStopHooks.push(() => { killAllPromotedRuns('app-quit'); });
     const stopTaskAutoArchive = startTaskAutoArchiveOrchestrator();
-    app.once('before-quit', stopTaskAutoArchive);
+    quitStopHooks.push(stopTaskAutoArchive);
+    // 会议产物沉淀：订阅会议域环节完成事件，把四件套（转写 / 纠错转写 / 纪要 / 待办）
+    // 即时落进知识库并入队索引（specs/009-meeting-output-archive）。
+    // 与上面的 task-auto-archive 并列但触发源不同：后者靠任务终态 + 产物登记，
+    // 而会议四件套不经过产物登记，故必须由环节事件驱动（research R1）。
+    // 实时路径：环节事件 → 立即沉淀。失败项交给下面的终态兜底登记。
+    const stopMeetingPrecipitation = startMeetingPrecipitationOrchestrator({
+      onFailure: rememberPrecipitationFailure,
+    });
+    quitStopHooks.push(stopMeetingPrecipitation);
+    // 兜底路径：任务终态（completed / cancelled）重试此前的失败项。
+    // 刻意订阅**同一个** subscribeTaskTerminals —— bus 已是终态事件的既有出口，
+    // 会议域不必自己造一套。
+    const stopMeetingTerminalSweep = startMeetingTerminalSweep({
+      subscribeTerminals: (listener) => subscribeTaskTerminals((ev) => listener(ev)),
+    });
+    quitStopHooks.push(stopMeetingTerminalSweep);
+    // 产物登记 → 知识库沉淀（主路径）。`publish_outputs` 是模型声明产出的唯一入口，
+    // 与具体 Agent/技能无关；真机实测三次发布三次命中（见 verification-evidence.md）。
+    const stopProducedOutputsPrecipitation = startProducedOutputsPrecipitation();
+    quitStopHooks.push(stopProducedOutputsPrecipitation);
+    // 聚合注册：此前这里是 9 个 `app.once`，加上 connectors / terminal 两个模块级钩子
+    // 与主退出处理器，每次启动都超过 EventEmitter 默认 10 个监听器的上限，于是每次启动
+    // 刷一条 `MaxListenersExceededWarning: 11 before-quit listeners`（CLIENT-1 的关联
+    // 线索）。这些 stop 函数都是同步的，聚合成一个监听器语义不变：一次退出只跑一次。
+    app.once('before-quit', () => {
+      for (const stop of quitStopHooks.splice(0)) {
+        try { stop(); } catch (err) { log.warn('quit stop hook failed', { error: (err as Error).message }); }
+      }
+    });
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });
@@ -1762,6 +1882,30 @@ if (!gotLock) {
       preferIdle: true,
       maxSliceMs: 20_000,
     });
+    registerDeferred('contacts:retry-a2a-deletion-cleanup', async () => {
+      const contacts = await import('./features/contacts/store');
+      await contacts.retryPendingContactCleanup(users.getActiveUserId());
+    }, 'serial', 0, {
+      resourceClass: 'network',
+      preferIdle: true,
+      maxSliceMs: 10_000,
+    });
+    registerDeferred('a2a:recover-claimed-receptions', async () => {
+      const reception = await import('./features/a2a/reception-run');
+      await reception.recoverClaimedReceptions(users.getActiveUserId());
+    }, 'serial', 0, {
+      resourceClass: 'network',
+      preferIdle: true,
+      maxSliceMs: 20_000,
+    });
+    registerDeferred('a2a:recover-outbound-intents', async () => {
+      const outbound = await import('./features/a2a/outbound');
+      await outbound.recoverA2AOutboundIntents(users.getActiveUserId());
+    }, 'serial', 0, {
+      resourceClass: 'network',
+      preferIdle: true,
+      maxSliceMs: 20_000,
+    });
     // In-app update check. Silent by design: failures are logged and swallowed
     // inside the feature; a surfaced reminder is broadcast to the renderer.
     // Skipped in the packaged launch smoke so the smoke run never touches the
@@ -1797,6 +1941,8 @@ if (!gotLock) {
       const { installModelOverrideResolver } = await import('./features/model_overrides');
       installModelOverrideResolver();
     }, 'serial');
+    // 登录 shell 的 PATH 探测：只影响 CLI 子进程环境，失败即回落约定目录。
+    registerImmediate('local-agents:login-shell-path', () => primeLoginShellPathDirs());
     registerImmediate('skills:version-recovery', async () => {
       const { recoverSkillVersionMutations } = await import('./features/skills/version-mutation-service');
       const result = await recoverSkillVersionMutations(users.getActiveUserId());
@@ -1860,7 +2006,7 @@ if (!gotLock) {
       MARKETPLACE_STARTUP_CHECK_DELAY_MS,
     );
     // 保守回收：启动期一次。**不挂在 6 小时检查周期上**——回收无时效性，
-    // 且三条删除条件任一不满足即不删、任何异常本轮删 0（FR-052 / FR-053）。
+    // 且三条删除条件任一不满足即不删、任何异常本轮删 0。
     registerDeferred(
       'marketplace:version-gc',
       async () => {
@@ -1897,22 +2043,41 @@ if (!gotLock) {
       void uid;
     });
 
-    // recall:correct-seed-maturity 已随出身收敛退役（2026-09-20）：一次性
-    // 历史归档修正早已空转，出身单值化后判据不复存在（见 asset-service 注释）。
-    // 2026-08-15 UI 优化：旧 KStar 线资产带英文技术标题（'Reusable experience
-    // lesson (requirement-level)' 等），迁移为中文可读。幂等，修完空转。
+    // Idempotently replace legacy KStar technical titles with readable titles.
     registerDeferred('recall:migrate-legacy-titles', async () => {
       const { migrateLegacyUserFacingTitles } = await import('./features/recall/asset-service');
       await migrateLegacyUserFacingTitles(users.getActiveUserId());
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
-    // A 轨道（2026-09-13 scope 枚举化）：存量自由文本 scope（"用户全局画像"）
-    // 归一为受控词表——否则自动投影永远 scope_mismatch，确认资产在正式通道
-    // 失效。幂等；迁移会同步刷新仍存活 committed 投影的版本快照（2026-09-14
-    // 补——此前"跳过被引用资产"的说法与实现相反，committed 校验器的版本
-    // 强校验会让注入整体失败）。
+    // Normalize legacy free-text scopes to the controlled vocabulary so
+    // confirmed assets remain eligible for automatic projection. The migration
+    // is idempotent and refreshes live committed projections' version snapshots
+    // to preserve strict version validation.
     registerDeferred('recall:migrate-legacy-scopes', async () => {
       const { migrateLegacyFreeTextScopes } = await import('./features/recall/asset-service');
       await migrateLegacyFreeTextScopes(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // Candidate record maintenance: content format + legacy defer retirement.
+    // Per-record progress lives in candidate-migrations; read paths no longer
+    // trigger migrations, and a partial run resumes on the next boot.
+    registerDeferred('recall:candidate-record-migrations', async (signal) => {
+      const { runCandidateRecordMigrations } = await import('./features/recall/candidate-service');
+      await runCandidateRecordMigrations(users.getActiveUserId(), signal);
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // Recover pending cognition journals and remove legacy version streams
+    // whose asset is tombstoned or absent. Purge and append share a lock;
+    // startup recovery is idempotent and tolerates individual failures.
+    registerDeferred('cognition:compatibility-recovery', async () => {
+      const { recoverCognitionProjection } = await import('./features/cognition_bridge');
+      const { applyCognitionDeltas } = await import('./features/cognition_kernel/store');
+      const journal = await applyCognitionDeltas(users.getActiveUserId(), []);
+      if (!journal.ok || journal.pendingHistory) log.warn('cognition journal recovery incomplete', { error: journal.error || 'history projection pending' });
+      await recoverCognitionProjection(users.getActiveUserId());
+      const { recoverAbilityAssetVersionJournals } = await import('./features/recall/asset-service');
+      await recoverAbilityAssetVersionJournals(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    registerDeferred('recall:purge-version-stream-sweep', async () => {
+      const { sweepPurgedAbilityAssetVersionStreams } = await import('./features/recall/asset-service');
+      await sweepPurgedAbilityAssetVersionStreams(users.getActiveUserId());
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     // 旧 USER.md / MEMORY.md 是用户数据，不在启动时自动归属迁移。用户须先
     // 在记忆内容页查看来源和原文、逐条选择并确认；preview 是只读，只有确认
@@ -1954,13 +2119,26 @@ if (!gotLock) {
       const uid = users.getActiveUserId();
       if (uid) await recoverRecallCaptures(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
+    // 夜间增量清扫：低频自续期；窗口内/错过补跑都由内部判定，
+    // 应用未运行不假装完成，恢复可运行后续办。
+    registerDeferred('recall:nightly-sweep', () => {
+      const uid = users.getActiveUserId();
+      if (uid) startNightlyCaptureSweepLoop(uid);
+    }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
+    // 本体整体暂停退役迁移：幂等 no-op 安全，逐版本入历史可恢复。
+    registerDeferred('recall:ontology-pause-retirement', async () => {
+      const uid = users.getActiveUserId();
+      if (!uid) return;
+      const { retireOntologyModulePause } = await import('./features/cognition/ontology/service');
+      await retireOntologyModulePause(uid);
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('recall:validation-recovery', async () => {
       const uid = users.getActiveUserId();
       if (!uid) return;
       const { recoverValidationApplications } = await import('./features/recall/validation-service');
       await recoverValidationApplications(uid);
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
-    // 保留期到期清理（specs/008 T005）：启动后跑一轮，此后低频自续期。
+    // 保留期到期清理：启动后跑一轮，此后低频自续期。
     // 「到期自动彻底删除」的级联清理链见 features/recall/asset-retention-service。
     registerDeferred('recall:retention-sweep', async () => {
       const uid = users.getActiveUserId();
@@ -1968,13 +2146,21 @@ if (!gotLock) {
       const { startAbilityAssetRetentionLoop } = await import('./features/recall/asset-retention-service');
       startAbilityAssetRetentionLoop(uid);
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
-    // 后台巡检（specs/008 US-405）：低频自续期，**只报不改**；开关关掉后不再自动跑。
-    registerDeferred('recall:asset-inspection', async () => {
+    // 只做一次：把已退役的独立巡检开关并入夜间发现。
+    registerDeferred('recall:unified-discovery-migration', async () => {
       const uid = users.getActiveUserId();
       if (!uid) return;
-      const { startAssetInspectionLoop } = await import('./features/recall/asset-inspection-service');
-      startAssetInspectionLoop(uid);
-    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+      const { migrateUnifiedDiscoverySettings } = await import('./features/recall/capture-settings');
+      await migrateUnifiedDiscoverySettings(uid);
+    }, 'serial', BOOT_BACKGROUND_DEFER_MS, idleDisk);
+    // 旧格式消息引用补坐标：只从记录自身声明的会话按内容标识找回消息，
+    // 写回 locator 与内容版本；修好后不再命中，空跑只读。
+    registerDeferred('recall:source-coordinate-repair', async () => {
+      const uid = users.getActiveUserId();
+      if (!uid) return;
+      const { repairRecallSourceCoordinates } = await import('./features/recall/source-coordinate-repair');
+      await repairRecallSourceCoordinates(uid);
+    }, 'serial', BOOT_BACKGROUND_DEFER_MS, idleDisk);
 
 
 
@@ -1995,6 +2181,15 @@ if (!gotLock) {
   });
 
   // Flush pending search-index writes + close KB vector DBs before exit.
+  //
+  // 退出**有界**：每个阶段有预算，整体还有 watchdog（`util/quit-guard.ts`）。此前这里只有
+  // 一个整体 promise——任一阶段永不 settle，`preventDefault()` 就再也没被撤销，进程只能
+  // 被 kill -9（CLIENT-1 的实测现象：收到 SIGTERM 后只剩一个空闲主线程）。
+  const quitWatchdog = createQuitWatchdog({
+    forceExit: () => app.exit(0),
+    log,
+    ms: QUIT_WATCHDOG_MS,
+  });
   let shutdownFlushed = false;
   let shutdownPromise: Promise<void> | null = null;
   app.on('before-quit', async (e) => {
@@ -2004,12 +2199,20 @@ if (!gotLock) {
     // 也会在 Windows 留下残影（`stop()` 幂等，重复调用无害）。
     backgroundRun?.stop();
     backgroundRun = null;
-    if (shutdownFlushed) return;
+    if (shutdownFlushed) {
+      // 第二次进入必须**放行**：这一次是 flush 完成后重新发起的退出，preventDefault
+      // 会把进程留在这里（实测：没有这条日志时，8 s 后只剩 watchdog 的强制退出）。
+      log.info('before-quit re-entered after flush; letting the quit proceed');
+      return;
+    }
     e.preventDefault();
+    // 从这一次 preventDefault 起，进程就不得无限期留在退出流程里：阶段预算 +
+    // watchdog 同时生效，任何一处挂住都会在 8 s 内以 `app.exit(0)` 结束。
+    quitWatchdog.arm();
     if (shutdownPromise) return shutdownPromise;
+    const quitStartedAt = Date.now();
     shutdownPromise = Promise.resolve().then(async () => {
-      try { await searchFeature.flushAll(); }
-      catch (err) { createLogger('search').warn('final flush failed', { error: (err as Error).message }); }
+      await withDeadline('search index flush', QUIT_PHASE_TIMEOUT_MS, () => searchFeature.flushAll(), log);
       try {
         const kb = await import('./features/kb_vector');
         kb.closeAllKb();
@@ -2017,11 +2220,18 @@ if (!gotLock) {
       // Keep Electron alive until the bridge and every managed external gateway
       // process tree have completed their graceful shutdown.
       await Promise.allSettled([
-        stopP3394Bridge(),
-        import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()),
+        withDeadline('p3394 bridge', QUIT_PHASE_TIMEOUT_MS, () => stopP3394Bridge(), log),
+        import('./features/p3394_bridge/external-gateways').then((m) =>
+          withDeadline('p3394 gateways', QUIT_PHASE_TIMEOUT_MS, () => m.stopAllExternalGateways(), log)),
       ]);
       shutdownFlushed = true;
-      app.quit();
+      log.info('shutdown complete; resuming quit', { ms: Date.now() - quitStartedAt });
+      // **必须异步重新发起退出**。在 `before-quit` 的派发过程中同步调用 `app.quit()`
+      // 会重入同一次退出（Electron 的 quit 不是可重入的），本次 `preventDefault()`
+      // 的取消随后生效，进程就再也没有第二次机会退出——实测：阶段全部完成后进程仍存活，
+      // 直到 watchdog 在 8 s 后强制 `app.exit(0)`。`setImmediate` 让新的退出循环从
+      // 一个干净的宏任务开始。
+      setImmediate(() => { app.quit(); });
     });
     await shutdownPromise;
   });

@@ -26,6 +26,11 @@ export interface ProviderModelEntry {
  * 列表移除，元数据落在这里（V4.1 系仍是多模态，产品口径 2026-09-13）。
  */
 export const PUBLIC_MODEL_UNLISTED_ALIASES: readonly ProviderModelEntry[] = [
+  // AIHubMix model contract and Tencent route boundary verified 2026-10-15:
+  // max_output_tokens=131072 succeeds, 131073 is rejected with HTTP 400.
+  // https://aihubmix.com/model/glm-5.3-flash
+  { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', contextWindow: 1048576, maxTokens: 131072 },
+  { id: 'tencent-glm-5.3-flash', name: 'GLM 5.3 Flash (Tencent)', contextWindow: 1048576, maxTokens: 131072 },
   { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1000000, maxTokens: 384000, vision: true },
   { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1000000, maxTokens: 384000, vision: true },
 ];

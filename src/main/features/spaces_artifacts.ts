@@ -326,6 +326,25 @@ export function isUnsafeWorkspaceRoot(dir: string): boolean {
   return false;
 }
 
+/** 原地工作区判定（纯函数，可单测）：解析出的会话工作区**不在**空间内容目录内
+ *  —— 空间绑定了本地项目目录（Codex 式工作区），或该会话单独绑定了
+ *  coding_project_dir。
+ *
+ *  这种工作区**不做兜底目录遍历**：那等于去扫用户自己的代码仓库，既慢又会把
+ *  用户自己写的文件混进「空间产物」。产物列表此时只认消息里的 produced[] 登记
+ *  —— 登记的路径与目录归属无关，"AI 干了什么"照样列得出来。
+ *  老数据不受影响：空间内容目录内的导入/工作区仍照常扫描。 */
+export function isOutOfSpaceWorkspace(uid: string, spaceId: string, wsDir: string): boolean {
+  if (!wsDir) return false;
+  try {
+    const root = path.resolve(spaceContentDir(uid, spaceId));
+    const target = path.resolve(wsDir);
+    return target !== root && !target.startsWith(root + path.sep);
+  } catch {
+    return false; // 空间不存在/不可解析 → 交给其它护栏，不在这里误判
+  }
+}
+
 /** 扫描 AI 产出文件：先走消息 produced[]（已登记），再兜底扫会话工作区目录
  *  （未登记进 produced 的产物，如部分工具直接写文件）。按文件名去重（附件优先）。
  *  产物确认态：产物无确认态——所有产出自动成为正式产物，直接可打开/引用/删除。 */
@@ -368,14 +387,15 @@ async function scanProducedFiles(
     // 消息读取失败不阻断（继续工作区兜底）
   }
   // 2. 会话工作区目录兜底（部分工具直接写文件、未登记 produced；递归子目录防漏）
-  //    护栏：异常根目录直接跳过；遍历计数超限中止并回滚本次兜底新增（见顶部注释）。
+  //    护栏：异常根目录直接跳过；原地工作区（在用户自己的项目里）不扫；遍历计数
+  //    超限中止并回滚本次兜底新增（见顶部注释）。
   //    同一空间内所有会话共享同一工作区根（除非个别会话自定义 coding_project_dir），
   //    逐会话重复遍历同一目录是 O(会话数 × 文件数) 的浪费——同一目录在一次
   //    聚合中只遍历一次（walkedWorkspaces 记忆）。
   try {
     const { getConversationWorkspacePath } = await import('./group_chat/conv_workspace');
     const wsDir = await getConversationWorkspacePath(uid, cid);
-    if (wsDir && !isUnsafeWorkspaceRoot(wsDir) && !walkedWorkspaces?.has(wsDir)) {
+    if (wsDir && !isUnsafeWorkspaceRoot(wsDir) && !isOutOfSpaceWorkspace(uid, spaceId, wsDir) && !walkedWorkspaces?.has(wsDir)) {
       walkedWorkspaces?.add(wsDir);
       const startLen = out.length;
       try {

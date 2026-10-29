@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../helpers/nightly-formation-fixture';
 /**
  * 探针（状态机审计员 · 新循环第 2 轮）：promoteRecallCandidate 把 LLM 起标题
  * 调用包在候选记录的 fileEditLock 内。
@@ -29,10 +30,12 @@ import * as path from 'node:path';
 const probe = vi.hoisted(() => ({
   candidatePath: '' as string,
   lockHeldDuringLlm: null as null | boolean,
+  llmCalls: 0,
 }));
 
 vi.mock('../../src/main/features/recall/asset-title-suggestion', () => ({
   suggestAbilityAssetTitle: async () => {
+    probe.llmCalls += 1;
     const { fileEditLock, acquireWithTimeout } = await import('../../src/main/util/locks');
     try {
       const release = await acquireWithTimeout(fileEditLock(probe.candidatePath), 150);
@@ -70,12 +73,12 @@ afterEach(() => {
 });
 
 describe('probe-sm2 › promote 锁内 LLM 起标题', () => {
-  it('suggestAbilityAssetTitle 执行期间候选记录锁被 promote 持有（150ms 探测超时）', async () => {
+  it('【已修 P-r2-17】suggestAbilityAssetTitle 执行期间候选记录锁空闲（标题已在锁外预计算）', async () => {
     const candidates = await import('../../src/main/features/recall/candidate-service');
-    // summary 与 judgment 首字相同 → prefix_overlap 不合规 → 走 LLM 兜底链。
-    const candidate = await candidates.saveRecallCandidate(UID, {
+    // 完整照抄正文首句 → 标题不合规 → 走真实标题生成调用路径。
+    const candidate = await createNightlyCandidateFixture(UID, {
       judgment: '评审结论必须写进决策日志再动架构。',
-      summary: '评审结论必须写进决策日', // 首字与正文相同，天然命中标题闸门
+      summary: '评审结论必须写进决策日志再动架构。', // 真正整句照抄正文，不能作为独立短标题
       suggestedType: 'rule',
       applicableWhen: ['正式评审与架构决策时'],
       forbiddenWhen: ['内部快速对齐'],
@@ -84,12 +87,15 @@ describe('probe-sm2 › promote 锁内 LLM 起标题', () => {
     });
     probe.candidatePath = path.join(tmpDir, UID, 'cloud', 'recall', 'records', 'candidates', `${candidate.id}.json`);
     probe.lockHeldDuringLlm = null;
+    probe.llmCalls = 0;
 
     const promoted = await candidates.promoteRecallCandidate(UID, candidate.id, { actor: 'user' });
 
-    // promote 全链成功（mock 标题生效），且锁探测证明 LLM 调用发生在锁内。
+    // P-r2-17 修复后：起标题（LLM）在所有锁之外预计算（锁内仅当正文与预计算
+    // 依据一致时沿用预计算标题），探测应能立即拿到候选记录锁。
     expect(promoted.candidate.status).toBe('confirmed');
     expect(promoted.asset.title).toBe('模型重起的样本标题');
-    expect(probe.lockHeldDuringLlm).toBe(true);
+    expect(probe.llmCalls).toBe(1);
+    expect(probe.lockHeldDuringLlm).toBe(false);
   });
 });

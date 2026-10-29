@@ -1,0 +1,6 @@
+{
+  "name": "周报整理助手",
+  "description_en": "Summarize this week's tasks into a weekly report draft.",
+  "workflow": "1. Read tasks. 2. Group. 3. Draft.",
+  "category": "office"
+}

@@ -665,10 +665,12 @@ export const invokeHandlers = {
   },
 
   /**
-   * Template-based handoff reply for an imported conversation. When the user
-   * sends a handoff/continue prompt ("继续这项工作", "现在做到哪里…"), we answer
-   * directly from real CogSeed data — instant, no CLI turn. Appends the
-   * three-part template as a commander reply and returns the text.
+   * Template-based handoff reply for an IMPORTED conversation only. When the
+   * user sends a pure handoff/continue prompt ("继续这项工作", "现在做到哪里…"),
+   * we answer from real CogSeed data. A user request carried by the same turn
+   * becomes the execution target. Appends the three-part template as a
+   * commander reply and returns the text. Normal conversations are rejected
+   * (`not_imported`) so a handoff phrase there still reaches the model.
    */
   'chats.handoffWelcomeReply': async (
     { conversationId, text }: { conversationId?: unknown; text?: unknown } = {},
@@ -683,9 +685,10 @@ export const invokeHandlers = {
   },
 
   /**
-   * 打开导入会话时自动开始接续（真实消息流）：系统替用户发送第一条引导句
-   * 「继续这项工作。先告诉我现在做到哪里…」，随后 commander 回复三段式
-   * （项目介绍 / 工作空间能力 / Action Plan）。两条消息落盘并清除 needs_welcome。
+   * Validate the pending welcome for an imported conversation. Writes no
+   * message (no fabricated user turn); the renderer then calls
+   * `chats.handoffWelcomeReply`, which appends the commander welcome and
+   * clears `needs_welcome`.
    */
   'chats.beginWelcome': async ({ conversationId }: { conversationId?: unknown } = {}) => {
     if (typeof conversationId !== 'string' || !conversationId) {
@@ -793,12 +796,22 @@ export const invokeHandlers = {
   // The renderer opens/writes/resizes/closes a real shell session. Output is
   // streamed back over the `terminal.stream` stream channel (see ipc/index.ts).
   'terminal.create': async (
-    payload: { cwd?: unknown; cols?: unknown; rows?: unknown },
+    payload: { cwd?: unknown; cid?: unknown; cols?: unknown; rows?: unknown },
     ctx: { userId: string },
   ) => {
+    const cid = typeof payload?.cid === 'string' && payload.cid ? payload.cid : undefined;
+    let requestedCwd = typeof payload?.cwd === 'string' && payload.cwd ? payload.cwd : undefined;
+    let allowedRoots: string[] = [];
+    if (cid) {
+      const { getConversationWorkspacePath } = await import('../features/group_chat/conv_workspace');
+      const workspace = await getConversationWorkspacePath(ctx.userId, cid);
+      allowedRoots = [workspace];
+      if (!requestedCwd) requestedCwd = workspace;
+    }
     const session = startTerminalSession({
       uid: ctx.userId,
-      cwd: typeof payload?.cwd === 'string' ? payload.cwd : undefined,
+      cwd: requestedCwd,
+      allowedRoots,
       cols: typeof payload?.cols === 'number' ? payload.cols : undefined,
       rows: typeof payload?.rows === 'number' ? payload.rows : undefined,
     });

@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -37,7 +38,7 @@ async function seedAsset(
   sourceRef: { kind: 'conversation' | 'memory'; id: string },
 ) {
   const { candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate(userId, {
+  const candidate = await createNightlyCandidateFixture(userId, {
     judgment,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: 'Tree fixture lesson',
@@ -106,7 +107,8 @@ describe('cognition tree asset relation contract', () => {
     // Provenance stays on the asset; it is not converted into tree nodes/edges.
     const stored = await assets.readAbilityAsset('u', updated.id);
     expect(stored.derivedFrom).toEqual([base.asset.id]);
-    expect(stored.sourceSessionIds).toEqual(['conv-a']);
+    expect(stored.sourceSessionIds).toEqual(['conv-a', expect.stringMatching(/^fixture-conv-/)]);
+    expect(stored.sourceSessionIds.some(id => id.startsWith('msg-'))).toBe(false);
     expect(JSON.stringify(graph)).not.toContain('source:');
     // 这两条候选都已经晋升（confirmed，canPromote=false），所以树上没有芽。
     expect(JSON.stringify(graph)).not.toContain('candidate:');
@@ -217,7 +219,7 @@ describe('cognition tree candidate buds', () => {
     },
   ) {
     const { candidates } = await modules();
-    return candidates.saveRecallCandidate(userId, {
+    return createNightlyCandidateFixture(userId, {
       judgment: input.judgment,
       summary: 'Tree bud fixture',
       suggestedType: input.suggestedType,

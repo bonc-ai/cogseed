@@ -67,19 +67,29 @@ afterEach(() => {
 });
 
 describe('Tencent Meeting stdio CLI adapter', () => {
-  it('exposes the read-only meeting tools plus the three auth-session tools, without starting the stdio server', () => {
+  it('exposes meeting actions and host-only protocol tools without starting the stdio server', () => {
     const adapter = loadAdapter();
     expect(adapter.TOOLS.map((t) => t.name).sort()).toEqual([
+      'apply_record_permission',
+      'cancel_meeting',
       'check_login',
+      'commit_meeting_change',
+      'create_meeting',
+      'discard_meeting_change',
+      'get_meeting',
       'get_meeting_minutes',
       'get_transcript',
       'get_transcript_paragraphs',
+      'list_ended_meetings',
+      'list_meetings',
       'list_recordings',
+      'prepare_meeting_change',
       'preview_record_permission',
       'search_meeting_minutes',
       'search_transcript',
       'start_login',
       'stop_login',
+      'update_meeting',
     ]);
     expect(typeof adapter.callTool).toBe('function');
   });
@@ -100,23 +110,40 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     expect(names.filter((n) => /logout|sign_out|signout/i.test(n))).toEqual([]);
   });
 
-  it('exposes NO write tool — no create/update/cancel/commit path can reach the CLI', () => {
-    const adapter = loadAdapter();
-    // COGSEED-314.4 is 只读接入适配. Tencent's docs require a self-built agent to implement write
-    // confirmation itself; shipping no write tool satisfies that by construction, and keeps the
-    // (agent, connector)-scoped bridge always-allow grant from silently covering a mutation.
-    // The auth-session tools are the one non-read-only surface; they were named to stay clear of
-    // this guard on purpose (`stop_login`, not `cancel_login`) so the guard keeps meaning
-    // "no meeting mutation is reachable" rather than being widened for them.
-    const WRITE_VERBS = /create|update|cancel|commit|delete|remove|replace|add|invite|control/i;
-    for (const t of adapter.TOOLS) {
-      expect(t.name).not.toMatch(WRITE_VERBS);
-      // The one near-miss: permission application is preview-only, and the description must say so.
-      if (t.name === 'preview_record_permission') {
-        expect(t.description).toMatch(/preview/i);
-        expect(t.description).toMatch(/NOT exposed|not available|NOT submitted/i);
-      }
-    }
+  it('refuses direct mutations, forged consent, replay and discarded receipts', async () => {
+    const { adapter, calls } = stubTmeet(() => ({ data: { meeting_id: '123' } }));
+    const args = { subject: 'Review', start: '2026-10-10T10:00+08:00', end: '2026-10-10T11:00+08:00' };
+    await expect(adapter.callTool('create_meeting', { ...args, confirmed: true })).rejects.toThrow(/human approval/);
+    await expect(adapter.callTool('commit_meeting_change', { token: 'invented' })).rejects.toThrow(/missing/);
+    const draft = await adapter.callTool('prepare_meeting_change', { tool_name: 'create_meeting', arguments: args });
+    expect(calls).toEqual([]);
+    args.subject = 'Tampered after preview';
+    await adapter.callTool('commit_meeting_change', { token: draft.token, subject: 'also ignored' });
+    expect(calls).toEqual([['meeting', 'create', '--subject=Review', '--start=2026-10-10T10:00+08:00', '--end=2026-10-10T11:00+08:00']]);
+    await expect(adapter.callTool('commit_meeting_change', { token: draft.token })).rejects.toThrow(/already used/);
+    const next = await adapter.callTool('prepare_meeting_change', { tool_name: 'cancel_meeting', arguments: { meeting_id: '123' } });
+    await adapter.callTool('discard_meeting_change', { token: next.token });
+    await expect(adapter.callTool('commit_meeting_change', { token: next.token })).rejects.toThrow(/missing/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    { subject: 'Review', start: '2026-10-10T10:00', end: '2026-10-10T11:00' },
+    { subject: 'Review', start: '2026-10-10T11:00+08:00', end: '2026-10-10T10:00+08:00' },
+    { subject: 'Review', start: '2026-10-10T10:00+08:00', end: '2026-10-10T11:00+08:00', confirmed: true },
+  ])('rejects invalid or forged write arguments before preparation', async (args) => {
+    const { adapter, calls } = stubTmeet(() => ({}));
+    await expect(adapter.callTool('prepare_meeting_change', { tool_name: 'create_meeting', arguments: args })).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
+
+  it('routes meeting discovery and rejects arbitrary flags', async () => {
+    const { adapter, calls } = stubTmeet(() => ({ data: {} }));
+    await adapter.callTool('list_meetings', { page_size: 20, page_token: 'next' });
+    await adapter.callTool('get_meeting', { meeting_id: '123' });
+    expect(calls).toEqual([['meeting', 'list', '--page-size=20', '--page-token=next'], ['meeting', 'get', '--meeting-id=123']]);
+    await expect(adapter.callTool('get_meeting', { meeting_id: '--help' })).rejects.toThrow();
+    await expect(adapter.callTool('list_meetings', { page_size: 21 })).rejects.toThrow();
   });
 
   it('reads the real data.record_meetings carrier and flags records with no record_files', async () => {
@@ -349,13 +376,13 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     expect(res.matches[0].snippets.length).toBeGreaterThan(0);
   });
 
-  it('preview_record_permission uses meeting_record_id and states that commit is unavailable', async () => {
+  it('preview_record_permission uses meeting_record_id and points to the human-approved application', async () => {
     const { adapter, calls } = stubTmeet(() => ({ apply_required: true, reason: '录制权限归属会议创建者' }));
 
     const res = await adapter.callTool('preview_record_permission', { meeting_record_id: '7001' });
     expect(calls[0]).toEqual(['record', 'permission-apply-prepare', '--meeting-record-id', '7001']);
     expect(res.preview).toEqual({ apply_required: true, reason: '录制权限归属会议创建者' });
-    expect(res.note).toMatch(/not available through this connector/i);
+    expect(res.note).toMatch(/apply_record_permission.*human confirmation/i);
 
     await expect(adapter.callTool('preview_record_permission', { record_file_id: '5002' }))
       .rejects.toThrow(/meeting_record_id is required/);
@@ -405,7 +432,7 @@ describe('Tencent Meeting stdio CLI adapter', () => {
     adapter._resetBinForTest();
     adapter._setExecForTest(null); // restore the real execFile so ENOENT actually happens
     await expect(adapter.callTool('list_recordings', { meeting_id: '1' }))
-      .rejects.toThrow(/npm install -g @tencentcloud\/tmeet/);
+      .rejects.toThrow(/repair or update the desktop client/);
   });
 });
 

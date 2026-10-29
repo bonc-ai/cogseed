@@ -19,7 +19,7 @@ function unique(values: string[]): string[] {
 }
 
 function normalized(value: unknown): string {
-  return String(value || '').replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+  return String(value || '').normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase();
 }
 
 function orderedCalls(calls: KstarToolCall[]): KstarToolCall[] {
@@ -74,7 +74,7 @@ function reconcileActions(forecast: WorldModelForecast, episode: KstarEpisodeRec
       const actual = normalized(action);
       return !forecast.aHat.plan.some((step) => {
         const expected = normalized(step);
-        return actual === expected || actual.includes(expected) || expected.includes(actual);
+        return Boolean(expected) && (actual === expected || actual.includes(expected) || expected.includes(actual));
       });
     });
   const predictedToolSequence = predictedTools.filter((tool, index) => predictedTools.indexOf(tool) === index);
@@ -112,8 +112,11 @@ function reconcileActions(forecast: WorldModelForecast, episode: KstarEpisodeRec
   };
 }
 
-function verificationChecks(value: unknown): { global?: boolean; checks: Map<string, boolean> } {
-  const checks = new Map<string, boolean>();
+function verificationChecks(value: unknown): {
+  global?: boolean;
+  checks: Map<string, { key: string; label: string; met: boolean }>;
+} {
+  const checks = new Map<string, { key: string; label: string; met: boolean }>();
   if (value === true) return { global: true, checks };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { checks };
   const record = value as Record<string, unknown>;
@@ -128,13 +131,17 @@ function verificationChecks(value: unknown): { global?: boolean; checks: Map<str
           : undefined;
   const rawChecks = record.checks;
   if (rawChecks && typeof rawChecks === 'object' && !Array.isArray(rawChecks)) {
-    for (const [key, raw] of Object.entries(rawChecks as Record<string, unknown>)) {
-      if (raw === true || raw === false) checks.set(normalized(key), raw);
+    for (const [label, raw] of Object.entries(rawChecks as Record<string, unknown>)) {
+      let met: boolean | undefined;
+      if (raw === true || raw === false) met = raw;
       else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
         const item = raw as Record<string, unknown>;
-        if (item.passed === true || item.ok === true) checks.set(normalized(key), true);
-        if (item.passed === false || item.ok === false) checks.set(normalized(key), false);
+        if (item.passed === true || item.ok === true) met = true;
+        if (item.passed === false || item.ok === false) met = false;
       }
+      // Keep the original label and a stable slot id. The normalized key may be
+      // empty (punctuation-only), and must never match another check.
+      if (met !== undefined) checks.set(`check-${checks.size}`, { key: normalized(label), label, met });
     }
   }
   return { ...(global !== undefined ? { global } : {}), checks };
@@ -142,12 +149,13 @@ function verificationChecks(value: unknown): { global?: boolean; checks: Map<str
 
 function signalResult(signal: string, verification: ReturnType<typeof verificationChecks>): AcceptanceSignalResult {
   const key = normalized(signal);
-  if (verification.checks.has(key)) {
-    const met = verification.checks.get(key) === true;
-    return { signal, status: met ? 'met' : 'not_met', evidence: `verification.checks[${signal}]` };
+  if (!key) return { signal, status: 'unknown', evidence: 'empty acceptance signal' };
+  const exact = [...verification.checks.values()].find((check) => check.key === key);
+  if (exact) {
+    return { signal, status: exact.met ? 'met' : 'not_met', evidence: `verification.checks[${exact.label}]` };
   }
-  const fuzzy = [...verification.checks.entries()].find(([candidate]) => candidate.includes(key) || key.includes(candidate));
-  if (fuzzy) return { signal, status: fuzzy[1] ? 'met' : 'not_met', evidence: `verification.checks[${fuzzy[0]}]` };
+  const fuzzy = [...verification.checks.values()].find((check) => check.key && (check.key.includes(key) || key.includes(check.key)));
+  if (fuzzy) return { signal, status: fuzzy.met ? 'met' : 'not_met', evidence: `verification.checks[${fuzzy.label}]` };
   if (verification.global !== undefined) {
     return { signal, status: verification.global ? 'met' : 'not_met', evidence: 'verification global status' };
   }

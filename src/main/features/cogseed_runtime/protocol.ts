@@ -1,4 +1,6 @@
+import { TRANSCRIPT_TOOL_DEFINITIONS, type TranscriptCorrectionEvidence } from '../transcript-tool-contract';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
@@ -14,7 +16,14 @@ import type { RuntimeToolPolicy } from './kernel/types';
 
 export const COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION = 2;
 
-export type RuntimeStatus = 'started' | 'running' | 'completed' | 'failed' | 'cancelled';
+/**
+ * `background` (decision 1B) marks a run that outlived its turn: the CLI process
+ * was promoted instead of killed (see the B line / `promoteOnDeadline`), so the
+ * run is still alive but no longer owns the foreground turn. It is deliberately
+ * NOT terminal — completion/failure still arrives later as `completed`/`failed`,
+ * and readers must treat it like `running` for liveness purposes.
+ */
+export type RuntimeStatus = 'started' | 'running' | 'background' | 'completed' | 'failed' | 'cancelled';
 
 export interface RuntimeTextContext {
   type: 'text';
@@ -58,6 +67,14 @@ export interface RuntimeRunRequest {
   skill_version_pins?: RuntimeSkillVersionPin[];
   model_profile?: string;
   working_dir?: string;
+  /** Canonical workspace root derived by the main process (ADR-006). */
+  workspace_root?: string;
+  workspace_id?: string;
+  workspace_source?: 'task' | 'conversation' | 'space' | 'project' | 'default';
+  temp_roots?: string[];
+  protected_paths?: string[];
+  /** Root task id of the delegation tree (observability only). */
+  trace_id?: string;
   read_only_roots?: string[];
   writable_roots?: string[];
   /** Trusted capability grants derived by the main process from the persisted
@@ -89,8 +106,9 @@ export interface RuntimeHelloResponse {
   capabilities: string[];
 }
 
-/** Capability grants a Runtime run can carry. Only `messaging.proactive`
- *  exists today; it enables the Commander-only Feishu/Lark send tools. */
+/** Capability grants a Runtime run can carry. `messaging.proactive` enables
+ *  the Commander-only Feishu/Lark send tools; `cogseed.coordination` enables
+ *  the parent side of delegation (delegate / join / tasks / cancel). */
 export const RUNTIME_CAPABILITIES = Object.freeze([
   'messaging.proactive',
   'p3394.interop',
@@ -98,6 +116,9 @@ export const RUNTIME_CAPABILITIES = Object.freeze([
   // 的任务才拿得到它；否则 cogseed_workflow / retry_step / skip_step /
   // resume_workflow 这四个宿主工具既不该出现在目录里、也不该能被调用。
   'cogseed.workflow',
+  // 委派是父任务的权力，不是被委派者的：子 Agent 若也能继续委派，会形成
+  // 无界 fan-out，且它没有结果回传通道。目录过滤 + 宿主重推双重门控。
+  'cogseed.coordination',
 ] as const);
 
 export type RuntimeCapability = (typeof RUNTIME_CAPABILITIES)[number];
@@ -107,15 +128,19 @@ export function isRuntimeCapability(value: string): value is RuntimeCapability {
 }
 
 export const RUNTIME_HOST_TOOL_NAMES = Object.freeze([
+  ...TRANSCRIPT_TOOL_DEFINITIONS.map((tool) => tool.name),
   'office_read', 'office_create', 'office_edit', 'office_render',
   'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
-  'cogseed_delegate', 'cogseed_tasks', 'cogseed_cancel', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow', 'cogseed_workflow',
+  'cogseed_delegate', 'cogseed_join', 'cogseed_tasks', 'cogseed_cancel', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow', 'cogseed_workflow',
+  'publish_outputs',
   'messaging_list_targets', 'messaging_send',
   'p3394_send',
+  'ontology_graph_read', 'ontology_projection_apply',
   // Internal only: these are never exposed in the Runtime model tool catalog.
   // They let an isolated Worker wait for the main-process human approval gate
   // and append the eventual execution outcome to its local audit journal.
-  'action_approval_request', 'action_approval_execution',
+  'desktop_connector_list_tools', 'desktop_connector_call_tool',
+  'action_approval_request', 'action_approval_execution', 'ontology_operation_preflight',
 ] as const);
 
 export type RuntimeHostToolName = typeof RUNTIME_HOST_TOOL_NAMES[number];
@@ -140,6 +165,7 @@ export interface RuntimeHostToolResult {
   call_id: string;
   content: string;
   is_error?: boolean;
+  correction?: TranscriptCorrectionEvidence;
 }
 
 export type RuntimeWorkerRequest = RuntimeHelloRequest | RuntimeRunRequest | RuntimeCancelRequest | { type: 'health'; request_id?: string } | { type: 'shutdown' } | RuntimeHostToolResult;
@@ -152,6 +178,14 @@ export interface RuntimeEventEnvelope {
   text?: string;
   error?: string | null;
   metadata?: Record<string, unknown>;
+  /**
+   * Conversation-facing projection of the same occurrence, in the `StreamEvent` shape that
+   * `features/group_chat` persists into the process trail and the renderer formats. The
+   * runtime is emitted out of the process by plain `JSON.stringify`, so unknown fields such
+   * as this one survive the boundary; `metadata` stays the runtime/audit-side protocol
+   * (task events, KSTAR episodes) and both are carried side by side on purpose.
+   */
+  event?: { stream: string; data?: unknown };
 }
 
 export type RuntimeNormalizeErrorCode =
@@ -297,6 +331,20 @@ function normalizeContext(uid: string, value: unknown, allowedRoots: readonly st
   return { ok: true, context, roots };
 }
 
+function defaultTempRoots(): string[] {
+  const candidates = process.platform === 'win32' ? [os.tmpdir()] : ['/tmp', os.tmpdir()];
+  const roots: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const real = fs.realpathSync(candidate);
+      if (fs.statSync(real).isDirectory() && !roots.includes(real)) roots.push(real);
+    } catch {
+      // A platform may not expose /tmp; omit it rather than inventing a path.
+    }
+  }
+  return roots;
+}
+
 function normalizeAttachments(uid: string, value: unknown, allowedRoots: readonly string[]): { ok: true; attachments: RuntimeAttachment[]; roots: string[] } | { ok: false; code: RuntimeNormalizeErrorCode; error: string } {
   if (value === undefined || value === null) return { ok: true, attachments: [], roots: [] };
   if (!Array.isArray(value)) return { ok: false, code: 'E_RUNTIME_INVALID_REQUEST', error: 'runtime attachments must be an array' };
@@ -342,8 +390,8 @@ function normalizeRuntimeToolPolicy(
     return { ok: false };
   }
   const { fileRead, fileWrite, shell, skillRun, network, connectors } = record;
-  if (fileRead !== 'none' && fileRead !== 'explicit_roots') return { ok: false };
-  if (fileWrite !== 'none' && fileWrite !== 'explicit_writable_roots') return { ok: false };
+  if (fileRead !== 'none' && fileRead !== 'explicit_roots' && fileRead !== 'all') return { ok: false };
+  if (fileWrite !== 'none' && fileWrite !== 'explicit_writable_roots' && fileWrite !== 'all') return { ok: false };
   if (shell !== 'none' && shell !== 'low_risk_only' && shell !== 'allow_with_confirmation') {
     return { ok: false };
   }
@@ -418,10 +466,63 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
     || skillVersionPins.findIndex((candidate) => candidate.skillId === pin.skillId) !== index)) {
     return fail('E_RUNTIME_INVALID_REQUEST', 'invalid skill_version_pins');
   }
-  const workingDir = (raw as any).working_dir;
-  if (workingDir !== undefined) {
-    const normalized = normalizeFilePath(uid, workingDir, opts.allowedRoots);
+  const rawWorkspaceRoot = (raw as any).workspace_root;
+  const rawWorkingDir = (raw as any).working_dir;
+  let workspaceRoot: string | undefined;
+  if (rawWorkspaceRoot !== undefined || rawWorkingDir !== undefined) {
+    const candidate = rawWorkspaceRoot !== undefined ? rawWorkspaceRoot : rawWorkingDir;
+    const normalized = normalizeFilePath(uid, candidate, opts.allowedRoots);
     if (normalized.ok === false) return { ok: false, code: normalized.code, error: normalized.error };
+    workspaceRoot = normalized.path;
+    if (rawWorkspaceRoot !== undefined && rawWorkingDir !== undefined) {
+      const normalizedWorking = normalizeFilePath(uid, rawWorkingDir, opts.allowedRoots);
+      if (normalizedWorking.ok === false) return { ok: false, code: normalizedWorking.code, error: normalizedWorking.error };
+      if (normalizedWorking.path !== workspaceRoot) {
+        return fail('E_RUNTIME_INVALID_REQUEST', 'workspace_root and working_dir must resolve to the same path');
+      }
+    }
+  }
+  const workspaceId = (raw as any).workspace_id;
+  if (workspaceId !== undefined
+    && (typeof workspaceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,160}$/.test(workspaceId))) {
+    return fail('E_RUNTIME_INVALID_ID', 'invalid workspace_id');
+  }
+  const workspaceSource = (raw as any).workspace_source;
+  if (workspaceSource !== undefined
+    && !['task', 'conversation', 'space', 'project', 'default'].includes(String(workspaceSource))) {
+    return fail('E_RUNTIME_INVALID_REQUEST', 'invalid workspace_source');
+  }
+  const rawTempRoots = (raw as any).temp_roots;
+  const tempRoots: string[] = rawTempRoots === undefined ? defaultTempRoots() : [];
+  if (rawTempRoots !== undefined) {
+    if (!Array.isArray(rawTempRoots) || rawTempRoots.length > 8) {
+      return fail('E_RUNTIME_INVALID_REQUEST', 'temp_roots must be a bounded array');
+    }
+    for (const item of rawTempRoots) {
+      if (typeof item !== 'string' || !path.isAbsolute(item)) {
+        return fail('E_RUNTIME_INVALID_REQUEST', 'temp_roots must contain absolute paths');
+      }
+      const resolved = path.resolve(item);
+      if (!tempRoots.includes(resolved)) tempRoots.push(resolved);
+    }
+  }
+  const rawProtectedPaths = (raw as any).protected_paths;
+  const protectedPaths: string[] = [];
+  if (rawProtectedPaths !== undefined) {
+    if (!Array.isArray(rawProtectedPaths) || rawProtectedPaths.length > 16) {
+      return fail('E_RUNTIME_INVALID_REQUEST', 'protected_paths must be a bounded array');
+    }
+    for (const item of rawProtectedPaths) {
+      if (typeof item !== 'string' || !path.isAbsolute(item)) {
+        return fail('E_RUNTIME_INVALID_REQUEST', 'protected_paths must contain absolute paths');
+      }
+      const resolved = path.resolve(item);
+      if (!protectedPaths.includes(resolved)) protectedPaths.push(resolved);
+    }
+  }
+  const traceId = (raw as any).trace_id;
+  if (traceId !== undefined && (typeof traceId !== 'string' || !/^cogseed-task-[A-Za-z0-9_-]{1,80}$/.test(traceId))) {
+    return fail('E_RUNTIME_INVALID_ID', 'invalid trace_id');
   }
   const capabilities = (raw as any).capabilities;
   if (capabilities !== undefined) {
@@ -443,18 +544,29 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
     attachments: attachments.attachments,
     execution_kind: 'cogseed-native',
   };
+  if (traceId) request.trace_id = traceId;
   if (agentId) request.agent_id = agentId;
   if (modelProfile) request.model_profile = modelProfile;
   if (allowedSkillIds !== undefined) request.allowed_skill_ids = allowedSkillIds;
   if (skillVersionPins !== undefined) request.skill_version_pins = skillVersionPins;
-  if (typeof workingDir === 'string') {
-    request.working_dir = path.resolve(workingDir);
-    request.writable_roots = [request.working_dir];
+  if (workspaceRoot) {
+    request.workspace_root = workspaceRoot;
+    request.working_dir = workspaceRoot;
+    request.writable_roots = [workspaceRoot, ...tempRoots]
+      .filter((value, index, all) => all.indexOf(value) === index);
     // 工作空间目录也作为只读根兜底：无附件的纯文字任务仍能用 search_files /
     // grep_files 访问自己的工作空间，否则 read_only_roots 为空会触发
     // E_RUNTIME_NO_ROOTS，让这类 agent 直接失败。
-    readOnlyRoots.push(request.working_dir);
+    readOnlyRoots.push(workspaceRoot);
+    const defaults = [path.join(workspaceRoot, '.git')];
+    for (const protectedPath of defaults) {
+      if (!protectedPaths.includes(protectedPath)) protectedPaths.push(protectedPath);
+    }
   }
+  if (workspaceId) request.workspace_id = workspaceId;
+  if (workspaceSource) request.workspace_source = workspaceSource;
+  if (tempRoots.length) request.temp_roots = tempRoots;
+  if (protectedPaths.length) request.protected_paths = protectedPaths;
   if (readOnlyRoots.length) request.read_only_roots = Array.from(new Set(readOnlyRoots));
   if (capabilities?.length) request.capabilities = [...capabilities] as string[];
   if (toolPolicy.value) request.tool_policy = toolPolicy.value;

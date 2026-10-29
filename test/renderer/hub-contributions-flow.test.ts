@@ -127,6 +127,8 @@ function loadPage(invoke: (channel: string, payload: any) => Promise<any>, optio
       .map((host: any) => ({ getValue: () => selects[host.id] || '' }))),
     uiSkeleton: vi.fn(() => '<div role="status">skeleton</div>'),
     uiStatusPill: vi.fn(({ label }: any) => `<span role="status">${label}</span>`),
+    // 报告 HUB-8 的行内角标：harness 只需保留 label 与 attrs 供断言。
+    uiBadge: vi.fn(({ label, attrs: badgeAttrs }: any) => `<span ${attrs(badgeAttrs)}>${label}</span>`),
     uiResourceCard: vi.fn(({ title, description }: any) => `<article>${title} ${description}</article>`),
     uiResourceGrid: vi.fn(({ bodyHtml }: any) => `<section>${bodyHtml}</section>`),
     uiEmptyState: vi.fn(({ title }: any) => `<p>${title}</p>`),
@@ -725,6 +727,16 @@ describe('My contributions page', () => {
     expect(page.calls().find((call) => call.channel === 'contribution.mine')?.payload).toEqual({ refresh: true });
   });
 
+  it('returns to the Skills grid it came from (S4: the 我的技能 sub-view is kept)', async () => {
+    const page = loadPage(router());
+    await openMine(page);
+    page.grid.style.display = 'none';
+    await page.click('mine', 'back');
+
+    expect(page.hosts.mine.style.display).toBe('none');
+    expect(page.grid.style.display).toBe('flex');
+  });
+
   it('asks for login before showing history and never lists data when it is cancelled', async () => {
     const page = loadPage(router({
       'contribution.preflight': () => ({ identity: { outcome: 'blocked', reason: 'not_signed_in' } }),
@@ -830,6 +842,22 @@ describe('My contributions page', () => {
     expect(request?.payload).toEqual({ content_id: '8a4f01c29d7e', reason: 'fixture reason' });
     expect(Object.keys(request?.payload)).not.toContain('version');
     expect(page.root.uiConfirm).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('governance review') }));
+  });
+
+  it('flags a rejected withdrawal in the list row (report HUB-8)', async () => {
+    const page = loadPage(router({
+      'contribution.mine': () => withItem(
+        { withdrawal_request: { status: 'REJECTED', reason: 'Retire it', rejected_reason: 'Still needed' } },
+        { status: 'ACCEPTED' },
+      ),
+    }));
+    await openMine(page);
+
+    // 上一次申请被拒不是"申请丢了"：行内要有显式角标，理由挂在 title 上（详情里另有完整历史）。
+    const mine = page.hosts.mine.text();
+    expect(mine).toContain('data-hubc-withdrawal="REJECTED"');
+    expect(mine).toContain('Withdrawal rejected');
+    expect(mine).toContain('Still needed');
   });
 
   it('does not offer a second withdrawal request while one is pending', async () => {

@@ -1,0 +1,30 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.seo.crawl
+  name: seo-crawl
+  version: 1.0.0
+  description: 'Fetch a URL and extract on-page SEO/GEO fields as structured JSON
+    (title/description/canonical/heading hierarchy/structured data/hreflang/image
+    alt/internal+external links/robots), SSRF-guarded and system-proxy aware; For:
+    ''grab this page''s SEO fields'', ''pull on-page data for dia'
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: python
+    scripts:
+    - scripts/crawl.py
+    - scripts/url_safety.py
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

@@ -40,6 +40,14 @@ const RETRY_JITTER_RATIO = 0.2;
 const TOOL_HEARTBEAT_TIMEOUT_GRACE_MS = 30_000;
 export const COMPACTED_HISTORY_PLACEHOLDER_ERROR_CODE = "E_COMPACTED_HISTORY_PLACEHOLDER";
 const LEGACY_COMPACTED_TOOL_USE_INPUT_KEY = "__cogseed_compacted_tool_use";
+
+/** Reflection may refine skills and metacognition only. Keep this allowlist
+ * aligned with the reflection prompt; shell, arbitrary writes and network tools
+ * are excluded. Extend this set and its contract test together. */
+export const REFLECTION_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
+  "skill_manage",
+  "metacognition",
+]);
 const TOOL_LOOP_LIMIT_SUMMARY_MAX_TOKENS = 1_200;
 export const RUN_CONVERGENCE_SOFT_RATIO = 0.8;
 export const RUN_CONVERGENCE_ELAPSED_MS = 8 * 60 * 1000;
@@ -77,7 +85,15 @@ export const SPIN_CONVERGENCE_TOOL_LOOP_RATIO = 0.75;
 export const MAX_INLINE_TOOL_RESULT_TOKENS_PER_ROUND = 16_000;
 export const TOOL_RESULT_MARKER_RESERVE_TOKENS = 1_000;
 const REQUEST_INPUT_SAFETY_TOKENS = 2_048;
+import {
+  CONTEXT_RETAIN_TAIL_RATIO,
+  assertRetainRatioBelowTrigger,
+} from "./context-compaction-policy.js";
+
 const CONTEXT_COMPACTION_TRIGGER_RATIO = 0.82;
+// C: the retained tail must stay below the trigger, or retention itself keeps the
+// session over the line. Checked at load so a bad pair is a startup error.
+assertRetainRatioBelowTrigger(CONTEXT_RETAIN_TAIL_RATIO, CONTEXT_COMPACTION_TRIGGER_RATIO);
 
 /**
  * Context summarization is an auxiliary data-transformation call, not another
@@ -196,7 +212,7 @@ function errorCodeForMeta(err: unknown): string | undefined {
   return undefined;
 }
 
-/** Concurrency cap for a parallel (read-only) tool batch (G4). Env-overridable;
+/** Concurrency cap for a parallel (read-only) tool batch. Env-overridable;
  *  conservative default. This is the READ-TOOL cap only — the group-chat layer
  *  applies a separate, lower cap to agent/worker dispatch tools. */
 function parallelToolCap(): number {
@@ -236,6 +252,22 @@ export const LOOP_HARD = 5;
  *  higher hard threshold bounds the run if the warning is ignored. */
 export const NEAR_DUP_LOOP_WARN = 6;
 export const NEAR_DUP_LOOP_HARD = 12;
+
+/** Cross-tool thrash: the exact/near-duplicate detectors above only see the SAME
+ *  call repeated. A model that searches with a different tool each time never
+ *  repeats a signature, so it can spin until `max_tool_rounds` with nothing
+ *  produced — the observed P2-1 failure (55–61 calls, zero `write_file`). This
+ *  tier counts CONSECUTIVE read-only calls and resets on any producing call. */
+export const READ_ONLY_STREAK_WARN = 12;
+export const READ_ONLY_STREAK_HARD = 20;
+
+/** Tools that only gather information. Anything outside this set (write_file,
+ *  edit_file, create_artifact, run_skill, connectors, …) counts as progress. */
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "read_file", "stat_file", "search_files", "grep_files",
+  "search_mate_kb", "list_connector_tools", "cognition_ontology_query",
+  "transcript_corrections_query", "list_task_experiences", "read_task_experience",
+]);
 
 /** Compaction skips a pass that would free less than this fraction of the context
  *  window — when the verbatim-kept tail dominates the window, summarising the
@@ -617,6 +649,10 @@ function completedWorkStatusForOutcome(
   return "succeeded";
 }
 
+/** Host-owned deny-only gate, including builtins and dynamically added tools. */
+export type ToolExecutionPreflight = (toolName: string, input: Record<string, unknown>, ctx: ToolContext)
+  => Promise<ToolResult | undefined> | ToolResult | undefined;
+
 type ToolResultTransformer = (
   toolName: string,
   result: ToolResult,
@@ -649,6 +685,7 @@ export class AgentRunner {
   private readonly onCompact: ((summary: string) => void) | null;
   private readonly onLearnedSkillAdvertised: ((id: string) => void) | null;
   private readonly transformToolResult: ToolResultTransformer | null;
+  private readonly beforeToolExecute: ToolExecutionPreflight | null;
   private readonly toolContextState: Record<string, unknown>;
 
   constructor(opts: {
@@ -661,6 +698,9 @@ export class AgentRunner {
     /** Disable builtin, caller-supplied, and evolution tools for a strictly
      * text-only utility call such as an independent benchmark judge. */
     disableTools?: boolean;
+    /** Final runtime allowlist. When present it filters builtins, execution
+     * plan, caller tools, and evolution tools before registration. */
+    toolAllowlist?: readonly string[];
     /** Restrict learned-skill index to this subset (undefined = all). */
     skillAllowlist?: string[];
     /** Fires after skill_manage(create) with the new skill id — CogSeed
@@ -678,6 +718,8 @@ export class AgentRunner {
      * including builtins and late-added evolution tools. Hosts use this for
      * lossless oversized-result persistence and per-round inline budgeting. */
     transformToolResult?: ToolResultTransformer;
+    /** Deny a tool before its implementation can begin; never grants permissions. */
+    beforeToolExecute?: ToolExecutionPreflight;
     /** Host-owned, run-invariant capabilities exposed to tools through
      * ToolContext.state. Reserved per-step ledgers below override collisions. */
     toolContextState?: Record<string, unknown>;
@@ -689,6 +731,7 @@ export class AgentRunner {
     this.skillAllowlist = opts.skillAllowlist;
     this.onLearnedSkillAdvertised = opts.onLearnedSkillAdvertised ?? null;
     this.transformToolResult = opts.transformToolResult ?? null;
+    this.beforeToolExecute = opts.beforeToolExecute ?? null;
     this.toolContextState = { ...(opts.toolContextState ?? {}) };
 
     // Set up evolution / skill store
@@ -716,8 +759,9 @@ export class AgentRunner {
     if (this.skillStore && !opts.disableTools) {
       allTools.push(createSkillManageTool(this.skillStore, opts.onSkillCreated));
     }
+    const allowedTools = opts.toolAllowlist ? new Set(opts.toolAllowlist) : null;
     for (const tool of allTools) {
-      this.tools.set(tool.name, tool);
+      if (!allowedTools || allowedTools.has(tool.name)) this.tools.set(tool.name, tool);
     }
   }
 
@@ -797,7 +841,7 @@ export class AgentRunner {
     return steered.filter((text) => text && text.trim());
   }
 
-  /** interrupt-steer (G9): drain any host-queued user messages and fold them
+  /** interrupt-steer: drain any host-queued user messages and fold them
    *  into the current active session turn. Returns how many were folded. Called
    *  at tool-loop boundaries so the next LLM round can course-correct without
    *  deferring the user input to a separate follow-up turn. */
@@ -868,7 +912,7 @@ export class AgentRunner {
     let lastUsage: import("../shared/types.js").Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 };
     // 最后一次模型调用的 usage（覆盖式，非累加）——"当前上下文占用"的唯一
     // 正确口径。lastUsage 是整轮累加（每步重发的历史被求和一次），只适合
-    // 消耗/计费口径；窗口占用必须读这个（2026-09-11 统计口径修复）。
+    // 消耗/计费口径；窗口占用必须读这个。
     let lastCallUsage: import("../shared/types.js").Usage | undefined;
     const toolNamesSet = new Set<string>();
     const skillsLoadedSet = new Set<string>();
@@ -903,8 +947,10 @@ export class AgentRunner {
     let loopSig: string | null = null;
     let loopRepeat = 0;
     let loopWarnedForStreak = false;
+    let readOnlyStreak = 0;
+    let readOnlyWarnedForStreak = false;
     let pendingLoopNudge: string | null = null;
-    // Near-duplicate streak (WS-3): same call modulo volatile id/timestamp fields.
+    // Near-duplicate streak: same call modulo volatile id/timestamp fields.
     let normSig: string | null = null;
     let normRepeat = 0;
     let normWarnedForStreak = false;
@@ -932,6 +978,7 @@ export class AgentRunner {
     // consumer sees a terminal event no matter which branch wins.
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
+        params.signal?.throwIfAborted();
         const toolDefs = [...this.tools.values()].map(toToolDefinition);
 
         const prepareContextStartedAt = Date.now();
@@ -952,6 +999,8 @@ export class AgentRunner {
           permanentToolErrors,
           planStepCount: this.session.getExecutionPlan()?.steps.length || 0,
         });
+
+        const responseGateRequired = params.finalResponseGate?.isRequired() === true;
 
         // Consume the provider stream token-by-token so callers (UI) can
         // paint partial text as it arrives. We still assemble a full
@@ -997,15 +1046,25 @@ export class AgentRunner {
         let streamModel = modelId;
         let streamingToolSeq = 0;
         let streamingTool: { id: string; name?: string; inputBytes: number } | null = null;
+        let withheldText = "";
+        const flushWithheldText = function* (): Generator<AgentRunEvent> {
+          if (!withheldText) return;
+          const text = withheldText;
+          withheldText = "";
+          yield { type: "text_delta", text };
+        };
         for await (const ev of streamIter) {
           if (ev.type === "text_delta") {
             streamText += ev.text;
-            // Forward to callers so UI can render incrementally.
-            yield { type: "text_delta", text: ev.text };
+            if (responseGateRequired) withheldText += ev.text;
+            else yield { type: "text_delta", text: ev.text };
           } else if (ev.type === "thinking_delta") {
-            // 思考流透传（交互设计 2026-09-08：思考过程展示链路补全）。
+            // 思考流透传。
             if (ev.delta) yield { type: "thinking_delta", delta: ev.delta };
           } else if (ev.type === "tool_use_start") {
+            // This is an intermediate tool-using turn, not the terminal
+            // response. Preserve its commentary before surfacing the tool.
+            yield* flushWithheldText();
             const id = ev.id || `stream_tool_${++streamingToolSeq}`;
             streamingTool = { id, name: ev.name, inputBytes: 0 };
             yield { type: "tool_delta", id, name: ev.name, inputDelta: "", inputBytes: 0 };
@@ -1069,10 +1128,10 @@ export class AgentRunner {
         // include `content` in message_end (older providers / custom stream
         // implementations). Tool-using turns won't reach this branch from
         // those providers — we still require content for the tool loop.
-        const finalContent: import("../shared/types.js").MessageContent[] =
+        let finalContent: import("../shared/types.js").MessageContent[] =
           streamContent ?? (streamText ? [{ type: "text", text: streamText }] : []);
 
-        const result: CompletionResult = {
+        let result: CompletionResult = {
           content: finalContent,
           stopReason: streamStopReason,
           usage: streamUsage,
@@ -1096,20 +1155,48 @@ export class AgentRunner {
           );
         }
 
-        // Add assistant response to session
-        this.session.addAssistantMessage(result.content);
-
         // Turn text — used for the "final" snapshot if this turn ends the run.
-        const turnText = result.content
+        let turnText = result.content
           .filter((c) => c.type === "text")
           .map((c) => (c as { text: string }).text)
           .join("");
 
         // Check for tool use
-        const toolCalls = result.content.filter((c) => c.type === "tool_use");
+        let toolCalls = result.content.filter((c) => c.type === "tool_use");
+
+        if (responseGateRequired && (toolCalls.length === 0 || result.stopReason !== "tool_use")) {
+          try {
+            const validated = await params.finalResponseGate!.validate({
+              text: turnText,
+              content: finalContent,
+              ...(params.signal ? { signal: params.signal } : {}),
+            });
+            const approvedText = String(validated.text || "").trim();
+            finalContent = validated.content || [{ type: "text", text: approvedText }];
+            result = { ...result, content: finalContent };
+            turnText = approvedText;
+            toolCalls = result.content.filter((c) => c.type === "tool_use");
+            withheldText = "";
+            if (approvedText) yield { type: "text_delta", text: approvedText };
+          } catch (error) {
+            log.warn(`final response gate failed closed: ${formatError(error)}`);
+            const fallbackText = "The evidence check could not be completed, so the unverified answer was not returned.";
+            finalContent = [{ type: "text", text: fallbackText }];
+            result = { ...result, content: finalContent };
+            turnText = fallbackText;
+            toolCalls = [];
+            withheldText = "";
+            yield { type: "text_delta", text: fallbackText };
+          }
+        } else {
+          yield* flushWithheldText();
+        }
+
+        // Only the approved terminal response is persisted to the session.
+        this.session.addAssistantMessage(result.content);
 
         if (toolCalls.length === 0 || result.stopReason !== "tool_use") {
-          // interrupt-steer (G9): a user message can land while the model is
+          // interrupt-steer: a user message can land while the model is
           // producing its FINAL answer (no tool calls), which the tool-loop
           // drain below never reaches. Drain here too; if anything arrived,
           // close the now-finished turn first and continue with the steer as a
@@ -1249,6 +1336,26 @@ export class AgentRunner {
         // at LOOP_WARN (injected at the post-tool-result boundary below).
         let loopHardTripped = false;
         for (const call of toolCalls as ReadonlyArray<{ name: string; input: unknown }>) {
+          // Cross-tool thrash tier: any producing call resets the streak.
+          if (READ_ONLY_TOOLS.has(call.name)) {
+            readOnlyStreak += 1;
+          } else {
+            readOnlyStreak = 0;
+            readOnlyWarnedForStreak = false;
+          }
+          if (readOnlyStreak >= READ_ONLY_STREAK_HARD) {
+            loopHardTripped = true;
+            break;
+          }
+          if (readOnlyStreak >= READ_ONLY_STREAK_WARN && !readOnlyWarnedForStreak) {
+            readOnlyWarnedForStreak = true;
+            if (!pendingLoopNudge) {
+              pendingLoopNudge =
+                `You have made ${readOnlyStreak} consecutive read/search calls without producing anything. `
+                + `This is not making progress. Produce the result now from what you already have `
+                + `(write the file or answer), or stop and say exactly what is missing.`;
+            }
+          }
           const sig = toolCallSignature(call);
           if (sig === loopSig) {
             loopRepeat += 1;
@@ -1266,7 +1373,7 @@ export class AgentRunner {
               + `or stop and report what you have so far. Repeating the identical call again will end the run.`;
           }
 
-          // Near-duplicate loop_detection (WS-3): a call that repeats
+          // Near-duplicate loop_detection: a call that repeats
           // modulo volatile id/timestamp fields. The exact streak above resets on
           // any real arg change, so this is the only tier that catches a "same
           // call, fresh request-id/uuid each time" spin. Threshold is above
@@ -1374,7 +1481,7 @@ export class AgentRunner {
         };
 
         // Batch tool calls: a run of ADJACENT parallel-safe tools executes
-        // concurrently (G4); every other tool is a singleton barrier. Declared
+        // concurrently; every other tool is a singleton barrier. Declared
         // order is preserved, so results are committed in order and a write/exec
         // tool separates the reads before it from the reads after it.
         const parallelCap = parallelToolCap();
@@ -1392,14 +1499,17 @@ export class AgentRunner {
         let endTurnRequested = false;
         let terminalBatchIndex = -1;
         const terminalSkipMessage = "A prior terminal tool ended this turn before this tool could run.";
-        const deferredToolImages: NonNullable<ToolResult["images"]>[] = [];
+        const deferredToolImages: Array<{ toolUseId: string; images: NonNullable<ToolResult["images"]> }> = [];
         const commitToolResult = (call: ToolUseCall, toolResult: ToolResult) => {
           this.session.addToolResult(call.id, toolResult.content, undefined, toolResult.isError);
-          if (toolResult.images?.length) deferredToolImages.push(toolResult.images);
+          // Keep the producing call id with the deferred images: flushing
+          // them bare loses which tool_use they answer, and the session's image
+          // externalization needs that attribution to replace exactly these images.
+          if (toolResult.images?.length) deferredToolImages.push({ toolUseId: call.id, images: toolResult.images });
         };
         const flushDeferredToolImages = () => {
-          for (const images of deferredToolImages.splice(0)) {
-            this.session.addToolImages(images);
+          for (const deferred of deferredToolImages.splice(0)) {
+            this.session.addToolImages(deferred.images, deferred.toolUseId);
           }
         };
 
@@ -1427,7 +1537,7 @@ export class AgentRunner {
 
             yield { type: "tool_start", id: call.id, name: call.name, input: call.input };
             toolNamesSet.add(call.name);
-            // Track skill reads for metacognition metrics
+            // Track skill reads for the run-result meta (skillsLoaded).
             if (call.name === "skill_manage" && call.input && (call.input as any).action === "read" && (call.input as any).id) {
               skillsLoadedSet.add((call.input as any).id as string);
             }
@@ -1450,6 +1560,7 @@ export class AgentRunner {
               state: toolState,
               toolIdleTimeoutMs: this.config.agent.toolIdleTimeoutMs,
               transformResult: this.transformToolResult,
+              beforeExecute: this.beforeToolExecute,
               emitEvent: pushToolEvent,
             });
             const sequentialToolStartedAt = Date.now();
@@ -1543,6 +1654,7 @@ export class AgentRunner {
               state: toolState,
               toolIdleTimeoutMs: this.config.agent.toolIdleTimeoutMs,
               transformResult: this.transformToolResult,
+              beforeExecute: this.beforeToolExecute,
               emitEvent: (event) => {
                 pQueue.push(event);
                 pBump();
@@ -2481,8 +2593,9 @@ export class AgentRunner {
 
   /**
    * Run a one-shot reflection turn: send the review prompt to the LLM
-   * with access to skill_manage + any injected tools, then return the
-   * text response. The reflection session is ephemeral (no persistence).
+   * with access to the reflection tool allowlist (skill_manage +
+   * metacognition), then return the text response. The reflection session
+   * is ephemeral (no persistence).
    */
   async runReflection(
     reviewPrompt: string,
@@ -2502,10 +2615,11 @@ export class AgentRunner {
 
     const provider = resolved.provider;
     const modelId = resolved.modelId;
-    // manage_execution_plan controls the live conversation Session and has no valid
-    // active user turn during this ephemeral reflection run.
+    // 反思只拿既定产出通道（见 REFLECTION_TOOL_ALLOWLIST 头注释）：
+    // Only the declared reflection outputs are executable; ordinary task tools
+    // are not inherited by a background reflection.
     const reflectionTools = new Map(
-      [...this.tools.entries()].filter(([name]) => name !== "manage_execution_plan"),
+      [...this.tools.entries()].filter(([name]) => REFLECTION_TOOL_ALLOWLIST.has(name)),
     );
     const toolDefs = [...reflectionTools.values()].map(toToolDefinition);
     const toolState: ToolContext["state"] = sandboxEnv ? { sandboxEnv } : {};
@@ -2556,6 +2670,7 @@ export class AgentRunner {
               toolState,
               signal,
               this.config.agent.toolIdleTimeoutMs,
+              this.beforeToolExecute,
             );
             reflectSession.addToolResult(call.id, toolResult.content, toolResult.images, toolResult.isError);
             if (toolResult.isError) {
@@ -2637,6 +2752,7 @@ async function runToolWithWatchdog(opts: {
   state: ToolContext["state"];
   toolIdleTimeoutMs: number;
   transformResult?: ToolResultTransformer | null;
+  beforeExecute?: ToolExecutionPreflight | null;
   emitEvent: (event: ToolExecutionEvent) => void;
 }): Promise<ToolExecutionOutcome> {
   const startedAt = Date.now();
@@ -2702,9 +2818,14 @@ async function runToolWithWatchdog(opts: {
   const toolIdle = createToolIdleWatchdog(toolIdleTimeoutMs);
   const abortWait = waitForAbort(signal);
   let acceptingProgress = true;
+  let atomicCommitStarted = false;
   const toolCtx: ToolContext = {
     workingDir,
     signal: toolAbort.signal,
+    beginAtomicCommit: () => {
+      toolAbort.signal.throwIfAborted();
+      atomicCommitStarted = true;
+    },
     state,
     emitProgress: (progress) => {
       if (!acceptingProgress) return;
@@ -2726,7 +2847,12 @@ async function runToolWithWatchdog(opts: {
     | { ok: true; result: ToolResult }
     | { ok: false; err: unknown };
   const toolPromise: Promise<ToolCompletion> = Promise.resolve()
-    .then(() => tool.execute(call.input, toolCtx))
+    .then(async () => {
+      const denial = await opts.beforeExecute?.(call.name, call.input, toolCtx);
+      if (denial) return { ...denial, isError: true };
+      if (toolCtx.signal?.aborted) return { content: abortedToolMessage, isError: true };
+      return tool.execute(call.input, toolCtx);
+    })
     .then(
       (result) => ({ ok: true as const, result }),
       (err) => ({ ok: false as const, err }),
@@ -2738,7 +2864,10 @@ async function runToolWithWatchdog(opts: {
       toolIdle.promise,
     ];
     if (abortWait.promise) waits.push(abortWait.promise);
-    const raced = await Promise.race(waits);
+    let raced = await Promise.race(waits);
+    // Host code marks only the irreversible write, not tool entry or lock
+    // acquisition. Keep its real receipt while normal tools still stop promptly.
+    if ((raced === "abort" || raced === "tool_idle") && atomicCommitStarted) raced = await toolPromise;
     acceptingProgress = false;
 
     if (raced === "tool_idle") {
@@ -2755,7 +2884,7 @@ async function runToolWithWatchdog(opts: {
       return abortResult();
     }
     if (raced.ok === false) {
-      if (signal?.aborted) {
+      if (signal?.aborted && !atomicCommitStarted) {
         toolAbort.abort();
         return abortResult();
       }
@@ -2837,10 +2966,12 @@ async function executeReflectionTool(
   state: ToolContext["state"],
   signal: AbortSignal | undefined,
   toolIdleTimeoutMs: number,
+  beforeExecute?: ToolExecutionPreflight | null,
 ): Promise<ToolResult> {
   const outcome = await runToolWithWatchdog({
     call: { type: "tool_use", id: "reflection", name: tool.name, input },
     tool,
+    beforeExecute,
     signal,
     state,
     toolIdleTimeoutMs,

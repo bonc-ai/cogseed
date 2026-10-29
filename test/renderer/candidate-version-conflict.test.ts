@@ -70,7 +70,11 @@ function ensureModule(): Ns {
     },
     uiButton: require('../../src/renderer/modules/ui-button.js').uiButton,
     uiIconButton: require('../../src/renderer/modules/ui-button.js').uiIconButton,
+    uiCard: require('../../src/renderer/modules/ui-card.js').uiCard,
     uiInput: require('../../src/renderer/modules/ui-form.js').uiInput,
+    uiSelect: require('../../src/renderer/modules/ui-form.js').uiSelect,
+    uiCheckbox: require('../../src/renderer/modules/ui-form.js').uiCheckbox,
+    uiField: require('../../src/renderer/modules/ui-form.js').uiField,
     uiSwitch: require('../../src/renderer/modules/ui-form.js').uiSwitch,
     uiTextarea: require('../../src/renderer/modules/ui-form.js').uiTextarea,
     uiEmptyState: require('../../src/renderer/modules/ui-empty.js').uiEmptyState,
@@ -86,7 +90,10 @@ function ensureModule(): Ns {
   globalScope.document = { getElementById: () => domRoot, querySelector: () => null, querySelectorAll: () => [] };
   /* eslint-disable @typescript-eslint/no-require-imports */
   require('../../src/renderer/modules/icons.js');
-  windowStub.uiIconHtml = (globalThis as unknown as Record<string, unknown>).uiIconHtml;
+  // icons.js 挂在 window（即本夹具的 windowStub）上；这里不能反手用 globalThis
+  // 的副本覆盖，否则 window 上的实现会被 undefined 抹掉。
+  windowStub.uiIconHtml = (windowStub as Record<string, unknown>).uiIconHtml
+    ?? (globalThis as unknown as Record<string, unknown>).uiIconHtml;
   // ui-status.js / ui-page-header.js 是 index.html 里的静态共享层（真机先于
   // cognition-assets 就绪）：夹具的 window 必须和真机一样有这一层。
   require('../../src/renderer/modules/ui-status.js');
@@ -119,8 +126,30 @@ const currentVersionSnapshot = {
   evidenceRefs: [],
 };
 
-/** 更新型候选：任务当时用 v1，冲突返回里当前在用版是 v3。 */
+/** 更新型候选：夜间会话捕获形成的一条对既有规则的更新建议。
+ *  版本口径：候选锚定 v1，冲突返回里当前在用版是 v3。
+ *
+ *  `captureProvenance` / `sourceRefs` 不是装饰：1.4.0 只有一个候选渲染面
+ *  （review-views.js::activityCandidate），它先过 review-candidate.js::attentionReady。
+ *  该系统活动只承接**完整形成**的夜间认知建议（pipeline、捕获 id、抽取完成时间、
+ *  消息 id、价值判定与其原文证据缺一不可），不认 KSTAR 血统（learningProvenance /
+ *  learningSignal / origin=manual|teaching|kstar 一律 false）——这些候选在 1.4.0
+ *  架构里本来就不可操作（主进程 activity-projection.ts 直接给 isolated_source、
+ *  cognition/candidate-submission.ts 对 kstar 来源抛错）。缺这段血统时渲染层把
+ *  capabilities 全部收敛掉，动作按钮与重锚出口整块消失——本文件 5 个用例都因此变红。
+ *  形状照抄 capture-service.ts::prepare（nightly_conversation 线）与共享夹具
+ *  test/renderer/helpers/nightly-candidate.ts。 */
 function updateCandidate(over: Record<string, unknown> = {}) {
+  // 存储层把 evidenceRefs 与 sourceRefs 写成同内容双份（candidate-service.ts:
+  // `evidenceRefs = normalize(input.evidenceRefs || input.sourceRefs)`），这里照办。
+  const sourceRefs = [
+    { kind: 'conversation', subtype: 'session', id: 'conv-1', title: '接口变更同步口径' },
+    {
+      kind: 'conversation', subtype: 'message', id: 'conv-1#msg-1',
+      excerpt: '接口变更后必须同步更新对应文档与 wiki，并在群里告知。',
+      locator: { conversationId: 'conv-1', messageId: 'msg-1' },
+    },
+  ];
   return {
     id: 'rcand-u', status: 'pending_review',
     judgment: '接口变更后必须同步更新对应文档与 wiki，并在群里告知。',
@@ -130,13 +159,37 @@ function updateCandidate(over: Record<string, unknown> = {}) {
     suggestedType: 'rule', suggestedScope: 'general',
     suggestedAction: 'update', targetAssetId: 'aa-t1', targetVersionUsed: '1', taskRunId: 'taskrun-1',
     applicableWhen: ['写并行批次工具时'], forbiddenWhen: ['涉及外部合规文档时'],
-    evidenceRefs: [{ kind: 'execution', id: 'kse-ep1' }],
-    learningProvenance: { episodeId: 'kse-ep1', attribution: 'execution_gap' },
+    sourceRefs,
+    evidenceRefs: sourceRefs,
+    captureProvenance: {
+      pipeline: 'nightly_conversation', captureId: 'cap-1', messageIds: ['msg-1'],
+      extractionCompletedAt: '2026-09-30T02:10:00.000Z',
+      valueJudgment: {
+        eligible: true,
+        reason: '同一次任务里两次漏更新文档，可固化成规则',
+        judgedAt: '2026-09-30T02:00:00.000Z',
+        evidence: [{
+          sourceId: 'conv-1#msg-1', messageId: 'msg-1',
+          quote: '接口变更后必须同步更新对应文档与 wiki，并在群里告知。',
+        }],
+      },
+    },
     capabilities: {
       canEdit: true, canPromote: true, canDefer: true, canReject: true,
       countsAsPending: true, isSnoozed: false, isTerminal: false, displayState: 'needs_review',
     },
     ...over,
+  };
+}
+
+/** 1.4.0 的确认契约：promote 之后渲染层会回读候选与资产核对"是否真的落地"
+ *  （core.js::verifyPromotion）。成功路径的 IPC 应答必须带 confirmed 候选与它
+ *  对应的资产；只回 `{ok:true}` 会被判成"提交了但未确认"，测不到成功话术。 */
+function promotedReply() {
+  return {
+    ok: true,
+    candidate: { ...updateCandidate(), status: 'confirmed', promotedAssetId: 'aa-t1' },
+    asset: { ...targetAsset, version: '4', activeVersion: '4' },
   };
 }
 
@@ -164,8 +217,15 @@ function resetWorld(candidate: Record<string, unknown> = updateCandidate()) {
   ALERTS.length = 0;
   domRoot.innerHTML = '';
   invokeImpl = defaultInvoke(candidate);
+  // 认知生长页把「区块是否已读」当首载骨架判据（views.js::render →
+  // NS.isRouteLoading）。真机进候选详情前这些区块早已读过；夹具里没有真实
+  // reload 的副作用可蹭，逐用例显式标成已读，否则渲染只有骨架、断言全变空断言。
+  const blockStatus = Object.fromEntries(
+    ['assets', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox', 'ontology']
+      .map((name) => [name, { loaded: true, loading: false }]),
+  );
   Object.assign(ns.store, {
-    loaded: true, loading: false, errors: [],
+    loaded: true, loading: false, errors: [], blockStatus,
     assets: [targetAsset], candidates: [candidate], sources: [], captures: [], captureSettings: null,
     proofs: [], inbox: [], kstarSummaries: null, kstarSummariesSettled: [], kstarEpisode: null,
     adoptionReceipts: null, improvementOutcomes: null, kstarFailures: null, assetVersions: null,
@@ -204,7 +264,7 @@ describe('确认更新撞版本冲突的处置（T022 / US-702）', () => {
       // 重锚有记录：任何带 confirmBaselineVersion 的调用都不该出现在"撞冲突"这一步。
       if (channel === 'recall.candidates.promote') {
         const confirm = (payload as Record<string, unknown>).confirmBaselineVersion;
-        if (confirm) return { ok: true, assetId: 'aa-t1' };
+        if (confirm) return promotedReply();
         return { ok: false, state: 'pending', versionConflict: rawConflict, message: '这条资产在你确认之前被改过…' };
       }
       return defaultInvoke(candidate)(channel, payload);
@@ -335,7 +395,10 @@ describe('确认更新撞版本冲突的处置（T022 / US-702）', () => {
     expect(html).toContain(zh['cognition.candidate_version_conflict_body_missing']);
     expect(html).not.toContain('data-rebase="1"');
     // 控件回到可操作态：另外两条出口还在（不是禁用死锁）。
-    expect(html).toContain('data-action="defer"');
+    // 活动详情收敛（2026-09-29）后「稍后处理」由活动控制器的 activity-defer
+    // 承接（内部仍发 recall.candidates.defer），不再是 cand-decide 上的
+    // data-action="defer"；「拒绝」仍是 cand-decide + data-action="reject"。
+    expect(html).toContain('data-act="activity-defer"');
     expect(html).toContain('data-action="reject"');
   });
 
@@ -351,7 +414,7 @@ describe('确认更新撞版本冲突的处置（T022 / US-702）', () => {
   it('versionCheckSkipped：确认照常生效但如实提示无法核对改进对象（不给重锚按钮）', async () => {
     // ① 展示期（存量候选没有任务当时的版本）：依据链照实说，页面上没有重锚按钮。
     const ns = resetWorld();
-    ns.store.candidates = [updateCandidate({ targetVersionUsed: '', learningProvenance: {} })];
+    ns.store.candidates = [updateCandidate({ targetVersionUsed: '' })];
     const detail = renderDetail();
     expect(detail).toContain(zh['cognition.chain_target_no_version']);
     expect(detail).not.toContain('data-rebase="1"');
@@ -360,7 +423,7 @@ describe('确认更新撞版本冲突的处置（T022 / US-702）', () => {
     // ② 确认期：主进程返回 versionCheckSkipped → 如实提示，不假装核过。
     TOASTS.length = 0;
     invokeImpl = (channel, payload) => {
-      if (channel === 'recall.candidates.promote') return { ok: true, assetId: 'aa-t1', versionCheckSkipped: true };
+      if (channel === 'recall.candidates.promote') return { ...promotedReply(), versionCheckSkipped: true };
       return defaultInvoke()(channel, payload);
     };
     await ns.actions.adoptCandidate('rcand-u', undefined);
@@ -392,10 +455,15 @@ describe('候选三态与按钮名按型分支（T023 / US-702）', () => {
     return visibleText(renderDetail());
   };
 
-  it('更新型（update / limit_scope 且有目标方法）：「保存更新 / 稍后处理 / 拒绝」，与 008 卡片同一批词条', () => {
+  it('更新型（update / limit_scope 且有目标方法）：确认词按型落词，决策词与 008 卡片同一批', () => {
     for (const action of ['update', 'limit_scope']) {
       const text = labelsOf(action);
-      expect(text, action).toContain(zh['recall.asset_approval.confirm']);
+      // 2026-09-29 A6 词根统一 + 活动详情按型分支：update 用 008 审批卡的
+      // 「保存更新」，limit_scope 用更具体的「保存边界」；两者同样以「保存」为
+      // 词根，都不是新建型的「保存」/「确认保存」。
+      expect(text, action).toContain(action === 'limit_scope'
+        ? zh['cognition.activity_save_boundary']
+        : zh['recall.asset_approval.confirm']);
       expect(text, action).toContain(zh['recall.asset_approval.defer']);
       expect(text, action).toContain(zh['recall.asset_approval.reject']);
       // 更新型不说新建型的旧文案「保存并使用」（2026-09-29 A6 词根统一后
@@ -405,20 +473,27 @@ describe('候选三态与按钮名按型分支（T023 / US-702）', () => {
     }
   });
 
-  it('新建型保持既有措辞：「保存并使用 / 稍后处理 / 不保存」', () => {
+  it('新建型保持既有措辞：「保存 / 稍后处理」，确认词不与更新型同词', () => {
     const text = labelsOf('create');
+    // A6 词根统一后新建型的确认词是「保存」（活动详情里是「确认保存」），
+    // 更新型才是「保存更新」/「保存边界」；稍后处理与拒绝在活动详情里与更新型
+    // 共用那批词条（cognition.activity_defer / inbox_action_reject），
+    // 不再退回 008 卡的「不保存」。
     expect(text).toContain(zh['cognition.candidate_save_and_use']);
+    expect(text).toContain(zh['cognition.activity_history_accept']);
     expect(text).toContain(zh['cognition.candidate_defer_action']);
-    expect(text).toContain(zh['cognition.candidate_reject']);
     expect(text).not.toContain(zh['recall.asset_approval.confirm']);
   });
 
   it('没有目标方法的候选不说"更新"（对不存在的旧版不许说更新）', () => {
-    // update 却缺 targetAssetId：不出现「确认更新」。
+    // update 却缺 targetAssetId：不出现「保存更新」，按新建型落词。
     const text = labelsOf('update', { targetAssetId: '' });
     expect(text).not.toContain(zh['recall.asset_approval.confirm']);
     expect(text).toContain(zh['cognition.candidate_save_and_use']);
-    expect(text).not.toContain(zh['recall.asset_approval.reject']);
+    // 旧断言钉的「拒绝」与活动详情共用的 cognition.inbox_action_reject 是同一个
+    // 词，在这个渲染面上无法区分更新型/新建型（两者都渲染「拒绝」）；能区分的
+    // 是确认词，所以这里连同 limit_scope 的「保存边界」一起排除。
+    expect(text).not.toContain(zh['cognition.activity_save_boundary']);
   });
 
   it('pause 提案保持既有呈现：不走重锚路径、也没有版本冲突块', () => {

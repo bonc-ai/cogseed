@@ -1,15 +1,14 @@
+// 身份、发言与文件名均为合成测试样例；时间仅用于解析和顺序断言。
 /**
  * transcript_rewrite + transcript_clean_pipeline — 受约束重建层与确定性清理层
  *
- * 重点覆盖（对齐 AGENTS「测业务不变量、恢复路径、文本陷阱」）：
- *   - **锚点纪律**：引用不存在的发言 id 的段落必须被丢弃——这条直接对治一个真实事故：
- *     人工+模型清理版结尾有一整句 `21:15:15—21:15:26「…我先试试 Codex…」`，
- *     而原文最大时间戳是 21:15:11、且「晚安」「完善」「额外」在原文各出现 0 次；
+ * 使用合成发言、编号与时间锚点，覆盖以下契约：
+ *   - **锚点纪律**：引用不存在的发言 id 的段落必须被丢弃，禁止补写无来源的发言；
  *   - **防擅自删内容**：未被任何段落引用的源发言必须被列出来；
  *   - **防新增实体**：段里出现原文没有的拉丁专名要记问题，但**词表规范形必须豁免**
  *     （规范形在原文中出现 0 次，不豁免则每一处合法归一都会被误报）；
  *   - 口癖删除**不得见词就删**（`这个方案` 的"这个"不该删）；
- *   - 实体归一**模糊通道默认不自动替换**（真实误召回：`cookie→Cogseed` 0.80、`id→EduSeed` 0.67）；
+ *   - 实体归一**模糊通道默认不自动替换**（近似词形只能提出候选，不能直接应用）；
  *   - 保留率区间与锚点覆盖率必须如实上报。
  */
 
@@ -63,26 +62,26 @@ function entry(over: Partial<GlossaryEntry> & { wrong: string; correct: string }
 }
 
 const SRC: SourceUtterance[] = [
-  { id: 'U0001', speaker: 'Alex', at: '2026-09-05 19:31:32', text: 'Hello。' },
-  { id: 'U0002', speaker: '张磊', at: '2026-09-05 19:31:34', text: '哈喽哈喽能听到吗？' },
-  { id: 'U0003', speaker: 'Alex', at: '2026-09-05 19:35:24', text: '长期来说的话，你应该是，就是你的身份，实际上是你的个人本体。' },
-  { id: 'U0004', speaker: 'Alex', at: '2026-09-05 19:35:36', text: '那你要是你比如说你从李静，比如换成王健的话，那他就应该那什么了呀。' },
+  { id: 'U0001', speaker: 'Demo', at: '2026-09-05 19:31:32', text: 'Hello。' },
+  { id: 'U0002', speaker: '例乙', at: '2026-09-05 19:31:34', text: '示例连线能听到吗？' },
+  { id: 'U0003', speaker: 'Demo', at: '2026-09-05 19:35:24', text: '整体来说的话，你应该是，就是你的编号，实际上是你的示例档案。' },
+  { id: 'U0004', speaker: 'Demo', at: '2026-09-05 19:35:36', text: '那你需要先比如说你从例丙，比如换成例丁的话，那它就应该变更编号了呀。' },
 ];
 
 describe('① 冻结解析 parseSource', () => {
   it('逐条拆出发言，id 从 U0001 起按序稳定', () => {
     const text = [
       '2026-09-05 19:26:04 会议已开启实时转写，机器识别结果仅供参考 ',
-      'Alex 2026-09-05 19:31:32 ',
+      'Demo 2026-09-05 19:31:32 ',
       'Hello.  ',
-      '张磊 2026-09-05 19:31:34 ',
-      '哈喽哈喽能听到吗？ ',
+      '例乙 2026-09-05 19:31:34 ',
+      '示例连线能听到吗？ ',
     ].join('\n');
     const out = parseSource(text);
     expect(out.map((u) => u.id)).toEqual(['U0001', 'U0002']);
-    expect(out[0].speaker).toBe('Alex');
+    expect(out[0].speaker).toBe('Demo');
     expect(out[0].at).toBe('2026-09-05 19:31:32');
-    expect(out[1].text).toBe('哈喽哈喽能听到吗？');
+    expect(out[1].text).toBe('示例连线能听到吗？');
   });
 
   it('跳过会议横幅；无发言人的散行不产出条目', () => {
@@ -91,37 +90,36 @@ describe('① 冻结解析 parseSource', () => {
   });
 
   it('同一条发言跨多行时拼成一条（换行不切段）', () => {
-    const out = parseSource('Alex 2026-09-05 19:31:32 \n第一行\n第二行\n张磊 2026-09-05 19:31:34 \n好的\n');
+    const out = parseSource('Demo 2026-09-05 19:31:32 \n第一行\n第二行\n例乙 2026-09-05 19:31:34 \n好的\n');
     expect(out).toHaveLength(2);
     expect(out[0].text).toBe('第一行第二行');
   });
 
   it('相对时钟导出（无日期）同样解析出全部发言，`at` 沿用原文时钟', () => {
-    // 真机事故（2026-09-18）：旧正则硬要日期，这类稿子解析出 0 条发言 →
-    // 整条清理管线静默失效（77 分钟的稿子清理版为空）。
+    // 相对时钟不含日期，也必须解析出发言，不能因格式差异返回空列表。
     const text = [
-      '王伟 02:45',
-      '喂海运哥能听到吗？',
-      '刘洋 02:56',
-      '我这边能听到？',
-      '李强 01:00:35',
-      '然后下边就是实现的现状与缺口。',
+      '例甲 02:45',
+      '示例乙这边准备好了吗？',
+      '例乙 02:56',
+      '示例连线已经准备好。',
+      '例丙 01:00:35',
+      '然后下面就是样例的内容与边界。',
     ].join('\n');
     const out = parseSource(text);
     expect(out).toHaveLength(3);
-    expect(out.map((u) => u.speaker)).toEqual(['王伟', '刘洋', '李强']);
+    expect(out.map((u) => u.speaker)).toEqual(['例甲', '例乙', '例丙']);
     expect(out.map((u) => u.at)).toEqual(['02:45', '02:56', '01:00:35']);
-    expect(out[0].text).toBe('喂海运哥能听到吗？');
-    expect(out[2].text).toBe('然后下边就是实现的现状与缺口。');
+    expect(out[0].text).toBe('示例乙这边准备好了吗？');
+    expect(out[2].text).toBe('然后下面就是样例的内容与边界。');
     // id 仍是稳定锚点
     expect(out.map((u) => u.id)).toEqual(['U0001', 'U0002', 'U0003']);
   });
 
   it('相对时钟导出不带日期的转写声明横幅也跳过', () => {
-    const out = parseSource('00:00:00 会议已开启实时转写，机器识别结果仅供参考\n王伟 02:45\n喂海运哥能听到吗？\n');
+    const out = parseSource('00:00:00 会议已开启实时转写，机器识别结果仅供参考\n例甲 02:45\n示例乙这边准备好了吗？\n');
     expect(out).toHaveLength(1);
-    expect(out[0].speaker).toBe('王伟');
-    expect(out[0].text).toBe('喂海运哥能听到吗？');
+    expect(out[0].speaker).toBe('例甲');
+    expect(out[0].text).toBe('示例乙这边准备好了吗？');
   });
 });
 
@@ -163,7 +161,7 @@ describe('③ 实体归一 normalizeEntities', () => {
     expect(r.applied[0].channel).toBe('normalized');
   });
 
-  it('模糊通道**默认不自动替换**，只进 pending（真实误召回：cookie→Cogseed 0.80）', () => {
+  it('模糊通道**默认不自动替换**，只进 pending（近似词形只进入待确认）', () => {
     const r = normalizeEntities('它本地是有个 cookie 吗', [cogseed], { domainTerms: ['Cogseed'] });
     expect(r.text).toBe('它本地是有个 cookie 吗'); // 未被改动
     expect(r.pending.some((p) => p.wrong === 'cookie')).toBe(true);
@@ -182,12 +180,12 @@ describe('③ 实体归一 normalizeEntities', () => {
 describe('④ 重建契约 buildRewriteRequest / parseRewriteResponse', () => {
   it('请求里带上源发言 id、词表与场景', () => {
     const req = buildRewriteRequest(SRC, {
-      scenario: '教育智能体演示汇报',
+      scenario: '合成工具演示流程',
       glossary: [{ correct: 'Cogseed', forms: ['coxy', 'cox'] }],
     });
-    expect(req.message).toContain('U0001｜Alex｜2026-09-05 19:31:32｜Hello。');
+    expect(req.message).toContain('U0001｜Demo｜2026-09-05 19:31:32｜Hello。');
     expect(req.message).toContain('Cogseed ← coxy / cox');
-    expect(req.message).toContain('教育智能体演示汇报');
+    expect(req.message).toContain('合成工具演示流程');
     expect(req.systemPrompt).toContain('绝对禁止');
   });
 
@@ -210,11 +208,11 @@ describe('④ 重建契约 buildRewriteRequest / parseRewriteResponse', () => {
 });
 
 describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
-  it('**引用不存在的 id 的段落必须被丢弃** —— 直接对治"清理版凭空补出结尾"的真实事故', () => {
+  it('引用不存在的 id 的段落必须被丢弃，不能凭空补出结尾', () => {
     const result = verifyRewrite(SRC, [
       { srcIds: ['U0003'], text: SRC[2].text },
       // 伪造：原文最大时间戳是 19:35:36，根本不存在 U9999 这条发言
-      { srcIds: ['U9999'], text: '好的，晚安。我先试试 Codex，看看能不能把这次会议整理得更完善一些。' },
+      { srcIds: ['U9999'], text: '这里凭空多了一条结束语，示例流程已经完成，请继续下一项练习。' },
     ]);
     expect(result.paragraphs).toHaveLength(1);
     expect(result.issues.some((i) => i.reason === 'invalid_anchor')).toBe(true);
@@ -243,7 +241,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   });
 
   it('只是大小写/空格差异的写法不算"新增实体"（NotebookLM vs notebook lm）', () => {
-    const S = [...SRC, { id: 'U0007', speaker: '张磊', at: 't', text: '那个是照 notebook lm 那么做的一个东西。' }];
+    const S = [...SRC, { id: 'U0007', speaker: '例乙', at: 't', text: '那个是照 notebook lm 那么做的一个东西。' }];
     const ok = verifyRewrite(S, [{ srcIds: ['U0007'], text: '那个是照 NotebookLM 那么做的一个东西。' }], { allowedTerms: [] });
     expect(ok.issues.some((i) => i.reason === 'new_entity')).toBe(false);
 
@@ -265,7 +263,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
     expect(result.stats.retention).toBeGreaterThan(0);
     expect(result.stats.retention).toBeLessThanOrEqual(REWRITE_MAX_RETENTION);
     expect(result.stats.retentionOk).toBe(true);
-    const tiny = verifyRewrite(SRC, [{ srcIds: ['U0003'], text: '身份。' }]);
+    const tiny = verifyRewrite(SRC, [{ srcIds: ['U0003'], text: '编号。' }]);
     expect(tiny.stats.retention).toBeLessThan(REWRITE_MIN_RETENTION);
     expect(tiny.stats.retentionOk).toBe(false);
   });
@@ -279,13 +277,13 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
     expect(result.uncovered).toEqual(['U0001', 'U0002']);
   });
 
-  it('**第三人称转述被直接判定**（实测失败模式：模型把"重建"做成"写摘要"）', () => {
+  it('**第三人称转述被直接判定**（区分重建与摘要）', () => {
     const result = verifyRewrite(
       SRC,
       [
-        { srcIds: ['U0003', 'U0004'], text: 'Alex 指出，个人本体与个人身份是直接连接的，换成王健就全都对不上了。' },
+        { srcIds: ['U0003', 'U0004'], text: 'Demo 指出，示例档案与个人编号是直接连接的，换成例丁就全都对不上了。' },
       ],
-      { speakers: ['Alex', '张磊'], allowedTerms: [] },
+      { speakers: ['Demo', '例乙'], allowedTerms: [] },
     );
     expect(result.issues.some((i) => i.reason === 'narration_style')).toBe(true);
     expect(result.stats.narrationCount).toBe(1);
@@ -294,8 +292,8 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   it('第一人称原话不会被误判为转述', () => {
     const result = verifyRewrite(
       SRC,
-      [{ srcIds: ['U0003'], text: '长期来说，身份实际上就是你的个人本体。' }],
-      { speakers: ['Alex', '张磊'], allowedTerms: [] },
+      [{ srcIds: ['U0003'], text: '整体来说，编号实际上就是你的示例档案。' }],
+      { speakers: ['Demo', '例乙'], allowedTerms: [] },
     );
     expect(result.issues.some((i) => i.reason === 'narration_style')).toBe(false);
   });
@@ -303,11 +301,11 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   it('跨说话人的段落按"谁的话更能解释它"定归属，而不是一律算第一个人', () => {
     const result = verifyRewrite(
       SRC,
-      [{ srcIds: ['U0002', 'U0003'], text: '长期来说，身份实际上就是你的个人本体。' }],
+      [{ srcIds: ['U0002', 'U0003'], text: '整体来说，编号实际上就是你的示例档案。' }],
       { allowedTerms: [] },
     );
-    // U0002 是张磊、U0003 是 Alex；文本明显是 Alex 说的 → 必须归给 Alex
-    expect(result.paragraphs[0].speaker).toBe('Alex');
+    // U0002 是例乙、U0003 是 Demo；文本明显是 Demo 说的 → 必须归给 Demo
+    expect(result.paragraphs[0].speaker).toBe('Demo');
     expect(result.issues.some((i) => i.reason === 'mixed_speaker')).toBe(false);
   });
 
@@ -322,19 +320,19 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
     expect(result.paragraphs[0].suspect).toBe(true);
   });
 
-  it('**过度归一被抓住**：用了规范形但来源里没有依据（真实案例 code→Cogseed）', () => {
+  it('**过度归一被抓住**：用了规范形但来源里没有依据（没有词表形态依据时禁止归一）', () => {
     const cogseedEntry = entry({ wrong: 'coxy', correct: 'Cogseed' });
     const bad = verifyRewrite(
       SRC,
-      [{ srcIds: ['U0003'], text: '相当于把插件的功能全都内化到 Cogseed 里面。' }],
+      [{ srcIds: ['U0003'], text: '这段样例把接口的名称全都改成 Cogseed 写法。' }],
       { allowedTerms: ['Cogseed'], canonicalForms: [{ correct: 'Cogseed', forms: ['coxy', 'cox'] }] },
     );
     expect(bad.issues.some((i) => i.reason === 'unsupported_canonical')).toBe(true);
 
     // 来源里确实出现了词表形态（coxy）→ 不算过度归一
     const ok = verifyRewrite(
-      [...SRC, { id: 'U0005', speaker: '张磊', at: 't', text: '我的 coxy 是个人大管家。' }],
-      [{ srcIds: ['U0005'], text: '我的 Cogseed 是个人大管家。' }],
+      [...SRC, { id: 'U0005', speaker: '例乙', at: 't', text: '这个 coxy 是示例工具。' }],
+      [{ srcIds: ['U0005'], text: '这个 Cogseed 是示例工具。' }],
       { allowedTerms: ['Cogseed'], canonicalForms: [{ correct: 'Cogseed', forms: ['coxy', 'cox'] }] },
     );
     expect(ok.issues.some((i) => i.reason === 'unsupported_canonical')).toBe(false);
@@ -342,10 +340,10 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   });
 
   it('**引例被抹平被抓住**：说话人在举错写例子，产出改成规范形 → 语义破坏', () => {
-    const S = [...SRC, { id: 'U0009', speaker: 'Alex', at: 't', text: '你看咱们现在转写里面，它一会儿叫什么？coxy 一会儿叫别的。' }];
+    const S = [...SRC, { id: 'U0009', speaker: 'Demo', at: 't', text: '这段示例比较名称：它一会儿叫什么？coxy 一会儿叫样例。' }];
     const bad = verifyRewrite(
       S,
-      [{ srcIds: ['U0009'], text: '你看咱们现在的转写，一会儿叫 Cogseed，一会儿叫别的什么。' }],
+      [{ srcIds: ['U0009'], text: '这段示例比较名称，一会儿叫 Cogseed，一会儿叫样例什么。' }],
       { allowedTerms: ['Cogseed'], canonicalForms: [{ correct: 'Cogseed', forms: ['coxy', 'cox'] }] },
     );
     expect(bad.issues.some((i) => i.reason === 'quoted_form_flattened')).toBe(true);
@@ -353,14 +351,14 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
     // 保留引例 → 不告警
     const ok = verifyRewrite(
       S,
-      [{ srcIds: ['U0009'], text: '你看咱们现在的转写，一会儿叫 coxy，一会儿叫别的什么。' }],
+      [{ srcIds: ['U0009'], text: '这段示例比较名称，一会儿叫 coxy，一会儿叫样例什么。' }],
       { allowedTerms: ['Cogseed'], canonicalForms: [{ correct: 'Cogseed', forms: ['coxy', 'cox'] }] },
     );
     expect(ok.issues.some((i) => i.reason === 'quoted_form_flattened')).toBe(false);
   });
 
   it('**挂名丢弃被抓住**：id 被引用但该条内容没进产出（不丢信息的空档）', () => {
-    const S = [...SRC, { id: 'U0011', speaker: 'Alex', at: 't', text: '就会有大量这种沉淀的东西需要处理，你稍等一下我看看这个。' }];
+    const S = [...SRC, { id: 'U0011', speaker: 'Demo', at: 't', text: '这段示例还有多项内容需要处理，请稍等一下，我再查看一遍。' }];
     const bad = verifyRewrite(
       S,
       [{ srcIds: ['U0003', 'U0011'], text: SRC[2].text }],
@@ -372,14 +370,14 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
     expect(bad.stats.droppedUtteranceCount).toBe(1);
   });
 
-  it('挂名丢弃检查**默认关闭**（实测噪声率过高，留着会淹没真信号）', () => {
-    const S = [...SRC, { id: 'U0011', speaker: 'Alex', at: 't', text: '就会有大量这种沉淀的东西需要处理，你稍等一下我看看这个。' }];
+  it('挂名丢弃检查**默认关闭**（字符相似度不能可靠区分改写与丢弃）', () => {
+    const S = [...SRC, { id: 'U0011', speaker: 'Demo', at: 't', text: '这段示例还有多项内容需要处理，请稍等一下，我再查看一遍。' }];
     const off = verifyRewrite(S, [{ srcIds: ['U0003', 'U0011'], text: SRC[2].text }], { allowedTerms: [] });
     expect(off.issues.some((i) => i.reason === 'dropped_utterance')).toBe(false);
   });
 
   it('极短应答被合并/删除属正常，不报挂名丢弃', () => {
-    const S = [...SRC, { id: 'U0012', speaker: '张磊', at: 't', text: '对对。' }];
+    const S = [...SRC, { id: 'U0012', speaker: '例乙', at: 't', text: '对对。' }];
     const ok = verifyRewrite(S, [{ srcIds: ['U0003', 'U0012'], text: SRC[2].text }],
       { allowedTerms: [], checkDroppedUtterances: true });
     expect(ok.issues.some((i) => i.reason === 'dropped_utterance')).toBe(false);
@@ -390,9 +388,9 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
       SRC,
       [
         { srcIds: ['U0001'], text: '会议开始，双方互相问候，确认能听到。' },
-        { srcIds: ['U0002'], text: '张磊询问是否开始投屏。' },
+        { srcIds: ['U0002'], text: '例乙询问是否开始投屏。' },
       ],
-      { speakers: ['Alex', '张磊'], allowedTerms: [] },
+      { speakers: ['Demo', '例乙'], allowedTerms: [] },
     );
     expect(summarized.stats.qualityGate).toBe('summarized');
 
@@ -406,7 +404,7 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
   it('toSuspectNotes 只输出需要人来判断的两类问题', () => {
     const result = verifyRewrite(SRC, [
       { srcIds: ['U0001'], text: '和 Hello 毫无关系的编造长文本内容内容内容内容内容内容。' },
-      { srcIds: ['U0002'], text: '哈喽哈喽能听到吗？多了一个 Bogus7。' },
+      { srcIds: ['U0002'], text: '示例连线能听到吗？多了一个 Bogus7。' },
     ], { allowedTerms: [] });
     const notes = toSuspectNotes(result);
     expect(notes.length).toBeGreaterThan(0);
@@ -416,10 +414,10 @@ describe('⑤ 锚点校验 verifyRewrite（本模块存在的意义）', () => {
 
 describe('⑤b 引例段确定性回退（不依赖模型遵守提示词）', () => {
   it('被标记的引例段回退为源发言原文并加可见标注', () => {
-    const S = [...SRC, { id: 'U0009', speaker: 'Alex', at: 't', text: '它一会儿叫什么？coxy 一会儿叫别的。' }];
+    const S = [...SRC, { id: 'U0009', speaker: 'Demo', at: 't', text: '它一会儿叫什么？coxy 一会儿叫样例。' }];
     const v = verifyRewrite(
       S,
-      [{ srcIds: ['U0009'], text: '它一会儿叫 Cogseed，一会儿叫别的什么。' }],
+      [{ srcIds: ['U0009'], text: '它一会儿叫 Cogseed，一会儿叫样例什么。' }],
       { allowedTerms: ['Cogseed'], canonicalForms: [{ correct: 'Cogseed', forms: ['coxy', 'cox'] }] },
     );
     const map = new Map(S.map((u) => [u.id, u.text]));
@@ -440,8 +438,8 @@ describe('⑤b 引例段确定性回退（不依赖模型遵守提示词）', ()
 describe('⑥ 结构合并与渲染', () => {
   it('同人相邻段落合并为一块，并给出起止时间与合并后的锚点', () => {
     const blocks = mergeBlocks([
-      { srcIds: ['U0003'], text: '甲', similarity: 1, speaker: 'Alex', from: '2026-09-05 19:35:24', to: '2026-09-05 19:35:24', suspect: false },
-      { srcIds: ['U0004'], text: '乙', similarity: 1, speaker: 'Alex', from: '2026-09-05 19:35:36', to: '2026-09-05 19:35:36', suspect: false },
+      { srcIds: ['U0003'], text: '甲', similarity: 1, speaker: 'Demo', from: '2026-09-05 19:35:24', to: '2026-09-05 19:35:24', suspect: false },
+      { srcIds: ['U0004'], text: '乙', similarity: 1, speaker: 'Demo', from: '2026-09-05 19:35:36', to: '2026-09-05 19:35:36', suspect: false },
     ]);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].paragraphs).toEqual(['甲', '乙']);
@@ -458,17 +456,17 @@ describe('⑥ 结构合并与渲染', () => {
 
   it('渲染产物含：说话人｜时间块、逐段锚点、整理说明、附记与未决项', () => {
     const md = renderMarkdown(
-      [{ speaker: 'Alex', from: '2026-09-05 19:35:24', to: '2026-09-05 19:35:36', paragraphs: ['身份是个人本体的一部分。'], srcIds: ['U0003', 'U0004'] }],
+      [{ speaker: 'Demo', from: '2026-09-05 19:35:24', to: '2026-09-05 19:35:36', paragraphs: ['编号是示例档案的一部分。'], srcIds: ['U0003', 'U0004'] }],
       {
-        title: '测试标题', date: '2026-09-05', speakers: ['Alex'],
+        title: '测试标题', date: '2026-09-05', speakers: ['Demo'],
         glossaryTable: [{ correct: 'Cogseed', forms: 'coxy、cox', basis: '项目文档' }],
-        openItems: ['〔本次额外入册，尚未经人工确认〕王晶 → 李静'],
+        openItems: ['〔本次额外入册，尚未经人工确认〕例加 → 例丙'],
         materials: ['原始转写：x.txt'],
         stats: { '字符保留率': '50%' },
       },
     );
     expect(md).toContain('# 测试标题');
-    expect(md).toContain('**Alex｜19:35:24—19:35:36**');
+    expect(md).toContain('**Demo｜19:35:24—19:35:36**');
     expect(md).toContain('⟦U0003-U0004⟧');
     expect(md).toContain('每个段落都回引了源发言 id');
     expect(md).toContain('| Cogseed | coxy、cox | 项目文档 |');
@@ -477,14 +475,14 @@ describe('⑥ 结构合并与渲染', () => {
   });
 });
 
-// ── 引例判据的唯一来源（specs/013 T005：只加 export，词表零改动）─────────────
+// ── 引例判据的唯一来源（各通道共享词表）─────────────
 describe('⑦ QUOTE_MARKERS 导出共享（引例判据唯一处定义）', () => {
-  it('词表内容逐字不变：17 个 marker，含 2026-09-16 事故原词「一会儿叫」', () => {
+  it('共享引例判据包含 17 个 marker，含「一会儿叫」', () => {
     expect(QUOTE_MARKERS).toHaveLength(17);
     expect(QUOTE_MARKERS).toContain('一会儿叫');
     expect(QUOTE_MARKERS).toContain('拼写');
     expect(QUOTE_MARKERS).toContain('词汇表');
-    // 事故判据的三个"识别"系 marker 都在（扫描链共享的就是这一份，不复制第二份）
+    // 引例判据的三个"识别"系 marker 都在（扫描链共享的就是这一份，不复制第二份）
     expect(QUOTE_MARKERS.filter((m) => m.startsWith('识别'))).toEqual(['识别成', '识别错', '识别不准']);
   });
 });

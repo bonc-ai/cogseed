@@ -17,6 +17,10 @@
  *   - `agentId` present → respect `agent.enabled_connectors`. `undefined` AND `[]` BOTH mean
  *     "no connectors" (intentionally stricter than `agent.skill_list`'s three-state — see
  *     PC/CLAUDE.md §6.5 "Per-agent scope"). Only a non-empty `string[]` grants access.
+ *   - `instanceIds` provided (三态，来自 runner 解析的 `agent.enabled_connectors`) → takes
+ *     precedence over `agentId` and restores the missing "inherit" state: `undefined` = 不收窄
+ *     （继承 commander），`[]` = 零连接器，非空数组 = 收窄。任务会话用它在不改动存量 agent
+ *     行为的前提下，把某个 agent 限定到指定的几个 MCP（如会议纪要 agent 只用腾讯会议 + MeshSeed）。
  *
  * Visibility resolution is intentionally side-effect free. It only reads local connector state;
  * Server/MCP restore, cache refresh, reconnect, and token checks happen during explicit connector
@@ -62,6 +66,16 @@ export function stringifyMcpResult(raw: unknown): string {
 export async function resolveVisibleConnectors(
   uid: string,
   agentId: string | undefined,
+  /**
+   * 显式实例 id 白名单（来自 `agent.enabled_connectors`，由 runner 解析后传入）。
+   * 与 `agentId` 的 `enabled_connectors` 语义不同：这里是三态，
+   *   - `undefined` → 不做额外收窄（按 agentId 既有语义）；
+   *   - `[]`        → 零连接器；
+   *   - 非空数组     → 收窄到这些实例。
+   * 存在的理由：`agentId` 存在但未声明 `enabled_connectors` 时，适配器语义是"零连接器"，
+   * 而任务会话需要的是"继承 commander"；调用方用 `undefined` 表达继承、用数组表达收窄。
+   */
+  instanceIds?: string[],
 ): Promise<Array<{ instance: ConnectorInstance; tools: ToolSchema[] }>> {
   if (!uid) return [];
   const all = manager.listInstances(uid);
@@ -77,7 +91,7 @@ export async function resolveVisibleConnectors(
   // deliberately separate from what the UI renders: `isConnectorVerifiedLive` gates the green card,
   // `isConnectorUsable` gates routing. Conflating them is what let a six-day-dead connector show
   // as connected while `callTool` failed every time.
-  const connected = all.filter((i) => isConnectorUsable(i.status) && isConnectorRuntimeEnabled(i.id));
+  const connected = all.filter((i) => isConnectorUsable(i.status) && isConnectorRuntimeEnabled(uid, i.id));
   if (!connected.length) return [];
   // Per-user soft-disable filter (Connectors panel "停用" button). Separate from `agent.enabled_connectors`:
   // this filter applies to every actor including the commander; even a disconnected-by-user instance
@@ -85,7 +99,9 @@ export async function resolveVisibleConnectors(
   // See features/component_enabled.ts + CLAUDE.md §6.5 "Per-user enable toggle".
   const userEnabled = connected.filter((i) => isConnectorEnabled(uid, i.id));
   if (!userEnabled.length) return [];
-  const scope = await _enabledInstancesForActor(uid, agentId, userEnabled);
+  const scope = instanceIds !== undefined
+    ? userEnabled.filter((i) => instanceIds.includes(i.id))
+    : await _enabledInstancesForActor(uid, agentId, userEnabled);
   const resolved = scope.map((instance) => {
     const allowed = instance.enabled_subtools;
     // Auth-session tools are never model-visible. They exist so the connector page can drive a
@@ -104,7 +120,7 @@ export async function resolveVisibleConnectors(
  *  provider data. Filtered here instead of by seeding `enabled_subtools`: the tool list is only
  *  known after the adapter's first `list_tools`, and a stored whitelist would silently hide any
  *  read tool added later. A deny-list of named tools needs no bookkeeping as the adapter grows. */
-const AUTH_SESSION_TOOL_NAMES = new Set(['start_login', 'check_login', 'stop_login']);
+const AUTH_SESSION_TOOL_NAMES = new Set(['start_login', 'check_login', 'stop_login', 'prepare_meeting_change', 'commit_meeting_change', 'discard_meeting_change']);
 
 async function _enabledInstancesForActor(
   uid: string,

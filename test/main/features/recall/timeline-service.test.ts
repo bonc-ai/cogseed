@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -18,6 +19,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previous;
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -36,7 +38,7 @@ async function modules() {
 
 async function promoteAsset(userId: string, statement: string, scope = 'review') {
   const { candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate(userId, {
+  const candidate = await createNightlyCandidateFixture(userId, {
     judgment: statement,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: '时间线基线样本',
@@ -49,6 +51,22 @@ async function promoteAsset(userId: string, statement: string, scope = 'review')
 }
 
 describe('Recall asset proof timeline', () => {
+  it('global timelines share collection reads once, retain per-asset semantics, and reload on the next request', async () => {
+    const { timeline, projection, proofs } = await modules();
+    const left = await promoteAsset('user-a', 'Keep review decisions traceable.', 'review');
+    const right = await promoteAsset('user-a', 'Keep research evidence separate.', 'research');
+    const expected = (await Promise.all([left, right].map(asset => timeline.listAbilityAssetTimeline('user-a', asset.id)))).flat();
+    const episodes = await import('../../../../src/main/features/kstar/episode-store');
+    const usage = await import('../../../../src/main/features/recall/usage-service');
+    const spies = [vi.spyOn(episodes, 'listKstarEpisodes'), vi.spyOn(projection, 'listAllContextProjections'),
+      vi.spyOn(proofs, 'listTransferProofs'), vi.spyOn(proofs, 'listEffectivenessProofs'), vi.spyOn(usage, 'listRecallUsage')];
+    const actual = await timeline.listRecallTimeline('user-a');
+    expect(actual.map(item => JSON.stringify(item)).sort()).toEqual(expected.map(item => JSON.stringify(item)).sort());
+    for (const spy of spies) expect(spy).toHaveBeenCalledOnce();
+    await timeline.listRecallTimeline('user-a');
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(2);
+    expect(await timeline.listRecallTimeline('user-b')).toEqual([]);
+  });
   it('aggregates one asset lifecycle, usage, transfer, and effectiveness evidence in reverse time order', async () => {
     const { assets, projection, proofs, timeline } = await modules();
 
@@ -75,11 +93,13 @@ describe('Recall asset proof timeline', () => {
     await proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'Evidence guidance was applied.' });
 
     vi.setSystemTime(new Date('2026-08-06T00:06:00.000Z'));
-    await proofs.evaluateEffectivenessProof('user-a', { transferProofId: prepared.id, outcome: 'better', observedResult: 'Review quality improved.', evidenceRefs: [{ kind: 'artifact', id: 'artifact-a' }] });
+    const feedback = await proofs.evaluateEffectivenessProof('user-a', { transferProofId: prepared.id, outcome: 'better', observedResult: 'Review quality improved.', evidenceRefs: [{ kind: 'artifact', id: 'artifact-a' }] });
+    // Feedback without a persisted baseline comparison does not establish improvement.
+    expect(feedback.outcome).toBe('insufficient_evidence');
+    expect((await assets.readAbilityAsset('user-a', asset.id)).maturity).toBe('transfer_validated');
 
     const items = await timeline.listAbilityAssetTimeline('user-a', asset.id);
     expect(items.map((item) => item.kind)).toEqual([
-      'asset_updated',
       'effectiveness_recorded',
       'asset_updated',
       'transfer_completed',
@@ -97,7 +117,7 @@ describe('Recall asset proof timeline', () => {
     expect(items.find((item) => item.kind === 'projection_confirmed')).toMatchObject({ refs: { projectionId: confirmed.id, taskRunId: 'task-a' } });
     expect(items.find((item) => item.kind === 'transfer_prepared')).toMatchObject({ refs: { projectionId: confirmed.id, taskRunId: 'task-a', transferProofId: prepared.id } });
     expect(items.find((item) => item.kind === 'transfer_completed')).toMatchObject({ status: 'succeeded', refs: { usageReceiptId: receipt.receiptId } });
-    expect(items.find((item) => item.kind === 'effectiveness_recorded')).toMatchObject({ status: 'valid', refs: { transferProofId: prepared.id } });
+    expect(items.find((item) => item.kind === 'effectiveness_recorded')).toMatchObject({ status: 'valid', outcome: 'insufficient_evidence', refs: { transferProofId: prepared.id } });
     // N-5: usage 行不再把 usage 记录 id 伪装成回执 id——回执索引只认
     // transfer_completed 行的 usageReceiptId；usage 行带 usage_id 供展示。
     const usageRow = items.find((item) => item.kind === 'usage_recorded');

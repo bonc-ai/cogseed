@@ -3,6 +3,27 @@
 Skill 安全静态扫描 + 全生命周期信任网关 + 路径级组合风险。前身为个人项目
 `cogseed-security-scan`，2.0.0 起按 CogSeed 技能治理体系设计。
 
+## 2.3.0 新增了什么（以及为什么）
+
+2.2.0 的能力页上有两项被标成「未完善」：依赖漏洞扫描要另装 osv-scanner，
+恶意特征匹配只有一张手写指标表。2.3.0 把两者都做成原生交付：
+
+| 能力 | 解决的具体问题 | 入口 |
+|---|---|---|
+| **原生依赖漏洞扫描** | 没有 osv-scanner、没有网络时，「这个已装版本有没有已知漏洞」曾是空白。现在从锁文件/清单抽出确定版本，与随规则包发布的 OSV 快照做区间匹配。 | `engine/scanner_core/dependency_inventory.py`、`vulnerability.py`、`rulesets/*/vulnerabilities.jsonl` |
+| **原生 YARA 签名匹配** | 手写指标表表达不了「A 与 B 同时出现才算」，也无法吸收标准规则格式。现在签名包是 `.yar`，由纯 Python 子集解释器执行，组合条件 + 上下文降权。 | `engine/scanner_core/yara_lite.py`、`signatures.py`、`rulesets/*/yara/` |
+
+口径与边界：
+
+- 漏洞快照来自 OSV.dev，覆盖常见 npm/PyPI 包（254 个包、1496 条公告）；**不是
+  完整 CVE 镜像**，截止日期写在报告 `coverage.vulnerability_db.as_of`。装了
+  osv-scanner 时仍会跑它，结果按公告 id 去重合并。
+- 只有锁文件/精确固定的版本参与区间判定；`^1.2.3` 不猜。已知恶意包是唯一例外。
+- 快照刷新：`python3 tools/refresh_vulnerability_db.py`（需要网络）。
+- YARA 子集不支持 `for` / `pe.*` / `math.*` / `xor`，这类规则会在
+  `coverage.signature_pack.errors` 中逐条列出；一条坏规则不会让整包失效。
+- 签名命中经过与文本规则相同的上下文降权，文档里的示例不会直接变成拦截。
+
 ## 2.2.0 新增了什么（以及为什么）
 
 | 能力 | 解决的具体问题 | 入口 |
@@ -25,7 +46,8 @@ Skill 安全静态扫描 + 全生命周期信任网关 + 路径级组合风险�
   `agent-creator` / `skill-creator`，它们的「安全守则」章节写的是**禁止**
   `curl | sh`、**禁止**读 `~/.ssh`，而闸门把禁止读成了行为。
 - **对抗用例 21 组**（`tests/unit/test_detectors.py`）：正例全部命中，反例全部干净。
-- **规则条数 181**（v1.0.0 为 58），12 个规则组 + 70 条密钥模式 + 2 条一票否决。
+- **文本规则 181 条**（v1.0.0 为 58），12 个规则组 + 70 条密钥模式 + 2 条一票否决；
+  另有 **49 条 YARA 签名** 与 **1496 条漏洞公告快照**（v1.2.0 起）。
 - **反规避有效性**：`tests/fixtures/v2-samples/sample-evasion-skill` 里没有任何
   明文的危险串（一处零宽切断、一处 base64），全部在派生视图里被检出。
 
@@ -33,7 +55,8 @@ Skill 安全静态扫描 + 全生命周期信任网关 + 路径级组合风险�
 
 见 [engine/capabilities.yaml](./engine/capabilities.yaml)（机器可读，含每条能力的
 `report_fields` 与局限）或 [SKILL.md](./SKILL.md) 底部。核心局限：仅静态分析，
-不执行被扫描代码；未接入 YARA 与动态沙箱；未做大规模误报率基线验证。
+不执行被扫描代码；漏洞快照是常见包子集而非完整 CVE 镜像；YARA 只实现条件子集；
+未接入动态沙箱；未做大规模误报率基线验证。
 
 ## 快速开始
 
@@ -58,7 +81,7 @@ python3 -m pytest tests/unit runtime_trust/tests
 
 | 目录 | 内容 |
 |---|---|
-| `engine/` | 检测引擎：scanner_core 模块、版本化规则包（`rulesets/v1.1.0`）、schema、能力声明 |
+| `engine/` | 检测引擎：scanner_core 模块、版本化规则包（`rulesets/v1.2.0`，含漏洞快照与 YARA 签名包）、schema、能力声明 |
 | `sandbox/` | Docker 隔离扫描层，供 Agent 安全扫描不可信 Skill |
 | `runtime_trust/` | 信任链：trust_root（防篡改自检）、trust_ledger（TOCTOU 防护）、skill_guard（对外网关入口） |
 | `tests/conformance/` | 回归向量：锁定已知输入的打分/分级/建议，含正例与反例 |
@@ -67,7 +90,7 @@ python3 -m pytest tests/unit runtime_trust/tests
 
 ## 规则包版本
 
-当前版本由 `engine/rulesets/CURRENT` 声明（不是硬编码在代码里），
-因此升级规则包只需要改一处。`engine/rulesets/v1.0.0` 仍可显式加载用于
-比对历史判定，但它不含 2.2.0 新增的 5 个规则组，`coverage.rule_groups`
-会如实反映这一点。
+当前版本由 `engine/rulesets/CURRENT` 声明，引擎与 UI 都读它（`rule_loader`
+不再另写一份版本号）。`engine/rulesets/v1.0.0` / `v1.1.0` 仍可显式加载用于
+比对历史判定，但它们没有 `vulnerabilities.jsonl` 与 `yara/`，报告里的
+`coverage.vulnerability_db` / `coverage.signature_pack` 会如实显示「未加载」。

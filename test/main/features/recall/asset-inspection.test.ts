@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 后台巡检（specs/008 US-405 / T047–T050）。
  *
@@ -46,7 +47,7 @@ let seedSeq = 0;
 async function seedAsset(uid: string, judgment: string) {
   const { candidates } = await modules();
   seedSeq += 1;
-  const candidate = await candidates.saveRecallCandidate(uid, {
+  const candidate = await createNightlyCandidateFixture(uid, {
     judgment,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: '巡检基线样本',
@@ -59,7 +60,8 @@ async function seedAsset(uid: string, judgment: string) {
 async function cloneAsset(uid: string, base: Record<string, unknown>, id: string, overrides: Record<string, unknown> = {}) {
   const { store } = await modules();
   await store.writeRecallJsonRecord(uid, 'ability-assets', id, {
-    ...base, id, candidateId: `cand-${id}`, version: '1', activeVersion: '1', ...overrides,
+    ...base, id, candidateId: `cand-${id}`, version: '1', activeVersion: '1',
+    evidenceRefs: [], sourceCandidateIds: [], sourceSessionIds: [], origin: 'manual', ...overrides,
   });
 }
 
@@ -150,7 +152,7 @@ describe('建议保持待确认（T048 / T050）', () => {
     const entry = items.find((row) => row.kind === 'inspection_finding')!;
     expect(entry.id).toBe(`inspection:${finding.key}`);
     expect(entry.urgency).toBe('low_disturbance');
-    expect(entry.detail).toContain('过时');
+    expect(entry.detail).toContain('建议复核');
 
     await expect(adapter.resolveCognitionInboxItem(uid, { id: entry.id, action: 'accept' }))
       .rejects.toThrow(/巡检不改资产/);
@@ -163,36 +165,58 @@ describe('建议保持待确认（T048 / T050）', () => {
   });
 });
 
-describe('开关（T049）', () => {
-  it('默认关（四病整改 G2 / 拍板项 #5）；缺 enabled 字段的记录也视为关；打开后定时跑，关掉后不跑，手动触发仍可用', async () => {
+describe('旧开关与夜间并入（T049 迁移口径）', () => {
+  it('旧开关默认关；只作为迁移和整理报告来源，不再决定巡检是否运行', async () => {
     const uid = 'user-inspect-switch';
     const { inspection, store } = await modules();
     await seedAsset(uid, '开关测试的基线资产。');
-    // 2026-09-28 G2 拍板项 #5：巡检默认关——未经用户开启不后台自跑。
     expect((await inspection.readInspectionSettings(uid)).enabled).toBe(false);
-    const skippedByDefault = await inspection.runScheduledInspectionIfEnabled(uid);
-    expect(skippedByDefault).toBeUndefined();
 
-    // 容错方向同款：历史记录缺 enabled 字段视为关（不再是"缺字段视为开"）。
+    // 历史记录缺 enabled 字段仍视为关。
     await store.writeRecallJsonRecord(uid, 'inspection-settings', 'settings', {
       schemaVersion: 1, ownerId: uid, id: 'settings', updatedAt: new Date().toISOString(),
     } as never);
     expect((await inspection.readInspectionSettings(uid)).enabled).toBe(false);
 
+    // The nightly sweep calls runAssetInspection directly; the retired switch
+    // no longer gates whether inspection runs.
+    const nightly = await inspection.runAssetInspection(uid, { trigger: 'nightly' });
+    expect(nightly.trigger).toBe('nightly');
+    expect(nightly.evaluatedAssetIds?.length).toBeGreaterThan(0);
+
     await inspection.setInspectionEnabled(uid, true);
-    const first = await inspection.runScheduledInspectionIfEnabled(uid);
-    expect(first).toBeTruthy();
-    expect(first!.trigger).toBe('scheduled');
-
-    await inspection.setInspectionEnabled(uid, false);
-    const runsBefore = (await inspection.listInspectionRuns(uid)).length;
-    const skipped = await inspection.runScheduledInspectionIfEnabled(uid);
-    expect(skipped).toBeUndefined();
-    expect((await inspection.listInspectionRuns(uid)).length).toBe(runsBefore);
-
+    const enabled = await inspection.readInspectionSettings(uid);
+    expect(enabled.enabled).toBe(true);
     // 手动触发与开关无关（那是用户自己要的）。
     const manual = await inspection.runAssetInspection(uid, { trigger: 'manual' });
     expect(manual.trigger).toBe('manual');
+  });
+
+  it('夜间巡检跳过已认领资产，其余照常评估', async () => {
+    const uid = 'user-inspect-claims';
+    const { inspection } = await modules();
+    const claimed = await seedAsset(uid, '本轮已由新对话更新的资产。');
+    const remaining = await seedAsset(uid, '本轮仍需巡检的资产。');
+    const run = await inspection.runAssetInspection(uid, {
+      trigger: 'nightly', excludeAssetIds: new Set([claimed.id]),
+    });
+    expect(run.evaluatedAssetIds).not.toContain(claimed.id);
+    expect(run.evaluatedAssetIds).toContain(remaining.id);
+    expect(run.skippedAssetIds).toEqual([claimed.id]);
+    expect(run.findings.some((finding) => finding.assetIds.includes(claimed.id))).toBe(false);
+  });
+
+  it('因认领没复查的旧发现保留，复查过且消失的才收口', async () => {
+    const uid = 'user-inspect-retain';
+    const { inspection } = await modules();
+    const { dup } = await seedMessyLibrary(uid);
+    const first = await inspection.runAssetInspection(uid, { trigger: 'nightly' });
+    expect(first.findings.some((finding) => finding.category === 'duplicate')).toBe(true);
+    const second = await inspection.runAssetInspection(uid, {
+      trigger: 'nightly', excludeAssetIds: new Set([dup.id]),
+    });
+    const pending = inspection.pendingInspectionFindings([second, first]);
+    expect(pending.some((finding) => finding.key.startsWith('duplicate:'))).toBe(true);
   });
 });
 
@@ -238,5 +262,212 @@ describe('跨轮不重复报（T050）', () => {
       ),
     }).filter((row) => row.kind === 'inspection_finding');
     expect(items.some((row) => row.id === `inspection:${target.key}`)).toBe(false);
+  });
+});
+
+describe('分批巡检与续做', () => {
+  it('每个目标与全部资产比较，后续批次保留早先发现', async () => {
+    const uid = 'user-inspect-batches';
+    const { inspection } = await modules();
+    const base = await seedAsset(uid, '独立主题需要保存适用条件。');
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'a0-batch-0001', {
+      statement: '上线之前必须核对回滚方案与灰度范围。',
+    });
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'zz-batch-0001', {
+      statement: '上线之前必须核对回滚方案与灰度。',
+    });
+    const first = await inspection.runAssetInspection(uid, { trigger: 'manual', batchSize: 1 });
+    const duplicate = first.findings.find(finding => finding.category === 'duplicate')!;
+    expect(duplicate.assetIds.sort()).toEqual(['a0-batch-0001', 'zz-batch-0001']);
+    expect(first.currentFindingKeys).toContain(duplicate.key);
+    expect(first.coverage).toEqual({ total: 3, evaluated: 1, remaining: 2 });
+    expect(first.coveredAssetIds).toEqual(['a0-batch-0001']);
+    const second = await inspection.runAssetInspection(uid, { trigger: 'manual', batchSize: 1 });
+    expect(second.coverage).toEqual({ total: 3, evaluated: 2, remaining: 1 });
+    expect(second.coveredAssetIds).toEqual(['a0-batch-0001', base.id]);
+    expect(second.evaluatedAssetIds).toEqual([base.id]);
+    expect(second.findings.some(finding => finding.key === duplicate.key)).toBe(true);
+    const third = await inspection.runAssetInspection(uid, { trigger: 'manual', batchSize: 1 });
+    expect(third.coverage).toEqual({ total: 3, evaluated: 3, remaining: 0 });
+    expect(third.coveredAssetIds).toEqual(['a0-batch-0001', base.id, 'zz-batch-0001']);
+  });
+
+  it('已检查内容发生变化后重新检查，不继续显示已消失的相似发现', async () => {
+    const uid = 'user-inspect-changed';
+    const { inspection, store } = await modules();
+    const base = await seedAsset(uid, '独立主题需要保存适用条件。');
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'a0-change-0001', {
+      statement: '上线之前必须核对回滚方案与灰度范围。',
+    });
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'zz-change-0001', {
+      statement: '上线之前必须核对回滚方案与灰度。',
+    });
+    const first = await inspection.runAssetInspection(uid, { batchSize: 1 });
+    const duplicate = first.findings.find(finding => finding.category === 'duplicate')!;
+    await store.updateRecallJsonRecord(uid, 'ability-assets', 'a0-change-0001', raw => ({
+      ...raw!, statement: '年度预算由财务负责人审批。', version: '2', activeVersion: '2',
+      updatedAt: new Date(Date.now() + 1000).toISOString(),
+    }));
+    const second = await inspection.runAssetInspection(uid, { batchSize: 1 });
+    expect(second.evaluatedAssetIds).toEqual(['a0-change-0001']);
+    expect(second.findings.some(finding => finding.key === duplicate.key)).toBe(false);
+    expect(second.coverage?.remaining).toBe(2);
+  });
+
+  it('超过 20 个批次后仍保留尚未复查的旧发现', async () => {
+    const uid = 'user-inspect-many-batches';
+    const { inspection } = await modules();
+    const base = await seedAsset(uid, '独立主题需要保存适用条件。');
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'a0-long-0001', {
+      statement: '上线之前必须核对回滚方案与灰度范围。',
+    });
+    for (let index = 0; index < 22; index++) {
+      await cloneAsset(uid, base as unknown as Record<string, unknown>, `b${String(index).padStart(2, '0')}-long-0001`, {
+        statement: `样本 ${index} 的独立讨论。`,
+      });
+    }
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'zz-long-0001', {
+      statement: '上线之前必须核对回滚方案与灰度。',
+    });
+    const first = await inspection.runAssetInspection(uid, { batchSize: 1 });
+    const duplicate = first.findings.find(finding => finding.key.includes('a0-long-0001') && finding.key.includes('zz-long-0001'))!;
+    expect(duplicate).toBeDefined();
+    let latest = first;
+    for (let index = 0; index < 21; index++) latest = await inspection.runAssetInspection(uid, { batchSize: 1 });
+    expect(latest.coverage?.remaining).toBeGreaterThan(0);
+    expect(latest.findings.some(finding => finding.key === duplicate.key)).toBe(true);
+    expect(inspection.pendingInspectionFindings(await inspection.listInspectionRuns(uid, 1))
+      .some(finding => finding.key === duplicate.key)).toBe(true);
+  });
+
+  it('受限资产计入未检查，不进入发现正文', async () => {
+    const uid = 'user-inspect-inaccessible';
+    const { inspection } = await modules();
+    const base = await seedAsset(uid, '公开的参考内容。');
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'restricted-asset-01', {
+      statement: '不应透露的受限内容。', scopePolicy: { projectIds: ['another-project'] },
+    });
+    const run = await inspection.runAssetInspection(uid);
+    expect(run.coverage).toMatchObject({ total: 2, evaluated: 1, remaining: 1, unavailable: 1 });
+    expect(JSON.stringify(run)).not.toContain('不应透露的受限内容');
+    expect(run.evaluatedAssetIds).not.toContain('restricted-asset-01');
+    expect(run.coveredAssetIds).toEqual([base.id]);
+  });
+
+  it('比较后资产发生变化时不保存旧发现，也不推进检查进度', async () => {
+    const uid = 'user-inspect-stale-baseline';
+    const { inspection, store } = await modules();
+    const base = await seedAsset(uid, '独立主题需要保存适用条件。');
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'a0-race-0001', {
+      statement: '上线之前必须核对回滚方案与灰度范围。',
+    });
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'zz-race-0001', {
+      statement: '上线之前必须核对回滚方案与灰度。',
+    });
+    await inspection.runAssetInspection(uid, { batchSize: 1 });
+    const before = await store.readRecallJsonRecord(uid, 'inspection-progress', 'coverage');
+    const runsBefore = await inspection.listInspectionRuns(uid);
+    const loader = await import('../../../../src/main/features/recall/capture-existing-assets');
+    const load = loader.loadCaptureExistingAssetPool;
+    const gate = vi.spyOn(loader, 'loadCaptureExistingAssetPool').mockImplementationOnce(async (...args) => {
+      const snapshot = await load(...args);
+      await store.updateRecallJsonRecord(uid, 'ability-assets', 'zz-race-0001', raw => ({
+        ...raw!, version: '2', activeVersion: '2', statement: '年度预算由负责人审批。',
+        updatedAt: new Date(Date.now() + 1000).toISOString(),
+      }));
+      return snapshot;
+    });
+    try {
+      await expect(inspection.runAssetInspection(uid, { batchSize: 1 })).rejects.toMatchObject({ code: 'inspection_baseline_stale' });
+      expect(await store.readRecallJsonRecord(uid, 'inspection-progress', 'coverage')).toEqual(before);
+      expect((await inspection.listInspectionRuns(uid)).map(run => run.id)).toEqual(runsBefore.map(run => run.id));
+    } finally { gate.mockRestore(); }
+    await inspection.runAssetInspection(uid, { batchSize: 1 });
+    const retry = await inspection.runAssetInspection(uid, { batchSize: 1 });
+    expect(retry.findings.some(finding => finding.key.includes('a0-race-0001') && finding.key.includes('zz-race-0001'))).toBe(false);
+  });
+
+  it('被跳过的目标保留旧发现，不将其当作已经复查', async () => {
+    const uid = 'user-inspect-skip-coverage';
+    const { inspection, store } = await modules();
+    const base = await seedAsset(uid, '独立主题需要保存适用条件。');
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'a0-skip-0001', {
+      statement: '上线之前必须核对回滚方案与灰度范围。',
+    });
+    await cloneAsset(uid, base as unknown as Record<string, unknown>, 'zz-skip-0001', {
+      statement: '上线之前必须核对回滚方案与灰度。',
+    });
+    const first = await inspection.runAssetInspection(uid, { batchSize: 1 });
+    expect(first.coverage).toEqual({ total: 3, evaluated: 1, remaining: 2 });
+    expect(first.evaluatedAssetIds).toEqual(['a0-skip-0001']);
+    const duplicate = first.findings.find(finding => finding.category === 'duplicate');
+    expect(duplicate).toBeDefined();
+    if (!duplicate) throw new Error('missing expected duplicate');
+    const saved = await store.readRecallJsonRecord(uid, 'inspection-progress', 'coverage');
+    expect((saved?.findings as Array<{ key: string }>).map(finding => finding.key)).toContain(duplicate.key);
+    const next = await inspection.runAssetInspection(uid, { batchSize: 1, excludeAssetIds: new Set(['zz-skip-0001']) });
+    expect(next.evaluatedAssetIds).not.toContain('a0-skip-0001');
+    expect(next.findings.map(finding => finding.key)).toContain(duplicate.key);
+    expect(next.coverage?.remaining).toBeGreaterThan(0);
+  });
+});
+
+describe('并发处置不丢更新（round-2）', () => {
+  // fileEditLock 按 recordPath 串行化写，但处置语义必须建在锁内最新值上：
+  // 锁外预读快照再整组写，会让并发写互相抹掉——已「不管它」的待办复活回清单。
+
+  it('两个并发 dismiss 互不抹掉：两条「不管它」都留得住', async () => {
+    const uid = 'user-inspect-race-decide';
+    const { inspection } = await modules();
+    await Promise.all([
+      inspection.decideInspectionFinding(uid, 'outdated:aa-race-1', 'dismissed'),
+      inspection.decideInspectionFinding(uid, 'outdated:aa-race-2', 'dismissed'),
+    ]);
+    const settings = await inspection.readInspectionSettings(uid);
+    expect([...settings.dismissedFindingKeys].sort())
+      .toEqual(['outdated:aa-race-1', 'outdated:aa-race-2']);
+  });
+
+  it('开关切换与待办处置并发：已「不管它」的键不被清空', async () => {
+    const uid = 'user-inspect-race-switch';
+    const { inspection } = await modules();
+    await Promise.all([
+      inspection.decideInspectionFinding(uid, 'outdated:aa-race-3', 'dismissed'),
+      inspection.setInspectionEnabled(uid, true),
+    ]);
+    const settings = await inspection.readInspectionSettings(uid);
+    expect(settings.enabled).toBe(true);
+    expect(settings.dismissedFindingKeys).toContain('outdated:aa-race-3');
+  });
+});
+
+describe('处置参数校验（round-3）', () => {
+  // 入口 throw 先例与 readInspectionRun 同款：非法入参宁可炸出来，也不静默
+  // 走反向 filter 把已「不管它」的待办复活、或把任意超长 key 落盘。
+
+  it('非法 decision 拒绝且不清掉已有处置（拼写错不再静默复活待办）', async () => {
+    const uid = 'user-inspect-guard-decision';
+    const { inspection } = await modules();
+    const key = 'outdated:aa-guard-1';
+    await inspection.decideInspectionFinding(uid, key, 'dismissed');
+
+    // 修前：'dismiss' 不在两个字面量里，双三元双双走反向 filter——key 从两数组
+    // 同时移除、待办复活，还不报任何错。
+    await expect(inspection.decideInspectionFinding(uid, key, 'dismiss' as never))
+      .rejects.toThrow(/invalid inspection decision/);
+    const settings = await inspection.readInspectionSettings(uid);
+    expect(settings.dismissedFindingKeys).toContain(key);
+  });
+
+  it('findingKey 空串与超长（>1024）都拒绝，不落盘', async () => {
+    const uid = 'user-inspect-guard-key';
+    const { inspection } = await modules();
+    await expect(inspection.decideInspectionFinding(uid, '', 'dismissed'))
+      .rejects.toThrow(/invalid inspection finding key/);
+    await expect(inspection.decideInspectionFinding(uid, 'k'.repeat(1025), 'dismissed'))
+      .rejects.toThrow(/invalid inspection finding key/);
+    const settings = await inspection.readInspectionSettings(uid);
+    expect(settings.dismissedFindingKeys).toEqual([]);
+    expect(settings.deferredFindingKeys).toEqual([]);
   });
 });

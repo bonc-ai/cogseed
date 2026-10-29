@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { describe, expect, it } from 'vitest';
 import {
   buildSameFamilyPatches,
@@ -120,7 +121,7 @@ describe('renameAssetFamily', () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const family = await import('../../../../src/main/features/recall/family');
     const now = new Date().toISOString();
-    const mk = async (id: string) => assets.createAbilityAsset('user-family-rename', {
+    const mk = async (id: string) => seedStoredAbilityAsset('user-family-rename', {
       schemaVersion: 2, ownerId: 'user-family-rename', id, candidateId: `cand-${id}`,
       sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_familyren${id.slice(-8)}`.padEnd(16, 'x'),
       type: 'personal', title: `条目${id.slice(-2)}`, statement: `同族内容 ${id}。`,
@@ -149,7 +150,7 @@ describe('renameAssetFamily', () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const family = await import('../../../../src/main/features/recall/family');
     const now = new Date().toISOString();
-    await assets.createAbilityAsset('user-family-lone', {
+    await seedStoredAbilityAsset('user-family-lone', {
       schemaVersion: 2, ownerId: 'user-family-lone', id: 'aa-lone-1', candidateId: 'cand-lone',
       sourceCandidateIds: ['cand-lone'], reviewDecisionId: 'rd_familylone00000',
       type: 'personal', title: '孤条', statement: '无族内容。',

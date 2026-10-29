@@ -7,6 +7,12 @@
  * `sbom.cdx.json`, ignoring volatile fields (`metadata.timestamp`,
  * `serialNumber`) that change on every run.
  *
+ * Generation is lock-file-only (`--package-lock-only`): the BOM must describe
+ * the locked dependency graph, not the packages one operating system happened
+ * to install. Rendering the installed tree instead made macOS and Linux
+ * disagree on every platform-scoped optional dependency, so a BOM regenerated
+ * on a laptop failed this gate on the Linux runner.
+ *
  * Usage:
  *   node scripts/sbom-check.cjs
  *
@@ -62,7 +68,7 @@ function regenerate() {
   const outFile = path.join(tmpDir, 'sbom.cdx.json');
   const res = spawnSync(
     'npx',
-    ['--yes', GENERATOR, '--output-file', outFile],
+    ['--yes', GENERATOR, '--package-lock-only', '--output-file', outFile],
     { cwd: REPO, encoding: 'utf8', timeout: 10 * 60 * 1000 },
   );
   if (res.status !== 0) {
@@ -73,12 +79,10 @@ function regenerate() {
 }
 
 /**
- * npm's dependency tree (which cyclonedx-npm renders) skips packages that do
- * not apply to the current platform: optional dependencies with `os`/`cpu`
- * constraints, and alternate versions resolved for other platforms. The
- * committed BOM may therefore legitimately differ from one regenerated on
- * another OS. Such packages are reported as warnings; anything else is a
- * hard stale error.
+ * A lock-file-only BOM is platform-independent, so the differences below should
+ * not occur any more; the filter stays as a guard for committed BOMs generated
+ * on a single machine. Such packages are reported as warnings; anything else is
+ * a hard stale error.
  */
 let _lockCache = null;
 function lockfile() {

@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
 /**
  * 回归 sm1（原探针「merge 锁内不复核终态」断言反转）：
  * mergeAbilityAssets 两处锁内 updater 必须复核 assertMutableAbilityAsset。
@@ -61,7 +62,7 @@ function assetFile(id: string): string {
 async function mkAsset(id: string) {
   const assets = await loadAssets();
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'personal', title: `资产 ${id}`, statement: `陈述 ${id}。`,

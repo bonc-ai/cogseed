@@ -104,6 +104,23 @@ describe('world-model reconciliation detail', () => {
     expect(result.attribution).toBe('unclear');
   });
 
+  it('keeps distinct Chinese verification checks and plan steps', () => {
+    const current = episode();
+    current.r.verification = { checks: { '检查构建产物': true, '验证构建': false } };
+    current.a.agentActions = [{ sequence: 0, actor: 'commander', action: '部署服务', status: 'ok' }];
+    const result = reconcileWorldModel({
+      ...forecast,
+      aHat: { ...forecast.aHat, plan: ['检查构建产物'], expectedTools: [], expectedActors: [] },
+      rHat: { ...forecast.rHat, acceptanceSignals: ['检查构建产物', '验证构建'], predictedFiles: [] },
+    }, current);
+    expect(result.resultDelta.acceptanceSignals).toEqual([
+      expect.objectContaining({ signal: '检查构建产物', status: 'met' }),
+      expect.objectContaining({ signal: '验证构建', status: 'not_met' }),
+    ]);
+    expect(result.actionDelta.missingPlanSteps).toEqual(['检查构建产物']);
+    expect(result.deltaR).toBe(-0.5);
+  });
+
   it('preserves the result signal when the execution deviates (no veto)', () => {
     const current = episode();
     current.r.verification = { checks: { 'OAuth tests pass': true } };

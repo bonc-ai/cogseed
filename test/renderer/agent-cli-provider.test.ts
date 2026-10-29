@@ -20,12 +20,14 @@ function loadAgentProviderHelpers() {
 }
 
 describe('External agent creation (P3394 gateway)', () => {
-  it('external agents join through the P3394 gateway (no provider selector row)', () => {
-    // P3394 外接方式：新建外接智能体走受管网关，原 CLI provider selector 行已移除。
-    expect(html).not.toContain('id="agent-ext-provider-row"');
-    expect(html).not.toContain('id="agent-modal-ext-provider-select"');
+  it('external agents join through the P3394 gateway, with an optional model provider row', () => {
+    // P3394 外接方式：新建外接智能体走受管网关。2026-10-20 改版恢复「模型供应商」行：
+    // p3394-wake-dispatcher 会把 runtime.cli_provider_id 传给网关，留空则用 CLI 自己的配置。
+    expect(html).toContain('id="agent-ext-provider-row"');
+    expect(html).toContain('id="agent-modal-ext-provider-select"');
     expect(source).toContain("window.cogseed.invoke('p3394.external.start'");
     expect(source).toContain("runtime: { kind: 'p3394-gateway', cli }");
+    expect(source).toContain('body.runtime = withCliProviderSelection(body.runtime, _getExternalCliProviderValue(cli));');
   });
 
   it('filters Anthropic for Claude and OpenAI for Codex', () => {

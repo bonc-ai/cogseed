@@ -272,6 +272,7 @@ describe('CogSeed IPC service', () => {
       retryTask: vi.fn(async () => ({ taskId: 'cogseed-task-retry', status: 'created' })),
       readEvents: vi.fn(async () => []),
       worktreeManager,
+      resolveConversationWorkspace: vi.fn(async () => "/safe/conversation-workspace"),
     });
 
     await expect(service.start('ipc-user', { requestId: 'req-ipc', task: 'Do work.', allowFallback: true })).rejects.toThrow(/fallback/i);
@@ -282,7 +283,7 @@ describe('CogSeed IPC service', () => {
     await expect(service.start('ipc-user', { requestId: 'req-path', task: 'Unsafe work.', workingDir: '/private/path' })).rejects.toThrow(/worktreeName/);
     await expect(service.cancel('ipc-user', 'cogseed-task-ipc')).resolves.toMatchObject({ status: 'cancelled' });
     expect(controller.startCogSeedTask).toHaveBeenNthCalledWith(1, 'ipc-user', {
-      requestId: 'req-ipc', task: 'Do work.',
+      requestId: 'req-ipc', task: 'Do work.', workingDir: '/safe/conversation-workspace',
       conversationId: cogSeedRunCenterConversationId('req-ipc'),
     });
     expect(controller.startCogSeedTask).toHaveBeenNthCalledWith(2, 'ipc-user', {
@@ -838,5 +839,29 @@ describe('CogSeed IPC service', () => {
     expect(JSON.stringify(result)).not.toContain('Private prompt');
     expect(JSON.stringify(result)).not.toContain('/Users/');
     expect(JSON.stringify(result)).not.toContain('codex');
+  });
+});
+
+describe('CogSeed IPC service › native run working directory (A2/A3)', () => {
+  it('gives a native run its own directory under the user workspace', async () => {
+    const startCogSeedTask = vi.fn(async () => ({ taskId: 't', status: 'running' }));
+    const service = createCogSeedIpcService({
+      controller: { startCogSeedTask, cancelCogSeedTask: vi.fn() } as never,
+      readTaskByRequestId: vi.fn(async () => null),
+      ensureRunCenterConversation: vi.fn(async () => undefined),
+      readTask: vi.fn(async () => ({ taskId: 't', status: 'running' })),
+      retryTask: vi.fn(),
+      readEvents: vi.fn(async () => []),
+      worktreeManager: { resolve: vi.fn(), list: vi.fn(), create: vi.fn(), remove: vi.fn() } as never,
+    } as never);
+
+    await expect(service.start('ipc-user', { requestId: 'req-a23', task: 'Do work.' }))
+      .resolves.toMatchObject({ taskId: 't' });
+
+    const input = startCogSeedTask.mock.calls[0][1] as { workingDir?: string };
+    expect(input.workingDir).toBeTruthy();
+    // A3: one directory per run, under the user's workspace — a plain folder, no Git.
+    // 用 path.sep 拼同一段后缀：硬编码 `/runs/...` 在 win32 的 `...\runs\req-a23` 上不匹配。
+    expect(String(input.workingDir).endsWith(`${path.sep}runs${path.sep}req-a23`)).toBe(true);
   });
 });

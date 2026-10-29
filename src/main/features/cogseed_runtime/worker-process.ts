@@ -1,11 +1,12 @@
+import type { TranscriptToolResult } from '../transcript-tool-contract';
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { PC_ROOT, WS_ROOT } from '../../paths';
+import { WS_ROOT } from '../../paths';
 import { createLogger } from '../../logger';
 import { logErrorRef } from '../../util/log-redact';
+import { childWorkerScriptPath, typescriptChildEnv } from '../../util/packaged-child-env';
 import {
   COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
   isRuntimeTerminalEvent,
@@ -17,6 +18,8 @@ import {
 } from './protocol';
 
 const log = createLogger('cogseed-runtime:worker-process');
+const MAX_CONSECUTIVE_INVALID_JSONL = 3;
+const MAX_INVALID_JSONL_PREVIEW = 200;
 
 export interface RuntimeWorkerChild {
   stdin: NodeJS.WritableStream;
@@ -42,7 +45,7 @@ export interface RuntimeHostToolHandlerContext {
 export type RuntimeHostToolHandler = (
   call: RuntimeHostToolCall,
   context: RuntimeHostToolHandlerContext,
-) => Promise<{ content: string; isError?: boolean }>;
+) => Promise<TranscriptToolResult>;
 
 export interface RuntimeWorkerServiceOptions {
   spawnWorker?: () => RuntimeWorkerChild;
@@ -63,14 +66,12 @@ interface PendingRun {
 }
 
 function defaultSpawnWorker(): RuntimeWorkerChild {
-  const pcDir = PC_ROOT.replace(/\bapp\.asar\b/, 'app.asar.unpacked');
-  const script = path.join(pcDir, 'bin', 'cogseed-runtime-worker.cjs');
+  const script = childWorkerScriptPath('cogseed-runtime-worker.cjs');
   return spawn(process.execPath, [script], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      COGSEED_PC_DIR: pcDir,
+      ...typescriptChildEnv(),
       COGSEED_WORKSPACE_ROOT: WS_ROOT,
     },
   });
@@ -125,7 +126,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
       const target = child;
       if (!target) return;
       void (async () => {
-        let result: { content: string; isError?: boolean };
+        let result: TranscriptToolResult;
         try {
           result = options.hostToolHandler
             ? await options.hostToolHandler(call, { request: run.request, signal: run.hostAbort.signal })
@@ -135,7 +136,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
         }
         const response: RuntimeHostToolResult = {
           type: 'host_tool_result', request_id: call.request_id, runtime_session_id: call.runtime_session_id,
-          call_id: call.call_id, content: result.content, ...(result.isError ? { is_error: true } : {}),
+          call_id: call.call_id, content: result.content, ...(result.correction ? { correction: result.correction } : {}), ...(result.isError ? { is_error: true } : {}),
         };
         if (child === target && !target.killed) writeJsonl(target, response);
       })();
@@ -152,10 +153,30 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
   function attach(next: RuntimeWorkerChild): void {
     child = next;
     const rl = createInterface({ input: next.stdout });
+    let consecutiveInvalidJsonl = 0;
     rl.on('line', (line) => {
       if (!line.trim()) return;
-      try { handleMessage(JSON.parse(line)); }
-      catch (err) { log.warn('invalid runtime worker json', { error: logErrorRef(err) }); }
+      try {
+        handleMessage(JSON.parse(line));
+        consecutiveInvalidJsonl = 0;
+      } catch (err) {
+        consecutiveInvalidJsonl += 1;
+        log.warn('invalid runtime worker json', {
+          error: logErrorRef(err),
+          invalidCount: consecutiveInvalidJsonl,
+          raw: String(line || '').replace(/\s+/g, ' ').slice(0, MAX_INVALID_JSONL_PREVIEW),
+          ...((next as { pid?: number }).pid ? { pid: (next as { pid?: number }).pid } : {}),
+        });
+        if (consecutiveInvalidJsonl >= MAX_CONSECUTIVE_INVALID_JSONL) {
+          const error = new Error('CogSeed Runtime worker emitted invalid JSON protocol output');
+          if (child === next) {
+            child = null;
+            handshake = null;
+          }
+          rejectAll(error);
+          try { next.kill(); } catch {}
+        }
+      }
     });
     next.stderr.on?.('data', (chunk: Buffer) => {
       const text = String(chunk || '').trim();

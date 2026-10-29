@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -7,12 +8,12 @@ const RULE_BOUNDARY = { applicableWhen: ['reviewing governed work'], forbiddenWh
 beforeEach(() => { vi.resetModules(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-recall-proof-')); previous = process.env.COGSEED_WORKSPACE_ROOT; process.env.COGSEED_WORKSPACE_ROOT = tmp; });
 afterEach(() => { if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT; else process.env.COGSEED_WORKSPACE_ROOT = previous; fs.rmSync(tmp, { recursive: true, force: true }); });
 async function modules() { const [candidates, refs, projection, proofs, assets] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection'), import('../../../../src/main/features/recall/proof-service'), import('../../../../src/main/features/recall/asset-service')]); return { candidates, refs, projection, proofs, assets }; }
-async function confirmedProjection() { const { candidates, refs, projection } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Record decision evidence.', summary: 'Evidence record habit', suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'review', spaceId: 'workspace-a', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] }); const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' }); await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' }); const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed' }); return { asset, projection: await projection.confirmContextProjection('user-a', preview.id) }; }
+async function confirmedProjection() { const { candidates, refs, projection } = await modules(); const candidate = await createNightlyCandidateFixture('user-a', { judgment: 'Record decision evidence.', summary: 'Evidence record habit', suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'review', spaceId: 'workspace-a', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] }); const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' }); await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' }); const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed' }); return { asset, projection: await projection.confirmContextProjection('user-a', preview.id) }; }
 async function realReceipt(assetId: string, executionId: string) { const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt'); return receipts.prepareReceipt('user-a', { executionId, targetSessionId: `session-${executionId}`, reusedRefs: [`asset:${assetId}@v1`], omittedRefs: [], permissionMode: 'read-only', allowedScopes: ['cognition:inherited'], boundary: 'real' }, { sessionId: `session-${executionId}` }); }
 
 
 describe('Recall transfer and effectiveness proofs', () => {
-  it('freezes expected assets, completes transfer, and advances maturity only after better effectiveness evidence', async () => {
+  it('freezes expected assets and does not accept an unrelated artifact as better effectiveness evidence', async () => {
     const { asset, projection } = await confirmedProjection(); const { proofs, assets } = await modules();
     const prepared = await proofs.prepareTransferProof('user-a', { projectionId: projection.id, executionId: 'exec-a', expectedResultSnapshot: 'Decision includes evidence and rationale.' });
     expect(prepared.status).toBe('prepared'); expect(prepared.assetVersions).toEqual([{ assetId: asset.id, version: '1' }]);
@@ -21,8 +22,8 @@ describe('Recall transfer and effectiveness proofs', () => {
     expect(completed).toMatchObject({ status: 'succeeded', receiptId: receipt.receiptId, receiptExecutionId: receipt.executionId });
     expect((await assets.readAbilityAsset('user-a', asset.id)).maturity).toBe('transfer_validated');
     const evaluation = await proofs.evaluateEffectivenessProof('user-a', { transferProofId: prepared.id, outcome: 'better', observedResult: 'Review quality improved.', evidenceRefs: [{ kind: 'artifact', id: 'artifact-a' }] });
-    expect(evaluation.status).toBe('valid'); expect(evaluation.outcome).toBe('better');
-    expect((await assets.readAbilityAsset('user-a', asset.id)).maturity).toBe('effectiveness_validated');
+    expect(evaluation.status).toBe('valid'); expect(evaluation.outcome).toBe('insufficient_evidence');
+    expect((await assets.readAbilityAsset('user-a', asset.id)).maturity).toBe('transfer_validated');
   });
 
   it('rejects effectiveness before successful transfer and yields an explicit governance recommendation for negative outcomes', async () => {

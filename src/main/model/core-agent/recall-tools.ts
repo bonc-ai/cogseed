@@ -1,15 +1,16 @@
+import { ambiguousRecallAssetIds, assessSemanticApplicability, type SemanticApplicabilityResult } from '../../features/recall/semantic-applicability';
 /**
  * Recall ability-asset search tool injected into every main-conv runner.
  *
- *   - `search_ability_assets` — 三种用法（2026-09-18 目录化）：
+ *   - `search_ability_assets` — 三种用法：
  *     ① 不带 query、不带 assetIds → **目录模式**：返回全量在用资产目录
  *        （一行一条：id/标题/类型/范围/成熟度/版本/使用次数/适用与禁用场景），
  *        模型自己看着目录判断要用哪几条 —— "目录在手，按需取用"；
- *     ② 带 assetIds → **正文模式**：按目录里的 id 取正文（≤6 条/次，截 2000 字）；
+ *     ② 带 assetIds → **正文模式**：按目录里的 id 取完整正文（≤6 条/次）；
  *     ③ 带 query → **混合检索**。搜索结果只记展示；按 ID 读完整正文
  *     才写 `agent_read` 注入回执与使用流水。
  *
- * 产品设计（2026-08-17）：引用（自动注入 / 预载投影）只显示本空间产生的
+ * 引用（自动注入 / 预载投影）只显示本空间产生的
  * 资产；全局资产池（所有空间产生的 + 全局资产）的使用交给 LLM 的主动检索
  * ——即本工具。只读，无需 localExec 权限（与 kb 工具一致）。
  */
@@ -23,8 +24,6 @@ import {
   recallAssetAgentReadBlockReasons,
   type RecallAgentReadContext,
 } from '../../features/recall/prompt-injection';
-import { recordInjectionReceipt, listInjectionReceipts } from '../../features/recall/injection-receipt';
-import { recordRecallUsage } from '../../features/recall/usage-service';
 import { loadOntologyAssets } from '../../features/recall/projection-knowledge';
 import { formatCatalogEntries } from '../../features/recall/asset-catalog';
 import type { RecallAbilityAssetRecord } from '../../features/recall/candidate-service';
@@ -37,11 +36,29 @@ import {
   type CatalogContext,
 } from '../../features/recall/catalog-engine';
 import { recordCatalogObservations } from '../../features/recall/catalog-observation';
+import {
+  queryOntologyAssets,
+  type OntologyAssetQueryDirection,
+} from '../../features/recall/ontology-asset-query';
+import type { AbilityAssetRelationKind } from '../../features/recall/asset-relations';
+import {
+  recordOntologyAnswerValidation,
+  validateOntologyAnswer,
+  type AnswerAssetEvidence,
+  type AnswerRelationEvidence,
+  type OntologyAnswerEvidenceBundle,
+} from '../../features/recall/ontology-answer-validation';
+import { isSemanticaEnabled } from '../../features/recall/semantica-settings';
+import { prepareAssetUsageClaim, type AssetUsageClaim } from '../../features/recall/asset-usage-claim';
 
+import { buildFormalAssetPayload, instantiateAssetTemplate, resolveFormalAssetPayload } from '../../features/recall/formal-assets/payload';
+import { recordAssetAgentReads as recordAgentReads } from '../../features/recall/agent-read-accounting';
 const log = createLogger('recall-tools');
 
 export interface RecallToolsOpts {
   userId: string;
+  onAssetUsageClaim?: (claim: AssetUsageClaim) => void | Promise<void>;
+  suppliedAbilityAssets?: Array<{ assetId: string; assetVersion: string }>;
   /** 当前目标 Agent；用于资产 scopePolicy.agentIds 准入判断。 */
   agentId?: string;
   /** 当前回合 id：写 agent_read 注入回执/使用流水用；缺省时只读不记账。 */
@@ -50,18 +67,25 @@ export interface RecallToolsOpts {
   cid?: string;
   /** 当前会话空间；作为 runtime scopePolicy.workspaceIds 上下文。 */
   spaceId?: string;
-  /** 会话的项目归属（specs/012 T018）：目录模式 scene 因子用（与提示词常驻
+  /** 空间主角色模板；作为 runtime scopePolicy.roleIds 上下文。 */
+  roleId?: string;
+  /** 当前会话类型；作为 runtime scopePolicy.conversationKinds 上下文。 */
+  conversationKind?: string;
+  /** 当前回合附件类型；作为 runtime scopePolicy.fileKinds 上下文。 */
+  fileKinds?: readonly string[];
+  /** 会话的项目归属：目录模式 scene 因子用（与提示词常驻
    *  目录同序的前提：同一份场景输入）；缺省时该维度不参与。 */
   projectId?: string;
   /** 当前用户消息文本：适用/禁用场景匹配用。 */
   taskText?: string;
+  /** Evidence from assets already injected by the host before the model run. */
+  initialEvidence?: OntologyAnswerEvidenceBundle;
 }
 
 const DEFAULT_RESULTS = 8;
 const MAX_RESULTS = 30;
 /** 正文模式单次取用上限：一次取太多等于绕回"整块塞正文"，目录化的意义就没了。 */
 const MAX_READ_IDS = 6;
-const READ_STATEMENT_LIMIT = 2_000;
 const CATALOG_PAGE_DEFAULT = 30;
 const CATALOG_PAGE_MAX = 50;
 
@@ -77,6 +101,21 @@ interface PoolEntry {
   spaceId?: string;
   /** 画像来源标记（user_profile / shared_memory）；正式资产为 undefined。 */
   profileSource?: string;
+}
+
+interface RecallTurnEvidence {
+  assets: Map<string, AnswerAssetEvidence>;
+  relations: AnswerRelationEvidence[];
+}
+
+export interface RecallFinalResponseGate {
+  isRequired(): boolean;
+  validate(input: { text: string; signal?: AbortSignal }): Promise<{ text: string }>;
+}
+
+export interface RecallToolSuite {
+  tools: AgentTool[];
+  finalResponseGate: RecallFinalResponseGate;
 }
 
 /** 返回给 LLM 的单条资产格式（含引用标记 [asset:<id>]）。 */
@@ -119,14 +158,17 @@ function blockReasonText(reasons: readonly string[]): string {
 function agentReadRuntimeContext(opts: RecallToolsOpts): RecallAgentReadContext {
   return {
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts.roleId ? { roleId: opts.roleId } : {}),
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
     ...(opts.spaceId ? { workspaceId: opts.spaceId } : {}),
+    ...(opts.conversationKind ? { conversationKind: opts.conversationKind } : {}),
+    ...(opts.fileKinds?.length ? { fileKinds: [...opts.fileKinds] } : {}),
     ...(opts.taskText ? { taskText: opts.taskText } : {}),
   };
 }
 
 /** 正文模式的一条（含版本与范围，便于模型判断适用性）。 */
-function formatReadEntry(asset: RecallAbilityAssetRecord, version: string): string {
+function formatReadEntry(asset: RecallAbilityAssetRecord, version: string, payload = buildFormalAssetPayload(asset)): string {
   const meta = [
     `类型:${asset.type || '?'}`,
     `范围:${asset.scope || 'general'}`,
@@ -140,13 +182,13 @@ function formatReadEntry(asset: RecallAbilityAssetRecord, version: string): stri
     meta,
     applies ? `适用于: ${applies}` : '',
     forbids ? `禁用: ${forbids}` : '',
+    '结构: ' + JSON.stringify(payload),
     '正文:',
-    (asset.statement || '').slice(0, READ_STATEMENT_LIMIT),
+    asset.statement || '',
   ].filter(Boolean).join('\n');
 }
 
-/** 画像记忆 → 检索池条目（不参与 status/spaceId 过滤——没有这些治理态）。
- *  2026-09-22 起画像来源为资产库（loadOntologyAssets 已 async）。 */
+/** 画像记忆 → 检索池条目；记忆本身不带 status/spaceId 治理态。 */
 async function profilePoolEntries(
   userId: string,
   context: RecallAgentReadContext,
@@ -174,72 +216,25 @@ async function profilePoolEntries(
 }
 
 /**
- * agent_read 留痕（2026-09-18）：模型自己取用的资产也写注入回执 + 使用流水。
+ * agent_read 留痕：模型自己取用的资产也写注入回执 + 使用流水。
  *   - 回执幂等（同回合同资产同版本只一条），所以重复取用不会刷次数；
  *   - 使用流水按"该回合首次取用"记一次，避免同回合反复读把统计刷高；
  *   - 记账失败只告警，绝不影响工具结果（模型拿得到内容优先）。
  */
-async function recordAgentReads(
-  opts: RecallToolsOpts,
-  entries: Array<{ assetId: string; assetVersion: string }>,
-): Promise<void> {
-  const turnId = String(opts.turnId || '');
-  if (!entries.length) return;
-  if (!turnId) {
-    // 没有回合 id 就记不了账（taskRunId 必填）：如实告警而不是静默丢弃——
-    // 静默丢弃正是"模型自取等于升档黑洞"的成因（2026-09-18 诊断补）。
-    log.warn('agent_read not recorded: tool built without a turn id', { userId: maskId(opts.userId) });
-    return;
-  }
-  try {
-    // 「为什么排前」拆解随回执留痕（specs/012 T019，与 bus.ts 写侧同款）：
-    // 只查 asset-catalog-hint 当轮 ranked 视图（userId+cid 同键），不在记账
-    // 路径重算（排序唯一处）；没建过目录 / 会话对不上 → 空 Map，不带
-    // ranking（读取侧 explainable:false，如实说「没有记录」）。
-    const { lastCatalogRankedForTurn } = await import('../../features/recall/asset-catalog-hint');
-    const { explainRanking } = await import('../../features/recall/asset-ranking');
-    const rankedThisTurn: ReadonlyMap<string, import('../../features/recall/asset-ranking').RankedAsset>
-      = opts.cid ? lastCatalogRankedForTurn(opts.userId, opts.cid, opts.turnId) : new Map();
-    const seenThisTurn = new Set(
-      (await listInjectionReceipts(opts.userId, turnId))
-        .filter((row) => String(row.channel || '') === 'agent_read')
-        .map((row) => String(row.assetId || '')),
-    );
-    for (const entry of entries) {
-      const rankedRow = rankedThisTurn.get(entry.assetId);
-      await recordInjectionReceipt(opts.userId, {
-        taskRunId: turnId,
-        assetId: entry.assetId,
-        assetVersion: entry.assetVersion,
-        boundary: 'real',
-        status: 'injected',
-        channel: 'agent_read',
-        ...(rankedRow ? { ranking: explainRanking(rankedRow) } : {}),
-      });
-      if (seenThisTurn.has(entry.assetId)) continue;
-      seenThisTurn.add(entry.assetId);
-      await recordRecallUsage(opts.userId, {
-        assetId: entry.assetId,
-        assetVersion: entry.assetVersion,
-        taskRunId: turnId,
-        ...(opts.spaceId ? { workspaceId: opts.spaceId } : {}),
-        boundary: 'real',
-        outcome: 'agent_read',
-      });
-    }
-  } catch (err) {
-    log.warn('agent_read accounting failed', { userId: maskId(opts.userId), error: logErrorRef(err as Error) });
-  }
-}
 
-function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
+function createSearchAbilityAssetsTool(opts: RecallToolsOpts, evidence: RecallTurnEvidence): AgentTool {
   const userId = opts.userId;
+  let semanticCheckSpent = false;
+  const semanticChecks = new Map<string, SemanticApplicabilityResult>();
 
   const catalogContext = (): CatalogContext => ({
     ...(opts.cid ? { cid: opts.cid } : {}),
     ...(opts.turnId ? { turnId: opts.turnId } : {}),
     ...(opts.taskText ? { taskText: opts.taskText } : {}),
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts.roleId ? { roleId: opts.roleId } : {}),
+    ...(opts.conversationKind ? { conversationKind: opts.conversationKind } : {}),
+    ...(opts.fileKinds?.length ? { fileKinds: [...opts.fileKinds] } : {}),
     scene: {
       ...(opts.projectId ? { turnProjectId: opts.projectId } : {}),
       ...(opts.spaceId ? { turnSpaceId: opts.spaceId } : {}),
@@ -287,7 +282,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
     if (!pool.length) {
       return `当前条件下没有可用于本任务的认知资产（可能没有在用资产、筛选未命中，或当前任务不满足使用规则${filterNote ? `；过滤条件：${filterNote}` : ''}）。`;
     }
-    // 过滤（准入/筛选）先于排序、排序先于分页（T018）：过滤后的集合整段按同一
+    // 过滤（准入/筛选）先于排序、排序先于分页：过滤后的集合整段按同一
     // 推荐分排（只排不裁——顺序变化，条目一条不少），再切页。
     const ordered = await rankCatalogPool(pool);
     if (!ordered.length) {
@@ -324,6 +319,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
     if (!uniqueIds.length) return { content: 'assetIds 为空', isError: true };
     const ids = uniqueIds.slice(0, MAX_READ_IDS);
     const skipped = uniqueIds.length - ids.length;
+    if (input.templateValues !== undefined && ids.length !== 1) return { content: '模板填写需要明确指定一条模板资产。', isError: true };
     const blocks: string[] = [];
     const readEntries: Array<{ assetId: string; assetVersion: string }> = [];
     for (const id of ids) {
@@ -348,19 +344,27 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
         blocks.push(`- [asset:${id}] 当前不可使用（准入检查暂不可用）`);
         continue;
       }
-      // 读取路径不拿"适用场景不符"当拒绝理由（2026-09-18 真机修正）：
-      // applicableWhen 是软提示，模型在目录里看过它、已自行判断适用性——按
-      // 用户消息做词面匹配来否掉模型的明确选择，会把这个功能废掉（真机实测：
-      // 模型按目录取正文被拦）。硬闸照旧：状态 / 来源可用 / scopePolicy /
-      // 禁用场景 / 敏感度 / Agent 与项目/空间白名单。
+      // applicableWhen 是目录中的适用性提示，不以词面匹配拒绝模型的明确读取。
+      // 硬边界仍包括状态 / 来源可用 / scopePolicy / 禁用场景 / 敏感度 /
+      // Agent 与项目/空间白名单。
       const reasons = recallAssetAgentReadBlockReasons(eligibility);
       if (reasons.length) {
         blocks.push(`- [asset:${id}] 当前不可使用（${blockReasonText(reasons)}）`);
         continue;
       }
       const version = String(asset.activeVersion || asset.version || '1');
-      blocks.push(formatReadEntry(asset, version));
+      const payload = await resolveFormalAssetPayload(userId, asset);
+      if (input.templateValues !== undefined) {
+        try { blocks.push(formatReadEntry(asset, version, payload) + '\n填充结果:\n' + instantiateAssetTemplate(asset, input.templateValues)); }
+        catch { blocks.push(`- [asset:${id}] 模板填写失败：请提供完整的槽位值；未登记读取。`); continue; }
+      } else blocks.push(formatReadEntry(asset, version, payload));
       readEntries.push({ assetId: asset.id, assetVersion: version });
+      evidence.assets.set(asset.id, {
+        assetId: asset.id,
+        title: asset.title,
+        version,
+        statement: String(asset.statement || ''),
+      });
     }
     await recordAgentReads(opts, readEntries);
     await recordCatalogObservations(userId, {
@@ -368,6 +372,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
       assets: readEntries.map((entry) => ({ id: entry.assetId, version: entry.assetVersion })),
     });
     return {
+      ...(input.templateValues !== undefined && readEntries.length === 0 ? { isError: true } : {}),
       content: [
         `已取出 ${readEntries.length} 条资产正文${skipped > 0 ? `（单次最多 ${MAX_READ_IDS} 条，忽略了多余的 ${skipped} 条）` : ''}：`,
         '',
@@ -427,7 +432,40 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
       .map((asset) => ({ asset, score: matches.get(asset.id)?.score || 0 }))
       .sort((left, right) => right.score - left.score || left.asset.id.localeCompare(right.asset.id));
 
-    const top = ranked.slice(0, k);
+    let top = ranked.slice(0, k);
+    const selectionNotes: string[] = [];
+    // Query is a retrieval hint, never a replacement for the complete host
+    // request. Explicit body reads and reviewed preference entrypoints retain
+    // their contract; this gate only disambiguates automatic search ranking.
+    if (opts.taskText) {
+      const formal = top.filter(item => !item.asset.profileSource).map(item => eligibleFormalAssets.find(asset => asset.id === item.asset.id)!).filter(Boolean);
+      const ambiguousIds = ambiguousRecallAssetIds(formal, opts.taskText, eligibleFormalAssets);
+      const ambiguous = formal.filter(asset => ambiguousIds.has(asset.id));
+      if (ambiguous.length) {
+        const key = JSON.stringify([opts.taskText, agentReadRuntimeContext(opts), ambiguous, eligibleFormalAssets]);
+        let assessment = semanticChecks.get(key);
+        if (!assessment && !semanticCheckSpent) {
+          semanticCheckSpent = true;
+          try {
+            assessment = await assessSemanticApplicability(userId, opts.taskText, ambiguous, agentReadRuntimeContext(opts), undefined, eligibleFormalAssets);
+            semanticChecks.set(key, assessment);
+          } catch { /* Unresolved search hits are not asserted applicable. */ }
+        }
+        const decisions = assessment?.decisions;
+        const allowed = new Set((decisions || []).filter(row => row.verdict === 'applicable').map(row => row.assetId));
+        top = top.filter(item => !ambiguousIds.has(item.asset.id) || allowed.has(item.asset.id));
+        for (const asset of ambiguous) {
+          const decision = decisions?.find(row => row.assetId === asset.id);
+          const unassessed = assessment?.unassessed.find(row => row.assetId === asset.id);
+          if (unassessed) { selectionNotes.push(`[asset:${asset.id}@v${unassessed.version}] not_evaluated: semantic_applicability_${unassessed.reason}`); continue; }
+          selectionNotes.push(`[asset:${asset.id}@v${asset.activeVersion || asset.version}] ${decision?.verdict || 'uncertain'}: ${decision?.reason || 'Applicability unresolved; read explicitly only if you can resolve the conditions from the current task.'}`);
+        }
+        const rank = new Map((decisions || []).map(row => [row.assetId, row.rank]));
+        const slots = top.flatMap((item, index) => ambiguousIds.has(item.asset.id) ? [index] : []);
+        const ordered = slots.map(index => top[index]).sort((a, b) => (rank.get(a.asset.id) ?? 100) - (rank.get(b.asset.id) ?? 100));
+        slots.forEach((slot, index) => { top[slot] = ordered[index]; });
+      }
+    }
     const profileInPool = pool.filter((entry) => entry.profileSource).length;
     await recordCatalogObservations(userId, {
       turnId: opts.turnId, cid: opts.cid, stage: 'search_result_shown',
@@ -440,6 +478,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
         '',
         ...top.map((item, index) => `${index + 1}. ${formatAsset(item.asset, item.score)}`),
         '',
+        ...selectionNotes,
         '搜索结果是线索；采用正式资产前用 assetIds 读取完整正文，并检查适用与禁用条件。',
         '引用格式：[asset:<id>]，例如 [asset:aa-xxx]。',
       ].join('\n'),
@@ -458,6 +497,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
       '②assetIds = 取某几条的完整正文（最多 6 条/次）——看到目录里有合适的，取正文再动手；',
       '③query = 语义、词面与专名混合检索（覆盖当前可用正式资产 + 遗留画像记忆；遗留记忆会标注来源并仅供参考）。',
       '目录很长时带 query 检索；搜索摘要只是线索，采用前须用 assetIds 读完整正文。',
+      '读到正文仍不算采用。若本轮有 report_ability_asset_usage 且你确实据此形成产出，在最终回复前报告具体资产版本和产出原文片段；只写“已采用”不会生成回执。',
       '如果这次任务确实要长期用到某几条，用 attach_assets_to_task 把它们挂到本任务上（用户会看到一张可撤销的卡）。',
       '引用格式 [asset:<id>]，例如 [asset:aa-xxx]。',
     ].join(''),
@@ -468,6 +508,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
           type: 'string',
           description: '自然语言查询：想找的经验/规则/方法，如"发布公告怎么写"、"竞品调研的维度"。与 assetIds 二选一；两者都不给则返回全量目录。',
         },
+        templateValues: { type: 'object', additionalProperties: { type: 'string' }, description: 'Template slot values; only with one template asset id. All slots must be filled.' },
         assetIds: {
           type: 'array',
           items: { type: 'string' },
@@ -498,6 +539,7 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
     },
     async execute(input: Record<string, unknown>) {
       const hasIds = Array.isArray(input.assetIds) && input.assetIds.some((value) => String(value || '').trim());
+      if (input.templateValues !== undefined && !hasIds) return { content: '模板填写需要明确指定一条模板资产。', isError: true };
       if (hasIds) return runRead(input);
       const query = String(input.query || '').trim();
       if (query) return runSearch(input);
@@ -506,7 +548,192 @@ function createSearchAbilityAssetsTool(opts: RecallToolsOpts): AgentTool {
   };
 }
 
-/** Read-only recall asset tools (currently one). No localExec needed. */
-export function createRecallTools(opts: RecallToolsOpts): AgentTool[] {
-  return [createSearchAbilityAssetsTool(opts)];
+function createOntologyQueryTool(opts: RecallToolsOpts, evidence: RecallTurnEvidence): AgentTool {
+  const relationKinds = new Set<AbilityAssetRelationKind>([
+    'refines', 'depends_on', 'replaces', 'conflicts_with', 'related_to', 'same_family',
+  ]);
+  const directions = new Set<OntologyAssetQueryDirection>(['incoming', 'outgoing', 'both']);
+
+  return {
+    name: 'ontology_query',
+    executionMode: 'parallel',
+    description: [
+      '按用户已沉淀的认知资产关系查询可复用资产，并返回可核对的关系证据路径。',
+      '适合“哪些资产依赖 X”“X 依赖哪些资产”“哪些资产替代/细化/冲突于 X”等问题；支持最多 4 跳。',
+      '查询只在当前回合资产目录已经通过状态、来源、Agent、项目、空间和使用规则准入的正式资产上执行，不会绕过治理边界。',
+      '结果只含资产元数据和关系路径；采用资产前仍用 search_ability_assets 的 assetIds 模式读取正文，长期使用再用 attach_assets_to_task。',
+    ].join(''),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          maxLength: 500,
+          description: '自然语言关系问题，例如“哪些资产依赖 本体查询示例：API 网关”。',
+        },
+        target: {
+          type: 'string',
+          maxLength: 200,
+          description: '可选目标资产 ID 或准确标题；提供后优先于从 query 推断。',
+        },
+        relationKind: {
+          type: 'string',
+          enum: ['refines', 'depends_on', 'replaces', 'conflicts_with', 'related_to', 'same_family'],
+          description: '可选关系类型；省略时从 query 推断，无法推断则查询全部关系。',
+        },
+        direction: {
+          type: 'string',
+          enum: ['incoming', 'outgoing', 'both'],
+          description: 'incoming=谁指向目标，outgoing=目标指向谁，both=双向。省略时从 query 推断。',
+        },
+        maxHops: { type: 'integer', minimum: 1, maximum: 4, description: '最大关系跳数，默认 1。' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: '最多返回多少个匹配资产，默认 30。' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    async execute(input: Record<string, unknown>) {
+      const query = typeof input.query === 'string' ? input.query.trim() : '';
+      if (!query || query.length > 500) return { content: 'ontology_query: query 必须是 1-500 字的文本', isError: true };
+      const target = input.target === undefined ? undefined : String(input.target || '').trim();
+      if (target !== undefined && (!target || target.length > 200)) {
+        return { content: 'ontology_query: target 必须是 1-200 字的资产 ID 或标题', isError: true };
+      }
+      const relationKind = input.relationKind as AbilityAssetRelationKind | undefined;
+      if (relationKind !== undefined && !relationKinds.has(relationKind)) {
+        return { content: 'ontology_query: relationKind 无效', isError: true };
+      }
+      const direction = input.direction as OntologyAssetQueryDirection | undefined;
+      if (direction !== undefined && !directions.has(direction)) {
+        return { content: 'ontology_query: direction 无效', isError: true };
+      }
+
+      try {
+        const snapshot = await catalogSnapshot(opts.userId, {
+          ...(opts.cid ? { cid: opts.cid } : {}),
+          ...(opts.turnId ? { turnId: opts.turnId } : {}),
+          ...(opts.taskText ? { taskText: opts.taskText } : {}),
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          ...(opts.roleId ? { roleId: opts.roleId } : {}),
+          ...(opts.conversationKind ? { conversationKind: opts.conversationKind } : {}),
+          ...(opts.fileKinds?.length ? { fileKinds: [...opts.fileKinds] } : {}),
+          scene: {
+            ...(opts.projectId ? { turnProjectId: opts.projectId } : {}),
+            ...(opts.spaceId ? { turnSpaceId: opts.spaceId } : {}),
+          },
+        });
+        const result = queryOntologyAssets(snapshot.assets, {
+          query,
+          ...(target ? { target } : {}),
+          ...(relationKind ? { relationKind } : {}),
+          ...(direction ? { direction } : {}),
+          ...(input.maxHops !== undefined ? { maxHops: Number(input.maxHops) } : {}),
+          ...(input.limit !== undefined ? { limit: Number(input.limit) } : {}),
+        });
+        if (result.status === 'ok') {
+          evidence.relations.push({ query, result });
+          await recordCatalogObservations(opts.userId, {
+            turnId: opts.turnId,
+            cid: opts.cid,
+            stage: 'search_result_shown',
+            assets: result.matches.map((match) => ({
+              id: match.asset.id,
+              version: String(match.asset.activeVersion || match.asset.version || '1'),
+            })),
+          });
+        }
+        return { content: JSON.stringify({ schemaVersion: 1, query, ...result }, null, 2) };
+      } catch (error) {
+        log.warn('ontology asset query failed', { userId: maskId(opts.userId), error: logErrorRef(error as Error) });
+        return { content: 'ontology_query: 本体资产关系查询暂不可用，请改用 search_ability_assets', isError: true };
+      }
+    },
+  };
+}
+
+/** Build the tools and the final-response gate over one shared turn evidence set. */
+export function createRecallToolSuite(opts: RecallToolsOpts): RecallToolSuite {
+  const semanticaEnabled = isSemanticaEnabled(opts.userId);
+  const evidence: RecallTurnEvidence = { assets: new Map(), relations: [] };
+  if (semanticaEnabled && opts.initialEvidence) {
+    for (const asset of opts.initialEvidence.assets) evidence.assets.set(asset.assetId, { ...asset });
+    evidence.relations.push(...opts.initialEvidence.relations.map((relation) => ({
+      ...relation,
+      ...(relation.paths ? {
+        paths: relation.paths.map((path) => ({
+          ...path,
+          evidencePath: path.evidencePath.map((edge) => ({ ...edge })),
+        })),
+      } : {}),
+    })));
+  }
+  const finalResponseGate: RecallFinalResponseGate = {
+    isRequired: () => semanticaEnabled && (evidence.assets.size > 0 || evidence.relations.length > 0),
+    validate: async ({ text, signal }) => {
+      // The legacy recall path must remain behaviorally unchanged while
+      // Semantica is off, even if search_ability_assets read asset bodies.
+      if (!semanticaEnabled) return { text };
+      const input = {
+        query: String(opts.initialEvidence?.taskText || opts.taskText || ''),
+        answer: text,
+        assets: [...evidence.assets.values()],
+        relations: [...evidence.relations],
+        ...(opts.turnId || opts.cid ? { requestId: String(opts.turnId || opts.cid) } : {}),
+      };
+      try {
+        const result = await validateOntologyAnswer(input, {
+          rolloutKey: opts.userId,
+          // Local deterministic checks are the authority for evidence,
+          // relationship direction and direct/indirect consistency.
+          mode: 'observe',
+          ...(signal ? { signal } : {}),
+        });
+        await recordOntologyAnswerValidation(opts.userId, input, result).catch((error) => {
+          log.warn('ontology answer validation receipt failed', {
+            userId: maskId(opts.userId), error: logErrorRef(error as Error),
+          });
+        });
+        return { text: result.answer };
+      } catch (error) {
+        log.warn('ontology answer validation failed open', {
+          userId: maskId(opts.userId), error: logErrorRef(error as Error),
+        });
+        // The validator is a judgment gate, not the source of truth. Runtime
+        // failures must not erase an answer or artifact the model completed.
+        return { text };
+      }
+    },
+  };
+  return {
+    tools: [
+      createSearchAbilityAssetsTool(opts, evidence),
+      ...(semanticaEnabled ? [createOntologyQueryTool(opts, evidence)] : []),
+      ...createAssetUsageReportTools(opts),
+    ],
+    finalResponseGate,
+  };
+}
+
+function createAssetUsageReportTools(opts: RecallToolsOpts): AgentTool[] {
+  const tools: AgentTool[] = [];
+  if (opts.onAssetUsageClaim && opts.turnId) tools.push({
+    name: 'report_ability_asset_usage',
+    description: '报告本轮确实采用的一条资产及读到的版本。完成产出后、最终回复前调用，outputExcerpt 必须是本轮最终消息或已发布文件中的原文片段（12至500字），具体体现这条资产如何影响产出。文件无需再贴入聊天；不能转义换行、改写引文或引用工具过程。只读取、列目录、提及名称不算采用。此工具只登记待核验报告；主进程核对当轮供应或主动读取记录（search_ability_assets 的 assetIds 正文模式）及实际持久化成果后才留下采用回执，不代表效果已验证。无法核验则只记采用未知，不改变成果正文。不采用则不要调用。多条资产分别报告，不要把同一工具成功算给所有引用。',
+    inputSchema: {
+      type: 'object', properties: {
+        assetId: { type: 'string' }, assetVersion: { type: 'string', description: '读到的版本，例如 1 或 v1。' },
+        outputExcerpt: { type: 'string', minLength: 12, maxLength: 500 },
+      }, required: ['assetId', 'assetVersion', 'outputExcerpt'], additionalProperties: false,
+    },
+    async execute(input: Record<string, unknown>) {
+      try {
+        const claim = await prepareAssetUsageClaim(opts.userId, opts.turnId!, input, opts.suppliedAbilityAssets || []);
+        await opts.onAssetUsageClaim!(claim);
+        return { content: '采用报告已登记，等待最终消息持久化后核验；尚未生成采用回执，也未验证效果。' };
+      } catch {
+        return { content: '未登记：需要本轮已供应或已读正文（search_ability_assets 的 assetIds 模式）的资产及版本、12至500字的最终产出原文片段；没有生成采用回执。', isError: true };
+      }
+    },
+  });
+  return tools;
 }

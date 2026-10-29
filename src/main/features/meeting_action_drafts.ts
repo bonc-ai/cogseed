@@ -27,6 +27,7 @@ import { createLogger } from '../logger';
 import { userMeetingActionDraftsDir } from '../paths';
 import { docKeyForDocId, MAX_DOC_ID_CHARS } from './meeting_doc';
 import type { MeetingAssetRef } from './meeting_refs';
+import { emitMeetingStage } from './meeting_stage_events';
 
 const log = createLogger('meeting-action-drafts');
 
@@ -204,7 +205,7 @@ function normalizeAnchors(value: unknown): MeetingTranscriptAnchor[] {
   return out;
 }
 
-const ASSET_TYPES: ReadonlySet<string> = new Set(['personal', 'rule', 'template', 'skill_method', 'fact']);
+const ASSET_TYPES: ReadonlySet<string> = new Set(['cognition', 'personal', 'rule', 'template', 'skill_method', 'fact']);
 
 function normalizeAssetRefs(value: unknown): Array<Pick<MeetingAssetRef, 'assetId' | 'version' | 'title' | 'type'>> {
   if (!Array.isArray(value)) return [];
@@ -363,7 +364,78 @@ function transition(
     updatedAt: at,
   };
   writeStore(uid, updated);
+
+  // 会议环节完成事件：待办草稿状态跃迁后广播一次，供会议产物沉淀消费
+  // （specs/009-meeting-output-archive 契约 A4 / T019）。
+  // 挂在 transition 而不是两个公开函数上：本模块**唯一**的状态跃迁点就是这里
+  // （`confirmActionDraft` / `discardActionDraft` 都只是它的薄封装），挂钩在此不会漏。
+  // 位置纪律：writeStore 成功之后才发；emitMeetingStage 永不抛异常，不影响状态机契约。
+  //
+  // 两种跃迁的沉淀语义不同：
+  //   - confirmed → 真成果，按 actions 沉淀（条目摘要 + 回查锚点）；
+  //   - discarded → **不是成果**。这里照样发事件，让沉淀方按 FR-029 明确记账为
+  //     「已丢弃、未沉淀」，用户能看到"它没进库"，而不是静默消失。
+  emitMeetingStage({
+    stage: to === 'confirmed' ? 'action_confirmed' : 'action_discarded',
+    uid,
+    docKey: docKeyForDocId(id),
+    docId: id,
+    artifactKind: 'actions',
+    sourceText: renderActionDraftForKb(next),
+    confirmed: to === 'confirmed',
+    // 每条草稿一个版本段 → 各自独立成文件（FR-005）。
+    version: next.id,
+    at,
+  });
+
   return next;
+}
+
+/**
+ * 把一条待办草稿渲染成可沉淀的 Markdown。
+ *
+ * 与纪要条目同理：本模块只持有锚点、不持有转写正文，故产出的是**可回查的条目摘要**。
+ * 渲染时如实带上状态（已确认 / 已丢弃），避免下游把草稿当承诺（规格 FR-024 的意图）。
+ */
+export function renderActionDraftForKb(d: MeetingActionDraft): string {
+  const lines: string[] = [
+    `# 会议任务清单（${d.status === 'confirmed' ? '已确认' : d.status === 'discarded' ? '已丢弃' : '草稿'}）`,
+    ``,
+    `- 来源文档：\`${d.docId}\``,
+    `- 草稿 id：\`${d.id}\``,
+    `- 状态：${d.status}${d.confirmedAt ? `（确认于 ${d.confirmedAt}）` : ''}`,
+    `- 条目类型：待办**条目摘要**（非转写原文；正文请按下方锚点回查）`,
+    ``,
+    `## 行动项`,
+    ``,
+    d.summary || '（无摘要）',
+    ``,
+  ];
+
+  lines.push(`## 负责人`, ``);
+  if (d.owner?.speaker) {
+    lines.push(`- ${d.owner.speaker}${d.owner.anchor ? `（依据：段落 \`${d.owner.anchor.utteranceId}\`）` : ''}`);
+  } else {
+    // 不猜负责人（与 meeting-actions 技能口径一致：不得按职位或语气推人）。
+    lines.push(`- 未指定`);
+  }
+  lines.push(``);
+
+  lines.push(`## 转写回查锚点`, ``);
+  if (Array.isArray(d.transcriptRefs) && d.transcriptRefs.length) {
+    for (const ref of d.transcriptRefs) {
+      lines.push(`- 段落 \`${ref.utteranceId}\`（第 ${ref.blockIndex} 段，偏移 ${ref.from}–${ref.to}）`);
+    }
+  } else {
+    lines.push(`（本条无可关联的转写锚点）`);
+  }
+  lines.push(``);
+
+  if (d.confirmedTarget) {
+    lines.push(`## 落点`, ``, `- ${d.confirmedTarget.kind}${d.confirmedTarget.ref ? `：\`${d.confirmedTarget.ref}\`` : ''}`, ``);
+  }
+
+  return lines.join('\n');
 }
 
 /** 用户确认（`draft→confirmed`）：只改本记录状态 + `confirmedAt`，无任何外发。 */

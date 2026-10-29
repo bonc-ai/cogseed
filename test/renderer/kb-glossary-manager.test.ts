@@ -97,6 +97,14 @@ describe('导入预览（先算清楚再动手）', () => {
     expect(summary.total).toBe(1);
     expect(summary.invalid).toBe(2);
   });
+
+  it('无效果条目（错词=正确写法）单独计数且不进新增/更新', () => {
+    const summary = manager.summarizeImport([], [
+      { wrong: '张浩', correct: '张浩' },
+      { wrong: 'coxy', correct: 'Cogseed' },
+    ], 'merge');
+    expect(summary).toMatchObject({ added: 1, noEffect: 1 });
+  });
 });
 
 describe('枚举兜底', () => {
@@ -140,6 +148,13 @@ describe('locale 覆盖（词表管理页）', () => {
     'select_required', 'entry_missing', 'delete_missing', 'status_paused_one', 'status_resumed_one',
     'export_generate_required', 'import_preview_required', 'import_empty',
     'pack_review_required', 'pack_content_required',
+    'add', 'add_title', 'add_wrong', 'add_correct', 'add_kind', 'add_save',
+    'add_need_both', 'add_no_effect', 'add_saved', 'more', 'row_menu',
+    'detail_title', 'detail_risk', 'detail_scope', 'detail_source',
+    'learning_title', 'learning_enabled', 'learning_threshold', 'learning_save',
+    'health_no_effect', 'health_show', 'health_show_all', 'bulk_selected',
+    'empty_title', 'empty_hint', 'no_effect',
+    'risk', 'risk_edit_hint', 'risk_legend', 'edit_invalid_risk',
   ];
 
   for (const lang of locales) {
@@ -161,6 +176,56 @@ describe('源码契约', () => {
     expect(/<button|<input|<textarea|<select/i.test(source)).toBe(false);
   });
 
+  it('首屏只保留词组/类别/状态，系统记账字段进详情', () => {
+    const row = source.slice(source.indexOf('function rowElement'), source.indexOf('function renderList'));
+    for (const internal of ['owner_scope', 'source_import', 'updated_at', 'freq', 'scope_global']) {
+      expect(row, `列表不应平铺 ${internal}`).not.toContain(internal);
+    }
+    expect(row).toContain('data-glo-menu');
+    expect(row).toContain('data-glo-select');
+  });
+
+  it('批量操作只在选中后出现，导入/导出默认不占首屏', () => {
+    expect(source).toContain("if (count === 0) { host.innerHTML = ''; host.hidden = true; return; }");
+    expect(source).toContain('data-glo-io hidden');
+    expect(source).toContain("attrs: { 'data-glo-action': 'open-io' }");
+  });
+
+  it('提供添加词条、详情抽屉与自动学习入口', () => {
+    expect(source).toContain('function openAdd()');
+    expect(source).toContain('function openDetail(entry)');
+    expect(source).toContain('function openLearningSettings()');
+    expect(source).toContain("'transcript.glossary.learning.get'");
+  });
+
+  it('风险可自由编辑，并且三档规则在页面上写清楚', () => {
+    expect(source).toContain("risk: 'glo-edit-risk'");
+    expect(source).toContain("id: ids.risk");
+    expect(source).toContain('riskOverride: true');
+    expect(source).toContain('data-glo-risk-legend');
+    expect(source).toContain('risk_legend');
+    expect(source).toContain('riskLevel,');
+    expect(source).toContain('hydrateUiFormSelects(editModal.dialog');
+    expect(source).toContain('hydrateUiFormSelects(modal.dialog');
+    expect(source).toContain('const modal = root.uiModal({');
+    expect(source).not.toContain('root.uiDrawer');
+  });
+
+  it('行本身不打开详情，详情里也不再放编辑/暂停/删除按钮', () => {
+    expect(source).not.toContain('const row = event.target.closest');
+    expect(source).not.toContain('data-detail-action');
+    expect(source).toContain("if (kind === 'more') { openMoreMenu(event, action); return; }");
+  });
+
+  it('行内三点菜单包含详情/编辑/暂停/删除，并置于弹窗之上', () => {
+    expect(source).toContain("t('kb.glossary.detail', '详情')");
+    expect(source).toContain("t('kb.glossary.edit', '编辑')");
+    expect(source).toContain("t('kb.glossary.pause', '暂停')");
+    expect(source).toContain("t('kb.glossary.delete', '删除')");
+    const contextMenu = fs.readFileSync(path.join(root, 'src/renderer/modules/context-menu.js'), 'utf8');
+    expect(contextMenu).toContain('context-menu--above-modal');
+  });
+
   it('只操作 transcript.glossary.* 与 library.writeText，不碰别的写入通道', () => {
     const channels = [...source.matchAll(/invoke\('([^']+)'/g)].map((m) => m[1]);
     expect(channels.length).toBeGreaterThan(0);
@@ -169,6 +234,19 @@ describe('源码契约', () => {
       'transcript.glossary.setStatus', 'transcript.glossary.delete', 'transcript.glossary.setOwnerNote',
       'transcript.glossary.seedInitial', 'transcript.queryRewrite.set',
       'transcript.glossary.exportPack', 'transcript.glossary.reviewPack', 'transcript.glossary.importPack',
+      // 单条编辑（方案 §七人工维护，2026-10-15 补）。主进程侧一次完成替换：
+      // 词条身份是 wrong+correct，改了 wrong 就等于换了一条 —— 前端拆成
+      // delete + upsert 两次调用会在中途失败时丢掉用户刚改的词条。
+      // 所以这里**必须**新开一条通道，不能复用 delete。
+      'transcript.glossary.update',
+      'transcript.glossary.upsert',
+      'transcript.glossary.learning.get',
+      'transcript.glossary.learning.set',
+      'transcript.glossary.learning.undo',
+      // 2026-10-21：CSV/JSON 导入预览、文件选择、清空前备份。
+      'transcript.glossary.parseImport',
+      'transcript.glossary.pickImportFile',
+      'transcript.glossary.clear',
       'transcript.metrics.summary',
       // specs/013 T057 / D16：指标区第二分区「会议引用」读会议指标——**只读**通道，
       // 与既有 transcript.metrics.summary 两数据源两读口（互不混流），不是写入。
@@ -176,6 +254,30 @@ describe('源码契约', () => {
       'library.writeText',
     ]);
     for (const channel of channels) expect(allowed.has(channel)).toBe(true);
+  });
+
+  /**
+   * 编辑弹窗的构造参数契约。
+   *
+   * 真实事故（2026-10-15）：`uiModal` 对**可关闭**模态强制要求本地化 `closeLabel`，
+   * 漏传直接抛 `uiModal requires a localized closeLabel when dismissible`。
+   * 该异常发生在点击事件处理器里，被浏览器吞掉，用户看到的只是"点了没反应" ——
+   * 面板上没有任何提示。这条测试把"必须传 closeLabel"钉住，避免同样的静默失败。
+   */
+  it('编辑弹窗必须给 uiModal 传本地化 closeLabel（漏传会静默打不开）', () => {
+    const call = source.match(/uiFormModal\(\{[\s\S]*?\n\s*\}\);/);
+    expect(call, '源码里应存在 uiFormModal 调用').toBeTruthy();
+    const block = call![0];
+    expect(block).toContain('closeLabel:');
+    // 同时校验其余 uiFormModal 必填项，一次把契约钉全
+    expect(block).toContain('submitLabel:');
+    expect(block).toContain('busyLabel:');
+    expect(block).toContain('onSubmit');
+  });
+
+  it('打开编辑弹窗必须被 try/catch 兜住（失败要能看见，不能静默）', () => {
+    expect(source).toMatch(/try\s*\{\s*openEdit\(/);
+    expect(source).toContain('edit_open_failed');
   });
 
   // 原先这里还有两条「待核候选区」契约（候选走 transcript.glossary.candidates /
@@ -496,26 +598,13 @@ describe('会议引用指标分区渲染（T057，vm 级）', () => {
     return { metricsHost, appended };
   }
 
-  it('meeting.metrics.summary 的数据渲染为 data-glo-metrics 内的追加分区（数值+分母+样本数）', async () => {
+  it('转写指标没有样本时，会议引用口径不占首屏', async () => {
     const { metricsHost, appended } = loadGlossaryManagerWithMeetingMetrics();
-    // reload() 是异步链：等 microtask + 一个 macrotask
     await Promise.resolve();
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await Promise.resolve();
-    const block = appended.find((node) => node?.dataset?.gloMeeting === 'metrics');
-    expect(block).toBeTruthy();
-    expect(block.className).toContain('kb-glo__meeting-metrics');
-    expect(block.textContent).toContain('会议引用指标');
-    expect(block.textContent).toContain('2/4');
-    expect(block.textContent).toContain('样本 4');
-    expect(block.textContent).toContain('口径');
-    // notMeasurable 至少三条进入渲染文本
-    expect(block.textContent).toContain('无对照环境，不宣称因果');
-    expect(block.textContent).toContain('仅有本机数据，不做跨账号推断');
-    expect(block.textContent).toContain('手动改回发生在产品之外');
-    // 既有指标区（transcript.metrics.summary 无数据）不受影响：容器未被写入其它内容
-    expect(appended.filter((node) => node?.dataset?.gloMeeting !== 'metrics')).toEqual([]);
     expect(metricsHost).toBeTruthy();
+    expect(appended).toEqual([]);
   });
 });

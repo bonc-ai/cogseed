@@ -200,7 +200,7 @@ export async function readSkillVersion(
     || records.find((record) => record.version === revisionOrVersion);
 }
 
-function nextVersion(records: SkillVersionRecord[]): string {
+export function nextVersion(records: SkillVersionRecord[]): string {
   const highest = records.reduce((max, record) => {
     const value = /^[0-9]+$/.test(record.version) ? Number(record.version) : 0;
     return Number.isSafeInteger(value) ? Math.max(max, value) : max;

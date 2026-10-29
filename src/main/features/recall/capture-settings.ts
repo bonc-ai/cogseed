@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { fileEditLock } from '../../util/locks';
+import { recallJsonRecordPath } from './paths';
 import {
   readRecallJsonRecord,
   updateRecallJsonRecord,
@@ -12,9 +15,16 @@ export type RecallCaptureExecutionPolicy = 'smart' | 'nightly' | 'manual';
 export type RecallCaptureReviewPolicy = 'auto' | 'manual';
 type StoredRecallCaptureExecutionPolicy = RecallCaptureExecutionPolicy | 'immediate';
 
+export interface RecallCaptureModelCandidate { provider: string; model: string; }
+
 export interface RecallCaptureSettingsRecord extends RecallJsonRecord {
   id: typeof SETTINGS_ID;
+  modelCandidates: RecallCaptureModelCandidate[];
   enabled: boolean;
+  autoApproval: boolean;
+  autoApprovalEnabledAt?: string;
+  autoApprovalEpoch?: string;
+  autoApprovalPolicyVersion?: 2;
   executionPolicy: RecallCaptureExecutionPolicy;
   reviewPolicy: RecallCaptureReviewPolicy;
   quietMinutes: number;
@@ -25,26 +35,27 @@ export interface RecallCaptureSettingsRecord extends RecallJsonRecord {
 }
 
 export interface UpdateRecallCaptureSettingsInput {
+  modelCandidates?: RecallCaptureModelCandidate[];
   enabled?: boolean;
+  autoApproval?: boolean;
   executionPolicy?: StoredRecallCaptureExecutionPolicy;
   reviewPolicy?: RecallCaptureReviewPolicy;
   quietMinutes?: number;
   nightlyStart?: string;
   nightlyEnd?: string;
-  catchUpMissed?: boolean;
 }
 
 const DEFAULT_SETTINGS = Object.freeze({
+  modelCandidates: [] as RecallCaptureModelCandidate[],
   enabled: true,
-  // 2026-09-16 B3：默认档与实际行为对齐——smart 的自动创建早已下线
-  //（terminalCaptureEnabledFor 仅放行 nightly），默认留在半死档会让
-  // "smart+auto"组合的手动整理意外自动采纳。
-  executionPolicy: 'manual' as const,
-  reviewPolicy: 'auto' as const,
+  autoApproval: false,
+  // One nightly pipeline; automatic confirmation requires a fresh explicit opt-in.
+  executionPolicy: 'nightly' as const,
+  reviewPolicy: 'manual' as const,
   quietMinutes: 10,
   nightlyStart: '02:00',
   nightlyEnd: '06:00',
-  catchUpMissed: true,
+  catchUpMissed: false,
 });
 
 function isStoredExecutionPolicy(value: unknown): value is StoredRecallCaptureExecutionPolicy {
@@ -52,10 +63,8 @@ function isStoredExecutionPolicy(value: unknown): value is StoredRecallCaptureEx
 }
 
 function canonicalExecutionPolicy(value: StoredRecallCaptureExecutionPolicy): RecallCaptureExecutionPolicy {
-  // 2026-09-16 B3 收窄：只改默认值不动存量归一——smart 自动创建闸门已拦，
-  // 存量 smart 用户动一次夜间开关即离开该档；强行归一会让 waiting_quiet
-  // 新建路径与 22 个活测试整体作废，代价大于收益。
-  return value === 'immediate' ? 'smart' : value;
+  // Legacy choices are read-compatible; all new automatic work uses the nightly pipeline.
+  return 'nightly';
 }
 
 function isReviewPolicy(value: unknown): value is RecallCaptureReviewPolicy {
@@ -73,10 +82,32 @@ function assertTime(value: unknown, field: string): string {
   return value;
 }
 
+function validateModelCandidates(value: unknown): RecallCaptureModelCandidate[] {
+  if (!Array.isArray(value) || value.length > 32) throw new Error('invalid recall capture model candidates');
+  const seen = new Set<string>();
+  return value.map(candidate => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)
+      || Object.keys(candidate).some(key => key !== 'provider' && key !== 'model')
+      || typeof candidate.provider !== 'string' || typeof candidate.model !== 'string'
+      || !candidate.provider.trim() || !candidate.model.trim()
+      || candidate.provider.length > 200 || candidate.model.length > 200) {
+      throw new Error('invalid recall capture model candidate');
+    }
+    const next = { provider: candidate.provider.trim(), model: candidate.model.trim() };
+    const key = JSON.stringify([next.provider, next.model]);
+    if (seen.has(key)) throw new Error('duplicate recall capture model candidate');
+    seen.add(key);
+    return next;
+  });
+}
+
 function asSettings(value: RecallJsonRecord): RecallCaptureSettingsRecord {
+  // Retired scope flag: saved-content organization follows the discovery switch.
+  const { stockOrganizationEnabled: _retiredScope, ...current } = value;
   if (
     value.id !== SETTINGS_ID
     || typeof value.enabled !== 'boolean'
+    || (value.autoApproval !== undefined && typeof value.autoApproval !== 'boolean')
     || !isStoredExecutionPolicy(value.executionPolicy)
     || (value.reviewPolicy !== undefined && !isReviewPolicy(value.reviewPolicy))
     || (value.quietMinutes !== undefined && !isQuietMinutes(value.quietMinutes))
@@ -85,14 +116,26 @@ function asSettings(value: RecallJsonRecord): RecallCaptureSettingsRecord {
     || typeof value.nightlyEnd !== 'string'
     || !TIME_PATTERN.test(value.nightlyEnd)
     || value.nightlyStart === value.nightlyEnd
-    || typeof value.catchUpMissed !== 'boolean'
+    || (value.catchUpMissed !== undefined && typeof value.catchUpMissed !== 'boolean')
     || typeof value.updatedAt !== 'string'
     || Number.isNaN(Date.parse(value.updatedAt))
   ) throw new Error('malformed recall capture settings');
   return {
-    ...value,
+    ...current,
+    // A previous manual choice was an explicit opt-out. Ordinary settings
+    // edits preserve it; an explicit enable writes the new nightly record.
+    enabled: value.executionPolicy === 'manual' ? false : value.enabled,
+    modelCandidates: value.modelCandidates === undefined ? [] : validateModelCandidates(value.modelCandidates),
     executionPolicy: canonicalExecutionPolicy(value.executionPolicy),
-    reviewPolicy: isReviewPolicy(value.reviewPolicy) ? value.reviewPolicy : DEFAULT_SETTINGS.reviewPolicy,
+    // Legacy auto values without an explicit grant stay disabled.
+    reviewPolicy: 'manual',
+    autoApproval: value.autoApproval === true && value.autoApprovalPolicyVersion === 2 && typeof value.autoApprovalEpoch === 'string'
+      && /^[a-f0-9-]{36}$/.test(value.autoApprovalEpoch) && typeof value.autoApprovalEnabledAt === 'string'
+      && Number.isFinite(Date.parse(value.autoApprovalEnabledAt)),
+    catchUpMissed: false,
+    autoApprovalPolicyVersion: value.autoApprovalPolicyVersion === 2 ? 2 : undefined,
+    autoApprovalEpoch: typeof value.autoApprovalEpoch === 'string' ? value.autoApprovalEpoch : undefined,
+    autoApprovalEnabledAt: typeof value.autoApprovalEnabledAt === 'string' ? value.autoApprovalEnabledAt : undefined,
     quietMinutes: isQuietMinutes(value.quietMinutes) ? value.quietMinutes : DEFAULT_SETTINGS.quietMinutes,
   } as RecallCaptureSettingsRecord;
 }
@@ -112,6 +155,42 @@ export async function readRecallCaptureSettings(userId: string): Promise<RecallC
   return stored ? asSettings(stored) : defaultSettings(userId);
 }
 
+const UNIFIED_DISCOVERY_MIGRATION_ID = 'unified-discovery-migration';
+
+/** One-shot migration from the retired independent inspection switch. The
+ * enabled flag is copied directly (never through `updateRecallCaptureSettings`)
+ * so an automatic migration cannot mint a fresh auto-approval grant. Legacy
+ * dismissed/deferred keys stay in `inspection-settings` and keep applying. */
+export async function migrateUnifiedDiscoverySettings(userId: string): Promise<void> {
+  if (!userId) return;
+  const marker = await readRecallJsonRecord(userId, SETTINGS_COLLECTION, UNIFIED_DISCOVERY_MIGRATION_ID)
+    .catch(() => undefined);
+  if (marker) return;
+  await withRecallAutoApprovalLock(userId, async () => {
+    const again = await readRecallJsonRecord(userId, SETTINGS_COLLECTION, UNIFIED_DISCOVERY_MIGRATION_ID)
+      .catch(() => undefined);
+    if (again) return;
+    const { readInspectionSettings } = await import('./asset-inspection-service');
+    // A failed read must not be stamped as "no legacy switch"; leave the marker
+    // unwritten so the next boot retries the migration.
+    const inspection = await readInspectionSettings(userId);
+    if (inspection?.enabled) {
+      await updateRecallJsonRecord(userId, SETTINGS_COLLECTION, SETTINGS_ID, current => {
+        const base = current ? asSettings(current) : defaultSettings(userId);
+        if (base.enabled) return base;
+        return { ...base, enabled: true, updatedAt: new Date().toISOString() };
+      });
+    }
+    await updateRecallJsonRecord(userId, SETTINGS_COLLECTION, UNIFIED_DISCOVERY_MIGRATION_ID, current => current || {
+      schemaVersion: 1,
+      ownerId: userId,
+      id: UNIFIED_DISCOVERY_MIGRATION_ID,
+      legacyInspectionEnabled: inspection?.enabled === true,
+      migratedAt: new Date().toISOString(),
+    } as RecallJsonRecord);
+  });
+}
+
 export async function updateRecallCaptureSettings(
   userId: string,
   input: UpdateRecallCaptureSettingsInput,
@@ -119,9 +198,18 @@ export async function updateRecallCaptureSettings(
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error('invalid recall capture settings');
   }
-  const allowed = new Set(['enabled', 'executionPolicy', 'reviewPolicy', 'quietMinutes', 'nightlyStart', 'nightlyEnd', 'catchUpMissed']);
+  const allowed = new Set(['modelCandidates', 'enabled', 'autoApproval', 'executionPolicy', 'reviewPolicy', 'quietMinutes', 'nightlyStart', 'nightlyEnd']);
   for (const key of Object.keys(input)) {
     if (!allowed.has(key)) throw new Error('invalid recall capture settings field');
+  }
+  if (input.autoApproval !== undefined && typeof input.autoApproval !== 'boolean') {
+    throw new Error('invalid recall capture auto approval');
+  }
+  if (input.reviewPolicy === 'auto') {
+    throw new Error('automatic approval is unavailable');
+  }
+  if (input.executionPolicy !== undefined && input.executionPolicy !== 'nightly') {
+    throw new Error('only nightly capture is available');
   }
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
     throw new Error('invalid recall capture enabled');
@@ -135,29 +223,38 @@ export async function updateRecallCaptureSettings(
   if (input.quietMinutes !== undefined && !isQuietMinutes(input.quietMinutes)) {
     throw new Error('invalid recall capture quiet minutes');
   }
-  if (input.catchUpMissed !== undefined && typeof input.catchUpMissed !== 'boolean') {
-    throw new Error('invalid recall capture catch-up setting');
-  }
+  const modelCandidates = input.modelCandidates === undefined ? undefined : validateModelCandidates(input.modelCandidates);
   const nightlyStart = input.nightlyStart === undefined
     ? undefined : assertTime(input.nightlyStart, 'nightly start');
   const nightlyEnd = input.nightlyEnd === undefined
     ? undefined : assertTime(input.nightlyEnd, 'nightly end');
 
-  return asSettings(await updateRecallJsonRecord(
+  return withRecallAutoApprovalLock(userId, async () => asSettings(await updateRecallJsonRecord(
     userId,
     SETTINGS_COLLECTION,
     SETTINGS_ID,
-    (current) => {
+    async (current) => {
       const base = current ? asSettings(current) : defaultSettings(userId);
+      if (modelCandidates !== undefined) {
+        const { assertRecallCaptureModelAdditions } = await import('./capture-model-selection');
+        await assertRecallCaptureModelAdditions(userId, base.modelCandidates, modelCandidates);
+      }
+      const autoApproval = input.autoApproval ?? base.autoApproval;
+      const newGrant = autoApproval && (!base.autoApproval || input.enabled === false || (input.enabled === true && !base.enabled));
       const next: RecallCaptureSettingsRecord = {
         ...base,
+        ...(modelCandidates === undefined ? {} : { modelCandidates }),
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
         ...(input.executionPolicy === undefined ? {} : { executionPolicy: canonicalExecutionPolicy(input.executionPolicy) }),
-        ...(input.reviewPolicy === undefined ? {} : { reviewPolicy: input.reviewPolicy }),
+        reviewPolicy: 'manual',
+        autoApproval,
+        autoApprovalPolicyVersion: autoApproval ? 2 : undefined,
+        autoApprovalEpoch: autoApproval ? (newGrant ? randomUUID() : base.autoApprovalEpoch) : undefined,
+        autoApprovalEnabledAt: autoApproval ? (newGrant ? new Date().toISOString() : base.autoApprovalEnabledAt) : undefined,
         ...(input.quietMinutes === undefined ? {} : { quietMinutes: input.quietMinutes }),
         ...(nightlyStart === undefined ? {} : { nightlyStart }),
         ...(nightlyEnd === undefined ? {} : { nightlyEnd }),
-        ...(input.catchUpMissed === undefined ? {} : { catchUpMissed: input.catchUpMissed }),
+        catchUpMissed: false,
         updatedAt: new Date().toISOString(),
       };
       if (next.nightlyStart === next.nightlyEnd) {
@@ -165,7 +262,18 @@ export async function updateRecallCaptureSettings(
       }
       return next;
     },
-  ));
+  )));
+}
+
+/** Settings changes and system promotion share this grant lock. Disabling waits
+ * for an already committing operation; nothing can commit after revocation returns. */
+export function withRecallAutoApprovalLock<T>(userId: string, operation: () => Promise<T>): Promise<T> {
+  return fileEditLock(recallJsonRecordPath(userId, 'candidate-locks', 'auto-approval')).runExclusive(operation);
+}
+
+export function captureAutoApprovalAuthorization(settings: RecallCaptureSettingsRecord): { autoApprovalEpoch?: string; autoApprovalEnabledAt?: string } {
+  return settings.enabled && settings.autoApproval
+    ? { autoApprovalEpoch: settings.autoApprovalEpoch, autoApprovalEnabledAt: settings.autoApprovalEnabledAt } : {};
 }
 
 function minuteOfDay(value: string): number {

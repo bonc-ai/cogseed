@@ -1,0 +1,27 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.html.renderer
+  name: ui-html-renderer
+  version: 1.0.0
+  description: Handle complex stateful HTML, runtime-safety repair, strict source-to-HTML
+    fidelity, or detailed implementation handoff; ordinary single-page HTML is completed
+    directly by the compact executor.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

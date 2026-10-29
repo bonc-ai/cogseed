@@ -168,7 +168,8 @@ describe('P3394 gateway turn runner', () => {
     const result = await runP3394GatewayTurn(baseInput);
 
     expect(result.failureCode).toBe('p3394_cli_not_found');
-    expect(result.failureKind).toBe('runtime');
+    // Missing CLI is user-actionable and nothing ran: config, not runtime.
+    expect(result.failureKind).toBe('config');
     expect(mocks.startExternalGateway).not.toHaveBeenCalled();
     expect(hub.sendAndWait).not.toHaveBeenCalled();
   });
@@ -223,6 +224,7 @@ describe('P3394 gateway turn runner', () => {
     const result = await runP3394GatewayTurn({ ...baseInput, cli: 'custom-agent' });
 
     expect(result.failureCode).toBe('p3394_node_offline');
+    expect(result.failureKind).toBe('config');
     expect(mocks.startExternalGateway).not.toHaveBeenCalled();
   });
 
@@ -232,6 +234,7 @@ describe('P3394 gateway turn runner', () => {
     const result = await runP3394GatewayTurn(baseInput);
 
     expect(result.failureCode).toBe('p3394_gateway_start_failed');
+    expect(result.failureKind).toBe('config');
     expect(hub.sendAndWait).not.toHaveBeenCalled();
   });
 

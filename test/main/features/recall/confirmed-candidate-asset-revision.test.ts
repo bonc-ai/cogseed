@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * Spec §5.2 / §10.3：候选确认之后的修改必须走**正式资产版本链**，
  * 而不是回头改那条已经终结的候选。
@@ -38,7 +39,7 @@ const USER = 'u-revision';
 
 async function confirmedCandidateWithAsset() {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
-  const saved = await candidates.saveRecallCandidate(USER, {
+  const saved = await createNightlyCandidateFixture(USER, {
     judgment: '架构决策要留可追溯记录',
     value: '让后续评审不必重建上下文',
     summary: '可追溯的架构决策',

@@ -79,11 +79,11 @@ export function createResearchRerankTool(): AgentTool {
   return {
     name: 'research_rerank',
     description:
-      'Rerank candidate research passages by SEMANTIC relevance to a sub-question, using local embeddings. '
-      + 'Use it as the second stage after the deep-research compress skill: compress filters by keyword overlap (and drops a relevant passage that happens to share no query words), then this tool reorders the survivors by MEANING, so on-topic passages with different wording still surface. '
-      + 'Pass the sub-question as `query` and the candidate `passages` (each at least a `text`, plus optional id/source/url/title). '
-      + 'Returns `ranked` as `{index, score, ...passthrough}` sorted most-relevant first — `index` refers to your ORIGINAL passages array (invalid entries are skipped without shifting indices). '
-      + 'At most 256 passages are evaluated per call; the response sets `truncated: true` when the input exceeded that (pre-narrow with compress). Read-only, local, no extra cost.',
+        'Rerank research passages by SEMANTIC relevance to a sub-question, using local embeddings (stage 2 after '
+        + 'deep-research compress, which filters by keyword overlap and can drop a relevant passage sharing no query words). '
+        + 'Pass `query` and `passages` (each needs `text`; optional id/source/url/title). '
+        + 'Returns `ranked` as `{index, score, ...}` most relevant first; `index` points into your ORIGINAL array '
+        + '(invalid entries skipped, indices unshifted). Max 256 per call (`truncated: true` beyond). Read-only, local.',
     inputSchema: {
       type: 'object',
       properties: {

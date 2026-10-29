@@ -67,8 +67,14 @@ export async function experienceCatalogForPrompt(
     if (built.entries.length > INLINE_EXPERIENCE_CATALOG_MAX_ENTRIES) {
       // 大目录：内联前 20 行 + 一行翻页引导；★（当轮相关）已排在前面，
       // 截断不会把相关条目挤出去。
+      // P-r1-106：复写页眉两行——页眉带着「用 read_task_experience 取正文」
+      // 的指引，大目录恰恰是模型最需要翻页/取正文的场合，截断把它整段丢掉
+      // 等于在最需要的时候撤走说明书。资产 hint 先例（asset-catalog-hint
+      // 的 lines[0] 恒为 header）同口径：页眉永远在。
+      const header = built.text.split('\n').slice(0, 2);
       const more = built.entries.length - INLINE_OVERFLOW_KEEP;
       text = [
+        ...header,
         ...built.lines.slice(0, INLINE_OVERFLOW_KEEP),
         `…还有 ${more} 条：可用 list_task_experiences 翻页查看。`,
       ].join('\n');

@@ -1,9 +1,10 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
- * 台账扩展（specs/008 T003/T004）：actor='ai'、before/after、reason、failureCategory。
+ * 台账字段：actor='ai'、before/after、reason、failureCategory。
  *
  * 守两条不变量：
- *   ① FR-004 —— 每次 AI 写操作有台账，四项（actor/时间/前后值/依据）齐全；
- *   ② FR-012 —— 台账只存**摘要**，正文全文不进台账文件。
+ *   ① 每次 AI 写操作记录 actor、时间、前后值摘要与依据；
+ *   ② 台账不保存正文全文。
  *
  * ② 的判据不是"看返回对象"，而是**把 JSONL 原文读出来找关键词**——摘要函数
  * 写错时返回对象仍然好看，只有盘上原文能证伪。
@@ -47,9 +48,9 @@ async function auditFileText(uid: string, assetId: string): Promise<string> {
 
 async function seed(uid: string) {
   const { candidates, assets } = await modules();
-  const candidate = await candidates.saveRecallCandidate(uid, {
+  const candidate = await createNightlyCandidateFixture(uid, {
     judgment: 'Prefer append-only audit trails.',
-    // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
+    // 标题闸门：无 summary 兜底＝正文首句，过不了闸门。
     summary: 'Append-only audit habit',
     suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
     sourceRefs: [{ kind: 'execution', id: 'exec-audit' }],
@@ -58,7 +59,7 @@ async function seed(uid: string) {
   return { assets, asset };
 }
 
-describe('台账扩展：actor=ai 与四项齐全（FR-004）', () => {
+describe('台账扩展：actor=ai 与四项齐全', () => {
   it('AI 的写操作留下 actor=ai + 时间 + 前后值 + 依据', async () => {
     const { assets, asset } = await seed('user-ai');
     await assets.updateAbilityAsset('user-ai', asset.id, {
@@ -73,9 +74,10 @@ describe('台账扩展：actor=ai 与四项齐全（FR-004）', () => {
     expect(row.actor).toBe('ai');
     expect(Number.isNaN(Date.parse(row.at))).toBe(false);
     expect(row.reason).toBe('用户要求把这条改清楚点');
-    // before/after 是摘要串：至少写明改了哪几维。
+    // before/after 是摘要串：写明改动字段。文本类字段保留
+    // 字数/条数，不落标题或正文原文。
     expect(row.before).toContain('title=');
-    expect(row.after).toContain('title=由 AI 改过的标题');
+    expect(row.after).toMatch(/title=\d+ 字/);
     expect(row.before).toContain('statement=');
     // 成功记录不带失败归因。
     expect(row.failureCategory).toBeUndefined();
@@ -122,13 +124,13 @@ describe('台账扩展：actor=ai 与四项齐全（FR-004）', () => {
   });
 });
 
-describe('台账摘要的隐私边界（FR-012）', () => {
+describe('台账摘要的隐私边界', () => {
   // 正文够长才会被截断，尾部标记用来证明"没把全文抄进台账"。
   const HEAD = '头'.repeat(80);
   const TAIL_MARK = 'TAILMARK-NEVER-IN-LEDGER';
   const BODY = `${HEAD}${TAIL_MARK}`;
 
-  it('正文只留短前缀，全文与尾部都不落台账', async () => {
+  it('正文只留字数，任何前缀与尾部都不落台账', async () => {
     const { assets, asset } = await seed('user-l0');
     await assets.updateAbilityAsset('user-l0', asset.id, {
       statement: BODY, reason: '整理正文', actor: 'ai',
@@ -136,7 +138,9 @@ describe('台账摘要的隐私边界（FR-012）', () => {
 
     const raw = await auditFileText('user-l0', asset.id);
     expect(raw).not.toContain(TAIL_MARK);
-    expect(raw).toContain('头'); // 前缀允许：与详情页对本人可见的信息量一致
+    // 文本类字段只留字数/条数，不保存前缀；台账不是
+    // 第二份正文副本；逐字内容只在版本流快照里（随 purge 一并清除）。
+    expect(raw).not.toContain('头');
     expect(raw).toMatch(/statement=\d+ 字/);
   });
 });

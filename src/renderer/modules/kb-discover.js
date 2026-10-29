@@ -906,7 +906,9 @@
         },
       })),
     });
+    // Nested under the KB page header (specs/008 D12): no shell slot.
     const pageHeader = window.uiPageHeader({
+      shell: false,
       title: tab.title,
       actions: [{
         label: _t('kb.discover.refresh', '刷新真实数据'),

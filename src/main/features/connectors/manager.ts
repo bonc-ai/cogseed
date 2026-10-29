@@ -14,18 +14,24 @@
  * expiry surfaces as a tool error and the user re-clicks "刷新工具".
  */
 import * as crypto from 'node:crypto';
+import { isEmailConnector } from './catalog-email';
+import { refreshEmail, removeEmail, callEmail, shutdownEmail } from './email-auth';
+import { connectTencentSurvey, refreshTencentSurvey, removeTencentSurvey, callTencentSurvey, shutdownTencentSurvey } from './tencent-survey';
 
 import * as registry from './registry';
 import { McpConnection } from './mcp-client';
 import { findCatalogEntry } from './catalog';
-import { applyTemplate } from './apply-template';
+import { scopeManagedCliTransport } from './cli-runtime';
+import { applyTemplate, scopeTencentMeetingTransport } from './apply-template';
+import { callApprovedTencentMeetingChange, isTencentMeetingInternal, isTencentMeetingWrite } from './tencent-meeting-approval';
 import { assertConnectorRuntimeEnabled, isConnectorRuntimeEnabled } from './availability';
 import { startOAuth, refreshIfStale, startGoogleSheetsPicker } from './oauth';
 import { startMcpDcrOAuth, refreshDcrIfStale } from './oauth-dcr';
 import { ensureLocalCliAuthorized } from './local-cli-auth';
+import { authorizeBrowserPoll } from './interactive-auth';
 import { createLogger } from '../../logger';
 import { logErrorSummary } from '../../util/log-redact';
-import { broadcastOAuthConnectOutcome } from './oauth-events';
+import { broadcastOAuthConnectOutcome, broadcastAuthorizationUrl } from './oauth-events';
 import { deriveCustomId, validateCustomTransport, validateDisplayName, type CustomConnectorInput } from './custom-transport';
 import { isConnectorUsable } from './types';
 import type { CatalogEntry, ConnectorInstance, OAuthGrant, ToolSchema, Transport } from './types';
@@ -227,6 +233,13 @@ function _isRecoverableTransportUnresolved(inst: ConnectorInstance): boolean {
   // be the cause here and re-authorization is never the fix — but retrying the spawn still is.
   // Keying this on `oauth_grant` would wrongly freeze such an instance as a permanent error.
   if (entry.auth_mode === 'local_cli') return _hasEstablishedConnectorState(inst);
+  // `interactive_token` also never has an `oauth_grant`, so the same reasoning applies: the stored
+  // transport proves the user supplied a credential, and a retry — not re-authorization — is what
+  // fixes an unresolved spawn. Note the contrast with a *cleared* credential: that removes the
+  // transport, so `_resolveTransport` returns null and this stays false.
+  if (entry.auth_mode === 'interactive_token') {
+    return !!inst.transport && _hasEstablishedConnectorState(inst);
+  }
   return !!inst.oauth_grant && _hasEstablishedConnectorState(inst);
 }
 
@@ -537,7 +550,20 @@ async function _resolveTransport(uid: string, inst: ConnectorInstance): Promise<
   // This branch must stay ahead of the `oauth_grant` check below: a `local_cli` instance never
   // has that row, and treating its absence as "broken instance" would silently drop the card.
   if (entry.auth_mode === 'local_cli') {
-    return { transport: applyTemplate(entry, null), grant: null };
+    const baseTransport = applyTemplate(entry, null);
+    return { transport: entry.id === 'tencent-meeting' ? scopeTencentMeetingTransport(uid, baseTransport) : scopeManagedCliTransport(uid, entry.id, baseTransport), grant: null };
+  }
+  // `interactive_token` is credential-forwarding without a grant: the user-supplied credential was
+  // materialized into the transport at connect time, and the transport itself lives in the
+  // instance's encrypted `secrets_enc` blob — so reconnecting re-uses it verbatim, exactly like the
+  // `custom` branch above. A missing transport means no credential has been supplied yet (or it was
+  // cleared), which is "not connectable", not "broken".
+  if (entry.auth_mode === 'interactive_token') {
+    if (!inst.transport) {
+      log.warn('interactive_token instance has no credential yet', { id: inst.id });
+      return null;
+    }
+    return { transport: inst.transport, grant: null };
   }
   if (!inst.oauth_grant) {
     log.warn('instance has no oauth_grant', { id: inst.id });
@@ -581,6 +607,8 @@ async function _connectAndCacheTools(
   inst: ConnectorInstance,
   statusPatches?: StatusPatchCollector,
 ): Promise<ConnectorInstance> {
+  if (isEmailConnector(inst.id)) return refreshEmail(uid, inst.id);
+  if (inst.id === 'tencent-survey') return refreshTencentSurvey(uid);
   const entry = findCatalogEntry(inst.id);
   let transport: Transport;
   try {
@@ -708,7 +736,7 @@ export async function verifyUsableConnectors(uid: string, reason = 'manual'): Pr
   const run = (async () => {
     const now = Date.now();
     const due = listInstances(uid).filter((inst) => {
-      if (!isConnectorUsable(inst.status) || !isConnectorRuntimeEnabled(inst.id)) return false;
+      if (!isConnectorUsable(inst.status) || !isConnectorRuntimeEnabled(uid, inst.id)) return false;
       if (_conns.get(inst.id)?.isConnected || _isInRetryCooldown(inst)) return false;
       return now - (_lastVerifiedAt(inst) || 0) >= VERIFY_TTL_MS;
     });
@@ -763,7 +791,7 @@ export async function bootstrap(uid: string): Promise<void> {
       }
       continue;
     }
-    if (!isConnectorRuntimeEnabled(inst.id)) continue;
+    if (!isConnectorRuntimeEnabled(uid, inst.id)) continue;
     // A healthy persisted row already has everything needed to expose the connector to the
     // model. Keeping every MCP process/socket warm made the deferred bootstrap take 10s+ for a
     // typical multi-connector setup and merely moved startup contention into the first minute.
@@ -772,10 +800,15 @@ export async function bootstrap(uid: string): Promise<void> {
     if (
       inst.status?.kind === 'connected'
       && inst.tools_cache.length > 0
+      // Upgrade the bundled meeting adapter's pre-application cache once. Otherwise its old
+      // preview-only description hides the new confirmed action until an unrelated tool call.
+      && (inst.id !== 'tencent-meeting' || inst.tools_cache.some(tool => tool.name === 'apply_record_permission'))
     ) {
       reusedCached += 1;
       continue;
     }
+    // Password failures require an explicit UI retry; do not retry logins at boot.
+    if (isEmailConnector(inst.id)) continue;
     if (_isInRetryCooldown(inst)) continue;
     connectCandidates.push(inst);
   }
@@ -850,6 +883,94 @@ export function getInstance(uid: string, id: string): ConnectorInstance | null {
   return inst;
 }
 
+/** Install and connect an `interactive_token` catalog connector from a user-supplied credential.
+ *
+ *  This is the mode's only entry point — it exists alongside `connectViaOAuth` (not inside it)
+ *  because there is no authorization server to talk to. The credential is materialized into the
+ *  transport template immediately, and that transport is then persisted inside the instance's
+ *  encrypted `secrets_enc` blob, which is also what `_resolveTransport` re-reads on every later
+ *  reconnect. Calling this again with a new credential replaces the stored transport — that is the
+ *  whole re-authorization story for this mode.
+ *
+ *  The token is never logged: only its length is, so an operator can tell "empty" from "wrong
+ *  paste" without the value ending up in a log file. */
+export async function connectInteractiveToken(
+  uid: string,
+  catalogId: string,
+  credential: string,
+): Promise<ConnectorInstance> {
+  if (!uid) throw new Error('uid required');
+  const entry = findCatalogEntry(catalogId);
+  if (!entry) throw new Error('unknown catalog id');
+  if (entry.auth_mode !== 'interactive_token') {
+    throw new Error(`'${catalogId}' is not an interactive_token connector`);
+  }
+  if (!entry.transport_template || entry.transport_template.kind !== 'streamable-http') {
+    throw new Error(`'${catalogId}' is not installable yet (${entry.unavailable_reason || 'unavailable'})`);
+  }
+  assertConnectorRuntimeEnabled(uid, catalogId);
+
+  const token = _normalisePastedCredential(credential, entry.id);
+  return _installInteractiveCredential(uid, entry, token);
+}
+
+/** Turn whatever the user pasted into a usable credential, or refuse with an actionable code.
+ *
+ *  Field report: a paste that carried the page's Chinese label reached the transport layer and came
+ *  back as `Cannot convert argument to a ByteString because the character at index 58 has a value of
+ *  19979` — a Node/undici internal error, in English, quoting a character code at the user. Two
+ *  things were wrong: the value became an HTTP header without ever being checked, and a paste that
+ *  included surrounding text had no recovery path.
+ *
+ *  So: drop whitespace, use the value outright when it is already clean printable ASCII, and
+ *  otherwise pull the longest token-shaped run out of the paste (skipping URLs, which a copied
+ *  config snippet also carries). Only when nothing token-shaped exists do we refuse — with a CODE the
+ *  renderer localises, never a runtime string. */
+function _normalisePastedCredential(raw: string, catalogId: string): string {
+  // Tokens never contain whitespace, so this alone fixes the common "copied with a trailing newline
+  // or soft-wrap spaces" paste. An earlier revision refused any whitespace outright, which turned a
+  // correct paste into a dead end the user could not act on.
+  const compact = String(raw || '').replace(/\s+/g, '');
+  if (!compact) throw Object.assign(new Error('connector credential is empty'), { code: 'credential_empty' });
+  if (compact.length > 4096) {
+    throw Object.assign(new Error('connector credential is unreasonably long'), { code: 'credential_too_long' });
+  }
+  if (/^[\x21-\x7e]+$/.test(compact)) return compact;
+
+  const matches: string[] = compact.match(/[\x21-\x7e]{20,}/g) || [];
+  const runs = matches.filter((run) => !/^https?:\/\//i.test(run) && !run.includes('//'));
+  const best = runs.sort((a, b) => b.length - a.length)[0];
+  if (!best) {
+    throw Object.assign(new Error('no token found in the pasted text'), { code: 'credential_not_a_token' });
+  }
+  // Lengths only — the token itself must never reach a log.
+  log.info('interactive credential extracted from surrounding text', {
+    catalog_id: catalogId,
+    pasted_chars: compact.length,
+    credential_chars: best.length,
+  });
+  return best;
+}
+
+/** Materialize an `interactive_token` credential into the transport and bring the connector up.
+ *
+ *  Shared by both ways of obtaining one — the user pasting it (`connectInteractiveToken`) and the
+ *  provider's own consent flow (`connectViaOAuth` → `browser_poll`) — so the storage path, the log
+ *  shape and the provisioning call cannot drift between them. The token is never logged; only its
+ *  length is, so an operator can tell "empty" from "wrong paste". */
+async function _installInteractiveCredential(
+  uid: string,
+  entry: CatalogEntry,
+  token: string,
+): Promise<ConnectorInstance> {
+  const transport = applyTemplate(entry, { access_token: token });
+  log.info('interactive credential stored; spawning MCP client', {
+    catalog_id: entry.id,
+    credential_chars: token.length,
+  });
+  return _provisionMemberInstance(uid, entry, null, undefined, transport);
+}
+
 /** Bring a catalog connector up and install it for this user.
  *  This is the **only** public install path — there is no free-form / API-key entry point, and
  *  no catalog entry is reachable except through here.
@@ -860,7 +981,9 @@ export async function connectViaOAuth(uid: string, catalogId: string): Promise<C
   if (!uid) throw new Error('uid required');
   const entry = findCatalogEntry(catalogId);
   if (!entry) throw new Error('unknown catalog id');
-  assertConnectorRuntimeEnabled(catalogId);
+  assertConnectorRuntimeEnabled(uid, catalogId);
+  if (entry.auth_mode === 'credentials') throw new Error('email_use_credentials_form');
+  if (catalogId === 'tencent-survey') return connectTencentSurvey(uid);
 
   // `local_cli`: no grant is created, requested, stored or refreshed. Returning here keeps the
   // grant/dcrClient declarations below honestly non-nullable, so the OAuth paths cannot
@@ -874,9 +997,27 @@ export async function connectViaOAuth(uid: string, catalogId: string): Promise<C
     // missing authorization step. This awaits the user finishing in the browser (or cancelling, or
     // the 5-minute deadline), so callers must already treat a connect as long-running — which
     // `beginOAuthConnect` does for every mode.
-    await ensureLocalCliAuthorized(entry);
+    await ensureLocalCliAuthorized(uid, entry);
     log.info('connectViaOAuth: local_cli authorized; spawning MCP adapter', { catalog_id: catalogId });
     return _provisionMemberInstance(uid, entry, null, undefined);
+  }
+
+  // `interactive_token` splits by how the credential is obtained. With `browser_poll` the provider
+  // runs its own consent flow, so this path can drive it end to end (and inherits
+  // `beginOAuthConnect`'s long-running handling — the poll can run for minutes). With `paste` the
+  // credential must arrive from the connect dialog first, via `connectInteractiveToken`; failing
+  // loudly here keeps a mis-wired caller from starting a flow that can only end in "no grant".
+  if (entry.auth_mode === 'interactive_token') {
+    if (entry.interactive_auth?.kind === 'browser_poll') {
+      if (!entry.interactive_auth.authorize_url || !entry.interactive_auth.exchange_url) {
+        throw new Error(`'${catalogId}' is missing its interactive authorization endpoints`);
+      }
+      const token = await authorizeBrowserPoll(entry.interactive_auth, {
+        onConsentUrl: (url) => broadcastAuthorizationUrl({ catalog_id: catalogId, url }),
+      });
+      return _installInteractiveCredential(uid, entry, token);
+    }
+    throw new Error(`'${catalogId}' requires a user-supplied credential; call connectInteractiveToken`);
   }
 
   log.info('connectViaOAuth: starting OAuth', { catalog_id: catalogId, auth_mode: entry.auth_mode });
@@ -965,7 +1106,7 @@ export function beginOAuthConnect(uid: string, catalogId: string): OAuthConnectS
   if (!uid) throw new Error('uid required');
   const entry = findCatalogEntry(catalogId);
   if (!entry) throw new Error('unknown catalog id');
-  assertConnectorRuntimeEnabled(catalogId);
+  assertConnectorRuntimeEnabled(uid, catalogId);
 
   const attemptId = crypto.randomUUID();
   const startedAt = Date.now();
@@ -982,7 +1123,7 @@ export function beginOAuthConnect(uid: string, catalogId: string): OAuthConnectS
     });
   }).catch((err) => {
     const code = _oauthConnectErrorCode(err);
-    if (code === 'flow_timeout') {
+    if (code === 'flow_timeout' && catalogId !== 'tencent-survey') {
       log.info('connector authorization expired without callback', { catalog_id: catalogId });
       return;
     }
@@ -1007,8 +1148,13 @@ async function _provisionMemberInstance(
   entry: CatalogEntry,
   grant: OAuthGrant | null,
   dcrClient: ConnectorInstance['dcr_client'],
+  /** Pre-materialized transport for modes whose credential is not an OAuth grant
+   *  (`interactive_token`). When present it is stored verbatim, so the credential rides inside the
+   *  instance's encrypted `secrets_enc` blob instead of being derivable from a grant. */
+  transportOverride?: Transport,
 ): Promise<ConnectorInstance> {
-  const transport = applyTemplate(entry, grant);
+  const baseTransport = transportOverride ?? applyTemplate(entry, grant);
+  const transport = entry.id === 'tencent-meeting' ? scopeTencentMeetingTransport(uid, baseTransport) : scopeManagedCliTransport(uid, entry.id, baseTransport);
 
   // Tear down any prior live connection for the same id before re-using the slot.
   const prior = _conns.get(entry.id);
@@ -1098,6 +1244,8 @@ export async function addCustomInstance(uid: string, input: CustomConnectorInput
 
 export async function removeInstance(uid: string, id: string): Promise<boolean> {
   if (!uid) return false;
+  if (isEmailConnector(id)) return removeEmail(uid, id);
+  if (id === 'tencent-survey') return removeTencentSurvey(uid);
   const conn = _conns.get(id);
   if (conn) {
     try { await conn.close(); } catch { /* swallow */ }
@@ -1107,8 +1255,10 @@ export async function removeInstance(uid: string, id: string): Promise<boolean> 
 }
 
 export async function refreshTools(uid: string, id: string): Promise<ToolSchema[]> {
+  if (isEmailConnector(id)) return (await refreshEmail(uid, id)).tools_cache;
+  if (id === 'tencent-survey') return (await refreshTencentSurvey(uid)).tools_cache;
   if (!uid) throw new Error('uid required');
-  assertConnectorRuntimeEnabled(id);
+  assertConnectorRuntimeEnabled(uid, id);
   const inst = getInstance(uid, id);
   if (!inst) throw new Error('instance not found');
   // Force refresh-token check by tearing the live conn down and reconnecting through
@@ -1137,7 +1287,7 @@ export async function setEnabledSubtools(
 
 export async function authorizeGoogleSheetsFiles(uid: string, fileIds?: string[]): Promise<string[]> {
   if (!uid) throw new Error('uid required');
-  assertConnectorRuntimeEnabled('gsheets');
+  assertConnectorRuntimeEnabled(uid, 'gsheets');
   const inst = getInstance(uid, 'gsheets');
   if (!inst || !inst.oauth_grant) throw new Error('connect Google Sheets first');
 
@@ -1166,11 +1316,14 @@ export async function callTool(
   id: string,
   name: string,
   args: Record<string, unknown>,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; beforeDispatch?: () => Promise<void> } = {},
 ): Promise<unknown> {
   if (!uid) throw new Error('uid required');
   if (opts.signal?.aborted) throw _connectorCancelledError(opts.signal.reason);
-  assertConnectorRuntimeEnabled(id);
+  assertConnectorRuntimeEnabled(uid, id);
+  if (isEmailConnector(id)) return callEmail(uid, id, name, args, opts.signal);
+  if (id === 'tencent-survey') return callTencentSurvey(uid, name, args, opts.signal);
+  if (id === 'tencent-meeting' && isTencentMeetingInternal(name)) throw new Error('Host-only meeting action');
   const inst = getInstance(uid, id);
   if (!inst) throw new Error('instance not found');
   const liveConn = _conns.get(id);
@@ -1227,9 +1380,13 @@ export async function callTool(
   }
   const startedAt = Date.now();
   try {
-    const result = opts.signal
-      ? await conn.callTool(name, args, { signal: opts.signal })
-      : await conn.callTool(name, args);
+    await opts.beforeDispatch?.();
+    if (opts.signal?.aborted) throw _connectorCancelledError(opts.signal.reason);
+    const result = id === 'tencent-meeting' && isTencentMeetingWrite(name)
+      ? await callApprovedTencentMeetingChange(uid, conn, name, args, opts.signal, opts.beforeDispatch)
+      : opts.signal
+        ? await conn.callTool(name, args, { signal: opts.signal })
+        : await conn.callTool(name, args);
     log.info('connector tool call completed', {
       id,
       tool: name,
@@ -1308,6 +1465,8 @@ function _connectFailureMessage(id: string, updated: ConnectorInstance): string 
 }
 
 export async function shutdownAll(): Promise<void> {
+  await shutdownTencentSurvey();
+  await shutdownEmail();
   const all = Array.from(_conns.values());
   _conns.clear();
   _onDemandConnectLocks.clear();

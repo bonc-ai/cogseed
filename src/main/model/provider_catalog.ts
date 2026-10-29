@@ -85,7 +85,8 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: 'google',       label: 'Google Gemini', docsUrl: 'https://aistudio.google.com/app/apikey' },
   { id: 'anthropic',    label: 'Anthropic',     docsUrl: 'https://console.anthropic.com/settings/keys' },
 
-  { id: 'zai',                label: 'Zhipu GLM',     docsUrl: 'https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys',      region: 'cn' },
+  { id: 'zai',                label: 'Zhipu GLM',     docsUrl: 'https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys',      region: 'cn',
+    subscriptionNote: 'provider.zai.note_coding_plan' },
   // Moonshot has two independently-billed endpoints:
   //   - `moonshot` → https://api.moonshot.cn/v1 (OpenAI-compatible,
   //     pay-as-you-go open platform).
@@ -139,6 +140,9 @@ export function curatedModelsFor(providerId: string): ProviderModelEntry[] {
  * points to the same API protocol and base URL family.
  */
 export const PI_MODEL_PROVIDER_ALIAS: Readonly<Record<string, string>> = {
+  // The saved `zai` id is the China-region Zhipu Coding Plan preset above.
+  // pi-ai's `zai` catalog targets the separate international service.
+  'zai':               'zai-coding-cn',
   'minimax-portal-cn': 'minimax-cn',
   'minimax-portal':    'minimax',
 };

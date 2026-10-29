@@ -3,6 +3,7 @@ import {
   listAbilityAssetVersions,
   type AbilityAssetVersionRecord,
 } from '../recall/asset-service';
+import { listRecallJsonlRecords } from '../recall/store';
 import {
   listAssetUsageReceipts,
   type AssetUsageReceipt,
@@ -298,6 +299,10 @@ export async function readKstarRunEvidence(
   await Promise.all([...new Set(requestedAssetVersions.map(({ assetId }) => assetId))]
     .map(async (assetId) => {
       const versions = await listAbilityAssetVersions(userId, assetId);
+      // 版本链展示读口允许逐行降级；KSTAR 证据必须 fail-closed，因此在
+      // 同一份版本流上再做一次严格读取：坏行向上传播，不能降级成
+      // 「快照缺失」的 gap。
+      await listRecallJsonlRecords(userId, 'ability-asset-versions', assetId, 0);
       snapshotsByAssetId.set(
         assetId,
         new Map(versions.map((record) => [record.version, record.snapshot])),

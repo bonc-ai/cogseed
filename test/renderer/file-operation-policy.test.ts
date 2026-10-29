@@ -33,7 +33,7 @@ describe('file operation policy', () => {
   });
 
   it.each([
-    'page.html', 'style.css', 'script.js', 'source.py', 'archive.zip', 'legacy.doc',
+    'page.html', 'style.css', 'script.js', 'source.py', 'legacy.doc',
     'vector.svg', 'font.woff2', 'module.wasm',
   ])('does not advertise Add to chat for unsupported %s', (name) => {
     expect(policy.canAddToChat(name)).toBe(false);

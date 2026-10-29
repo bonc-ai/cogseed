@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -37,7 +38,7 @@ describe('cognition feature aggregate layer', () => {
     expect(memory.addEntry(UID, 'user', 'Prefers local-first memory flows.').ok).toBe(true);
     const created = await groups.createGroup(UID, 'Research ontology');
     expect(created.ok).toBe(true);
-    const recallCandidate = await recallCandidates.saveRecallCandidate(UID, {
+    const recallCandidate = await createNightlyCandidateFixture(UID, {
       judgment: 'Keep review evidence traceable.', summary: 'Traceable evidence habit',
       suggestedType: 'rule',
       suggestedScope: 'project',
@@ -71,9 +72,6 @@ describe('cognition feature aggregate layer', () => {
         ]),
       }),
     ]));
-
-    const dashboard = await cognition.buildCognitionDashboard(UID);
-    expect(dashboard.counts.assets).toBe(assets.length);
   });
 
   it('normalizes and filters personal ontology candidates without reading legacy KSTAR state', async () => {
@@ -95,7 +93,7 @@ describe('cognition feature aggregate layer', () => {
       source_memory_refs: ['mem-a'],
     }]));
 
-    const pending = await cognition.listCognitionCandidates(UID, { status: 'pending' });
+    const pending = await cognition.listCognitionCandidates(UID);
     expect(pending).toEqual(expect.arrayContaining([
       expect.objectContaining({
         source: 'personal_ontology',
@@ -110,7 +108,49 @@ describe('cognition feature aggregate layer', () => {
       }),
     ]));
 
-    await expect(cognition.listCognitionCandidates(UID, { conversationId: 'gconv-b' })).resolves.toEqual([]);
+    // P-r1-1（2026-10-01 死代码真删批）：status/conversationId/skillId 三个
+    // 归因过滤维度已删——唯一候选源不携带这三个归因（status 恒 'pending'、
+    // conversationId/skillId 恒缺失），原过滤分支对任何输入恒空或恒真。
+    // 回归钉子：运行时传入历史死键（宽松 IPC 边界可能透传）不再过滤任何
+    // 条目——死分支删干净后，多余键与 undefined 同价。
+    const withDeadKeys = await cognition.listCognitionCandidates(UID, {
+      conversationId: 'gconv-b', skillId: 'skill-x', status: 'accepted',
+    } as unknown as Parameters<typeof cognition.listCognitionCandidates>[1]);
+    expect(withDeadKeys).toHaveLength(pending.length);
+  });
+
+  it('sorts personal ontology candidates by recorded_time so limit returns the newest first', async () => {
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(UID);
+    const { userLocalRoot } = await import('../../../src/main/paths');
+    const { serializeCandidatesMarkdown } = await import('../../../src/main/features/personal_ontology_candidates');
+    const cognition = await import('../../../src/main/features/cognition');
+
+    // 文件序即追加序：新候选 push 到文件尾（最旧在前）。
+    // 回归点：mapPersonal 曾漏映射 recorded_time → createdAt，排序比较器恒 0，
+    // limit 拿到的是文件头最旧 N 条而非最新 N 条。
+    const base = {
+      kind: 'instance',
+      confidence: 'medium',
+      memory_scope: 'user',
+      source_memory_refs: ['mem-a'],
+    } as const;
+    const candidatesDir = path.join(userLocalRoot(UID), 'ontology_candidates');
+    fs.mkdirSync(candidatesDir, { recursive: true });
+    fs.writeFileSync(path.join(candidatesDir, 'candidates.md'), serializeCandidatesMarkdown([
+      { ...base, candidate_id: 'cand-early', summary: 'early', recorded_time: '2026-09-01T08:00:00' },
+      { ...base, candidate_id: 'cand-late', summary: 'late', recorded_time: '2026-09-28T09:30:00' },
+      { ...base, candidate_id: 'cand-legacy', summary: 'legacy' },
+    ]));
+
+    const all = await cognition.listCognitionCandidates(UID);
+    expect(all.map((item) => item.sourceId)).toEqual(['cand-late', 'cand-early', 'cand-legacy']);
+    expect(all[0].createdAt).toBe('2026-09-28T09:30:00');
+    // 无 recorded_time 的旧数据沉底且保持文件序（稳定排序）。
+    expect(all[2].createdAt).toBeUndefined();
+
+    const newestOnly = await cognition.listCognitionCandidates(UID, { limit: 1 });
+    expect(newestOnly.map((item) => item.sourceId)).toEqual(['cand-late']);
   });
 
   it('skill summary exposes version history rollback availability', async () => {
@@ -165,14 +205,30 @@ describe('cognition feature aggregate layer', () => {
     await expect(cognition.diffSkillCognitionVersions(UID, 'skill-versioned', '1', '2')).resolves.toMatchObject({
       added: 1, modified: 1, deleted: 0, unchanged: 1,
     });
-    await expect(cognition.previewSkillCognitionRollback(UID, 'skill-versioned', '1')).resolves.toMatchObject({
+    const preview = await cognition.previewSkillCognitionRollback(UID, 'skill-versioned', '1');
+    expect(preview).toMatchObject({
       currentVersion: '2',
       currentRevisionId: second.revisionId,
       targetVersion: '1',
       targetRevisionId: first.revisionId,
       rollbackScope: 'full_tree',
+      nextVersion: '3',
       diff: { added: 0, modified: 1, deleted: 1, unchanged: 1 },
     });
+    // Regression: the previewed nextVersion must be allocated by the same
+    // version-store nextVersion() that real commits use, so the displayed
+    // value can never drift from the committed version number.
+    const third = await versions.appendFullSkillVersion(UID, 'skill-versioned', {
+      operation: 'upgrade',
+      files: [
+        { path: 'SKILL.md', content: '---\nname: skill-versioned\ndescription: third\n---\n' },
+        { path: 'references/contract.md', content: 'first\n' },
+      ],
+      source: { kind: 'recall_asset', assetId: 'asset-a', assetVersion: '3' },
+      security: { outcome: 'pass', findingCount: 0 },
+      expectedCurrentRevisionId: second.revisionId,
+    });
+    expect(third.version).toBe(preview.nextVersion);
   });
 
 });

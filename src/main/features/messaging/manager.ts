@@ -10,7 +10,6 @@ import * as groupChat from '../group_chat';
 import * as spaces from '../spaces';
 import * as wakeController from '../p3394/wake-controller';
 import * as wakeService from '../p3394/wake-service';
-import * as ontologyCandidates from '../personal_ontology_candidates';
 import * as touchpointLedger from '../touchpoints/ledger';
 import * as touchpointActions from '../touchpoints/actions';
 import { buildResolvedTouchpointCard, TOUCHPOINT_CARD_INPUT_ID } from '../touchpoints/feishu/card';
@@ -297,6 +296,7 @@ export async function sendProactive(
     card?: Record<string, JsonCompatibleValue>;
     sourceKey: string;
     signal?: AbortSignal | null;
+    beforeDispatch?: () => Promise<void>;
   },
 ): Promise<{ entry: DeliveryLedgerEntry }> {
   assertUserId(uid);
@@ -313,12 +313,14 @@ export async function sendProactive(
   const recipientId = typeof input.recipientId === 'string' ? input.recipientId.trim() : '';
   if (!recipientId || recipientId.length > 512) throw new Error('proactive recipient required');
   const key = ledger.deliveryKey(input.instanceId, sourceKey);
+  if (input.beforeDispatch) runtime.setDeliveryPreflight(key, input.beforeDispatch);
   const begun = await ledger.beginDelivery(uid, {
     key,
     instanceId: input.instanceId,
     recipientId,
     recipientIdType: 'open_id',
     sourceMessageId: sourceKey,
+    ...(input.beforeDispatch ? { requiresOperationPreflight: true } : {}),
     textHash: ledger.textHash(text),
     text,
     ...(input.card ? { card: input.card } : {}),
@@ -336,6 +338,7 @@ export async function sendProactive(
   }
   try {
     const terminal = await ledger.waitForDeliveryTerminal(uid, key, { signal: input.signal ?? null });
+    if (terminal.status === 'failed') throw new Error(terminal.error || 'proactive delivery failed');
     if (terminal.status === 'cancelled') {
       throw new Error('proactive delivery cancelled');
     }
@@ -363,6 +366,7 @@ export async function sendProactiveFile(
     fileName: string;
     sourceKey: string;
     signal?: AbortSignal | null;
+    beforeDispatch?: () => Promise<void>;
   },
 ): Promise<{ entry: DeliveryLedgerEntry }> {
   assertUserId(uid);
@@ -383,12 +387,14 @@ export async function sendProactiveFile(
   if (!recipientId || recipientId.length > 512) throw new Error('proactive recipient required');
   const text = `[文件] ${fileName}`;
   const key = ledger.deliveryKey(input.instanceId, sourceKey);
+  if (input.beforeDispatch) runtime.setDeliveryPreflight(key, input.beforeDispatch);
   const begun = await ledger.beginDelivery(uid, {
     key,
     instanceId: input.instanceId,
     recipientId,
     recipientIdType: 'open_id',
     sourceMessageId: sourceKey,
+    ...(input.beforeDispatch ? { requiresOperationPreflight: true } : {}),
     textHash: ledger.textHash(text),
     text,
     file: { path: filePath, name: fileName },
@@ -406,6 +412,7 @@ export async function sendProactiveFile(
   }
   try {
     const terminal = await ledger.waitForDeliveryTerminal(uid, key, { signal: input.signal ?? null });
+    if (terminal.status === 'failed') throw new Error(terminal.error || 'proactive delivery failed');
     if (terminal.status === 'cancelled') {
       throw new Error('proactive file delivery cancelled');
     }
@@ -947,19 +954,9 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
   if (action.action === 'touchpoint') {
     return handleTouchpointCardAction(uid, action);
   }
-  // 候选确认卡片（personal_context 管线产出）：按钮 value 携带 candidate_id，
-  // 确认/拒绝直接落 personal_ontology 候选池，无 wake_id。
+  // Retired personal-ontology cards cannot approve or consume legacy records.
   if (action.action === 'candidate_approve' || action.action === 'candidate_reject') {
-    const candidateId = typeof action.payload.candidate_id === 'string' ? action.payload.candidate_id.trim() : '';
-    if (!candidateId) return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
-    if (action.action === 'candidate_approve') {
-      const result = await ontologyCandidates.confirmCandidate(uid, candidateId);
-      if (!result.ok) return { accepted: false, duplicate: false, reason: 'candidate_confirm_failed' };
-    } else {
-      await ontologyCandidates.rejectCandidate(uid, candidateId);
-    }
-    void finalizeCandidateCard(uid, action);
-    return { accepted: true, duplicate: false };
+    return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
   }
 
   const wakeId = typeof action.payload.wake_id === 'string' && action.payload.wake_id.trim()
@@ -1126,42 +1123,6 @@ async function finalizeFailedCard(uid: string, action: CardActionEnvelope, reaso
     });
   } catch (error) {
     log.warn('messaging failed card finalize failed', {
-      instanceId: action.instanceId,
-      error: (error as Error).message,
-    });
-  }
-}
-
-/** Terminal card for a resolved personal-ontology candidate, so the same
- * buttons cannot be clicked twice (mirrors approval card finalize). */
-function buildResolvedCandidateCard(approved: boolean): Record<string, JsonCompatibleValue> {
-  return {
-    config: { wide_screen_mode: true },
-    header: {
-      title: {
-        content: approved ? t('messaging.candidate_card.confirmed') : t('messaging.candidate_card.rejected'),
-        tag: 'plain_text',
-      },
-      template: approved ? 'green' : 'red',
-    },
-    elements: [
-      {
-        tag: 'markdown',
-        content: approved ? t('messaging.candidate_card.confirmed_detail') : t('messaging.candidate_card.rejected_detail'),
-      },
-    ],
-  };
-}
-
-async function finalizeCandidateCard(uid: string, action: CardActionEnvelope): Promise<void> {
-  const runtime = runtimes.get(uid)?.get(action.instanceId);
-  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
-  const adapter = runtime.adapter;
-  if (!isCardAdapter(adapter)) return;
-  try {
-    await adapter.updateCard(action.externalMessageId, buildResolvedCandidateCard(action.action === 'candidate_approve'));
-  } catch (error) {
-    log.warn('messaging candidate card finalize failed', {
       instanceId: action.instanceId,
       error: (error as Error).message,
     });

@@ -16,12 +16,23 @@ import type { HubSession } from './types';
 
 const HUB_SECRET_NAMESPACE = 'hub-account';
 const HUB_SESSION_RECORD = 'session';
+const generations = new Map<string, number>();
+
+/** Process-local revocation fence. Token rotation stays in the same lifecycle. */
+export function hubSessionGeneration(uid: string): number {
+  return generations.get(uid) ?? 0;
+}
+
+export function invalidateHubSessionGeneration(uid: string): void {
+  generations.set(uid, hubSessionGeneration(uid) + 1);
+}
 
 function _secretContext(uid: string): localSecrets.LocalSecretContext {
   return { namespace: HUB_SECRET_NAMESPACE, ownerId: uid, recordId: HUB_SESSION_RECORD };
 }
 
 export function saveHubSession(uid: string, session: HubSession): void {
+  if (loadHubSession(uid)?.session_id !== session.session_id) invalidateHubSessionGeneration(uid);
   const ciphertext = localSecrets.encryptLocalSecret(_secretContext(uid), JSON.stringify(session));
   writeSessionCiphertext(uid, ciphertext);
 }
@@ -50,6 +61,7 @@ export function loadHubSession(uid: string): HubSession | null {
 }
 
 export function clearHubSession(uid: string): void {
+  invalidateHubSessionGeneration(uid);
   writeSessionCiphertext(uid, null);
 }
 

@@ -4,8 +4,11 @@ import {
   type CogSeedAgentRuntimeInput,
 } from '../cogseed_runtime';
 import type { RuntimeEventEnvelope } from '../cogseed_runtime/protocol';
+import * as path from 'node:path';
+
 import { genId12, nowIso, writeJson } from '../../storage';
 import { createLogger } from '../../logger';
+import { onBackgroundJobFinished } from '../background-job-settler';
 import { logErrorRef } from '../../util/log-redact';
 import { fileEditLock } from '../../util/locks';
 import {
@@ -21,6 +24,7 @@ import {
   readCogSeedTask,
   updateCogSeedTask,
 } from './task-store';
+import { CogSeedGroupChatTaskAdmissionError } from './followup-errors';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
 import { resolveRuntimeToolPolicyForRun } from './runtime-tool-policy';
 import { buildDispatchedRuntimeAssetContext, buildRuntimeAssetContext } from './runtime-asset-context';
@@ -59,6 +63,8 @@ export interface StartCogSeedTaskInput {
   /** Product Agent identity passed to Runtime tools; never use this as a model profile id. */
   agentId?: string;
   conversationId?: string;
+  /** Space scope persisted on the task for isolation/analytics; never inferred from text. */
+  spaceId?: string;
   executionKind?: 'cogseed-native' | 'local-cli';
   /** Optional Group Chat collaboration ledger correlation for wake-gated tasks. */
   groupChatRunId?: string;
@@ -86,6 +92,7 @@ export interface StartCogSeedTaskInput {
 
 export interface ResumeCogSeedTaskInput {
   requestId: string;
+  groupChatRunId?: string;
   continuation: string;
   profileId?: string;
   context?: unknown[];
@@ -117,6 +124,7 @@ export interface CogSeedRuntimeController {
   reconcileConversationResultDeliveries(userId: string, conversationId: string): Promise<void>;
   recoverOrphanedTasks(userId: string): Promise<CogSeedRecoveryReport>;
   scanRuntimeHealth(userId: string): Promise<CogSeedRuntimeHealthScanReport>;
+  waitForTaskTurn(userId: string, taskId: string): Promise<void>;
   runtimeStatus(): Promise<CogSeedRuntimeStatus>;
   restartRuntime(): Promise<{ restarted: true }>;
   shutdown(): Promise<void>;
@@ -143,6 +151,7 @@ function asRuntimeInput(
   input: StartCogSeedTaskInput & {
     runtimeSessionId?: string;
     capabilities?: string[];
+    trace_id?: string;
     toolPolicy?: import('../cogseed_runtime/kernel/types').RuntimeToolPolicy;
   },
 ): CogSeedAgentRuntimeInput {
@@ -154,6 +163,7 @@ function asRuntimeInput(
     ...(input.allowedSkillIds !== undefined ? { allowed_skill_ids: input.allowedSkillIds } : {}),
     ...(input.skillVersionPins !== undefined ? { skill_version_pins: input.skillVersionPins } : {}),
     ...(input.runtimeSessionId ? { runtime_session_id: input.runtimeSessionId } : {}),
+    ...(input.trace_id ? { trace_id: input.trace_id } : {}),
     ...(input.context ? { context: input.context } : {}),
     ...(input.attachments ? { attachments: input.attachments } : {}),
     ...(input.profileId ? { model_profile: input.profileId } : {}),
@@ -182,6 +192,24 @@ function cancellationOrder(tasks: CogSeedTaskRecord[]): CogSeedTaskRecord[] {
     }
   }
   return ordered;
+}
+
+function classifyRuntimeFailure(error: unknown): string {
+  if (error instanceof CogSeedTerminalResultRetentionError) return 'result_retention_failed';
+  const code = typeof (error as { code?: unknown })?.code === 'string'
+    ? String((error as { code: string }).code)
+    : '';
+  if (code.startsWith('E_WORKSPACE_')) return runtimeErrorCode(code);
+  if (code === 'E_RUNTIME_PATH_DENIED' || code === 'E_RUNTIME_TRANSCRIPT_PATH') {
+    return 'E_WORKSPACE_OUTSIDE_DECLARED_ROOTS';
+  }
+  const message = error instanceof Error ? error.message : String(error || '');
+  const workspaceCode = message.match(/\b(E_WORKSPACE_[A-Z_]+)\b/);
+  if (workspaceCode) return runtimeErrorCode(workspaceCode[1]);
+  if (/outside the explicit sandbox|outside the allowed workspace/i.test(message)) {
+    return 'E_WORKSPACE_OUTSIDE_DECLARED_ROOTS';
+  }
+  return 'runtime_worker_error';
 }
 
 function runtimeErrorCode(value: unknown): string {
@@ -280,15 +308,19 @@ async function buildTaskExecutionContext(
   conversationId?: string,
 ): Promise<unknown[] | undefined> {
   const context = [...(input.context ?? [])];
+  const conversation = conversationId ? await (await import('../chats')).getConversation(userId, conversationId).catch(() => undefined) : undefined;
+  const assetScope = { ...(task.agentId ? { agentId: task.agentId } : {}), taskText: input.task, purpose: input.task,
+    ...(conversation?.project_id ? { projectId: conversation.project_id } : {}),
+    ...(conversation?.space_id || task.spaceId ? { workspaceId: conversation?.space_id || task.spaceId } : {}),
+    ...(conversation?.kind ? { conversationKind: conversation.kind } : {}) };
   if (task.abilityAssetIds?.length) {
     context.push(...await buildDispatchedRuntimeAssetContext(userId, task.abilityAssetIds, {
-      ...(task.agentId ? { agentId: task.agentId } : {}),
-      taskText: input.task,
-      purpose: input.task,
+      taskId: task.taskId, executionId: task.executionId,
+      ...assetScope,
     }));
   }
   if (conversationId) {
-    const assetContext = await buildRuntimeAssetContext(userId, conversationId, task.taskId);
+    const assetContext = await buildRuntimeAssetContext(userId, conversationId, task.taskId, task.executionId, assetScope);
     if (assetContext.length) context.push(...assetContext);
   }
   return context.length ? context : undefined;
@@ -333,7 +365,7 @@ async function projectTaskEventBestEffort(
       ...(task.executionId ? { executionId: task.executionId } : {}),
       ...(task.groupChatRunId ? { groupChatRunId: task.groupChatRunId } : {}),
       sessionId: task.sessionId,
-      event,
+      event: { ...event, payload: { ...event.payload, ...(task.lastResumeRequestId ? { continuationRequestId: task.lastResumeRequestId } : {}) } },
     });
     if (result === 'dropped') return 'failed';
     return 'projected';
@@ -458,18 +490,52 @@ async function mapRuntimeEvent(
       terminal(current) ? current : { ...current, runtimeRunId }
     ));
   }
+  if (event.type === 'result' && event.status === 'background') {
+    // Decision 1B: the run outlived its turn and keeps going in the background.
+    // The task stays live (`terminal()` does not include this status) and the UI
+    // shows "已转后台"; completion or failure still arrives through this loop.
+    const jobId = String((event.metadata as { background?: { job_id?: string } } | undefined)?.background?.job_id || '');
+    const promotedTask = await updateCogSeedTask(userId, task.taskId, (current) => (
+      terminal(current) ? current : {
+        ...current,
+        status: 'background',
+        // Remember which job this task was promoted into: phase 2 carries the same
+        // job id, and that is how the finishing link finds the task again.
+        ...(jobId ? { backgroundJobId: jobId } : {}),
+      }
+    ));
+    await projectTaskEventBestEffort(userId, promotedTask, {
+      eventId: `cogseed-event-background-${task.taskId}`,
+      type: 'task.recoverable',
+      payload: { errorCode: 'background' },
+    }, projectTaskEvent);
+    return promotedTask;
+  }
   if (event.type === 'result' && event.status === 'completed') {
+    const { extractActorResultFromFinal, extractPlanInteractionFromFinal } = await import('../group_chat/router');
+    const actorResult = extractActorResultFromFinal(String(event.text || ''));
+    const interaction = extractPlanInteractionFromFinal(actorResult.cleanText);
+    event = { ...event, text: interaction.cleanText };
+    if (actorResult.status === 'waiting_input' || interaction.status === 'open') {
+      const waiting = await transitionCogSeedTask(userId, task.taskId, 'waiting_user', {});
+      await projectTaskEventBestEffort(userId, waiting, {
+        eventId: `cogseed-event-waiting-${task.taskId}${task.lastResumeRequestId ? '-' + task.lastResumeRequestId : ''}`,
+        type: 'task.waiting_user', payload: { text: interaction.cleanText },
+      }, projectTaskEvent);
+      return waiting;
+    }
+
     // 透传 adapter 终态信封携带的用量/模型自报（metadata.metrics）——
     // exec 投影路径落库 metrics 与回读校验的数据源。
     const metricsMeta = event.metadata && typeof (event.metadata as { metrics?: unknown }).metrics === 'object'
       ? (event.metadata as { metrics?: unknown }).metrics
       : undefined;
     const terminalEvent: CogSeedTerminalProjectionEvent = {
-      eventId: `cogseed-event-terminal-${task.taskId}`,
+      eventId: `cogseed-event-terminal-${task.taskId}${task.lastResumeRequestId ? '-' + task.lastResumeRequestId : ''}`,
       type: 'task.completed',
       payload: { text: String(event.text || ''), ...(metricsMeta ? { metrics: metricsMeta } : {}) },
     };
-    return finishRuntimeTask(
+    const finished = await finishRuntimeTask(
       userId,
       latest ?? task,
       'completed',
@@ -479,6 +545,13 @@ async function mapRuntimeEvent(
       resultDeliveryStore,
       isCurrentRun,
     );
+    if ((!finished.executionKind || finished.executionKind === 'cogseed-native') && finished.status === 'completed') {
+      try {
+        const { checkPersistedRuntimeCognitionOutput } = await import('../recall/cognition-output-check');
+        await checkPersistedRuntimeCognitionOutput(userId, finished.taskId, signal);
+      } catch { log.warn('Runtime terminal text check unavailable; completed task preserved'); }
+    }
+    return finished;
   }
   if (event.type === 'error' && event.status === 'cancelled') {
     if (signal.aborted && signal.reason === 'runtime_restart') {
@@ -492,7 +565,7 @@ async function mapRuntimeEvent(
     }
     const cancelled = await transitionCogSeedTask(userId, task.taskId, 'cancelled', {});
     await projectTaskEventBestEffort(userId, cancelled, {
-      eventId: `cogseed-event-terminal-${task.taskId}`,
+      eventId: `cogseed-event-terminal-${task.taskId}${task.lastResumeRequestId ? '-' + task.lastResumeRequestId : ''}`,
       type: 'task.cancelled',
       payload: {},
     }, projectTaskEvent);
@@ -505,11 +578,24 @@ async function mapRuntimeEvent(
     // into the generic retry notice and the root cause is unrecoverable
     // from the conversation history alone.
     const failureDetail = String(event.error || '').trim();
+    if (failureCode === 'transcript_confirmation_required') {
+      const waiting = await transitionCogSeedTask(userId, task.taskId, 'waiting_user', { errorCode: failureCode });
+      await projectTaskEventBestEffort(userId, waiting, {
+        eventId: `cogseed-event-waiting-${task.taskId}${task.lastResumeRequestId ? '-' + task.lastResumeRequestId : ''}`,
+        type: 'task.waiting_user',
+        payload: { code: failureCode, error: failureDetail.slice(0, 6000),
+          // The Agent's own ask about the undecided items, when it wrote one.
+          ...(typeof event.metadata?.reply === 'string' && event.metadata.reply.trim()
+            ? { reply: event.metadata.reply.trim().slice(0, 4000) } : {}) },
+      }, projectTaskEvent);
+      return waiting;
+    }
+
     const terminalEvent: CogSeedTerminalProjectionEvent = {
-      eventId: `cogseed-event-terminal-${task.taskId}`,
+      eventId: `cogseed-event-terminal-${task.taskId}${task.lastResumeRequestId ? '-' + task.lastResumeRequestId : ''}`,
       type: 'task.failed',
       payload: {
-        ...(failureDetail ? { error: failureDetail.slice(0, 2000) } : {}),
+        ...(failureDetail ? { error: failureDetail.slice(0, failureCode === 'transcript_confirmation_required' ? 6000 : 2000) } : {}),
         ...(failureCode ? { code: failureCode } : {}),
       },
     };
@@ -528,12 +614,15 @@ async function mapRuntimeEvent(
     const kernelEvent = event.metadata?.kernel_event;
     if (kernelEvent === 'tool_call') {
       const stored = await appendCogSeedTaskEventIfActive(userId, task.taskId, 'tool.started', {
+        ...(typeof event.metadata?.id === 'string' ? { id: event.metadata.id } : {}),
+        ...(event.metadata?.arguments && typeof event.metadata.arguments === 'object' ? { arguments: event.metadata.arguments } : {}),
         ...(typeof event.metadata?.name === 'string' ? { name: event.metadata.name } : {}),
       });
       if (stored) await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     } else if (kernelEvent === 'tool_result') {
       const toolError = typeof event.metadata?.error === 'string' ? event.metadata.error.trim() : '';
       const stored = await appendCogSeedTaskEventIfActive(userId, task.taskId, 'tool.finished', {
+        ...(typeof event.metadata?.id === 'string' ? { id: event.metadata.id } : {}),
         ...(typeof event.metadata?.name === 'string' ? { name: event.metadata.name } : {}),
         ...(typeof event.metadata?.isError === 'boolean' ? { isError: event.metadata.isError } : {}),
         ...(event.metadata?.isError === true && toolError ? { error: toolError.slice(0, 2000) } : {}),
@@ -555,6 +644,27 @@ async function mapRuntimeEvent(
 }
 
 export function createCogSeedRuntimeController(options: CogSeedRuntimeControllerOptions = {}): CogSeedRuntimeController {
+
+  // Decision 1B/2: close the loop for a promoted task. The p3394 bridge delivers
+  // phase 2 into the conversation and reports it here; the task then moves out of
+  // `background` instead of staying there forever.
+  onBackgroundJobFinished(async ({ uid, job_id, outcome, summary, errorMessage }) => {
+    if (!uid || !job_id) return;
+    const tasks = await listCogSeedTasks(uid);
+    const promoted = tasks.find((task) => task.status === 'background' && task.backgroundJobId === job_id);
+    if (!promoted) return;
+    const nextStatus = outcome === 'completed' ? 'completed' : 'failed';
+    try {
+      await transitionCogSeedTask(uid, promoted.taskId, nextStatus, {
+        ...(outcome === 'completed'
+          ? { text: summary || '' }
+          : { errorCode: 'p3394_background_' + outcome }),
+      });
+    } catch (error) {
+      log.warn('background task settle failed', { taskId: promoted.taskId, error: logErrorRef(error) });
+    }
+  });
+
   const runtime = options.runtime ?? cogseedAgentRuntime;
   const activeRuns = new Map<string, AbortController>();
   const activeRunPromises = new Map<string, Promise<void>>();
@@ -611,7 +721,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
     return withCogSeedLaunchRecoveryOperation(userId, candidate.taskId, async () => {
       if (launchClaims.has(candidate.taskId)) return false;
       const current = await readCogSeedTask(userId, candidate.taskId);
-      if (!current) return false;
+      if (!current || current.status === 'waiting_user') return false;
       const processHealth = await probeTaskProcess(userId, current);
       if (processHealth !== 'missing' && processHealth !== 'invalid') return false;
 
@@ -667,6 +777,39 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
           async () => undefined,
         );
       }
+      const runWorkingDir = input.workingDir ?? task.workingDir;
+      const runtimeAllowedRoots = [
+        runWorkingDir,
+        ...(Array.isArray(input.attachments) ? input.attachments : [])
+          .map((attachment) => (attachment && typeof attachment === 'object'
+            ? (attachment as { path?: unknown }).path
+            : null))
+          .filter((value): value is string => typeof value === 'string' && path.isAbsolute(value)),
+        ...(Array.isArray(input.context) ? input.context : [])
+          .filter((item) => item && typeof item === 'object' && (item as { type?: unknown }).type === 'file')
+          .map((item) => (item as { path?: unknown }).path)
+          .filter((value): value is string => typeof value === 'string' && path.isAbsolute(value)),
+      ].filter((value): value is string => typeof value === 'string' && path.isAbsolute(value))
+        .filter((value, index, all) => all.indexOf(value) === index);
+      if (runWorkingDir && process.env.COGSEED_WORKSPACE_DIAGNOSTIC === '1') {
+        // Phase 0 read-only diagnostic: resolve the root but never use it for
+        // execution. Off by default so task behavior and latency are unchanged.
+        void import('../workspace-context')
+          .then(({ resolveWorkspaceContext }) => resolveWorkspaceContext(userId, {
+            task: { taskId: task.taskId, workspaceRoot: runWorkingDir },
+          }))
+          .then((context) => log.info('workspace context diagnostic', {
+            taskId: task.taskId,
+            status: context.status,
+            source: context.source,
+            code: context.diagnostics.code,
+            sameRoot: context.root === runWorkingDir,
+          }))
+          .catch((error) => log.warn('workspace context diagnostic failed', {
+            taskId: task.taskId,
+            error: logErrorRef(error),
+          }));
+      }
       const stream = task.executionKind === 'local-cli'
         ? (await localCliAdapter()).run({
             userId,
@@ -689,15 +832,31 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
             userId,
             asRuntimeInput({
               ...input,
+              // Library paths the Commander cites in prose are unreadable to
+              // the Agent; copy them into its workspace first.
+              task: (await import('./library-staging')).stageLibraryReferences(
+                userId, input.task, runWorkingDir).task,
+              // The persisted task owns the session for initial runs, retries
+              // and resumes. Omitting it makes normalization mint a different
+              // session, which correctly fails every scoped host-tool check.
+              runtimeSessionId: task.runtimeSessionId,
+              ...(task.traceId ? { trace_id: task.traceId } : {}),
               // 工具策略由主进程从持久化会话（权限模式）+ 工作区推导，随请求下发；
               // worker/模型不得自述。推导不出来时不带字段，kernel 落回 deny-all。
               toolPolicy: await resolveRuntimeToolPolicyForRun(
                 userId,
                 task.conversationId,
-                input.workingDir ?? task.workingDir,
+                runWorkingDir,
               ),
             }),
-            { signal: controller.signal },
+            {
+              signal: controller.signal,
+              // The selected Run Center workspace and the conversation's
+              // attachment/context files are main-derived and must extend the
+              // runtime sandbox; otherwise normalization rejects them before
+              // the worker starts.
+              ...(runtimeAllowedRoots.length ? { allowedRoots: runtimeAllowedRoots } : {}),
+            },
           );
       for await (const event of stream) {
         current = await mapRuntimeEvent(
@@ -709,11 +868,23 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
           controller.signal,
           () => activeRuns.get(task.taskId) === controller,
         );
-        if (terminal(current) || current.status === 'recoverable') break;
+        if (terminal(current) || current.status === 'recoverable' || current.status === 'waiting_user') break;
       }
       const latest = await readCogSeedTask(userId, task.taskId);
+      // Terminal safety net: archive the transcript + corrected transcript from
+      // the session's own write records when the model never declared them.
+      // Declaration-only for minutes/actions (confirmation cannot be inferred
+      // from a file), so this never bypasses the second gate.
+      if (latest && latest.executionKind === 'cogseed-native'
+        && (latest.status === 'completed' || latest.status === 'cancelled')) {
+        void import('../meeting_kb_precipitate')
+          .then(({ sweepRuntimeCorrectionArtifacts }) => (
+            sweepRuntimeCorrectionArtifacts(userId, latest.runtimeSessionId, latest.conversationId)
+          ))
+          .catch((error) => log.warn('CogSeed correction artifact sweep failed', { error: logErrorRef(error) }));
+      }
       if (activeRuns.get(task.taskId) === controller
-        && latest && !terminal(latest) && latest.status !== 'recoverable') {
+        && latest && !terminal(latest) && latest.status !== 'recoverable' && latest.status !== 'waiting_user') {
         const errorCode = controller.signal.aborted && controller.signal.reason === 'runtime_restart'
           ? 'runtime_restart'
           : 'runtime_stream_ended';
@@ -725,14 +896,13 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
         }, projectTaskEvent);
       }
     } catch (error) {
+      log.warn('CogSeed Runtime run failed', { taskId: task.taskId, error: logErrorRef(error) });
       const latest = await readCogSeedTask(userId, task.taskId);
       if (activeRuns.get(task.taskId) === controller
-        && latest && !terminal(latest) && latest.status !== 'recoverable') {
+        && latest && !terminal(latest) && latest.status !== 'recoverable' && latest.status !== 'waiting_user') {
         const errorCode = controller.signal.aborted && controller.signal.reason === 'runtime_restart'
           ? 'runtime_restart'
-          : error instanceof CogSeedTerminalResultRetentionError
-            ? 'result_retention_failed'
-            : 'runtime_worker_error';
+          : classifyRuntimeFailure(error);
         try {
           const recoverable = await markCogSeedTaskRecoverable(userId, task.taskId, errorCode);
           await projectTaskEventBestEffort(userId, recoverable, {
@@ -768,7 +938,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       } else if (!task.runtimeWorkerId) {
         task = await updateCogSeedTask(userId, task.taskId, (current) => ({ ...current, runtimeWorkerId }));
       }
-      if (task.status === 'created' || task.status === 'recoverable') {
+      if (task.status === 'created' || task.status === 'recoverable' || task.status === 'waiting_user') {
         task = await transitionCogSeedTask(userId, task.taskId, 'queued');
       }
       if (task.status !== 'queued') return { task };
@@ -780,7 +950,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
     const { task, controller } = admission;
     if (controller) {
       await projectTaskEventBounded(userId, task, {
-        eventId: `cogseed-event-started-${task.taskId}`,
+        eventId: `cogseed-event-started-${task.taskId}${task.lastResumeRequestId ? '-' + task.lastResumeRequestId : ''}`,
         type: 'task.started',
         payload: {},
       }, projectTaskEvent);
@@ -1018,7 +1188,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
   async function retryTaskUnlocked(userId: string, taskId: string, requestId: string): Promise<CogSeedTaskRecord> {
     const operation = async (): Promise<CogSeedTaskRecord> => {
       const retried = await retryStoredCogSeedTask(userId, taskId, requestId);
-      if (retried.executionKind === 'group-chat') throw new Error('Group Chat tasks cannot run in CogSeed Runtime');
+      if (retried.executionKind === 'group-chat') throw new CogSeedGroupChatTaskAdmissionError(retried.taskId);
       if (retried.status !== 'created') return retried;
       const capabilities = await resolveRuntimeCapabilities(userId, retried.requestId, retried.runtimeSessionId);
       const retryInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = {
@@ -1186,12 +1356,18 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       );
     },
 
+    async waitForTaskTurn(userId, taskId) {
+      if (!await readCogSeedTask(userId, taskId)) throw new Error('CogSeed task not found');
+      await activeRunPromises.get(taskId);
+    },
+
     async resumeCogSeedTask(userId, taskId, input) {
       watchUser(userId);
       const continuation = input.continuation.trim();
       if (!continuation) throw new Error('CogSeed continuation is required');
       const requestFingerprint = cogSeedRequestFingerprint('resume', {
         taskId,
+        groupChatRunId: input.groupChatRunId,
         continuation,
         profileId: input.profileId,
         context: input.context,
@@ -1210,15 +1386,15 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
         async () => {
           const current = await readCogSeedTask(userId, taskId);
           if (!current) throw new Error('CogSeed task not found');
-          if (current.executionKind === 'group-chat') throw new Error('Group Chat tasks cannot run in CogSeed Runtime');
+          if (current.executionKind === 'group-chat') throw new CogSeedGroupChatTaskAdmissionError(current.taskId);
           if (current.lastResumeRequestId === input.requestId
             && current.lastResumeRequestFingerprint
             && current.lastResumeRequestFingerprint !== requestFingerprint) {
             throw new Error('CogSeed request ID payload conflict');
           }
-          if (current.lastResumeRequestId === input.requestId && current.status !== 'recoverable') return current;
+          if (current.lastResumeRequestId === input.requestId && !['recoverable', 'waiting_user'].includes(current.status)) return current;
           if (current.status === 'completed' || current.status === 'cancelled') return current;
-          if (current.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
+          if (!['recoverable', 'waiting_user'].includes(current.status)) throw new Error('CogSeed task is not resumable');
 
           // A live executor may have been externally marked recoverable while
           // it is still winding down. Never wait for that executor while
@@ -1233,7 +1409,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
             && settled.lastResumeRequestFingerprint !== requestFingerprint) {
             throw new Error('CogSeed request ID payload conflict');
           }
-          if (settled.lastResumeRequestId === input.requestId && settled.status !== 'recoverable') return settled;
+          if (settled.lastResumeRequestId === input.requestId && !['recoverable', 'waiting_user'].includes(settled.status)) return settled;
           if (settled.status === 'completed' || settled.status === 'cancelled') return settled;
           if (settled.executionId && await resultDeliveryStore.read(userId, settled.executionId)) {
             return recoverResultDelivery(userId, settled, true);
@@ -1246,24 +1422,24 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
               && latest.lastResumeRequestFingerprint !== requestFingerprint) {
               throw new Error('CogSeed request ID payload conflict');
             }
-            if (latest.lastResumeRequestId === input.requestId && latest.status !== 'recoverable') return latest;
+            if (latest.lastResumeRequestId === input.requestId && !['recoverable', 'waiting_user'].includes(latest.status)) return latest;
             if (latest.status === 'completed' || latest.status === 'cancelled') return latest;
-            if (latest.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
+            if (!['recoverable', 'waiting_user'].includes(latest.status)) throw new Error('CogSeed task is not resumable');
             const replacement = (await listCogSeedTasks(userId)).find((candidate) => (
               candidate.retryOfTaskId === taskId && candidate.status !== 'cancelled'
             ));
             if (replacement) throw new Error('CogSeed task already has a replacement');
             const reserved = await updateCogSeedTask(userId, taskId, (task) => {
-              if (task.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
+              if (!['recoverable', 'waiting_user'].includes(task.status)) throw new Error('CogSeed task is not resumable');
               if (task.lastResumeRequestId === input.requestId) {
                 if (task.lastResumeRequestFingerprint && task.lastResumeRequestFingerprint !== requestFingerprint) {
                   throw new Error('CogSeed request ID payload conflict');
                 }
                 return task;
               }
-              return { ...task, lastResumeRequestId: input.requestId, lastResumeRequestFingerprint: requestFingerprint };
+              return { ...task, ...(input.groupChatRunId ? { groupChatRunId: input.groupChatRunId } : {}), lastResumeRequestId: input.requestId, lastResumeRequestFingerprint: requestFingerprint };
             });
-            if (reserved.executionKind === 'group-chat') throw new Error('Group Chat tasks cannot run in CogSeed Runtime');
+            if (reserved.executionKind === 'group-chat') throw new CogSeedGroupChatTaskAdmissionError(reserved.taskId);
             const resumeInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = {
               requestId: input.requestId,
               task: continuation,
@@ -1341,8 +1517,10 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
             const updated = await withCogSeedLaunchRecoveryOperation(userId, candidate.taskId, async () => {
               if (launchClaims.has(candidate.taskId) || activeRuns.has(candidate.taskId)) return null;
               const current = await readCogSeedTask(userId, candidate.taskId);
+              // A settled interaction intentionally has no worker. Preserve
+              // its confirmation state across application restarts.
               if (!current || (current.status !== 'created' && current.status !== 'queued'
-                && current.status !== 'running' && current.status !== 'waiting_user')) return null;
+                && current.status !== 'running')) return null;
               let recoverable: CogSeedTaskRecord;
               try {
                 recoverable = await markCogSeedTaskRecoverable(userId, current.taskId, 'worker_restart');

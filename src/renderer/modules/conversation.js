@@ -46,6 +46,14 @@ function _saveSidebarCollapse() {
 // 「最近任务」分区内联新建任务输入条（＋ 展开，回车即建）
 let _sidebarNewTaskOpen = false;
 let _sidebarNewTaskValue = '';
+// 「最近任务」条数分页（COGSEED-551）：首屏只铺 5 条，其余按页揭示。
+// 置顶与渠道聚合不在此列——它们有各自的分区，不占这份配额。
+const _SIDEBAR_RECENT_PAGE = 5;
+let _sidebarRecentLimit = _SIDEBAR_RECENT_PAGE;
+// 空间组内同样按页铺：组头计数是空间总数，组内每页 5 条，
+// 按 space_id 记住各自已揭示到第几页。
+const _SPACE_TASKS_PAGE = 5;
+const _spaceTaskLimit = new Map();
 
 function _convTrackClick(action, data) {
   try { if (window.Monitor) (() => {})(action, data || {}); } catch (_) {}
@@ -340,22 +348,42 @@ function _renderMessageMarkdown(text) {
   // marker was plain text. Protect it through markdown and turn it into an
   // actionable button below, beside the existing asset citation handling.
   const candidateRefIds = [];
-  const markdownInput = protectedText.replace(/\[candidate:([A-Za-z0-9_-]{1,64})\]/g, (m, id) => {
+  const candidateText = protectedText.replace(/\[candidate:([A-Za-z0-9_-]{1,64})\]/g, (m, id) => {
     const idx = candidateRefIds.length;
     candidateRefIds.push(id);
     return `\x00CANDIDATEREF${idx}\x00`;
+  });
+  // [proposal:<id>] is the steward's entry to an existing governed decision.
+  const proposalRefIds = [];
+  const proposalText = candidateText.replace(/\[proposal:([A-Za-z0-9_-]{1,64})\]/g, (_marker, id) => {
+    const idx = proposalRefIds.length;
+    proposalRefIds.push(id);
+    return `\uE000PROPOSALREF${idx}\uE001`;
+  });
+  // [[ontology:module/record@version]] opens that exact read-only record version.
+  const ontologyRefs = [];
+  const markdownInput = proposalText.replace(/\[\[ontology:([A-Za-z0-9_-]{1,160})\/([A-Za-z0-9_-]{1,160})@([1-9]\d{0,8})\]\]/g, (_marker, moduleId, recordId, version) => {
+    const idx = ontologyRefs.length;
+    ontologyRefs.push({ moduleId, recordId, version: Number(version) });
+    return `\uE000ONTOLOGYREF${idx}\uE001`;
   });
   const html = renderMarkdownFull(markdownInput);
   const needsSkillRewrite = _htmlMayContainKnownSkillIdForDisplay(html, skills);
   // Mention highlighting requires DOM walking — do it on a detached
   // container, then return its innerHTML for the bubble to embed.
-  if (!html || (html.indexOf('@') < 0 && !needsSkillRewrite && !assetRefIds.length && !candidateRefIds.length)) return html;
+  if (!html || (html.indexOf('@') < 0 && !needsSkillRewrite && !assetRefIds.length && !candidateRefIds.length && !proposalRefIds.length && !ontologyRefs.length)) return html;
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
   if (needsSkillRewrite) _replaceKnownSkillIdsIn(tmp, skills);
   _highlightMentionsIn(tmp);
   if (assetRefIds.length) _replaceAssetCitationsIn(tmp, assetRefIds);
   if (candidateRefIds.length) _replaceCandidateCitationsIn(tmp, candidateRefIds);
+  if (proposalRefIds.length) {
+    _replaceProposalCitationsIn(tmp, proposalRefIds);
+    // 调用方在渲染后同步挂载这段 HTML：附着完成后才读宿主状态。
+    Promise.resolve().then(() => window.ChatAssetApproval?.refreshVisible());
+  }
+  if (ontologyRefs.length) _replaceOntologyCitationsIn(tmp, ontologyRefs);
   return tmp.innerHTML;
 }
 
@@ -479,6 +507,83 @@ function _replaceCandidateCitationsIn(container, ids) {
   }
 }
 
+// ── [proposal:<id>] 引用 → 打开既有审批提议的按钮（跳过 pre/code）──
+
+function _replaceProposalCitationsIn(container, ids) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const pattern = /\uE000PROPOSALREF(\d+)\uE001/g;
+    if (!pattern.test(node.nodeValue)) continue;
+    pattern.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let match;
+    while ((match = pattern.exec(node.nodeValue))) {
+      if (match.index > last) frag.appendChild(document.createTextNode(node.nodeValue.slice(last, match.index)));
+      const id = ids[Number(match[1])];
+      if (node.parentElement?.closest('pre, code') || !id) {
+        frag.appendChild(document.createTextNode(`[proposal:${id || '?'}]`));
+      } else {
+        const template = document.createElement('template');
+        template.innerHTML = uiButton({
+          label: t('chat.proposal_citation_open'),
+          role: 'ghost',
+          size: 'sm',
+          attrs: { 'data-proposal-citation': id },
+        });
+        frag.appendChild(template.content.cloneNode(true));
+      }
+      last = match.index + match[0].length;
+    }
+    if (last < node.nodeValue.length) frag.appendChild(document.createTextNode(node.nodeValue.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+// ── [[ontology:module/record@version]] 引用 → 打开指定历史版本（跳过 pre/code）──
+
+function _replaceOntologyCitationsIn(container, refs) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const pattern = /\uE000ONTOLOGYREF(\d+)\uE001/g;
+    if (!pattern.test(node.nodeValue)) continue;
+    pattern.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let match;
+    while ((match = pattern.exec(node.nodeValue))) {
+      if (match.index > last) frag.appendChild(document.createTextNode(node.nodeValue.slice(last, match.index)));
+      const ref = refs[Number(match[1])];
+      if (ref && node.parentElement?.closest('pre, code')) {
+        frag.appendChild(document.createTextNode(`[[ontology:${ref.moduleId}/${ref.recordId}@${ref.version}]]`));
+      } else if (ref) {
+        const key = 'chat.ontology_citation_open';
+        const translated = typeof t === 'function' ? t(key) : key;
+        const label = translated && translated !== key ? translated : 'View ontology record';
+        const template = document.createElement('template');
+        template.innerHTML = uiButton({
+          label: `${label} · v${ref.version}`,
+          role: 'ghost',
+          size: 'sm',
+          attrs: {
+            'data-ontology-citation': ref.recordId,
+            'data-ontology-module': ref.moduleId,
+            'data-ontology-version': String(ref.version),
+          },
+        });
+        frag.appendChild(template.content.cloneNode(true));
+      }
+      last = match.index + match[0].length;
+    }
+    if (last < node.nodeValue.length) frag.appendChild(document.createTextNode(node.nodeValue.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
 // Build the mention-highlight portion of the textarea mirror. Escapes
 // everything EXCEPT `@<token>` matches, which become accent-coloured spans.
 function _buildMentionMirrorHtml(text) {
@@ -541,11 +646,11 @@ function focusChatRichComposer(inputOrId) {
   return true;
 }
 
-function syncChatRichComposerFromTextarea(inputOrId) {
+function syncChatRichComposerFromTextarea(inputOrId, opts) {
   const id = _chatRichInputId(inputOrId);
   const api = id ? _chatRichComposers.get(id) : null;
   if (!api) return false;
-  api.renderFromTextarea();
+  api.renderFromTextarea(opts);
   return true;
 }
 
@@ -1051,7 +1156,7 @@ function _chatRichCreateApi(textarea, editor) {
       // compositionend runs one reconcile once the text has committed.
       if (this.composing) return;
       const value = String(textarea.value || '');
-      const changed = value !== this.lastValue;
+      const changed = value !== this.lastValue || !!opts.force;
       let shouldAutoGrow = !!(opts && opts.forceHeight);
       if (changed) {
         shouldAutoGrow = true;
@@ -1352,6 +1457,16 @@ function _initMentionMirror(textarea) {
   // 会话成员与正文标记联动（FR-002）：只有用户真实编辑草稿才可能取消成员；
   // 发送后的自动清空走 resetDraftTracking，不算手动删除标记。
   const memberTarget = _chatRichInputTarget(textarea.id);
+  if (memberTarget !== 'auto') {
+    textarea.addEventListener('input', () => {
+      if (typeof _markA2AComposerChanged === 'function') {
+        _markA2AComposerChanged(
+          memberTarget,
+          memberTarget === 'new-chat' ? DRAFT_CID : currentCid,
+        );
+      }
+    });
+  }
   if (memberTarget !== 'auto' && window.composerMembers) {
     const members = window.composerMembers;
     members.seedDraftTracking(memberTarget, textarea.value);
@@ -1514,6 +1629,7 @@ function _upgradeWelcomePanel(cid, welcome) {
     boundary: welcome.boundary || '',
     plan: Array.isArray(welcome.plan) ? welcome.plan : [],
     summary: welcome.summary || '',
+    currentRequest: welcome.currentRequest || '',
   });
   panel.outerHTML = _renderWelcomeCarryHtml(carry, resumeJson);
 }
@@ -1735,6 +1851,12 @@ function _projectIdForConversation(cid) {
 }
 
 function _onRecipientChanged(_target) {
+  if (typeof _markA2AComposerChanged === 'function') {
+    _markA2AComposerChanged(
+      _target,
+      _target === 'new-chat' ? DRAFT_CID : currentCid,
+    );
+  }
   // Unified execution entry: the exec-config chip resolves its display from
   // the active recipient (agent defaults / API model pick), so it must
   // re-render on every recipient change.
@@ -1866,6 +1988,9 @@ if (typeof window !== 'undefined') {
   window.addEventListener('composer-members-change', (event) => {
     const detail = event && event.detail ? event.detail : {};
     _syncRecipientFromMembers(detail.target);
+  });
+  window.addEventListener('cogseed:view-changed', () => {
+    _markA2ASurfaceChanged();
   });
 }
 
@@ -2682,20 +2807,22 @@ document.addEventListener('click', (e) => {
   }
 });
 
-/** 「带着这些继续」：按 welcome_resume 的 Action Plan 构造真实执行消息发给
- *  CLI / commander（不走模板交接回复），随后标记 welcome 已处理。失败时恢复
- *  按钮，避免"点了没反应"。 */
+/** 「带着这些继续」：把「当前请求」作为本轮任务发给 commander / CLI
+ *  （当前请求优先；Action Plan 只作为参考步骤）。两者都没有时不要发送旧的
+ *  通用引导句——那会把用户目标替换成「先汇报进度」，改为提示用户补充任务。 */
 async function _submitWelcomeContinue(cid, block, btn) {
   let plan = [];
   let summary = '';
+  let currentRequest = '';
   try {
     const raw = block && block.dataset.welcomeResume;
     if (raw) {
       const parsed = JSON.parse(raw);
       plan = Array.isArray(parsed && parsed.plan) ? parsed.plan : [];
       summary = String((parsed && parsed.summary) || '');
+      currentRequest = String((parsed && parsed.currentRequest) || '').trim();
     }
-  } catch (_) { /* keep empty plan */ }
+  } catch (_) { /* keep empty plan / request */ }
 
   // 任务较长判定：摘要字符数超过阈值视为长任务（按任务长度判断）。
   const taskIsLong = summary.trim().length > 300;
@@ -2707,9 +2834,29 @@ async function _submitWelcomeContinue(cid, block, btn) {
     try { window.interactiveTour.markWelcomeContinued({ taskIsLong }); } catch (_) {}
   }
 
-  const message = plan.length
-    ? `继续。先按这个 Action Plan 执行，遇到冲突或需要扩大权限时再问我：\n${plan.map((item, i) => `${i + 1}. ${item}`).join('\n')}`
-    : t('chat.welcome_guide_sentence', '继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。');
+  const planLines = plan.map((item, i) => `${i + 1}. ${item}`).join('\n');
+  const message = currentRequest
+    ? (plan.length
+      ? t('chat.welcome_continue_with_request_and_plan', { request: currentRequest, plan: planLines })
+      : t('chat.welcome_continue_with_request', { request: currentRequest }))
+    : (plan.length
+      ? t('chat.welcome_continue_with_plan', { plan: planLines })
+      : '');
+
+  if (!message) {
+    // No current request and no plan: sending the old generic "where are we?"
+    // sentence would silently replace the user's goal. Ask instead, and keep
+    // the welcome panel actionable.
+    if (btn) btn.disabled = false;
+    if (typeof uiToast === 'function') {
+      uiToast(t('chat.welcome_continue_need_request'), { variant: 'warning', timeoutMs: 5000 });
+    }
+    if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
+      const input = document.getElementById('chat-input');
+      if (input && typeof input.focus === 'function') input.focus();
+    }
+    return;
+  }
   try {
     if (typeof sendInConversation === 'function') {
       const res = await sendInConversation(cid, message, undefined, {});
@@ -2811,6 +2958,43 @@ document.addEventListener('click', (e) => {
     return;
   }
   // recall feature 未加载：先懒加载（同上 asset 引用卡的 fallback），再打开评审详情。
+  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+  if (typeof loader === 'function') loader('recall').then(open).catch(() => {});
+});
+
+// [proposal:<id>] opens an existing governed decision; never resubmit it as an edit.
+document.addEventListener('click', (e) => {
+  const el = e.target && e.target.closest ? e.target.closest('[data-proposal-citation]') : null;
+  if (!el) return;
+  const proposalId = el.dataset.proposalCitation;
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(proposalId || '')) return;
+  const open = () => {
+    if (typeof window.openCognitionApprovalById !== 'function') return;
+    window.openCognitionApprovalById(proposalId);
+  };
+  if (typeof window.openCognitionApprovalById === 'function') {
+    open();
+    return;
+  }
+  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+  if (typeof loader === 'function') loader('recall').then(open).catch(() => {});
+});
+
+// [[ontology:module/record@version]] → 同一权威记录的只读历史版本。
+document.addEventListener('click', (e) => {
+  const el = e.target && e.target.closest ? e.target.closest('[data-ontology-citation]') : null;
+  if (!el) return;
+  const { ontologyCitation: recordId, ontologyModule: moduleId, ontologyVersion } = el.dataset;
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(recordId || '') || !/^[A-Za-z0-9_-]{1,160}$/.test(moduleId || '')
+    || !/^[1-9]\d{0,8}$/.test(ontologyVersion || '')) return;
+  const open = () => {
+    if (typeof window.openCognitionOntologyRecord !== 'function') return;
+    window.openCognitionOntologyRecord(moduleId, recordId, Number(ontologyVersion));
+  };
+  if (typeof window.openCognitionOntologyRecord === 'function') {
+    open();
+    return;
+  }
   const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
   if (typeof loader === 'function') loader('recall').then(open).catch(() => {});
 });
@@ -2933,9 +3117,13 @@ function _forgetCidRecipient(cid) {
   _autoRecipientByCid.delete(cid);
   _serverFloorByCid.delete(cid);
   _pendingFloorResetByCid.delete(cid);
+  _forgetChatStreamAnchors(cid);
   if (_agentStatusPopoverCid === cid) _closeAgentStatusPopover();
   setGroupConversationBusy(cid, false);
   _latestInFlight.delete(cid);
+  // 会话被丢弃时要连"等批准"标记一起清：否则该 cid 的标签会留在内存里，
+  // 一旦同一 cid 再次进入列表就会顶着一个过期状态。
+  _latestWaitingApproval.delete(cid);
   _clearBackgroundGroupEvents(cid);
   const infoTimer = _conversationInfoFileRefreshTimers.get(cid);
   if (infoTimer) clearTimeout(infoTimer);
@@ -2956,6 +3144,10 @@ function _forgetCidRecipient(cid) {
 // state_changed events coalesce.
 const _autoEvalInflight = new Set(); // cid set
 const _latestInFlight = new Map();   // cid → string[] (mirrors state_changed.state.in_flight)
+// cid → true 当且仅当 main 的 /runtime 报 waiting_approval：该会话只剩「等用户点
+// 批准」这一件事（run 停在 running、actor 停在 pending，bus 不会收口，wake 也不会
+// 过期）。这时它不是"在跑"，不该转圈；侧栏改用共享状态标签如实说明在等谁。
+const _latestWaitingApproval = new Map(); // cid → boolean
 const _runtimeRecoveryTimers = new Map(); // cid → timeout id
 const _lastGroupWorkEventAt = new Map(); // cid → ms timestamp of process/artifact/assistant message
 const _groupObserverCtrls = new Map();   // cid → recovery observer controller
@@ -3237,6 +3429,8 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
   const hasActiveTurnsField = Array.isArray(data.active_turns);
   const activeTurns = _normaliseActiveTurns(data.active_turns);
   const processing = _conversationRuntimeIsActive(data);
+  // 等批准与"在跑"互斥：真在跑就转圈，只有等用户决定时才显示状态标签。
+  _setConvWaitingApproval(cid, data.waiting_approval === true && !processing);
   if (window.ConversationInfo) {
     try { window.ConversationInfo.refreshFiles(cid, { silent: true }); } catch (_) {}
   }
@@ -3278,6 +3472,7 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
     _observeConversationRunFromPlanAction(cid, {
       attachExisting: true,
       allowWithController: true,
+      source: 'sync_pending_actors_with_controller',
     });
   }
   if (!hasLiveController) {
@@ -3286,7 +3481,7 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
     // stale controller state, or reconnect), attach the group event stream
     // so plan-triggered agents keep streaming instead of only appearing
     // after the final history poll.
-    _observeConversationRunFromPlanAction(cid, { attachExisting: true });
+    _observeConversationRunFromPlanAction(cid, { attachExisting: true, source: 'sync_pending_actors' });
   }
   if (!inFlight.length && !activeTurns.length) return false;
 
@@ -3964,6 +4159,12 @@ function _groupActorLabel(fromId) {
     const a = cached.find((x) => x.id === fromId);
     if (a && a.name) return a.name;
   }
+  // A2A 对端助理：名册还没到时先给「对方助理」，chip 会在名册刷新后升级成
+  // 「X 的助理」——用通用「智能体」会让跨方回答看起来像本地智能体说的。
+  if (typeof fromId === 'string' && fromId.startsWith('a2a_')) {
+    // 对端助理 / 来访者：同一个前缀，两种身份，别都读成「助理」。
+    return fromId.endsWith('_assistant') ? t('a2a.peer_assistant_generic') : t('a2a.visitor_generic');
+  }
   // Last resort: never leak the id. Show a neutral placeholder; the chip
   // will repaint as soon as the cache catches up (state_changed handler
   // refreshes _groupMembersCache).
@@ -3997,8 +4198,46 @@ function _repaintPendingActorHeaders(cid) {
     delete bubble.dataset.actorPending;
   }
 }
+      /** M1: seed the composer's own member list from the backend roster.
+       *  The composer keeps `chat.membersByCid` in localStorage and that list is what
+       *  `_composerMemberPayload` sends as `member_agent_ids`; the backend
+       *  members.json is authoritative, so unknown agents are added here (idempotent). */
+      function _seedComposerFromBackendActors(actors, { addMissingMembers = true } = {}) {
+        if (!Array.isArray(actors) || !window.composerMembers) return;
+        const cm = window.composerMembers;
+        if (typeof cm.addMember !== 'function' || typeof cm.getMembers !== 'function') return;
+        const existing = cm.getMembers('conversation') || [];
+        const have = new Set(existing.map((m) => `${m.kind || m.type || 'agent'}:${m.id}`));
+        // The bottom member bar and tooltip read composer selections, not the
+        // roster cache. Refresh labels by the same stable agent key; leave the
+        // selection/order and structured draft mentions untouched.
+        const names = new Map(actors.filter(actor => actor && actor.id && actor.name)
+          .map(actor => [String(actor.id), actor.name]));
+        let renamed = false;
+        const refreshed = existing.map(member => {
+          if ((member.kind || member.type || 'agent') !== 'agent') return member;
+          const name = names.get(member.id);
+          if (!name || name === member.name) return member;
+          renamed = true;
+          return { ...member, name };
+        });
+        if (renamed && typeof cm.setMembers === 'function') {
+          cm.setMembers('conversation', refreshed);
+        }
+        // Contact renames preserve the user's selection, including exclusions.
+        if (!addMissingMembers) return;
+        for (const actor of actors) {
+          const id = String(actor && actor.id ? actor.id : '').trim();
+          if (!id || id === 'commander' || id === 'user') continue;
+          if (have.has(`agent:${id}`)) continue;
+          try {
+            cm.addMember('conversation', { kind: 'agent', id, name: actor.name || id });
+          } catch (_) { /* non-fatal: composer stays usable */ }
+        }
+      }
 
-async function _refreshGroupMembers(cid) {
+
+async function _refreshGroupMembers(cid, { addMissingMembers = true } = {}) {
   if (!cid) return [];
   try {
     const res = await apiFetch(_membersRequestUrl(cid));
@@ -4026,6 +4265,7 @@ async function _refreshGroupMembers(cid) {
       if (cid === currentCid) {
         try { _ensureConvCreateAgentInline(); } catch (_) { /* non-fatal */ }
       }
+      if (cid === currentCid) _seedComposerFromBackendActors(data.actors, { addMissingMembers });
       return data.actors;
     }
   } catch (_) { /* non-fatal */ }
@@ -4445,8 +4685,23 @@ function _chatAttachList(cid) {
   return _chatAttachments.get(cid) || [];
 }
 
+function _a2aAttachmentStateSignature(items) {
+  return JSON.stringify((Array.isArray(items) ? items : []).map((item) => ({
+    name: String((item && item.name) || ''),
+    displayName: String((item && (item.displayName || item.name)) || ''),
+    kind: String((item && item.kind) || ''),
+    bytes: Math.max(0, Number((item && item.bytes) || 0)),
+    status: String((item && item.status) || 'ready'),
+  })));
+}
+
 function _chatAttachSet(cid, items) {
+  const changed = _a2aAttachmentStateSignature(_chatAttachList(cid))
+    !== _a2aAttachmentStateSignature(items);
   _chatAttachments.set(cid, items);
+  if (changed && typeof _markA2AComposerChanged === 'function') {
+    _markA2AComposerChanged(cid === DRAFT_CID ? 'new-chat' : 'conversation', cid);
+  }
   _chatAttachRenderChips(cid);
   if (cid && cid === currentCid && window.ConversationInfo) {
     window.ConversationInfo.refreshAttachments(cid, { items });
@@ -4465,6 +4720,8 @@ async function _chatAttachDeleteItemFile(cid, item) {
 }
 
 async function _chatAttachClear(cid, opts = {}) {
+  const changed = _a2aAttachmentStateSignature(_chatAttachList(cid))
+    !== _a2aAttachmentStateSignature([]);
   const deleteFiles = !!(opts && opts.deleteFiles);
   if (deleteFiles) {
     const items = _chatAttachList(cid).slice();
@@ -4476,6 +4733,9 @@ async function _chatAttachClear(cid, opts = {}) {
     }
   }
   _chatAttachments.delete(cid);
+  if (changed && typeof _markA2AComposerChanged === 'function') {
+    _markA2AComposerChanged(cid === DRAFT_CID ? 'new-chat' : 'conversation', cid);
+  }
   _chatAttachRenderChips(cid);
   if (cid && cid === currentCid && window.ConversationInfo) {
     window.ConversationInfo.refreshAttachments(cid, { items: [] });
@@ -5305,7 +5565,9 @@ function _renderCognitionSaveReceiptsHtml(receipts) {
   return `<div class="chat-cognition-save-receipts">${receipts.map((receipt) => {
     // taught-pending-review（2026-09-28 四病整改 7.0 修7）：教学回执并入保存
     // 回执后的新态——用户教了一条记忆，信号落库时建了候选、等审核。
-    const outcomeKey = receipt.outcome === 'created'
+    const outcomeKey = receipt.target === 'ontology'
+      ? receipt.outcome === 'ontology-pending' ? 'chat.cognition_save.ontology_pending' : 'chat.cognition_save.ontology_saved'
+      : receipt.outcome === 'created'
       ? 'chat.cognition_save.state_active'
       : receipt.outcome === 'already-confirmed'
         ? 'chat.cognition_save.state_existing'
@@ -5327,7 +5589,7 @@ function _renderCognitionSaveReceiptsHtml(receipts) {
           : receipt.outcome === 'taught-pending-review'
             ? '已记住 · 待审核'
             : 'Awaiting your review · not active yet';
-    const label = receipt.outcome === 'already-confirmed'
+    const label = receipt.target === 'ontology' ? copy('chat.cognition_save.open_ontology', '查看本体') : receipt.outcome === 'already-confirmed'
       ? copy('chat.cognition_save.open_existing', 'View record')
       : receipt.target === 'asset'
         ? copy('chat.cognition_save.open_asset', 'View and edit')
@@ -5337,7 +5599,9 @@ function _renderCognitionSaveReceiptsHtml(receipts) {
       role: 'ghost',
       size: 'sm',
       className: 'chat-cognition-save-open',
-      attrs: receipt.target === 'asset'
+      attrs: receipt.target === 'ontology'
+        ? { 'data-ontology-citation': receipt.id, 'data-ontology-module': receipt.moduleId || receipt.id, 'data-ontology-version': String(receipt.version || 1) }
+        : receipt.target === 'asset'
         ? { 'data-asset-citation': receipt.id }
         : { 'data-candidate-citation': receipt.id },
     });
@@ -5353,9 +5617,10 @@ function _renderCognitionSaveReceiptsHtml(receipts) {
 
 
 
-// ── Recall 引用反馈 →「本次使用的记忆」合并卡（拍板项 #8）──────────────────
-// 2026-09-28 四病整改：引用卡（事后回执）与投影卡（事前面板）合并为一张
-// 「本次使用的记忆」卡。卡片的完整实现收在 recall-projection-card.js（同步
+// ── Recall 使用反馈 →「本轮资产检索与带入状态」合并卡（拍板项 #8）─────────
+// 2026-09-28 四病整改：带入回执与投影卡（事前面板）合并为一张状态卡；
+// 它证明资产被选中或进入提示词，不单独证明最终回答实际采用。卡片实现收在
+// recall-projection-card.js（同步
 // 骨架 recallMemoryCardHtml + 投影数据异步补全 mountRecallProjectionCard）；
 // 这里只保留同步入口与反馈绑定。旧互斥抑制（有投影卡就不出引用卡）已删。
 
@@ -5383,32 +5648,46 @@ function _hydrateRecallCitations(messageEl, cid, messageId) {
     const button = event.target?.closest?.('[data-recall-feedback]');
     if (!button || button.disabled) return;
     const feedback = button.dataset.recallFeedback;
-    if (!cid || !resolvedMessageId || (feedback !== 'positive' && feedback !== 'negative')) return;
-    if (host.dataset.feedbackBusy === '1' || host.dataset.feedbackSent === '1') return;
-    host.dataset.feedbackBusy = '1';
-    host.querySelectorAll('[data-recall-feedback]').forEach((item) => { item.disabled = true; });
+    // 逐行反馈：按钮钉在自己行的资产上——反馈只记给用户
+    // 点的那条资产，不再连带同消息其他引用。行取包含按钮的已引用行（按钮自身
+    // 也带 data-recall-asset-id，closest 从按钮起会只命中按钮自己）。
+    const assetId = String(button.dataset.recallAssetId || '');
+    if (!cid || !resolvedMessageId || !assetId || (feedback !== 'positive' && feedback !== 'negative')) return;
+    const row = button.closest('.chat-recall-citation[data-recall-asset-id]');
+    if (!row) return;
+    if (row.dataset.feedbackBusy === '1' || row.dataset.feedbackSent === '1') return;
+    row.dataset.feedbackBusy = '1';
+    row.querySelectorAll('[data-recall-feedback]').forEach((item) => { item.disabled = true; });
     try {
       const result = await window.cogseed.invoke('recall.usage.feedback', {
         cid,
         messageId: resolvedMessageId,
         feedback,
+        assetId,
       });
       if (!result?.ok) throw new Error(result?.error || 'Recall feedback failed');
       // 负反馈后认知资产面板的刷新不再走 window CustomEvent（2026-09-27
       // 刷新机制重写）：主进程写回执时经 recall store 广播 cognition:changed
       // （asset-usage-receipts → timeline 区块），面板订阅中枢自己重拉。
-      host.dataset.feedbackSent = '1';
-      host.dataset.feedback = feedback;
-      host.classList.add('is-feedback-sent');
-      const status = host.querySelector('[data-recall-feedback-status]');
+      const sent = new Set(String(host.dataset.feedbackAssets || '').split(',').filter(Boolean));
+      sent.add(assetId);
+      host.dataset.feedbackAssets = [...sent].join(',');
+      // 整卡可能在请求期间被投影补全重画：按 assetId 重查当前渲染的行再落
+      // 状态，不依赖请求前捕获的节点（CodeRabbit 校正）；行不在（极端重画）
+      // 时 dataset 已记账，重画自然呈现已反馈态。
+      const currentRow = host.querySelector(`.chat-recall-citation[data-recall-asset-id="${assetId}"]`);
+      const targetRow = currentRow || row;
+      targetRow.dataset.feedbackSent = '1';
+      targetRow.classList.add('is-feedback-sent');
+      const status = targetRow.querySelector('[data-recall-feedback-status]');
       const key = 'chat.recall.feedback_thanks';
       const value = typeof t === 'function' ? t(key) : key;
       if (status) status.textContent = value && value !== key ? value : 'Thanks for the feedback';
     } catch (error) {
-      host.querySelectorAll('[data-recall-feedback]').forEach((item) => { item.disabled = false; });
+      row.querySelectorAll('[data-recall-feedback]').forEach((item) => { item.disabled = false; });
       if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
     } finally {
-      host.dataset.feedbackBusy = '0';
+      row.dataset.feedbackBusy = '0';
     }
   });
   // 头部带 role="button"：键盘等效入口（Enter/Space 翻转折叠），忽略 IME 组合期。
@@ -5881,6 +6160,8 @@ async function loadConversations(options = {}) {
       if (data.ok) {
         if (requestGeneration !== _conversationListLocalGeneration) return;
         conversations = data.conversations || [];
+        _applyWaitingApprovalFromRows(conversations);
+        _initWaitingApprovalSync();
         _conversationDeferredBuckets = startup
           ? { last30: Number(data.deferred_unprojected?.last30) || 0, older: Number(data.deferred_unprojected?.older) || 0 }
           : { last30: 0, older: 0 };
@@ -6136,6 +6417,29 @@ function _renderConversationTimeBucketList(items, itemOpts = {}) {
   return parts.join('');
 }
 
+/** A2A 会话标识（PRD FR-18/§8）：列表里标出这是跨账号会话及其当前状态。
+ *  已结束的会话不再打标（D-19：删除联系人后才结束）。 */
+function _convA2aBadge(conversation) {
+  const marker = conversation && conversation.a2a;
+  if (!marker || !marker.state || marker.state === 'ended') return '';
+  const inbound = marker.inbound === true || marker.role === 'receiver';
+  const label = inbound ? t('chat.a2a.incoming') : t('chat.a2a.badge');
+  // 接访会话等的是本人确认：读成「等待对方接受」会让用户以为在等对面回话。
+  // 过期同理：`chat.a2a.expired`（"对方未响应"）是提问方视角；来访方必须读成
+  // 「我方未及时接待」。
+  const stateKey = inbound && marker.state === 'waiting'
+    ? 'chat.a2a.incoming_waiting'
+    : inbound && marker.state === 'expired'
+      ? 'chat.a2a.incoming_expired'
+      : `chat.a2a.${marker.state}`;
+  const stateText = t(stateKey);
+  const tone = marker.state === 'waiting' ? 'warning' : (marker.state === 'active' ? 'info' : 'neutral');
+  const badge = typeof uiBadge === 'function'
+    ? uiBadge({ label, tone, className: 'conv-item-a2a-badge' })
+    : `<span class="conv-item-a2a-badge">${escapeHtml(label)}</span>`;
+  return `<span class="conv-item-a2a" title="${escapeHtml(stateText)}">${badge}<span class="conv-item-a2a-state">${escapeHtml(stateText)}</span></span>`;
+}
+
 function _renderConversationSidebarItem(c, opts = {}) {
   const cid = escapeHtml(c.conversation_id);
   const rawTitle = c.title || t('chat.new_conv_title');
@@ -6154,6 +6458,7 @@ function _renderConversationSidebarItem(c, opts = {}) {
     ? `<span class="conv-item-time" data-time-iso="${escapeHtml(_conversationActivityIso(c) || '')}" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(timeText)}</span>`
     : '';
   const runningHtml = _convTaskStatusLine(c.conversation_id);
+  const a2aBadgeHtml = _convA2aBadge(c);
   const titleNode = editing
     ? uiInput({
         id: `conv-item-title-input-${c.conversation_id}`,
@@ -6186,6 +6491,7 @@ function _renderConversationSidebarItem(c, opts = {}) {
     <div class="${classes}" data-cid="${cid}">
       <div class="conv-item-row">
         ${selectionHtml}
+        ${a2aBadgeHtml}
         ${runningHtml}
         ${titleNode}
         ${timeHtml}
@@ -6195,14 +6501,99 @@ function _renderConversationSidebarItem(c, opts = {}) {
   `;
 }
 
-// SidebarTasks：只把真实 running > 0 显示成紧邻标题的旋转指示器。
-// 排队与计划数据仍保留在各自状态源中，不挤占紧凑的侧栏任务行。
+// SidebarTasks：三态互斥——真在跑 → 转圈；只剩「等用户批准」→ 共享状态标签
+// （uiStatusPill，见 ui-status.js）；其余 → 什么都不显示。排队与计划数据仍保留在
+// 各自状态源中，不挤占紧凑的侧栏任务行。
+// 列表/单条 hydrate 返回的 `waiting_approval` 直接落进映射：**陈旧会话不会被
+// 轮询**（闲置的会话没有 runtime 同步），它的"等批准"只能靠这条路标出来。
+// 只处理本次返回里出现的行，不动其它 cid。
+function _applyWaitingApprovalFromRows(rows) {
+  if (!Array.isArray(rows)) return;
+  for (const row of rows) {
+    const cid = row && row.conversation_id;
+    if (!cid) continue;
+    _setConvWaitingApproval(cid, row.waiting_approval === true);
+  }
+}
+
+// 绝对同步：以 main 的索引为准，对**全部已知行**增/删标记。只增不减会让标签在
+// 用户批准/中止之后一直挂着（真机反馈）。兜底轮询 60s 一次，且只在窗口可见时。
+let _waitingApprovalSyncTimer = null;
+async function _syncWaitingApprovalFlags() {
+  try {
+    const api = window.cogseed;
+    if (!api || typeof api.invoke !== 'function') return;
+    const res = await api.invoke('conversations.waitingApproval', {});
+    if (!res || res.ok === false) return;
+    const flagged = new Set(
+      (Array.isArray(res.conversations) ? res.conversations : []).map(String).filter(Boolean),
+    );
+    const known = new Set();
+    for (const conv of (Array.isArray(conversations) ? conversations : [])) {
+      if (conv && conv.conversation_id) known.add(String(conv.conversation_id));
+    }
+    if (currentCid) known.add(String(currentCid));
+    const changed = [];
+    for (const cid of known) {
+      const before = _latestWaitingApproval.has(cid);
+      _setConvWaitingApproval(cid, flagged.has(cid));
+      if (before !== _latestWaitingApproval.has(cid)) changed.push(cid);
+    }
+    for (const cid of [..._latestWaitingApproval.keys()]) {
+      if (!known.has(cid)) { _latestWaitingApproval.delete(cid); changed.push(cid); }
+    }
+    // 只增量刷新受影响的行：整树重绘会牵动分页/懒加载流程（测试与真机都验证过）。
+    for (const cid of changed) {
+      if (typeof _refreshConvTaskLine === 'function') _refreshConvTaskLine(cid);
+    }
+  } catch (_) { /* 同步失败不影响渲染 */ }
+}
+
+let _waitingApprovalSyncWired = false;
+function _initWaitingApprovalSync() {
+  if (!_waitingApprovalSyncWired) {
+    _waitingApprovalSyncWired = true;
+    // 控制中心批准/拒绝唤醒后广播：侧栏立刻重算，不等下一次列表拉取。
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('wake-approval-change', () => { void _syncWaitingApprovalFlags(); });
+    }
+  }
+  if (_waitingApprovalSyncTimer) return;
+  // 宿主可能没有 setInterval（隔离渲染夹具就是这样，见
+  // "renders the list without throwing in a host that has no setInterval"）。
+  if (typeof setInterval !== 'function') return;
+  _waitingApprovalSyncTimer = setInterval(() => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    void _syncWaitingApprovalFlags();
+  }, 60_000);
+}
+
+function _setConvWaitingApproval(cid, waiting) {
+  if (!cid) return;
+  if (waiting) _latestWaitingApproval.set(cid, true);
+  else _latestWaitingApproval.delete(cid);
+}
+
 function _convTaskStatusLine(cid) {
   if (!cid) return '';
   const inFlight = (_latestInFlight.get(cid) || []).filter(Boolean).length;
-  if (inFlight <= 0) return '';
-  const runningLabel = escapeHtml(t('chat.status.running'));
-  return `<span class="conv-task-indicator" role="img" aria-label="${runningLabel}" title="${runningLabel}"></span>`;
+  if (inFlight > 0) {
+    const runningLabel = escapeHtml(t('chat.status.running'));
+    return `<span class="conv-task-indicator" role="img" aria-label="${runningLabel}" title="${runningLabel}"></span>`;
+  }
+  if (_latestWaitingApproval.get(cid)) {
+    const label = t('chat.status.waiting_approval');
+    // 共享状态组件（禁止页面自造状态样式）；ui-status 未加载时降级为不显示，
+    // 也不能退回字面 DOM。
+    if (typeof uiStatusPill !== 'function') return '';
+    return uiStatusPill({
+      label,
+      tone: 'attention',
+      className: 'conv-task-pill',
+      attrs: { title: label },
+    });
+  }
+  return '';
 }
 
 // state_changed 后只替换该行的运行指示器，不重绘任务树。
@@ -6210,7 +6601,9 @@ function _refreshConvTaskLine(cid) {
   if (!cid) return;
   const item = document.querySelector(`.conv-item[data-cid="${cid}"]`);
   if (!item) return;
+  // 转圈与「等批准」标签互斥：换状态前两者都要摘掉，避免同时出现两个指示器。
   item.querySelector('.conv-task-indicator')?.remove();
+  item.querySelector('.conv-task-pill')?.remove();
   const indicator = _convTaskStatusLine(cid);
   if (!indicator) return;
   const title = item.querySelector('.conv-item-title, .conv-item-title-input');
@@ -6362,7 +6755,6 @@ async function _saveConversationTitle(cid, raw, opts = {}) {
     renderConversationList();
     _refreshChatHeader();
     if (typeof renderProjectsSection === 'function') renderProjectsSection();
-    if (typeof _renderProjectAllTasks === 'function') _renderProjectAllTasks();
     if (window.ConversationInfo && typeof window.ConversationInfo.refresh === 'function') {
       window.ConversationInfo.refresh(cid, { silent: true });
     }
@@ -6452,6 +6844,35 @@ async function _deleteConversationWithConfirm(cid, opts = {}) {
   if (typeof opts.afterDelete === 'function') await opts.afterDelete(cid);
 }
 
+
+/** A2A 角色缓存：会话列表可能还没刷新到新会话，用已渲染过的对端 actor 兜底。 */
+const _a2aRoleCache = new Map();
+function _a2aRoleFor(cid) {
+  if (!cid) return '';
+  const conversation = _conversationById(cid);
+  const a2a = conversation && conversation.a2a ? conversation.a2a : null;
+  // Visibility projection: outgoing questions stay shared when inbound is also set.
+  const role = a2a
+    ? ((a2a.outgoing === true || a2a.role === 'initiator')
+      ? 'initiator'
+      : ((a2a.inbound === true || a2a.role === 'receiver') ? 'receiver' : 'initiator'))
+    : '';
+  if (role) {
+    _a2aRoleCache.set(cid, role);
+    return role;
+  }
+  return _a2aRoleCache.get(cid) || '';
+}
+
+/** A2A 对端 actor 第一次出现时补一次名册刷新（5s 节流），让 chip 升级成「X 的助理」。 */
+const _a2aMemberRefreshAt = new Map();
+function _scheduleA2aMemberRefresh(cid) {
+  if (!cid) return;
+  const last = _a2aMemberRefreshAt.get(cid) || 0;
+  if (Date.now() - last < 5000) return;
+  _a2aMemberRefreshAt.set(cid, Date.now());
+  Promise.resolve().then(() => _refreshGroupMembers(cid)).catch(() => { /* 名册刷新失败保留兜底文案 */ });
+}
 
 function _conversationById(cid) {
   return Array.isArray(conversations)
@@ -7402,6 +7823,15 @@ function _bindConversationSidebarItems(container, opts = {}) {
       renderConversationList();
     });
   });
+  // 空间组内「展开其余 N 个会话 / 收起」与「最近任务」的同名入口。
+  //
+  // 这四个入口走容器级事件委托，不逐元素绑定：链接节点每次 renderConversationList
+  // 都会被 innerHTML 重建，而侧栏还会被异步刷新（空间列表回填、会话列表更新）。
+  // 逐元素绑定时，真实鼠标的 mousedown 与 mouseup 若跨过一次重渲染，浏览器会把
+  // click 派发到两者的共同祖先，绑在旧节点上的处理器就永远收不到——表现为
+  // 「点了没反应」，且只在第二次点、也就是重渲染恰好插进来时复现。
+  // 委托绑在稳定的容器上，一次绑定长期有效。
+  _bindConvListPagerDelegation(container);
   // 侧栏「消息渠道」折叠组切换（飞书/微信等；状态持久化 localStorage）
   container.querySelectorAll('[data-conv-channel-toggle="1"]').forEach((btn) => {
     if (btn.dataset.channelBound === '1') return;
@@ -7613,6 +8043,86 @@ function _invalidateSidebarSpaces() {
   _ensureSidebarSpaces();
 }
 
+/** 侧栏分区块共用的「展开其余 N 个会话 / 收起」链接行。
+ *  对齐 CLI 侧栏的空态文案形态：折叠后的补充入口是纯文本链接，
+ *  不占按钮重量；展开过就同时给出「收起」，避免只能一路往下翻。 */
+function _renderConvListPager(opts) {
+  const visibleCount = Math.max(0, Number(opts && opts.visibleCount) || 0);
+  const totalCount = Math.max(0, Number(opts && opts.totalCount) || 0);
+  const page = Math.max(1, Number(opts && opts.page) || 1);
+  const canExpand = totalCount > visibleCount;
+  const canCollapse = visibleCount > page;
+  if (!canExpand && !canCollapse) return '';
+  const links = [];
+  if (canExpand) {
+    const n = totalCount - visibleCount;
+    const key = 'sidebar.expand_remaining';
+    const raw = t(key, { n });
+    links.push(uiButton({
+      label: raw === key ? `展开其余 ${n} 个会话` : raw,
+      role: 'ghost',
+      size: 'sm',
+      className: 'conv-list-pager-link',
+      attrs: opts.expandAttrs || {},
+    }));
+  }
+  if (canCollapse) {
+    const key = 'sidebar.collapse_tasks';
+    const raw = t(key);
+    links.push(uiButton({
+      label: raw === key ? '收起' : raw,
+      role: 'ghost',
+      size: 'sm',
+      className: 'conv-list-pager-link',
+      attrs: opts.collapseAttrs || {},
+    }));
+  }
+  return `<div class="conv-list-pager">${links.join('')}</div>`;
+}
+
+const _CONV_PAGER_SELECTOR = '[data-conv-space-more-tasks],[data-conv-space-collapse-tasks],'
+  + '[data-sidebar-recent-more],[data-sidebar-recent-collapse]';
+
+/** 侧栏分页链接的容器级事件委托（只绑一次）。
+ *  链接节点每次 renderConversationList 都会重建，侧栏还会被异步刷新回填；
+ *  逐元素绑定时真实鼠标的 mousedown/mouseup 跨过一次重渲染，click 会被派发到
+ *  共同祖先，旧节点上的处理器收不到——表现为「点了没反应」。 */
+function _bindConvListPagerDelegation(container) {
+  if (!container || typeof container.addEventListener !== 'function') return;
+  const ds = container.dataset || null;
+  if (ds && ds.convPagerDelegated === '1') return;
+  if (ds) ds.convPagerDelegated = '1';
+  container.addEventListener('click', (e) => {
+    const raw = e && e.target;
+    const hit = raw && typeof raw.closest === 'function' ? raw.closest(_CONV_PAGER_SELECTOR) : null;
+    if (!hit) return;
+    if (typeof container.contains === 'function' && !container.contains(hit)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const data = hit.dataset || {};
+    if (data.convSpaceMoreTasks) {
+      const sid = data.convSpaceMoreTasks;
+      _spaceTaskLimit.set(sid, (_spaceTaskLimit.get(sid) || _SPACE_TASKS_PAGE) + _SPACE_TASKS_PAGE);
+      renderConversationList();
+      return;
+    }
+    if (data.convSpaceCollapseTasks) {
+      _spaceTaskLimit.set(data.convSpaceCollapseTasks, _SPACE_TASKS_PAGE);
+      renderConversationList();
+      return;
+    }
+    if (data.sidebarRecentMore !== undefined) {
+      _sidebarRecentLimit += _SIDEBAR_RECENT_PAGE;
+      renderConversationList();
+      return;
+    }
+    if (data.sidebarRecentCollapse !== undefined) {
+      _sidebarRecentLimit = _SIDEBAR_RECENT_PAGE;
+      renderConversationList();
+    }
+  }, true);
+}
+
 /** 按空间分组当前缓存会话：{ spaceId: Conversation[] }（按最近活跃倒序）。 */
 function _spaceConversationMap() {
   const map = new Map();
@@ -7640,6 +8150,22 @@ function _renderSpaceSidebarGroup(sp, convs) {
         attrs: { 'data-conv-space-rename-input': sp.space_id, autocomplete: 'off', spellcheck: 'false' },
       })
     : `<span class="conv-list-section-label" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
+  // 组内条数分页：每个空间组首屏只铺 5 条，组头计数保留该空间的真实总数，
+  // 多出来的靠组内「展开其余 N 个会话」揭示，展开过就给出「收起」。
+  const allTasks = Array.isArray(convs) ? convs : [];
+  const taskLimit = _spaceTaskLimit.get(sp.space_id) || _SPACE_TASKS_PAGE;
+  const visibleTasks = allTasks.slice(0, taskLimit);
+  const rowsHtml = collapsed ? '' : visibleTasks.map((c) => _renderConversationSidebarItem(c, {
+    bucketScope: `space:${sp.space_id}`,
+    nested: true,
+  })).join('');
+  const moreHtml = collapsed ? '' : _renderConvListPager({
+    visibleCount: visibleTasks.length,
+    totalCount: allTasks.length,
+    page: _SPACE_TASKS_PAGE,
+    expandAttrs: { 'data-conv-space-more-tasks': escapeHtml(sp.space_id) },
+    collapseAttrs: { 'data-conv-space-collapse-tasks': escapeHtml(sp.space_id) },
+  });
   return `
     <button type="button" class="conv-list-section-header is-collapsible${collapsed ? ' is-collapsed' : ''}${renaming ? ' is-renaming' : ''}"
       data-conv-space-toggle="1" data-conv-space="${escapeHtml(sp.space_id)}"
@@ -7647,7 +8173,7 @@ function _renderSpaceSidebarGroup(sp, convs) {
       <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
       <span class="conv-space-group-icon" aria-hidden="true">${_uiIconHtml('space', 'conv-space-group-icon-svg')}</span>
       ${labelHtml}
-      <span class="conv-list-section-count">${convs.length}</span>
+      <span class="conv-list-section-count">${allTasks.length}</span>
       <span class="conv-space-quick-task" role="button" tabindex="0" data-conv-space-quick-task="${escapeHtml(sp.space_id)}"
         title="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}" aria-label="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}">
         ${_uiIconHtml('plus', 'conv-space-quick-task-icon')}</span>
@@ -7655,10 +8181,7 @@ function _renderSpaceSidebarGroup(sp, convs) {
         title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">
         ${_uiIconHtml('more-horizontal', 'conv-space-more-icon')}</span>
     </button>
-    ${collapsed ? '' : convs.map((c) => _renderConversationSidebarItem(c, {
-      bucketScope: `space:${sp.space_id}`,
-      nested: true,
-    })).join('')}`;
+    ${rowsHtml}${moreHtml}`;
 }
 
 // ── 消息渠道分组（飞书/微信等渠道会话在「最近任务」tab 的聚合展示）──
@@ -7891,11 +8414,23 @@ function renderConversationList() {
       actionIcon: 'plus',
     }));
     if (!_sidebarCollapse.recent) {
+      // 条数分页优先于时间桶：先把已加载的最近任务按页铺开，翻完了才用
+      // 原来的「加载更多」去拉 last30/older（否则会跳过中间的任务）。
+      const visibleRecent = plainRecent.slice(0, _sidebarRecentLimit);
+      const hasMoreRecent = plainRecent.length > visibleRecent.length;
       if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
-      parts.push(_renderConversationFlatList(plainRecent, {
+      parts.push(_renderConversationFlatList(visibleRecent, {
         bucketScope: 'sidebar',
-        loadMore: _sidebarHasMoreOld(),
+        // 条数还有得翻时不出时间桶按钮，两个入口并存会互相打断。
+        loadMore: !hasMoreRecent && _sidebarHasMoreOld(),
         loadMoreBucket: 'last30',
+      }));
+      parts.push(_renderConvListPager({
+        visibleCount: visibleRecent.length,
+        totalCount: plainRecent.length,
+        page: _SIDEBAR_RECENT_PAGE,
+        expandAttrs: { 'data-sidebar-recent-more': '1' },
+        collapseAttrs: { 'data-sidebar-recent-collapse': '1' },
       }));
       if (channelConvs.length) parts.push(_renderChannelSidebarGroups(channelConvs));
     }
@@ -7917,7 +8452,8 @@ function renderConversationList() {
   _bindConversationSidebarItems(container, {
     onBucketLoadMore(scope, bucket) {
       if (scope !== 'sidebar') return;
-      // 平铺后只有一个「加载更多」：优先加载 last30，完了再 older
+      // 条数分页由 _renderConvListPager 的「展开其余 N 个会话」承担；
+      // 这个按钮只剩时间桶取数：优先加载 last30，完了再 older。
       const pick = () => {
         if (_sidebarHasMoreOld()) {
           const p = _oldConversationPages[bucket];
@@ -8068,10 +8604,12 @@ function _historyRequestUrl(cid, before = null, limit = HISTORY_PAGE_SIZE, aroun
 // full = 完全访问（bypass）；auto_approve = 帮我批准（敏感操作自动放行）；
 // ask = 请求批准（敏感操作弹窗确认）。三档都在执行层（bash-permissions）生效。
 const _PERMISSION_MODES = [
-  { id: 'full', labelKey: 'chat.permission.full', label: '完全访问' },
+  { id: 'full', labelKey: 'chat.permission.full', label: '完全访问（仅工作区）' },
   { id: 'auto_approve', labelKey: 'chat.permission.auto_approve', label: '帮我批准' },
   { id: 'ask', labelKey: 'chat.permission.ask', label: '请求批准' },
+  { id: 'danger_full_access', labelKey: 'chat.permission.danger', label: '全盘访问（危险）' },
 ];
+const _PERMISSION_MODE_IDS = _PERMISSION_MODES.map((mode) => mode.id);
 
 let _permissionModeSelectBound = false;
 let _permissionModeSelectApi = null;
@@ -8109,7 +8647,7 @@ function _ensurePermissionModeSelect() {
 function _renderPermissionModeSelect(convMeta) {
   const select = _ensurePermissionModeSelect();
   if (!select) return;
-  const current = convMeta && ['full', 'auto_approve', 'ask'].includes(convMeta.permission_mode)
+  const current = convMeta && _PERMISSION_MODE_IDS.includes(convMeta.permission_mode)
     ? convMeta.permission_mode
     : 'ask';
   select.setOptions(_permissionModeOptions(), { value: current });
@@ -8121,7 +8659,21 @@ function _bindPermissionModeSelect() {
   if (!select) return;
   _permissionModeSelectBound = true;
   select.onChange(async (mode) => {
-    if (!currentCid || !['full', 'auto_approve', 'ask'].includes(mode)) return;
+    if (!currentCid || !_PERMISSION_MODE_IDS.includes(mode)) return;
+    if (mode === 'danger_full_access') {
+      const approved = typeof uiConfirmDanger === 'function'
+        ? await uiConfirmDanger({
+          title: (typeof t === 'function' && t('chat.permission.danger_title')) || '开启全盘访问？',
+          message: (typeof t === 'function' && t('chat.permission.danger_message')) || 'Agent 将可以读写整台电脑上的文件，不再局限于当前工作区。只在你完全信任当前任务时开启。',
+          okLabel: (typeof t === 'function' && t('chat.permission.danger_ok')) || '开启全盘访问',
+          cancelLabel: (typeof t === 'function' && t('common.cancel')) || '取消',
+        })
+        : typeof confirm === 'function' && confirm('Agent 将可以读写整台电脑上的文件。确认开启全盘访问？');
+      if (!approved) {
+        select.setOptions(_permissionModeOptions(), { value: 'ask' });
+        return;
+      }
+    }
     try {
       await window.cogseed.invoke('conversations.setPermissionMode', { cid: currentCid, permission_mode: mode });
     } catch (err) {
@@ -8561,22 +9113,26 @@ function _ensureCreateAgentInlineObserver() {
   _ensureConvCreateAgentInline();
 }
 
+// Welcome generation in flight, per cid. A history reload can re-enter
+// `_showImportedConversationWelcome` before the first call clears
+// `needs_welcome` (the clear happens when the commander reply is appended);
+// without this guard the welcome reply would be appended twice.
+const _welcomeInFlight = new Set();
+
 /**
- * 打开导入会话自动开始接续（真实消息流，v1.6 模板），分两步让界面不空白：
- *  1) 立即：系统替用户插入第一条「继续这项工作。先告诉我现在做到哪里…」并刷新
- *     ——刚进入会话就有内容。
- *  2) 动态：后台生成 commander 三段式回复（项目介绍 / 工作空间能力 / Action
- *     Plan，Action Plan 走 LLM 需要时间），期间显示轻量占位气泡，生成完刷新。
+ * 打开导入会话时生成接续欢迎（真实消息流）：
+ *  1) 校验 needs_welcome（后端不写入任何伪造的 user turn）；
+ *  2) 后台生成 commander 三段式回复，期间显示轻量占位气泡。
+ * 回复落盘时一并清除 needs_welcome（handoffWelcomeReply 是原子提交点）；
+ * 若中途失败，标记仍在，下次打开会重试，不会留下空会话。
  */
 async function _showImportedConversationWelcome(cid) {
   if (!window.cogseed?.invoke) return;
+  if (!cid || _welcomeInFlight.has(cid)) return;
+  _welcomeInFlight.add(cid);
   try {
     const result = await window.cogseed.invoke('chats.beginWelcome', { conversationId: cid });
     if (!result?.ok) return;
-    if (cid === currentCid) {
-      await loadConversationHistory(cid, { preserveScroll: false });
-    }
-    // 动态回复：后台生成 commander 三段式（不阻塞 UI），期间显示占位。
     if (cid !== currentCid) return;
     const placeholder = _appendWelcomeThinkingPlaceholder(cid);
     try {
@@ -8589,11 +9145,16 @@ async function _showImportedConversationWelcome(cid) {
     }
   } catch (err) {
     _convLog.error('welcome begin failed', { cid, error: err });
+  } finally {
+    _welcomeInFlight.delete(cid);
   }
 }
 
 /** 轻量占位气泡：commander 回复生成中（LLM 可能需要几秒），先告知用户在整理。 */
 function _appendWelcomeThinkingPlaceholder(cid) {
+  // #chat-history is shared by every conversation: never append a welcome
+  // placeholder for a conversation that is not on screen.
+  if (typeof currentCid !== 'undefined' && cid && cid !== currentCid) return null;
   const history = document.getElementById('chat-history');
   if (!history) return null;
   const el = document.createElement('div');
@@ -8802,6 +9363,9 @@ async function loadConversationHistory(cid, opts = {}) {
       rows: history.length,
     });
     await _evaluateAutoRecipient(cid);
+    if (typeof window.restoreTranscriptGlossaryConfirmations === 'function') {
+      void window.restoreTranscriptGlossaryConfirmations(cid);
+    }
 
     // Detect unanswered user message (e.g. after page refresh while server was processing).
     // Only show the "thinking…" bubble while the authoritative runtime still
@@ -8868,7 +9432,7 @@ async function loadConversationHistory(cid, opts = {}) {
       // Opening/reloading into an already-running plan still needs the
       // group event stream; runtime polling can recover placeholders, but
       // it cannot replay live text deltas.
-      _observeConversationRunFromPlanAction(cid, { attachExisting: true });
+      _observeConversationRunFromPlanAction(cid, { attachExisting: true, source: 'load_history_running' });
       _startRuntimeActorRecovery(cid);
       _updateConvSendUI(cid);
     } else if (isConvPending(cid)) {
@@ -8910,7 +9474,7 @@ async function loadConversationHistory(cid, opts = {}) {
         // Same recovery path for a detached pending state: reconnect to the
         // live group event stream so the bubble streams instead of waiting
         // for the final history reconcile.
-        _observeConversationRunFromPlanAction(cid, { attachExisting: true });
+        _observeConversationRunFromPlanAction(cid, { attachExisting: true, source: 'load_history_pending' });
         _startRuntimeActorRecovery(cid);
       }
       state.needsIndicator = false;
@@ -9498,6 +10062,15 @@ function _streamingRestoreStableMedia(nextRoot, stable) {
 
 function _setStreamingFinalHtml(finalEl, html) {
   if (!finalEl) return;
+  _replaceStreamingFinalHtml(finalEl, html);
+  // Every live paint (deltas, finalize, deferred math) lands here; cached
+  // resolutions re-apply synchronously, new file names resolve once per batch.
+  if (typeof window !== 'undefined' && typeof window.decorateChatPathCodes === 'function') {
+    void window.decorateChatPathCodes(finalEl);
+  }
+}
+
+function _replaceStreamingFinalHtml(finalEl, html) {
   if (
     typeof document === 'undefined'
     || !document.createElement
@@ -9941,7 +10514,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const coalescedProjectionCard = coalescedProjectionMatch
     ? { projectionId: coalescedProjectionMatch.projectionId, authorization: 'model_selected' }
     : null;
-  // 两卡互斥抑制已删（拍板项 #8）：投影与引用合并进同一张「本次使用的记忆」
+  // 两卡互斥抑制已删（拍板项 #8）：投影与带入回执合并进同一张状态卡
   // 卡，引用行不再因投影卡在场而被抑制。
   const projectionCardForBubble = _projectionReceiptForMessage(message)
     || message.recall_projection_card
@@ -10043,11 +10616,25 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const p3394Fallback = typeof headerActorId === 'string' && headerActorId.startsWith('p3394_')
     ? headerActorId.slice(7)
     : '';
+  // A2A 对端助理：名册还没到就先显示「对方助理」，同时补一次名册刷新让 chip 升级成
+  // 「X 的助理」——否则第一条回答会一直顶着通用的「智能体」。
+  const a2aPeer = typeof headerActorId === 'string' && headerActorId.startsWith('a2a_');
+  if (a2aPeer) {
+    // 注意：这里不能用下面才声明的 _a2aCid（会 TDZ 抛错，整条对端气泡渲染不出来）。
+    const peerCid = opts.cid || currentCid || '';
+    const peerRole = String(headerActorId).endsWith('_assistant') ? 'initiator' : 'receiver';
+    // An incoming actor cannot erase an observed outgoing direction. List metadata wins below.
+    if (peerCid && (peerRole === 'initiator' || !_a2aRoleCache.has(peerCid))) {
+      _a2aRoleCache.set(peerCid, peerRole);
+    }
+  }
+  const a2aFallback = a2aPeer ? t('a2a.peer_assistant_generic') : '';
+  if (a2aPeer && !resolvedActorLabel) _scheduleA2aMemberRefresh(opts.cid || currentCid);
   const headerName = role === 'user'
     ? ''
     : isSpaceBuilderCid
       ? t('chat.recipient_space_builder')
-      : resolvedActorLabel || fromLabel || p3394Fallback || t('chat.from_agent_unknown');
+      : resolvedActorLabel || fromLabel || a2aFallback || p3394Fallback || t('chat.from_agent_unknown');
   const avatarHtml = role === 'user' ? '' : _renderActorAvatarHtml(headerActorId);
   // Unified execution entry: the actual execution config persisted with the
   // message rides the header as a subtle meta chip — 发送前（composer 配置
@@ -10055,9 +10642,34 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const execMetaHtml = role !== 'user' && message.exec_meta && _formatExecMetaText(message.exec_meta)
     ? `<span class="chat-msg-exec-meta">${escapeHtml(_formatExecMetaText(message.exec_meta))}</span>`
     : '';
+  const _a2aCid = opts.cid || currentCid || '';
+  const _a2aRole = _a2aRoleFor(_a2aCid);
+  // FR-27: peer and local assistant replies are relayed. Own user bubbles are
+  // shared when this thread has an outgoing direction, including bidirectional
+  // threads; receiver-only local instructions remain private.
+  //
+  // T1.3: a message that carries its own routing fact (`a2a`) decides for itself.
+  // The session-level heuristic below only serves legacy rows written before the
+  // field existed — for those we keep the coarse badge but never invent a
+  // recipient, because the exchange marker says nothing about this message.
+  const _a2aFact = message && message.a2a && typeof message.a2a === 'object' ? message.a2a : null;
+  const _a2aCross = _a2aFact
+    ? _a2aFact.visibility === 'cross'
+    : ((a2aPeer)
+      || (role === 'user' && _a2aRole === 'initiator')
+      || (role !== 'user' && !!_a2aRole));
+  const a2aMarks = typeof window !== 'undefined' ? window.a2aMessageMarks : null;
+  const a2aRecipientHtml = _a2aCross && _a2aFact && _a2aFact.recipient_name
+    && a2aMarks && typeof a2aMarks.recipientLabel === 'function'
+    ? `<span class="chat-msg-a2a-to">${a2aMarks.recipientLabel(_a2aFact.recipient_name)}</span>`
+    : '';
+  const a2aVisHtml = _a2aCross && a2aMarks && typeof a2aMarks.visBadge === 'function'
+    ? `<span class="chat-msg-a2a-vis">${a2aMarks.visBadge()}</span>`
+    : '';
+
   const headerHtml = role === 'user'
-    ? `<div class="chat-msg-header chat-msg-header-user"><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`
-    : `<div class="chat-msg-header">${avatarHtml}<span class="chat-msg-from${_isActorDetailTarget(headerActorId) ? ' is-agent-link' : ''}"${_actorLinkAttrs(headerActorId)}>${escapeHtml(headerName)}</span>${execMetaHtml}<span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`;
+    ? `<div class="chat-msg-header chat-msg-header-user"><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span>${a2aRecipientHtml}${a2aVisHtml}</div>`
+    : `<div class="chat-msg-header">${avatarHtml}<span class="chat-msg-from${_isActorDetailTarget(headerActorId) ? ' is-agent-link' : ''}"${_actorLinkAttrs(headerActorId)}>${escapeHtml(headerName)}</span>${execMetaHtml}<span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span>${a2aRecipientHtml}${a2aVisHtml}</div>`;
   const planAnnHtml = message._plan_announcement
     ? `<div class="chat-plan-announce">${_uiIconHtml('clipboard-list', 'ui-icon chat-plan-announce-icon')}<span>${escapeHtml(t('chat.plan_announce'))}</span></div>` : '';
   // Deliverables mount last inside the bubble as a footer strip. The separate
@@ -10127,6 +10739,12 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const md = msgDiv.querySelector('.markdown-body');
     if (md) typesetMath(md);
   }
+  if (!isHtmlSnippet && role !== 'user' && typeof window.decorateChatPathCodes === 'function') {
+    void window.decorateChatPathCodes(msgDiv.querySelector('.markdown-body'), {
+      fresh: true,
+      cid: opts.cid || currentCid || '',
+    });
+  }
   if (attachmentsHtml) _hydrateMessageAttachmentThumbs(msgDiv, attachmentCid);
   if (referencesHtml) _hydrateMessageReferenceFiles(msgDiv);
   _hydrateActorHeaderLinks(msgDiv);
@@ -10177,7 +10795,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     if (bubble) _mountAssetApprovalCard(bubble, message.asset_change_approval_card);
   }
 
-  // 「本次使用的记忆」合并卡补全（拍板项 #8，2026-09-28）：引用卡与投影卡
+  // 资产检索与带入状态卡补全（拍板项 #8，2026-09-28）：带入回执与投影卡
   // 合并为一张——有引用数据时同步骨架已随气泡渲染（recallCitationsHtml），
   // 这里把投影数据（带入/省略/状态/撤销口）补进同一张卡；没有骨架时（仅投影
   // 无引用）创建空 host 交给合并卡填充。其它授权维持"不挂卡"现状（2026-08-17
@@ -10249,6 +10867,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     // （摘要行，点开看全程），仅空正文异常回合 expanded:true 展开。
     if (typeof window.chatStreamRenderPersisted === 'function'
         && window.chatStreamRenderPersisted(currentCid, msgDiv, message.process, {
+          finalText: bodyText,
           actorName: String(message.from || message._from || message.actor || ''),
           turnId: message.turn_id || (message._msg_id ? `m:${message._msg_id}` : undefined),
           expanded,
@@ -10770,12 +11389,29 @@ function _mountWakeRequestCards(host, message, opts = {}) {
   try { _updateChatInputReserve(); } catch (_) {}
 }
 
+async function _wakeRequestStillPending(cid, requestId) {
+  // The card is not proof the request exists: `wake_requests` is frozen onto the
+  // message record at creation, so a card outlives a request the backend no longer
+  // has (another instance rewrote wake-state.json, or the request expired).
+  // Unknown answers keep the card — never hide an approval that may still be live.
+  try {
+    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/wake-requests`);
+    const data = await res.json();
+    if (!data?.ok || !Array.isArray(data.requests)) return true;
+    return data.requests.some((candidate) => String(candidate?.id || '') === String(requestId)
+      && String(candidate?.status || 'pending') === 'pending');
+  } catch (err) {
+    _convLog.warn('wake request refresh failed', (err && err.message) || String(err));
+    return true;
+  }
+}
+
 async function _resolveWakeRequest(card, request, cid, decision) {
   if (!card || card.dataset.busy === '1') return;
   card.dataset.busy = '1';
   for (const button of card.querySelectorAll('button')) button.disabled = true;
   const observer = decision === 'approve'
-    ? _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true })
+    ? _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true, source: 'wake_request_approve' })
     : null;
   try {
     const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/wake-requests/${encodeURIComponent(request.id)}/decision`, {
@@ -10785,14 +11421,39 @@ async function _resolveWakeRequest(card, request, cid, decision) {
     });
     const data = await res.json();
     if (!data || data.ok === false) throw new Error(data?.error || 'wake decision failed');
-    card.remove();
-    _pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }));
+    // 需求口径（2026-10-14 需求方）：批准之后这张卡就可以退场——授权已经生效，
+    // 「点击生效了」的回执由工人气泡上的运行指示给出（过程徽章常显旋转/计时），
+    // 留一张「已启动」的卡反而挡住输入区。拒绝没有别的信号能说明，保留定格回执
+    // （已拒绝），否则用户点完就再无痕迹。
+    const settled = data.request && typeof data.request === 'object'
+      ? data.request
+      : { ...request, status: decision === 'approve' ? 'approved' : 'rejected' };
+    if (decision === 'approve') {
+      card.remove();
+      _pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }));
+    } else {
+      card.dataset.busy = '';
+      _renderWakeRequestCard(card, settled, cid);
+    }
   } catch (err) {
     observer?.abort?.();
+    _convLog.warn('wake decision failed', (err && err.message) || String(err));
+    // Say what actually failed. A generic "processing failed" left the tester with
+    // no way to tell a stale card from a real backend error (2026-10-21).
+    const reason = String((err && err.message) || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!(await _wakeRequestStillPending(cid, request.id))) {
+      // There is no such request any more: the card is a stale snapshot. Retire it
+      // and let the live pending list re-align, instead of letting the user click a
+      // permanently failing approval.
+      card.remove();
+      _pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }));
+      try { await uiAlert(reason ? t('p3394.wake.stale_reason', { reason }) : t('p3394.wake.stale')); } catch (_) {}
+      void _hydratePendingWakeRequests(cid);
+      return;
+    }
     card.dataset.busy = '';
     for (const button of card.querySelectorAll('button')) button.disabled = false;
-    _convLog.warn('wake decision failed', (err && err.message) || String(err));
-    try { await uiAlert(t('p3394.wake.failed')); } catch (_) {}
+    try { await uiAlert(reason ? t('p3394.wake.failed_reason', { reason }) : t('p3394.wake.failed')); } catch (_) {}
   }
 }
 
@@ -11343,6 +12004,9 @@ function _addQuote(cid, payload) {
     referenceCount: Math.max(0, Number(payload.referenceCount) || payload.references?.length || 0),
     produced: Array.isArray(payload.produced) ? payload.produced.slice() : [],
   }));
+  if (typeof _markA2AComposerChanged === 'function') {
+    _markA2AComposerChanged(cid === DRAFT_CID ? 'new-chat' : 'conversation', cid);
+  }
   if (typeof _persistQuoteDraft === 'function') _persistQuoteDraft(cid);
   _renderQuotePreview(cid);
   return true;
@@ -11355,6 +12019,9 @@ function _removeQuoteAt(cid, index) {
   const next = quotes.filter((_, quoteIndex) => quoteIndex !== index);
   if (next.length) _quotesByCid.set(cid, next);
   else _quotesByCid.delete(cid);
+  if (typeof _markA2AComposerChanged === 'function') {
+    _markA2AComposerChanged(cid === DRAFT_CID ? 'new-chat' : 'conversation', cid);
+  }
   if (typeof _persistQuoteDraft === 'function') _persistQuoteDraft(cid);
   _renderQuotePreview(cid);
 }
@@ -11362,6 +12029,9 @@ function _getQuotes(cid) { return cid ? _quotesByCid.get(cid) || [] : []; }
 function _clearQuotes(cid) {
   if (!cid) return;
   _quotesByCid.delete(cid);
+  if (typeof _markA2AComposerChanged === 'function') {
+    _markA2AComposerChanged(cid === DRAFT_CID ? 'new-chat' : 'conversation', cid);
+  }
   if (typeof _persistQuoteDraft === 'function') _persistQuoteDraft(cid);
   _renderQuotePreview(cid);
 }
@@ -11608,6 +12278,7 @@ function _removeRenderedHistoryFrom(msgDiv) {
   for (const key of Array.from(_groupPlaceholders.keys())) {
     if (key.startsWith(`${currentCid}:`)) _groupPlaceholders.delete(key);
   }
+  _forgetChatStreamAnchors(currentCid);
 }
 
 async function _confirmUserMessageEdit() {
@@ -12437,7 +13108,7 @@ function _hasTaskIntent(text, target) {
   return body.replace(/[\s\p{P}\p{S}]+/gu, '').length > 0;
 }
 
-/** 首页提交在途标志：首个 await 之前生效，函数退出（含失败）时释放。 */
+/** 首页本地提交在途标志：A2A 候选发送由自身状态合并，不占用该锁。 */
 let _newChatSubmitInFlight = false;
 
 async function handleNewChatSubmit() {
@@ -12454,17 +13125,27 @@ async function handleNewChatSubmit() {
   // 创建会话并调用模型。引用与有效附件按原有规则放行。
   const intentAttachments = (typeof _chatAttachList === 'function' ? _chatAttachList(DRAFT_CID) : [])
     .filter((item) => item.status !== 'error');
-  if (!quotes.length && !intentAttachments.length && !_hasTaskIntent(raw, 'new-chat')) {
+  if (!quotes.length && !intentAttachments.length && !_hasTaskIntent(input.value, 'new-chat')) {
     await uiAlert(t('run_center.create_task_required'));
     return;
   }
   // 首页提交保护（FR-016 / SC-004；验收报告 MA-04）：连按 Enter 或双击发送时，
-  // 第二次进入必须在**首个 await 之前**被挡下——模型检查与会话创建都在 await 之后，
-  // 只靠禁用按钮太晚，两次调用会各自创建一个会话、拿到不同 cid，后端幂等无法补救。
-  // 失败在 finally 里恢复：改完草稿可以立即重试。
-  if (_newChatSubmitInFlight) return;
-  _newChatSubmitInFlight = true;
+  // 只有首个调用能进入模型检查与会话创建——两次调用会各自创建一个会话、拿到不同
+  // cid，后端幂等无法补救。A2A 发送必须先进入自己的状态机（见下），所以普通首页
+  // 锁在 A2A 路由之后才取；失败在 finally 里恢复，改完草稿可以立即重试。
+  let ownsLocalSubmitLock = false;
   try {
+    // A2A 自身按精确发送意图合并。先进入它的状态机，才能让恢复了相同文本的
+    // 新调用更新完成上下文；非 A2A 消息仍由下面的普通首页锁串行化。
+    const a2aSend = typeof _tryA2AContactSend === 'function'
+      ? await _tryA2AContactSend('new-chat', DRAFT_CID, raw)
+      : null;
+    if (a2aSend && a2aSend.handled) return;
+    // 首页本地提交保护：连按 Enter 或双击发送时，只有首个调用能进入
+    // 模型检查与会话创建。失败在 finally 里恢复，改完草稿可以立即重试。
+    if (_newChatSubmitInFlight) return;
+    _newChatSubmitInFlight = true;
+    ownsLocalSubmitLock = true;
     await _submitNewChatIntent(input, raw, quotes);
   } catch (err) {
     // 主体内部的**可预期**失败（模型检查、会话创建、附件）已经 uiAlert 后 return；
@@ -12477,14 +13158,23 @@ async function handleNewChatSubmit() {
       }
     } catch (_) { /* 提示失败不再改变提交锁语义 */ }
   } finally {
-    _newChatSubmitInFlight = false;
+    if (ownsLocalSubmitLock) _newChatSubmitInFlight = false;
   }
 }
 
 /** 首页提交主体（模型检查 → 会话创建 → 首条消息派发）。
  *  只由 handleNewChatSubmit 在提交保护内调用；锁语义见那里。 */
 async function _submitNewChatIntent(input, raw, quotes) {
-  if (!(await _ensureModelOrCliFallback(DRAFT_CID, 'new-chat', raw))) return;
+  const draftText = String(input.value || '');
+  if (!(await _ensureModelOrCliFallback(DRAFT_CID, 'new-chat', draftText))) return;
+
+  // Resolve identity against the full draft before text transforms or clearing
+  // can invalidate whitespace-bearing atoms. Outgoing body still uses raw.
+  const newChatMemberPayload = _composerMemberPayload('new-chat', draftText);
+  const newChatMentionSnapshot = window.composerMembers
+    && typeof window.composerMembers.mentionSidecarSnapshot === 'function'
+    ? window.composerMembers.mentionSidecarSnapshot('new-chat')
+    : [];
 
   const references = _referenceSnapshotsForQuotes(quotes);
   // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头，换成
@@ -12553,6 +13243,12 @@ async function _submitNewChatIntent(input, raw, quotes) {
     if (!data.ok) throw new Error(data.error || t('chat.create_conv_failed'));
     const conv = data.conversation;
     convId = conv.conversation_id;
+    // The remembered space was consumed by this conversation. Keep the
+    // documented "remembers it for the NEXT new chat" semantics instead of
+    // silently binding every later normal conversation to that space.
+    if (newChatSpaceId && typeof window.clearNewChatSpaceId === 'function') {
+      try { window.clearNewChatSpaceId(); } catch (_) { /* best-effort */ }
+    }
     // Optimistic title from the user-visible text (without recipient routing).
     // Use the shared `_autoTitle` so this matches backend `autoTitle` —
     // otherwise the optimistic + backend-refreshed titles disagree and
@@ -12648,9 +13344,10 @@ async function _submitNewChatIntent(input, raw, quotes) {
   const newChatExecConfig = _executionConfigForSend('conversation', recipientSnapshot);
   // 幂等键同样覆盖落地页首条消息（EC-07）：失败重发复用同一 id。
   const newChatSubmitRequestId = _submitRequestIdFor(convId, raw);
-  // 首页路径同样携带成员/点名/按来源配置载荷（复盘 2026-09-20：
+  // 首页与会话路径使用相同的成员、点名和按来源配置载荷（复盘 2026-09-20：
   // 之前只有会话路径接了这个，首页手打 @ 的提交把结构化逻辑全绕过了）。
-  const newChatMemberPayload = _composerMemberPayload('conversation', content);
+  // 载荷取自转移前的 new-chat 快照（成员/按来源配置随后随首条消息转入 convId），
+  // 这也是会话路径 `_composerMemberPayload('conversation', draftText)` 的同一口径。
   const newChatHasMembers = Array.isArray(newChatMemberPayload.member_agent_ids)
     && newChatMemberPayload.member_agent_ids.length > 0;
   const newChatHasMentions = Array.isArray(newChatMemberPayload.mention_agent_ids)
@@ -12668,11 +13365,8 @@ async function _submitNewChatIntent(input, raw, quotes) {
     submit_request_id: newChatSubmitRequestId,
   };
   _holdPendingSubmitDraft(convId, newChatSubmitRequestId, {
-    text: raw,
-    mentions: window.composerMembers
-      && typeof window.composerMembers.mentionSidecarSnapshot === 'function'
-      ? window.composerMembers.mentionSidecarSnapshot('conversation')
-      : [],
+    text: draftText,
+    mentions: newChatMentionSnapshot,
     quotes,
     attachments: draftItems,
     composer: window.composerMembers
@@ -12695,16 +13389,29 @@ async function _submitNewChatIntent(input, raw, quotes) {
 }
 
 
-/** 交接意图关键词：命中即视为「继续这项工作/交接」类请求。 */
-const _HANDOFF_INTENT_RE =
-  /继续这项工作|现在做到哪里|做到哪里了|交接|继续工作|接着做|下一步准备怎么做|哪些约束不能丢|进度.*继续|继续.*进度|工作交接|汇报进度/;
+/** 纯交接短句：整句就是一个「继续/进度/交接」意图，没有附加任务内容。
+ *  只有这种消息才允许走模板交接回复；任何带任务内容的句子（例如
+ *  「继续这项工作，把这段工作内容整理成可汇报版本」）都必须进入真实模型
+ *  回合，否则用户当前请求会被模板回复吞掉。 */
+function _isPureHandoffIntent(text) {
+  const compact = String(text || '')
+    .replace(/[\s。！？!?~～、，,.…:：;；"'“”‘’（）()\-]/g, '');
+  if (!compact) return false;
+  return new Set([
+    '继续', '继续工作', '继续这项工作', '继续执行', '接着做', '继续做', '接着',
+    '交接', '工作交接', '进度', '进度如何', '进度怎么样了', '汇报进度',
+    '现在做到哪里', '现在做到哪里了', '做到哪里了',
+    '下一步准备怎么做', '哪些约束不能丢',
+  ]).has(compact);
+}
 
-/** 模板交接回复：导入会话 + 交接意图 → 用真实数据直出三部分模板回复，
- *  不调 CLI / LLM，毫秒级。命中并成功返回 true（已处理，发送流程跳过）。 */
+/** 模板交接回复：导入会话 + 纯交接短句 → 用真实数据直出三部分模板回复。
+ *  命中并成功返回 true（已处理，发送流程跳过）。后端还会校验 imported，
+ *  普通会话返回 not_imported，此时照常进入真实发送。 */
 async function _tryTemplateHandoffReply(cid, raw) {
   if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return false;
   const text = String(raw || '').trim();
-  if (!_HANDOFF_INTENT_RE.test(text)) return false;
+  if (!_isPureHandoffIntent(text)) return false;
   try {
     const res = await window.cogseed.invoke('chats.handoffWelcomeReply', { conversationId: cid, text });
     if (!res || !res.ok) return false;
@@ -12813,6 +13520,10 @@ function _submitRequestIdFor(cid, text) {
   return _newSubmitRequestId(cid, text);
 }
 
+function _mintSubmitRequestId() {
+  return `req_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function _newSubmitRequestId(cid, text) {
   const key = String(cid || '');
   const id = `req_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
@@ -12875,10 +13586,408 @@ function _composerMemberPayload(target, text) {
   return out;
 }
 
+/**
+ * A2A 发送侧（AC-04）：这条消息是不是「只点名了联系人」。
+ *
+ * 返回 null＝不是发给联系人的消息，走原来的本地流程；返回 { handled } 时调用方
+ * 直接结束提交（已经发出去了，或者被守卫拦下了并给了提示）。
+ *
+ * 判断只看结构化信息：点名 id 是否命中联系人列表、有没有附件、有没有同时点名本
+ * 方 Agent——不做名字正则匹配，避免把普通文字当成收件人。
+ */
+/** Find an unresolved address, retaining all longest-name identities. Existing
+ * atoms are authoritative; plain local names keep their existing local route. */
+function _contactMentionFromText(raw, contacts, target, structuredTokens = []) {
+  const cm = window.composerMembers;
+  const localRows = cm && typeof cm.memberRows === 'function'
+    ? cm.memberRows(target, 'mentions').filter((row) => row.kind !== 'contact' && !row.unavailable)
+    : [];
+  const localTable = cm && typeof cm.mentionTableFrom === 'function'
+    ? cm.mentionTableFrom(localRows.filter((row) => row.kind === 'agent')
+      .map((row) => ({ agent_id: row.key, name: row.name })))
+    : [];
+  const entries = localTable.concat((contacts || [])
+    .filter((row) => row && row.user_id && row.name)
+    .map((row) => ({ id: String(row.user_id), name: String(row.name), kind: 'contact', unavailable: row.online === false })));
+  const text = String(raw || '');
+  const word = /[A-Za-z0-9_\u4e00-\u9fff-]/;
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== '@' || (start > 0 && word.test(text[start - 1]))) continue;
+    if (structuredTokens.some((token) => start >= token.start && start < token.end)) continue;
+    let longest = 0;
+    let candidates = [];
+    for (const entry of entries) {
+      for (const name of [entry.name].concat(entry.aliases || [])) {
+        if (!name || name.length < longest) continue;
+        if (text.slice(start + 1, start + 1 + name.length).toLowerCase() !== name.toLowerCase()) continue;
+        const end = start + 1 + name.length;
+        if (text[end] && word.test(text[end])) continue;
+        if (structuredTokens.some((token) => token.start < end && token.end > start)) continue;
+        if (name.length > longest) { longest = name.length; candidates = []; }
+        const kind = entry.kind || 'commander';
+        const key = `${kind}:${entry.id}`;
+        if (!candidates.some((candidate) => candidate.key === key)) candidates.push({ ...entry, kind, key });
+      }
+    }
+    if (candidates.some((candidate) => candidate.kind === 'contact')) {
+      return { start, end: start + 1 + longest, name: text.slice(start + 1, start + 1 + longest), candidates };
+    }
+    start += longest;
+  }
+  return null;
+}
+
+let _a2aQuestionSendState = null;
+let _a2aComposerFreshnessState = null;
+let _a2aRecipientConfirmation = null;
+
+async function _confirmA2ARecipient(target, cid, mention) {
+  if (_a2aRecipientConfirmation) return { handled: true };
+  const cm = window.composerMembers;
+  if (!cm || typeof cm.setMentionSidecar !== 'function' || typeof uiFormModal !== 'function') {
+    uiToast(t('composer.a2a.confirm_recipient'), { variant: 'warning' });
+    return { handled: true };
+  }
+  const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
+  const input = document.getElementById(inputId);
+  if (!input) return { handled: true };
+  const value = String(input.value || '');
+  const view = String(currentView || '');
+  const activeCid = String(currentCid || '');
+  const freshness = _captureA2AComposerFreshness(target, cid);
+  const sidecar = JSON.stringify(cm.mentionSidecarSnapshot(target));
+  const fresh = () => _isA2AComposerFresh(freshness)
+    && document.getElementById(inputId) === input
+    && String(input.value || '') === value
+    && String(currentView || '') === view
+    && String(currentCid || '') === activeCid
+    && JSON.stringify(cm.mentionSidecarSnapshot(target)) === sidecar;
+  let selected = '';
+  const labels = () => ({
+    title: t('composer.a2a.recipient_title'),
+    closeLabel: t('common.cancel'),
+    cancelLabel: t('composer.a2a.recipient_edit'),
+    submitLabel: t('composer.a2a.recipient_confirm'),
+    busyLabel: t('composer.a2a.recipient_confirm'),
+    bodyHtml: uiForm({
+      ariaLabel: t('composer.a2a.recipient_title'),
+      fields: [{ html: uiField({
+        id: 'a2a-recipient-choice', label: t('composer.a2a.recipient_target'),
+        hint: t('composer.a2a.recipient_hint'), required: true,
+        control: {
+          kind: 'select', value: selected, placeholder: t('composer.a2a.recipient_placeholder'),
+          options: mention.candidates.map((candidate) => ({
+            value: candidate.key,
+            label: `${candidate.name} · ${t(candidate.kind === 'contact' ? 'composer.a2a.recipient_external' : 'composer.a2a.recipient_local')}`,
+            hint: candidate.id + (candidate.unavailable ? ` · ${t('composer.members.contact_offline')}` : ''),
+          })),
+        },
+      }) }],
+    }),
+  });
+  const modal = uiFormModal({
+    ...labels(), initialFocus: '[data-ui-modal-close]',
+    onSubmit: () => {
+      if (!fresh()) { modal.close(null, 'stale'); return; }
+      const candidate = mention.candidates.find((item) => item.key === selected && !item.unavailable);
+      if (!candidate) { modal.setFeedback(t('composer.a2a.recipient_required')); return; }
+      modal.close(candidate.key, 'confirmed');
+    },
+  });
+  _a2aRecipientConfirmation = modal;
+  let selects = [];
+  const releaseSelects = () => { selects.forEach((select) => select.destroy()); selects = []; };
+  const hydrate = () => {
+    selects = hydrateUiFormSelects(modal.dialog, {
+      'a2a-recipient-choice': (next) => { selected = next; modal.setFeedback(''); },
+    }) || [];
+  };
+  const relocalize = () => { releaseSelects(); modal.update(labels()); hydrate(); };
+  window.addEventListener('i18n-change', relocalize);
+  try {
+    hydrate();
+    const result = await modal;
+    if (!result.value || !fresh()) return { handled: true };
+    const latest = _contactMentionFromText(value, window.getComposerContactCandidates() || [], target,
+      cm.mentionTokensForTarget(target, value));
+    const candidate = latest && latest.start === mention.start && latest.end === mention.end
+      && latest.candidates.find((item) => item.key === result.value && !item.unavailable);
+    if (!candidate) return { handled: true };
+    const end = mention.end + (/^\s*/.exec(value.slice(mention.end)) || [''])[0].length;
+    cm.setMentionSidecar(target, cm.mentionSidecarSnapshot(target).concat({
+      id: candidate.id, kind: candidate.kind, name: mention.name, start: mention.start, end,
+      text: value.slice(mention.start, end),
+    }));
+    cm.seedDraftTracking(target, value);
+    // Confirmation changes the atom identity without changing its visible text.
+    if (typeof syncChatRichComposerFromTextarea === 'function') syncChatRichComposerFromTextarea(inputId, { force: true });
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    uiToast(t('composer.a2a.recipient_ready'), { i18nKey: 'composer.a2a.recipient_ready' });
+    return { handled: true };
+  } finally {
+    window.removeEventListener('i18n-change', relocalize);
+    releaseSelects();
+    modal.close(null, 'cleanup');
+    if (_a2aRecipientConfirmation === modal) _a2aRecipientConfirmation = null;
+    _releaseA2AComposerFreshness(freshness);
+  }
+}
+
+function _getA2AQuestionSendState() {
+  if (_a2aQuestionSendState) return _a2aQuestionSendState;
+  const guards = typeof window !== 'undefined' ? window.a2aComposeGuards : null;
+  if (!guards || typeof guards.createQuestionSendState !== 'function') return null;
+  _a2aQuestionSendState = guards.createQuestionSendState({
+    maxPreparedPerComposer: 16,
+    maxPreparedRecords: 64,
+  });
+  return _a2aQuestionSendState;
+}
+
+function _getA2AComposerFreshnessState() {
+  if (_a2aComposerFreshnessState) return _a2aComposerFreshnessState;
+  const guards = typeof window !== 'undefined' ? window.a2aComposeGuards : null;
+  if (!guards || typeof guards.createComposerFreshnessState !== 'function') return null;
+  _a2aComposerFreshnessState = guards.createComposerFreshnessState({
+    maxRevisionIdentities: 64,
+  });
+  return _a2aComposerFreshnessState;
+}
+
+function _markA2AComposerChanged(target, cid) {
+  return _a2aComposerFreshnessState
+    ? _a2aComposerFreshnessState.bumpComposer(target, cid)
+    : 0;
+}
+
+function _markA2ASurfaceChanged() {
+  return _a2aComposerFreshnessState ? _a2aComposerFreshnessState.bumpSurface() : 0;
+}
+
+function _captureA2AComposerFreshness(target, cid) {
+  const state = _getA2AComposerFreshnessState();
+  return state ? state.capture(target, cid) : null;
+}
+
+function _isA2AComposerFresh(token) {
+  return !!(_a2aComposerFreshnessState && _a2aComposerFreshnessState.matches(token));
+}
+
+function _releaseA2AComposerFreshness(token) {
+  return !!(_a2aComposerFreshnessState && _a2aComposerFreshnessState.release(token));
+}
+
+async function _a2aPreparedRequest(target, cid, contactUserId, text) {
+  const state = _getA2AQuestionSendState();
+  if (!state) return null;
+  return state.prepare(
+    { target, cid, contactUserId, text },
+    () => window.cogseed.invoke('a2a.conversation.prepare', { contactUserId }),
+    () => { _convLog.warn('a2a conversation prepare failed'); },
+  );
+}
+
+function _clearA2APreparedRequest(target, cid, contactUserId, text, record) {
+  const state = _getA2AQuestionSendState();
+  return state ? state.clearPrepared({ target, cid, contactUserId, text }, record) : false;
+}
+
+async function _tryA2AContactSend(target, cid, raw) {
+  const threadConversation = target === 'conversation' && cid ? _conversationById(cid) : null;
+  const threadMarker = threadConversation && threadConversation.a2a;
+  const cm = window.composerMembers;
+  const contacts = typeof window.getComposerContactCandidates === 'function'
+    ? (window.getComposerContactCandidates() || [])
+    : [];
+  const input = document.getElementById(target === 'new-chat' ? 'new-chat-input' : 'chat-input');
+  const draftText = input && String(input.value || '').trim() === String(raw || '').trim()
+    ? String(input.value || '') : String(raw || '');
+  const mentionIds = cm && typeof cm.mentionIdsForTarget === 'function'
+    ? (cm.mentionIdsForTarget(target, draftText) || [])
+    : [];
+  const contactIds = contacts.map((row) => String((row && row.user_id) || '')).filter(Boolean);
+  const structuredTokens = cm && typeof cm.mentionTokensForTarget === 'function'
+    ? cm.mentionTokensForTarget(target, draftText) : [];
+  const tokenKinds = new Map(structuredTokens.map((token) => [String(token.id), token.kind]));
+  // D1: outbound is authorised only by a structured token in the *current* draft.
+  // The session marker, a previous message, the leftover recipient chip and a
+  // typed "@DisplayName" all used to authorise a send here; each of them sends a
+  // message the user never addressed to anyone.
+  // Candidate availability cannot change an already-bound external identity.
+  // The peer marker identifies legacy atoms only; it never authorizes a send.
+  const structuredContacts = mentionIds.map(String).filter((id) => tokenKinds.get(id) === 'contact'
+    || (!tokenKinds.get(id) && (contactIds.includes(id) || id === String(threadMarker?.peer_user_id || ''))));
+  const localMentions = mentionIds.filter((id) => !structuredContacts.includes(String(id)));
+  const typedContact = _contactMentionFromText(draftText, contacts, target, structuredTokens);
+  if (typedContact) return _confirmA2ARecipient(target, cid, typedContact);
+
+  if (threadMarker && threadMarker.state === 'ended' && structuredContacts.length) {
+    // A finished exchange forbids further outbound asks only. Ordinary local
+    // discussion still follows the normal conversation-validity rules.
+    const key = 'composer.a2a.send_failed_not_contact';
+    let message = typeof t === 'function' ? t(key) : key;
+    if (!message || message === key) message = '已不是联系人，无法继续发送';
+    if (typeof uiAlert === 'function') await uiAlert(message);
+    return { handled: true };
+  }
+
+  const toastBlocked = (key, fallback) => {
+    const text = typeof t === 'function' ? t(key) : key;
+    if (typeof uiToast === 'function') uiToast(text && text !== key ? text : fallback, { variant: 'warning' });
+    return { handled: true };
+  };
+  const localIds = new Set(['commander']);
+  if (typeof window.getComposerAgentList === 'function') {
+    for (const agent of window.getComposerAgentList() || []) {
+      if (agent && agent.agent_id) localIds.add(String(agent.agent_id));
+    }
+  }
+  if (cm && typeof cm.getMembers === 'function') {
+    for (const member of cm.getMembers(target)) {
+      if (member.kind === 'agent') localIds.add(String(member.id));
+    }
+  }
+  const unresolvedIdentity = structuredTokens.some((token) => token.id && !token.kind
+    && !structuredContacts.includes(String(token.id)) && !localIds.has(String(token.id)));
+  if (unresolvedIdentity || structuredContacts.some((id) => !contactIds.includes(id))) {
+    return toastBlocked('composer.a2a.recipient_unavailable', '接收目标当前不可用，请重新选择后发送');
+  }
+  if (!structuredContacts.length) return null;
+  const attachments = (typeof _chatAttachList === 'function' ? _chatAttachList(target === 'new-chat' ? DRAFT_CID : cid) : [])
+    .filter((item) => item.status !== 'error');
+  if (attachments.length) return toastBlocked('composer.a2a.blocked_attachments', 'A2A 对话暂不支持附件');
+  if (localMentions.length) {
+    return toastBlocked('composer.a2a.blocked_mixed_recipients', '发给对方的消息不能同时发给本方 Agent');
+  }
+  if (structuredContacts.length > 1) {
+    return toastBlocked('composer.a2a.blocked_many_contacts', '一次只能问一个联系人，请只保留一个收件人');
+  }
+
+  // Strip the mention tokens: the peer should read the question, not our @address.
+  let text = draftText;
+  if (typeof cm.mentionTokensForTarget === 'function') {
+    for (const token of cm.mentionTokensForTarget(target, text).slice().reverse()) {
+      text = text.slice(0, token.start) + text.slice(token.end);
+    }
+  }
+  text = text.trim().replace(/[ \t]{2,}/g, ' ');
+  if (!text) return toastBlocked('composer.a2a.question_required', '请填写要问对方的问题；仅点名或引用不会发送');
+
+  const contactId = String(structuredContacts[0]);
+  const guards = window.a2aComposeGuards;
+  const sendState = _getA2AQuestionSendState();
+  const freshnessState = _getA2AComposerFreshnessState();
+  if (!guards || typeof guards.questionRoute !== 'function' || !sendState || !freshnessState) {
+    _convLog.error('a2a compose guards unavailable');
+    const message = typeof t === 'function'
+      ? t('composer.a2a.send_failed', '没能发给对方，请稍后重试')
+      : '没能发给对方，请稍后重试';
+    if (typeof uiAlert === 'function') await uiAlert(message);
+    return { handled: true };
+  }
+  const sendIdentity = { target, cid, contactUserId: contactId, text };
+  const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
+  const completionContext = {
+    inputId,
+    submittedInput: document.getElementById(inputId),
+    submittedView: typeof currentView === 'undefined' ? '' : String(currentView || ''),
+    submittedCid: typeof currentCid === 'undefined' ? '' : String(currentCid || ''),
+    submittedFreshness: _captureA2AComposerFreshness(target, cid),
+    clearedFreshness: null,
+    composerMembers: cm,
+  };
+  completionContext.submittedValue = completionContext.submittedInput
+    ? String(completionContext.submittedInput.value || '')
+    : null;
+  const releaseCompletionContext = (context) => {
+    if (!context) return;
+    _releaseA2AComposerFreshness(context.submittedFreshness);
+    _releaseA2AComposerFreshness(context.clearedFreshness);
+    context.submittedFreshness = null;
+    context.clearedFreshness = null;
+  };
+  const isThreadPeer = !!threadMarker && String(threadMarker.peer_user_id || '') === contactId;
+  return sendState.runSend(sendIdentity, async (claimLatestContext) => {
+    const preparedRecord = await _a2aPreparedRequest(target, cid, contactId, text);
+    if (!preparedRecord) {
+      const message = typeof t === 'function'
+        ? t('composer.a2a.send_failed', '没能发给对方，请稍后重试')
+        : '没能发给对方，请稍后重试';
+      if (typeof uiAlert === 'function') await uiAlert(message);
+      return { handled: true };
+    }
+    const route = guards.questionRoute({
+      contactUserId: contactId,
+      // "Continue" is chosen by the structured token matching this thread's peer,
+      // never by the thread merely existing.
+      threadConversationId: isThreadPeer ? cid : '',
+      requestId: preparedRecord.requestId,
+    });
+    let result = null;
+    try {
+      result = await window.cogseed.invoke('a2a.question.send', { ...route, text });
+    } catch (err) {
+      _convLog.warn('a2a question send failed', err);
+    }
+    if (!result || !result.sent) {
+      const reason = (result && result.error) || 'delivery_failed';
+      const key = `composer.a2a.send_failed_${reason}`;
+      let message = typeof t === 'function' ? t(key) : key;
+      if (!message || message === key) message = t('composer.a2a.send_failed', '没能发给对方，请稍后重试');
+      if (typeof uiAlert === 'function') await uiAlert(message);
+      return { handled: true };
+    }
+
+    _clearA2APreparedRequest(target, cid, contactId, text, preparedRecord);
+    const context = typeof claimLatestContext === 'function' ? claimLatestContext() : null;
+    if (!context) return { handled: true };
+    const expectedView = target === 'new-chat' ? 'new-chat' : 'conversation';
+    const submittedSurfaceMatches = (expectedValue, freshness = context.submittedFreshness) => {
+      const activeInput = document.getElementById(context.inputId);
+      if (activeInput !== context.submittedInput || context.submittedView !== expectedView) return false;
+      if (String(currentView || '') !== context.submittedView) return false;
+      if (target === 'conversation'
+        && (context.submittedCid !== String(cid || '') || String(currentCid || '') !== context.submittedCid)) return false;
+      if (!_isA2AComposerFresh(freshness)) return false;
+      return !activeInput || String(activeInput.value || '') === expectedValue;
+    };
+    if (!submittedSurfaceMatches(context.submittedValue)) return { handled: true };
+    if (context.submittedInput) {
+      context.submittedInput.value = '';
+      if (typeof syncChatRichComposerFromTextarea === 'function') syncChatRichComposerFromTextarea(context.inputId);
+      autoGrow(context.submittedInput, target === 'new-chat' ? 260 : 200);
+    }
+    if (typeof _clearDraft === 'function') _clearDraft(cid || DRAFT_CID);
+    _clearQuotes(cid || DRAFT_CID);
+    if (context.composerMembers && typeof context.composerMembers.resetDraftTracking === 'function') {
+      context.composerMembers.resetDraftTracking(target);
+    }
+    context.clearedFreshness = _captureA2AComposerFreshness(target, cid);
+    _releaseA2AComposerFreshness(context.submittedFreshness);
+    context.submittedFreshness = null;
+    if (typeof loadConversations === 'function') {
+      try { await loadConversations({ startup: false }); } catch (_) { /* Sidebar refresh is best-effort. */ }
+    }
+    if (!submittedSurfaceMatches('', context.clearedFreshness)) return { handled: true };
+    if (result.conversationId && typeof setView === 'function') {
+      setView('conversation', result.conversationId);
+    }
+    const toastKey = result.error === 'not_contact'
+      ? 'composer.a2a.sent_contact_ended'
+      : 'composer.a2a.sent';
+    const sentToast = typeof t === 'function' ? t(toastKey) : '';
+    if (sentToast && sentToast !== toastKey && typeof uiToast === 'function') {
+      uiToast(sentToast, { variant: result.error === 'not_contact' ? 'warning' : 'info' });
+    }
+    return { handled: true };
+  }, completionContext, releaseCompletionContext);
+}
+
 async function handleChatSubmit() {
   _convLog.info('[cli-fallback] handleChatSubmit entered', { currentCid });
   const input = document.getElementById('chat-input');
-  const raw = (input.value || '').trim();
+  const draftText = String(input.value || '');
+  const raw = draftText.trim();
   if (!currentCid) return;
   // A bare quote with no extra text is a legitimate "look at this" forward;
   // only reject when both the textarea AND the quote are empty.
@@ -12886,10 +13995,13 @@ async function handleChatSubmit() {
   // 首页与会话用同一条意图检查（MA-08）：仅 @、仅标点或空白不启动模型。
   const convIntentAttachments = (typeof _chatAttachList === 'function' ? _chatAttachList(currentCid) : [])
     .filter((item) => item.status !== 'error');
-  if (!_getQuotes(currentCid).length && !convIntentAttachments.length && !_hasTaskIntent(raw, 'conversation')) {
+  if (!_getQuotes(currentCid).length && !convIntentAttachments.length && !_hasTaskIntent(input.value, 'conversation')) {
     await uiAlert(t('run_center.create_task_required'));
     return;
   }
+  // A2A 发送侧（AC-04）：点名联系人 ＝ 问对方的助理，不走本地运行，也不需要本方模型。
+  const a2aSend = await _tryA2AContactSend('conversation', currentCid, raw);
+  if (a2aSend && a2aSend.handled) return;
   // Template handoff reply: when the user sends a handoff/continue prompt on an
   // imported conversation, answer instantly from real CogSeed data (three-part
   // template) instead of running a slow CLI/LLM turn. Only when this
@@ -12901,7 +14013,7 @@ async function handleChatSubmit() {
     _clearDraft(currentCid);
     return;
   }
-  if (!(await _ensureModelOrCliFallback(currentCid, 'conversation', raw))) return;
+  if (!(await _ensureModelOrCliFallback(currentCid, 'conversation', draftText))) return;
 
   const cid = currentCid;
   const quotes = _getQuotes(cid).slice();
@@ -12935,7 +14047,7 @@ async function handleChatSubmit() {
   const attachments = attachList.filter((a) => a.status !== 'error').map((a) => a.name);
   // EC-06：正文只剩成员标记 / 空白 / 标点时没有明确任务意图，不启动运行；
   // 附件或引用仍在时沿用既有规则（引用本身就是「看这个」的有效意图）。
-  if (!_composerIntentText(raw) && !attachments.length && !quotes.length) {
+  if (!_composerIntentText(draftText) && !attachments.length && !quotes.length) {
     uiToast(t('composer.members.need_task'), { variant: 'warning' });
     try { focusChatRichComposer(input); } catch (_) {}
     return;
@@ -12956,6 +14068,13 @@ async function handleChatSubmit() {
   // keeps each queued message tied to the selection visible when Send was
   // pressed, even if the composer draft is changed before queue drain.
   const recipientSnapshot = _takeRecipientSnapshotForSend('conversation');
+  // Freeze routing and recovery identity before body transforms or autoGrow
+  // clear the draft sidecar. Never reparse trimmed text for stable identities.
+  const memberPayload = _composerMemberPayload('conversation', draftText);
+  const mentionSnapshot = window.composerMembers
+    && typeof window.composerMembers.mentionSidecarSnapshot === 'function'
+    ? window.composerMembers.mentionSidecarSnapshot('conversation')
+    : [];
   if (isConvPending(cid) || (messageQueues.get(cid) || []).length) {
     if (attachments.length) {
       await uiAlert(t('chat.attach_queue_blocked'));
@@ -12964,17 +14083,13 @@ async function handleChatSubmit() {
     const queuedExecConfig = _executionConfigForSend('conversation', recipientSnapshot);
     // 排队消息同样要冻结本次成员 / 点名 / 按来源配置（FR-016）：排到队列末尾才真正
     // 发送，若只带 legacy 单套配置，多成员快照就会丢。
-    const queuedMemberPayload = _composerMemberPayload('conversation', requestText);
+    const queuedMemberPayload = memberPayload;
     const queuedHasMemberConfig = !!(queuedMemberPayload.execution_config
       || queuedMemberPayload.execution_configs);
     const queuedSubmitRequestId = _newSubmitRequestId(cid, requestText);
-    const queuedMentionSnapshot = window.composerMembers
-      && typeof window.composerMembers.mentionSidecarSnapshot === 'function'
-      ? window.composerMembers.mentionSidecarSnapshot('conversation')
-      : [];
     _holdPendingSubmitDraft(cid, queuedSubmitRequestId, {
-      text: raw,
-      mentions: queuedMentionSnapshot,
+      text: draftText,
+      mentions: mentionSnapshot,
       quotes,
       attachments: attachList,
       composer: window.composerMembers
@@ -13022,7 +14137,6 @@ async function handleChatSubmit() {
   // 多 Agent：成员名单存在时由成员载荷接管配置与路由（单成员等价于原
   // recipient 语义；多成员交给 commander 按分工编排。点名身份只来自
   // chooser 边车；手打/粘贴的 @display-name 保留可见文本但不参与路由。
-  const memberPayload = _composerMemberPayload('conversation', content);
   const hasMembers = Array.isArray(memberPayload.member_agent_ids)
     && memberPayload.member_agent_ids.length > 0;
   const hasMentions = Array.isArray(memberPayload.mention_agent_ids)
@@ -13035,12 +14149,8 @@ async function handleChatSubmit() {
     ? undefined
     : _executionConfigForSend('conversation', recipientSnapshot);
   const submitRequestId = _submitRequestIdFor(cid, raw);
-  const mentionSnapshot = window.composerMembers
-    && typeof window.composerMembers.mentionSidecarSnapshot === 'function'
-    ? window.composerMembers.mentionSidecarSnapshot('conversation')
-    : [];
   _holdPendingSubmitDraft(cid, submitRequestId, {
-    text: raw,
+    text: draftText,
     mentions: mentionSnapshot,
     quotes,
     attachments: attachList,
@@ -13380,7 +14490,12 @@ function _makeConvChatController(cid, options = {}) {
     historyEl: 'chat-history',
     inputEl: 'chat-input',
     sendBtnEl: 'chat-send-btn',
+    // Identity for endpoints/queue; NOT the currently viewed conversation.
     getCurrentId: () => cid,
+    // The shared #chat-history DOM must only receive the conversation that is
+    // actually on screen. `getCurrentId` is a captured id and must never be
+    // used as the "am I still visible?" test (see createChatController).
+    isViewActive: (id) => id === currentCid,
     historyEndpoint: (id) => _historyRequestUrl(id),
     streamEndpoint: (id) => `/api/conversations/${id}/send/stream`,
     features: {
@@ -13409,6 +14524,7 @@ function _makeConvChatController(cid, options = {}) {
         for (const k of Array.from(_groupPlaceholders.keys())) {
           if (k.startsWith(`${id}:`)) _groupPlaceholders.delete(k);
         }
+        _forgetChatStreamAnchors(id);
         // Bridge the controller's abort into the existing pendingConvs
         // state shape so legacy code (abortConvStream, sidebar badge,
         // polling recovery) keeps working untouched.
@@ -14122,7 +15238,14 @@ async function sendInConversation(cid, content, extra, options = {}) {
     }
     // Queued input starts a new execution stream after the current one ends,
     // so it must not be merged into the active task-turn sample.
-    enqueueMessage(cid, content, '', { direct: true, extra });
+    // The queue only dequeues on an exact acceptance receipt, which needs a
+    // request id; callers like form submit don't mint one, and without it the
+    // head item replays after every stream end. Mint without touching the
+    // composer's submit intent — this text isn't the composer draft.
+    const queuedExtra = String(extra?.submit_request_id || '').trim()
+      ? extra
+      : { ...(extra || {}), submit_request_id: _mintSubmitRequestId() };
+    enqueueMessage(cid, content, '', { direct: true, extra: queuedExtra });
     return { started: false, queued: true, aborted: false, errored: false };
   }
 
@@ -14349,6 +15472,18 @@ function _observeConversationRunFromPlanAction(cid, opts = {}) {
   if (_convChatCtrls.has(cid) && !allowWithController) return null;
   if (allowWithController && _groupObserverCtrls.has(cid)) return null;
   if (!attachExisting && (pendingConvs.has(cid) || isGroupConversationBusy(cid))) return null;
+
+  // The observer opens a second `groupChat.events` subscription for this cid,
+  // which runs alongside the primary `conversations.sendStream` and relays the
+  // same event volume. We could not tell from the logs which code path starts
+  // it in the common send flow (the 2s `_scheduleBackendRunRediscovery` debounce
+  // did not match the observed 229ms gap), so record the caller here.
+  _convLog.info('conversation run observer started', {
+    cid,
+    source: String(opts.source || 'unspecified'),
+    attach_existing: attachExisting,
+    allow_with_controller: allowWithController,
+  });
 
   const controller = new AbortController();
   let msgEl = null;
@@ -14867,6 +16002,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
   // to where it belongs once we know the message's true timestamp).
   msg.dataset.ts = String(Date.now());
   _appendBeforeSpacer(container, msg);
+  _streamingUpdateActivity(msg, t('chat.activity_receiving'));
   return msg;
 }
 
@@ -15053,7 +16189,7 @@ function _eventProcessKind(evt, text) {
   if (stream === 'error') return 'err';
   if (stream === 'cli') {
     const type = String(data.type || '').toLowerCase();
-    if (type === 'tool-event') return 'tool';
+    if (type === 'tool-event') return data.isError === true || data.error ? 'err' : 'tool';
     if (type === 'process-info') return 'bound';
     if (type === 'stderr-line' || type === 'idle') return 'warn';
     if (type === 'permission-request') return 'info';
@@ -15246,7 +16382,10 @@ function _streamingUpdateActivity(msg, text) {
     );
   }
   const textEl = row.querySelector('[data-role="activity-text"]');
+  const meta = row.querySelector('[data-role="activity-meta"]');
   const label = String(text || '').replace(/\s+/g, ' ').trim();
+  row.classList.remove('is-terminal', 'is-completed', 'is-failed', 'is-cancelled');
+  row.dataset.activityState = 'running';
   if (textEl) {
     if (label) {
       textEl.textContent = label.length > 88 ? label.slice(0, 88) + '…' : label;
@@ -15256,6 +16395,7 @@ function _streamingUpdateActivity(msg, text) {
       textEl.textContent = t('chat.activity_working');
     }
   }
+  if (meta) meta.hidden = false;
   row.style.display = '';
   _streamingPaintActivityMeta(msg);
   _streamingEnsureActivityTimer(msg);
@@ -15277,6 +16417,26 @@ function _streamingEnsureActivityTimer(msg) {
     }
     _streamingPaintActivityMeta(msg);
   }, 1000);
+}
+
+function _streamingFinishActivity(msg, text, state) {
+  if (!msg) return;
+  msg.dataset.activityDone = '1';
+  if (msg._activityTimer) {
+    clearInterval(msg._activityTimer);
+    msg._activityTimer = null;
+  }
+  const row = msg.querySelector('[data-role="activity"]');
+  if (!row) return;
+  const textEl = row.querySelector('[data-role="activity-text"]');
+  if (textEl) textEl.textContent = String(text || '').replace(/\s+/g, ' ').trim();
+  row.classList.remove('is-terminal', 'is-completed', 'is-failed', 'is-cancelled');
+  row.classList.add('is-terminal', `is-${state || 'completed'}`);
+  row.dataset.activityState = state || 'completed';
+  row.style.display = '';
+  _streamingPaintActivityMeta(msg);
+  const meta = row.querySelector('[data-role="activity-meta"]');
+  if (meta) meta.hidden = true;
 }
 
 function _activityMonotonicNow() {
@@ -15308,40 +16468,212 @@ function _streamingPaintActivityMeta(msg) {
   meta.textContent = `${mm}:${ss}`;
 }
 
-function _streamingStopActivity(msg) {
-  if (!msg) return;
-  msg.dataset.activityDone = '1';
-  if (msg._activityTimer) {
-    clearInterval(msg._activityTimer);
-    msg._activityTimer = null;
-  }
-  const row = msg.querySelector('[data-role="activity"]');
-  if (row) row.style.display = 'none';
+function _activityToolAction(toolName) {
+  const name = String(toolName || '').toLowerCase();
+  if (/^(read|read_file|stat_file|list_dir|search_files|find_files|glob|grep|web_search|websearch|web_fetch|webfetch)$/.test(name)) return 'read';
+  if (/^(write|edit|multiedit|notebookedit|write_file|edit_file|create_file|delete_file|move_file|copy_file|apply_patch|patch_apply)$/.test(name)) return 'write';
+  if (/^(exec_command|run_command|bash|shell|run_worker)$/.test(name)) return 'run';
+  return 'use';
 }
 
-// Map one structured live event onto the concise activity strip. Retry is a
-// reliable explicit phase; every other process event stays at generic working
-// so incomplete event streams cannot overstate the exact current action.
-function _streamingUpdateActivityFromEvent(msg, evt) {
-  const data = (evt && evt.data) || {};
-  const stream = (evt && evt.stream) || '';
-  const cliType = stream === 'cli' ? String(data.type || '').toLowerCase() : '';
+function _activityDurationMs(msg) {
+  const elapsed = Number(msg && msg._activityClock && msg._activityClock.elapsedMs);
+  if (Number.isFinite(elapsed) && elapsed >= 0) return elapsed;
+  const started = Number(msg && msg.dataset && msg.dataset.activityStart);
+  return Number.isFinite(started) && started > 0 ? Math.max(0, Date.now() - started) : 0;
+}
+
+function _activityTerminalText(msg, state, errorDetail = '') {
+  if (state === 'waiting_input') return t('chat.stream_waiting_input');
+  const summary = msg && msg._activitySummary && typeof msg._activitySummary === 'object'
+    ? msg._activitySummary
+    : null;
+  const duration = _formatProcessDuration(_activityDurationMs(msg));
+  const target = summary && summary.detail ? summary.detail : '';
+  const tool = summary && summary.toolName ? summary.toolName : '';
+  const action = summary && summary.action ? summary.action : 'use';
+  if (state === 'completed') {
+    if (action === 'read' && target) return t('chat.activity_read_done', { target, duration });
+    if (action === 'write' && target) return t('chat.activity_write_done', { target, duration });
+    if (action === 'run' && target) return t('chat.activity_run_done', { target, duration });
+    if (tool) return t('chat.activity_tool_done', { tool, target: target ? ` · ${target}` : '', duration });
+    return t('chat.activity_reply_done', { duration });
+  }
+  if (state === 'cancelled') {
+    if (action === 'read' && target) return t('chat.activity_read_stopped', { target });
+    if (action === 'write' && target) return t('chat.activity_write_stopped', { target });
+    if (action === 'run' && target) return t('chat.activity_run_stopped', { target });
+    if (tool) return t('chat.activity_tool_stopped', { tool, target: target ? ` · ${target}` : '' });
+    return t('chat.activity_reply_stopped');
+  }
+  if (action === 'read' && target) return t('chat.activity_read_failed', { target, duration });
+  if (action === 'write' && target) return t('chat.activity_write_failed', { target, duration });
+  if (action === 'run' && target) return t('chat.activity_run_failed', { target, duration });
+  if (tool) return t('chat.activity_tool_failed', {
+    tool,
+    target: target ? ` · ${target}` : '',
+    duration,
+  });
+  return t('chat.activity_reply_failed', {
+    detail: errorDetail ? ` · ${errorDetail}` : '',
+    duration,
+  });
+}
+
+// Project one structured live event onto the concise activity strip. Main
+// remains the source of truth; the renderer exposes only safe execution phases.
+function _activityStatusFromEvent(evt) {
+  const data = evt && evt.data && typeof evt.data === 'object' ? evt.data : {};
+  const stream = String(evt && evt.stream || '').toLowerCase();
   const phase = String(data.phase || data.status || '').toLowerCase();
-  if (stream === 'runtime' && phase === 'retrying') {
-    const attempt = Math.max(1, Math.round(Number(data.attempt) || 1));
-    if (typeof window.chatStreamSetRuntimeStatus === 'function') {
-      window.chatStreamSetRuntimeStatus(msg?.dataset?.cid, msg, { type: 'retry', attempt });
+  const compact = (value, limit = 120) => String(value == null ? '' : value)
+    .replace(/\s+/g, ' ').trim().slice(0, limit);
+  const sensitiveDetail = (value) => /(?:\bBearer\b|\bBasic\b|\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|authorization)\b|\b(?:sk|rk)-[A-Za-z0-9_-]{8,})/i
+    .test(String(value || ''));
+  const compactDetail = (value) => {
+    if (value == null) return '';
+    if (typeof value === 'string') return sensitiveDetail(value) ? '' : compact(value);
+    if (typeof value === 'object') {
+      const preferred = value.path || value.file || value.command || value.url;
+      if (preferred != null) return sensitiveDetail(preferred) ? '' : compact(preferred);
+      return '';
     }
-    _streamingUpdateActivity(msg, attempt > 1
-      ? t('model.retrying_n', { attempt })
-      : t('model.retrying'));
-    return;
+    return compact(value);
+  };
+  const toolDetail = () => {
+    if (phase === 'progress' && data.message) return compact(data.message);
+    const args = data.arguments || data.args || data.input;
+    return compactDetail(args || data.path || data.file || data.command || '');
+  };
+  const toolName = compact(data.name || data.toolName || data.tool || 'tool', 80);
+  const action = _activityToolAction(toolName);
+  const decision = phase || String(data.decision || data.result || '').toLowerCase();
+
+  if (stream === 'assistant' && (data.text || data.delta)) return { key: 'generating' };
+  if (stream === 'runtime' && phase === 'retrying') {
+    return { key: 'retrying', attempt: Math.max(1, Math.round(Number(data.attempt) || 1)) };
   }
-  if (cliType === 'status' && phase === 'usage') {
-    _streamingUpdateActivity(msg, t('chat.activity_working'));
-    return;
+  if (stream === 'plan') return { key: 'planning' };
+  if (stream === 'approval') {
+    if (/^(approved|allowed|granted|allow)$/.test(decision)) return { key: 'permission_granted' };
+    if (/^(rejected|denied|deny|cancelled|canceled)$/.test(decision)) return { key: 'permission_denied' };
+    return { key: 'waiting_permission' };
   }
-  _streamingUpdateActivity(msg, t('chat.activity_working'));
+  if (stream === 'tool') {
+    if (/^(start|running|request|call|begin|progress)$/.test(phase)) {
+      return { key: 'tool_calling', toolName, detail: toolDetail(), action };
+    }
+    if (/^(error|failed)$/.test(phase) || data.isError === true) {
+      return {
+        key: 'failed',
+        toolName,
+        detail: compact(data.error || data.message || data.result_preview || ''),
+        action,
+      };
+    }
+    if (/^(end|result|success|completed|done)$/.test(phase)) {
+      return {
+        key: 'tool_completed',
+        toolName,
+        detail: toolDetail(),
+        action,
+        impact: action === 'read' ? 'unchanged' : action === 'write' ? 'modified' : 'unknown',
+        ...(Number.isFinite(Number(data.duration_ms)) ? { durationMs: Number(data.duration_ms) } : {}),
+      };
+    }
+    return { key: 'working' };
+  }
+  if (stream === 'cli') {
+    const cliType = String(data.type || '').toLowerCase();
+    if (cliType === 'permission-request') {
+      if (data.autoDecided === 'allow') return { key: 'permission_granted', toolName };
+      if (data.autoDecided === 'deny') return { key: 'permission_denied', toolName };
+      return { key: 'waiting_permission', toolName };
+    }
+    if (cliType === 'tool-event') {
+      const cliPhase = String(data.phase || '').toLowerCase();
+      if (cliPhase === 'result' && (data.isError === true || data.error)) {
+        return { key: 'failed', toolName, detail: compactDetail(data.error || data.output), action };
+      }
+      if (cliPhase === 'use') {
+        return { key: 'tool_calling', toolName, detail: compactDetail(data.input), action };
+      }
+      if (cliPhase === 'result') {
+        return {
+          key: 'tool_completed',
+          toolName,
+          detail: compactDetail(data.input),
+          action,
+          impact: action === 'read' ? 'unchanged' : action === 'write' ? 'modified' : 'unknown',
+        };
+      }
+      return { key: 'working' };
+    }
+    if (cliType === 'idle') return { key: 'waiting_output' };
+    if (cliType === 'status' && /^(error|failed|timeout)$/.test(phase)) {
+      return { key: 'failed', detail: compact(data.message || data.error || '') };
+    }
+  }
+  if (stream === 'error') return { key: 'failed', detail: compact(data.message || data.text || '') };
+  return { key: 'working' };
+}
+
+function _activityTextFromStatus(status) {
+  const item = status && typeof status === 'object' ? status : { key: 'working' };
+  switch (item.key) {
+    case 'tool_calling':
+      return t({
+        read: 'chat.activity_reading',
+        write: 'chat.activity_modifying',
+        run: 'chat.activity_running_command',
+      }[item.action] || 'chat.activity_calling_tool', {
+        tool: item.toolName || 'tool',
+        target: item.detail || item.toolName || 'tool',
+        detail: item.detail ? ` · ${item.detail}` : '',
+      });
+    case 'planning': return t('chat.activity_planning');
+    case 'waiting_permission': return t('chat.activity_waiting_permission');
+    case 'permission_granted': return t('chat.activity_permission_granted');
+    case 'permission_denied': return t('chat.activity_permission_denied', {
+      tool: item.toolName ? ` · ${item.toolName}` : '',
+    });
+    case 'generating': return t('chat.activity_writing');
+    case 'retrying':
+      return item.attempt > 1
+        ? t('model.retrying_n', { attempt: item.attempt })
+        : t('model.retrying');
+    case 'waiting_output': return t('chat.activity_waiting_output');
+    case 'failed': return t('chat.activity_failed', { detail: item.detail ? ` · ${item.detail}` : '' });
+    case 'tool_completed': return t('chat.activity_tool_result', {
+      tool: item.toolName || 'tool',
+      target: item.detail ? ` · ${item.detail}` : '',
+    });
+    default: return t('chat.activity_working');
+  }
+}
+
+function _streamingUpdateActivityFromEvent(msg, evt) {
+  const status = _activityStatusFromEvent(evt);
+  // 运行时重试提示条（retry chip）需要真实 msg，只能在这里挂：状态机本身是纯函数，
+  // 事件分支里既没有 msg 也没有 window（此前直接写在那里，重试事件会抛 ReferenceError）。
+  if (msg && status && status.key === 'retrying' && typeof window.chatStreamSetRuntimeStatus === 'function') {
+    window.chatStreamSetRuntimeStatus(msg.dataset && msg.dataset.cid, msg, { type: 'retry', attempt: status.attempt });
+  }
+  const previous = msg && msg._activitySummary;
+  if (msg && status && status.key === 'tool_calling') {
+    msg._activitySummary = { ...status };
+  } else if (msg && status && status.key === 'tool_completed') {
+    const sameTool = previous && previous.toolName === status.toolName;
+    const merged = { ...(sameTool ? previous : {}), ...status };
+    if (sameTool && !status.detail && previous.detail) merged.detail = previous.detail;
+    msg._activitySummary = merged;
+  } else if (msg && status && status.key === 'failed' && (status.toolName || previous?.toolName)) {
+    const sameTool = previous && (!status.toolName || previous.toolName === status.toolName);
+    const merged = { ...(sameTool ? previous : {}), ...status };
+    if (sameTool && previous.detail) merged.detail = previous.detail;
+    msg._activitySummary = merged;
+  }
+  _streamingUpdateActivity(msg, _activityTextFromStatus(status));
 }
 
 // Cancel any rAF queued by `_streamingAppendFinalDelta`. Callers that are
@@ -15367,7 +16699,8 @@ function _cancelPendingStreamRaf(msg) {
 // agent edit chats skip it by design).
 function _streamingSetFinal(msg, text, { archive = false } = {}) {
   _hideThinking(msg);
-  _streamingStopActivity(msg);
+  const terminalStatus = msg.dataset.terminalStatus || 'completed';
+  _streamingFinishActivity(msg, _activityTerminalText(msg, terminalStatus), terminalStatus);
   const finalEl = msg.querySelector('[data-role="final"]');
   if (!finalEl) return;
   _cancelPendingStreamRaf(msg);
@@ -15382,6 +16715,10 @@ function _streamingSetFinal(msg, text, { archive = false } = {}) {
     _paintStreamingFinalMarkdown(msg, finalEl, display);
   }
   finalEl.style.display = '';
+  // The agent may have written a file it named mid-stream: re-check misses.
+  if (typeof window !== 'undefined' && typeof window.decorateChatPathCodes === 'function') {
+    void window.decorateChatPathCodes(finalEl, { fresh: true });
+  }
   msg.dataset.finalText = display || '';
   delete msg.dataset.streamBuf;
   delete msg.dataset.streamDisplay;
@@ -15414,7 +16751,7 @@ function _streamingSetFinal(msg, text, { archive = false } = {}) {
 
 function _streamingSetError(msg, text) {
   _hideThinking(msg);
-  _streamingStopActivity(msg);
+  _streamingFinishActivity(msg, _activityTerminalText(msg, 'failed', text), 'failed');
   _cancelPendingStreamRaf(msg);
   msg.dataset.failed = '1';
   // Freeze the live preview line so it stops looking like it's still streaming.
@@ -15432,7 +16769,10 @@ function _streamingSetError(msg, text) {
   if (details) {
     const body = details.querySelector('.stream-process-body');
     const hasProcess = !!body && body.children.length > 0;
-    if (hasProcess) details.style.display = '';
+    if (hasProcess) {
+      details.removeAttribute('open');
+      details.style.display = '';
+    }
   }
   const finalEl = msg.querySelector('[data-role="final"]');
   if (!finalEl) return;
@@ -15461,7 +16801,7 @@ function _streamingSetError(msg, text) {
 // content streamed into the process pane; just stamps a "stopped" note.
 function _streamingMarkAborted(msg) {
   _hideThinking(msg);
-  _streamingStopActivity(msg);
+  _streamingFinishActivity(msg, _activityTerminalText(msg, 'cancelled'), 'cancelled');
   // Freeze any live preview line so it's not misread as still generating.
   const live = msg.querySelector('.stream-process-live');
   if (live) {
@@ -15476,7 +16816,10 @@ function _streamingMarkAborted(msg) {
     bubble.appendChild(note);
   }
   const details = msg.querySelector('.stream-process');
-  if (details) details.style.display = '';
+  if (details) {
+    details.removeAttribute('open');
+    details.style.display = '';
+  }
 }
 
 /**
@@ -15568,7 +16911,7 @@ async function _rediscoverBackendRun(cid) {
   // Re-establish the run: pending state, streaming placeholder, group event
   // observer (untilIdle — ends when the Backend task's terminal projection
   // clears backendTurns and the bus goes quiescent) and history polling.
-  _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true });
+  _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true, source: 'rediscover_backend_run' });
 }
 
 // Scroll the given message to the top of the visible chat area.
@@ -15631,6 +16974,10 @@ function _pinMessageToTopWithDynamicSpacer(msgEl, container) {
 //   inputEl:         HTMLTextArea  — the send textarea
 //   sendBtnEl:       HTMLElement   — send/stop button
 //   getCurrentId():  returns the target id (cid / skill id / agent id)
+//   isViewActive(id): optional; true when `id` may render into the shared view.
+//                     Defaults to true for single-view editors. Conversation
+//                     chat passes `id === currentCid`; getCurrentId is a
+//                     captured identity and is NOT a visibility check.
 //   streamEndpoint(id): returns the URL string for the streaming POST
 //   historyEndpoint(id): returns the URL for GET history
 //   clearEndpoint(id):   (optional) URL for DELETE history
@@ -15994,6 +17341,30 @@ function createChatController(config) {
       return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
 
     }
+    // A2A 守卫（FR-19/FR-20）：点名联系人时不能带附件，也不能同时点名本方 Agent。
+    // 被拦时保留草稿并提示，不进入发送流程。
+    try {
+      const guards = typeof window !== 'undefined' ? window.a2aComposeGuards : null;
+      if (guards && typeof guards.checkComposeLocalized === 'function') {
+        const contactRows = typeof window.getComposerContactCandidates === 'function'
+          ? (window.getComposerContactCandidates() || [])
+          : [];
+        const contactIds = contactRows.map((row) => row && row.user_id).filter(Boolean);
+        const mentioned = Array.isArray(extraBody && extraBody.mention_agent_ids)
+          ? extraBody.mention_agent_ids
+          : [];
+        const result = guards.checkComposeLocalized({
+          contactMentions: guards.countContactMentions(mentioned, contactIds),
+          agentMentions: mentioned.filter((id) => !contactIds.includes(id)).length,
+          attachments: Array.isArray(extraBody && extraBody.attachments) ? extraBody.attachments.length : 0,
+        }, (key) => (typeof t === 'function' ? t(key) : key));
+        if (result && result.blocked) {
+          if (typeof uiToast === 'function') uiToast(result.message, { variant: 'warning' });
+          return { started: false, aborted: false, errored: false, reason: result.reason };
+        }
+      }
+    } catch (_) { /* 守卫失败不阻断发送 */ }
+
     if (hooks.beforeSend) {
       const transformed = await hooks.beforeSend(content, id);
       if (transformed === null || transformed === undefined) {
@@ -16110,8 +17481,15 @@ function createChatController(config) {
             // running server-side and switch-back rebuilds from disk, so we just
             // skip the render while off-view — do NOT abort (that would stop the
             // agent's turn). Scene hooks still run so edit-scene state is intact.
-            if (id === config.getCurrentId()) {
-              _handleStreamEvent(id, msgEl, ev, { archive: features.archive });
+            //
+            // `getCurrentId()` is the controller's captured identity, not the
+            // visible conversation. Comparing id to it is always true; the
+            // view-scope predicate is the only correct cross-cid guard.
+            const viewActive = typeof config.isViewActive === 'function'
+              ? config.isViewActive(id) === true
+              : true;
+            if (viewActive) {
+              _handleStreamEvent(id, msgEl, ev, { archive: features.archive, actorIdentity: !!features.actorIdentity });
             }
             if (hooks.onStreamEvent) hooks.onStreamEvent(ev, msgEl, id);
             if (ev.type === 'final' && hooks.onFinal) hooks.onFinal(ev, msgEl, id);
@@ -16267,7 +17645,11 @@ function createChatController(config) {
   return { loadHistory, send, abort, clear, isBusy, enqueue, renderQueue };
 }
 
-function _handleStreamEvent(cid, msg, ev, { archive = false } = {}) {
+function _handleStreamEvent(cid, msg, ev, { archive = false, actorIdentity = false } = {}) {
+  // NOTE: do not gate on `currentCid` here. createChatController is also used
+  // by the Agent/Skill editors, whose ids are not conversation cids. The
+  // conversation controller passes `isViewActive`; _ensureActorPlaceholder
+  // keeps the shared chat-history writers scoped.
   if (ev.type === 'progress') {
     const evt = ev.event && ev.event.stream ? ev.event : null;
     const line = evt ? (_formatEventLine(evt) || ev.text) : ev.text;
@@ -16282,8 +17664,20 @@ function _handleStreamEvent(cid, msg, ev, { archive = false } = {}) {
     // arrives, then on the most-recent rendered bubble for that actor.
     if (inner.stream === 'chat' && inner.data && typeof window.chatStreamHandleEvent === 'function') {
       // conv-core 结构化事件：chat-stream 过程面板（工具卡/思考/Diff/用量），
-      // 与下方 group 老协议并行渲染。
-      window.chatStreamHandleEvent(cid, msg, inner.data);
+      // 与下方 group 老协议并行渲染。锚点按 actor 解析（一个 actor 一条气泡），
+      // 否则派单链的 worker 过程会落进 commander 的气泡。
+      const chatEvent = inner.data;
+      const chatAnchor = _resolveChatStreamAnchor(cid, chatEvent, msg, chatEvent.turnId);
+      const chatActorId = String(chatEvent.actorId || '');
+      window.chatStreamHandleEvent(cid, chatAnchor, chatEvent, {
+        actorId: chatActorId,
+        actorName: chatActorId ? _knownGroupActorLabel(cid, chatActorId) : '',
+        // 当前话权方：运行指示 = 持有 floor（话权回到某 actor 时它的流复活）。
+        floorActor: _serverFloorByCid.get(cid) || '',
+        // 群聊派单链：commander 是主 Agent，其过程保持展开可跟踪；worker 的
+        // 执行过程默认折叠（页面高度不增长），点徽章才展开。
+        collapseByDefault: !!actorIdentity && !!chatActorId && chatActorId !== 'commander',
+      });
       return;
     }
     if (inner.stream === 'group' && inner.data) {
@@ -16301,6 +17695,10 @@ function _handleStreamEvent(cid, msg, ev, { archive = false } = {}) {
       && window.chatStreamHasPanel(cid);
     if (!_csTL) _streamingAppendFinalDelta(msg, ev.text || '');
   } else if (ev.type === 'final') {
+    // Group messages are authoritative and carry actor/turn identity. The
+    // request-level final aggregates the last actor and must never overwrite
+    // the initial placeholder (which may already belong to another actor).
+    if (actorIdentity) return;
     _streamingSetFinal(msg, ev.text, { archive });
     // Attach input-form widget if the final event carries one. Main
     // already stripped the fenced block from `ev.text`, so the bubble
@@ -16340,6 +17738,68 @@ function _phKey(cid, actorId, turnId) {
 
 function _eventTurnId(evData) {
   return _normaliseTurnId(evData && (evData.turn_id || evData.turnId));
+}
+
+// chat.* 结构化事件（conv-core）的过程折叠条锚点。一个 actor 一条气泡：
+// `chat.turn.started` 带 actorId，据此把活动流挂到**该 actor 自己的**占位气泡
+// 上（而不是共用的发送占位）；后续 `chat.item` / `chat.turn.completed` 只带
+// turnId，用本表回查同一锚点。不这么做时派单链里 commander 与 worker 的活动
+// 流会同挂发送占位 → 折叠条归属错（看起来像主 Agent 在执行）、一次任务画成
+// 两条并行线（2026-10-13 需求方截图）。
+const _chatStreamAnchors = new Map(); // key = `${cid}::turn:${turnId}` → { el, actorId }
+
+function _chatAnchorKey(cid, turnId) {
+  const tid = _normaliseTurnId(turnId);
+  return tid ? `${cid}::turn:${tid}` : '';
+}
+
+function _forgetChatStreamAnchors(cid) {
+  const prefix = `${cid}::turn:`;
+  for (const key of Array.from(_chatStreamAnchors.keys())) {
+    if (key.startsWith(prefix)) _chatStreamAnchors.delete(key);
+  }
+}
+
+function _resolveChatStreamAnchor(cid, chatEvent, fallbackEl, turnIdHint) {
+  if (!cid || !chatEvent || typeof chatEvent !== 'object') return fallbackEl;
+  const tid = _normaliseTurnId(turnIdHint || chatEvent.turnId);
+  const key = _chatAnchorKey(cid, tid);
+  const live = (el) => !!(el && el.parentElement);
+  const bind = (anchor, actorId) => {
+    if (key) _chatStreamAnchors.set(key, { el: anchor, actorId });
+    return anchor;
+  };
+  // 轮询/历史回放会把原锚点（或发送占位）摘出 DOM：这时必须按 actor 重新领养/新建，
+  // 否则活动流会画进脱树的节点——用户看不到过程，而 `chatStreamHasPanel` 仍为 true，
+  // 连老过程 rail 也被去重掉（真机 2026-10-14 00:30 的 30 条丢弃）。
+  const remint = (actorId) => {
+    if (!actorId) return fallbackEl;
+    const ph = _ensureActorPlaceholder(cid, actorId, fallbackEl, tid, undefined, undefined, { contentBearing: true });
+    return live(ph) ? ph : fallbackEl;
+  };
+  if (chatEvent.type === 'chat.turn.started') {
+    const actorId = String(chatEvent.actorId || '');
+    return bind(remint(actorId), actorId);
+  }
+  const known = key ? _chatStreamAnchors.get(key) : null;
+  if (known) {
+    if (live(known.el)) return known.el;
+    _chatStreamAnchors.delete(key);
+    const actorId = String(known.actorId || '');
+    const anchor = remint(actorId);
+    if (live(anchor)) return bind(anchor, actorId);
+    return fallbackEl;
+  }
+  return fallbackEl;
+}
+
+/** 话权交给「某个 agent」时返回该 agent id，其余（空 / commander / user）返回 ''。
+ *  交出方（commander）据此立即终态化：它的回合还挂着（R-11 等齐汇报），但此刻
+ *  它没有在跑——不摘掉 spinner/计时就成了「两个执行」并行（2026-10-13 需求）。 */
+function _yieldedFloorActor(state) {
+  const floor = String((state && state.active_recipient) || '');
+  if (!floor || floor === 'commander' || floor === 'user') return '';
+  return floor;
 }
 
 function _normaliseActiveTurns(raw) {
@@ -16429,7 +17889,11 @@ function _refreshActorPlaceholders(cid, actorId) {
   }
 }
 
-function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId, startedAtMs) {
+function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId, startedAtMs, opts = {}) {
+  // Never mint or revive a placeholder for a conversation that is not on
+  // screen. The #chat-history node is shared, so a background run's process
+  // event would otherwise appear under the new conversation's header.
+  if (typeof currentCid !== 'undefined' && cid !== currentCid) return null;
   const tid = _normaliseTurnId(turnId);
   const sourceMsgId = _normaliseTurnId(triggerMsgId);
   const k = _phKey(cid, actorId, tid);
@@ -16455,7 +17919,23 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
   // while the floor points elsewhere.
   if (actorId === 'commander') {
     const floor = _serverFloorByCid.get(cid) || '';
-    if (floor && floor !== 'commander' && floor !== 'user') return null;
+    if (floor && floor !== 'commander' && floor !== 'user') {
+      // The floor moving to an agent must not make the commander's own process
+      // events vanish: dropping them left the user with an empty-looking bubble and
+      // no execution detail at all (578 'group process target missing' warnings on
+      // 2026-10-13, nearly all of them actor=commander). Attach to the existing
+      // fallback placeholder when it is live; only truly targetless events are
+      // dropped. The bubble still belongs to the commander, so its steps stay its
+      // own — no worker step is ever rendered into it.
+      if (fallbackPh && fallbackPh.parentElement) return fallbackPh;
+      // 真机 2026-10-14 00:30：commander 派单后，它的 seg 气泡会被历史回放/轮询
+      // 重建摘掉（`_finalizeActorPlaceholder` 遇到同签名已渲染消息会 remove 占位），
+      // 于是 fallback 脱树 → 收尾综合的 process 事件再次被丢（30 条）。
+      // 带内容的事件不能丢：落到下面的常规路径，按该 actor 的活占位/兜底重建一条
+      // 真实气泡来承载它的过程（空事件流仍由上面的 return null 拦住，mint 不出
+      // 空气泡来闪）。这是「空泡防闪」与「过程不可丢」的分界：有没有内容。
+      if (!opts.contentBearing) return null;
+    }
   }
 
   // Wake→task→exec 两级系统的 turn_id 会中途更换（cogseed-task-* →
@@ -16658,6 +18138,50 @@ function _mountFinalEvidenceBlock(ph, gm) {
   if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(block);
 }
 
+// Streaming placeholders bypass appendChatMessage(), so the authoritative
+// final GroupMessage must mount its recall receipt here as well. Without this
+// step recall_citations are persisted correctly but remain invisible until a
+// history reload rebuilds the whole bubble.
+function _mountFinalRecallMemoryCard(ph, gm, cid) {
+  const bubble = ph?.querySelector('.chat-bubble');
+  if (!bubble) return;
+
+  let host = bubble.querySelector('.chat-recall-citations');
+  const citationsHtml = _renderRecallCitationsHtml(gm.recall_citations);
+  if (!host && citationsHtml) {
+    const template = document.createElement('template');
+    template.innerHTML = citationsHtml;
+    host = template.content.firstElementChild;
+    if (host) bubble.appendChild(host);
+  }
+  if (!host) return;
+
+  _hydrateRecallCitations(ph, cid, gm.id);
+
+  const explicitProjectionReceipt = _projectionReceiptForMessage(gm);
+  const container = document.getElementById('chat-history');
+  const coalescedProjectionMatch = explicitProjectionReceipt
+    ? null
+    : _findProjectionSidecar(container, gm);
+  const projectionCard = explicitProjectionReceipt
+    || gm.recall_projection_card
+    || (coalescedProjectionMatch
+      ? { projectionId: coalescedProjectionMatch.projectionId, authorization: 'model_selected' }
+      : null);
+
+  if (coalescedProjectionMatch?.sidecar) {
+    coalescedProjectionMatch.sidecar.hidden = true;
+    coalescedProjectionMatch.sidecar.classList.add('is-coalesced');
+  }
+  if (!projectionCard?.projectionId || typeof window.mountRecallProjectionCard !== 'function') return;
+  if (gm.recall_projection_card) host.dataset.recallProjectionTransport = 'sidecar';
+  window.mountRecallProjectionCard(host, projectionCard, {
+    cid,
+    onlyModelSelected: true,
+    citations: Array.isArray(gm.recall_citations) ? gm.recall_citations : [],
+  });
+}
+
 // Transform a streaming placeholder bubble into its finalized form:
 // freeze the process rail (keep visible + collapsed by default),
 // render markdown into [data-role="final"], append produced-files chip /
@@ -16719,10 +18243,12 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   // Final markdown body: reuses the legacy helper which preserves the
   // .stream-process rail (collapsed if non-empty, hidden if empty) so
   // tool calls stay scannable after the reply lands.
+  ph.dataset.terminalStatus = gm.terminal_status || (gm.failure_kind ? 'failed' : 'completed');
   const text = String(gm.text || '');
   const failedAssistant = _isFailedAssistantContent(text, gm);
   _streamingSetFinal(ph, text, { archive: archive && !failedAssistant });
   _mountFinalEvidenceBlock(ph, gm);
+  _mountFinalRecallMemoryCard(ph, gm, cid);
   if (failedAssistant) {
     _attachFailedAssistantActions(ph, () => _messageTextForActions(ph, text));
     _handleModelOutputErrorForUi(cid, ph, _failedAssistantErrorText(ph) || text, {
@@ -16889,9 +18415,9 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
     // 主进程叠加整树遍历（每次消息 → 一次全量快照），还会反复闪加载态。
     // 180ms 合并一次 + silent 刷新，数据到达延迟不可感知，行为不变。
     _scheduleConversationInfoFileRefresh(cid);
-    // Mark commander as "in chat" the moment it speaks here, so the
-    // sidebar/header badges add the commander avatar without waiting for
-    // the next `listConversations` to re-derive it from <cid>.jsonl.
+    // Mark commander as "in chat" the moment it speaks here, so the chat
+    // header adds the commander avatar without waiting for the next
+    // `listConversations` to re-derive it from <cid>.jsonl.
     if (evData.msg.from === 'commander' && Array.isArray(conversations)) {
       const conv = conversations.find((x) => x && x.conversation_id === cid);
       if (conv && !conv.commander_in_chat) {
@@ -17075,7 +18601,8 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       startPolling(cid);
       if (cid === currentCid) _updateConvSendUI(cid);
     }
-    const target = _ensureActorPlaceholder(cid, actor, streamingMsg, turnId);
+    const target = _ensureActorPlaceholder(cid, actor, streamingMsg, turnId, undefined, undefined,
+      { contentBearing: true });
     if (!target) {
       _convLog.warn('group process target missing', {
         cid,
@@ -17179,7 +18706,8 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       startPolling(cid);
       if (cid === currentCid) _updateConvSendUI(cid);
     }
-    const target = _ensureActorPlaceholder(cid, actor, streamingMsg, turnId);
+    const target = _ensureActorPlaceholder(cid, actor, streamingMsg, turnId, undefined, undefined,
+      { contentBearing: true });
     const bubble = target?.querySelector?.('.chat-bubble');
     if (bubble && typeof window.mountMessageArtifacts === 'function') {
       window.mountMessageArtifacts(bubble, [artifact], cid);
@@ -17199,6 +18727,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
     // be current for THIS event or the commander bubble flickers during the
     // handed-off agent's reply.
     _serverFloorByCid.set(cid, typeof st.active_recipient === 'string' ? st.active_recipient : '');
+    // 话权一旦交给某个 agent，交出方（commander）的气泡必须**立即终态化**：
+    // 它的回合还挂着（R-11 等齐汇报），但此刻它没有在跑——不摘掉 spinner/计时
+    // 就变成「两个执行」并行（2026-10-13 需求方截图）。
+    const _floorNow = _yieldedFloorActor(st);
+    if (_floorNow && typeof window.chatStreamYieldFloor === 'function') {
+      try { window.chatStreamYieldFloor(cid, _floorNow); } catch (_) { /* 终态化失败不阻塞状态同步 */ }
+    }
     setGroupConversationBusy(cid, st.status === 'running' || inFlight.length > 0 || activeTurns.length > 0);
     if (hasActiveTurnsField) {
       for (const turn of activeTurns) {
@@ -17526,14 +19061,55 @@ function _stripDashboardBlocksForStream(buf) {
 // `_streamingSetFinal` is still called at the terminal `final` event to
 // guarantee a clean final render.
 //
-// Render throttling: every delta accumulates into `dataset.streamBuf`
-// synchronously, but the actual `renderMarkdownFull` + DOM swap only runs
-// once per animation frame (via `requestAnimationFrame`). Each delta in
-// the wild is ~2-4 chars and they can arrive ~50/sec; without throttling
-// we'd run renderMarkdown × 500 in one event loop turn (each O(n) on the
-// growing buffer = O(n²) total ≈ multi-second sync stall) and the user
-// would see nothing until the stall ended. With rAF throttling the
-// reader loop stays cheap and the browser paints between frames.
+// Render throttling: deltas accumulate into `dataset.streamBuf`
+// synchronously; only the `renderMarkdownFull` + DOM swap is gated.
+//
+// Each delta used to schedule a full `renderMarkdownFull` + subtree replace on
+// the next animation frame. A 3.4k-char reply arrives as ~1.4k deltas, i.e.
+// ~260 full pipeline runs over a growing buffer (O(n²) overall) on the main
+// thread — competing with the delta reader loop for the same frames.
+//
+// Two rules keep the text live without the churn:
+//   - a newline (paragraph / list / fence edge) paints on the next frame
+//   - anything else waits out STREAM_PAINT_MIN_INTERVAL_MS, with a trailing
+//     timer so a tail that stops mid-line still gets painted
+//
+// The terminal `final` event still calls `_streamingSetFinal`, which performs
+// a clean full render, so the settled frame is always exact.
+const STREAM_PAINT_MIN_INTERVAL_MS = 80;
+
+function _flushStreamingFinalPaint(msg, finalEl) {
+  msg._streamRafScheduled = false;
+  msg._streamRafHandle = null;
+  msg._streamLastPaintAt = Date.now();
+  const buf = msg.dataset.streamBuf || '';
+  const display = _stripSkillCreateBlocksForStream(
+    _stripAgentCreateBlocksForStream(
+      _stripAutoTaskBlocksForStream(
+        _stripAgentFormBlockForStream(
+          _stripExpenseCardBlockForStream(
+            _stripDashboardBlocksForStream(
+              _stripSkillFileBlocksForStream(buf),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  msg.dataset.streamDisplay = display;
+  _paintStreamingFinalMarkdown(msg, finalEl, display, { stickBottom: true });
+}
+
+function _scheduleStreamingFinalPaint(msg, finalEl) {
+  if (msg._streamRafScheduled) return;
+  msg._streamRafScheduled = true;
+  if (typeof requestAnimationFrame === 'function') {
+    msg._streamRafHandle = requestAnimationFrame(() => _flushStreamingFinalPaint(msg, finalEl));
+  } else {
+    setTimeout(() => _flushStreamingFinalPaint(msg, finalEl), 0);
+  }
+}
+
 function _streamingAppendFinalDelta(msg, piece) {
   if (!piece) return;
   const finalEl = msg.querySelector('[data-role="final"]');
@@ -17543,33 +19119,24 @@ function _streamingAppendFinalDelta(msg, piece) {
   msg.dataset.streamBuf = next;
   msg.dataset.finalText = next;
   if (finalEl.style.display === 'none') finalEl.style.display = '';
-  if (msg._streamRafScheduled) return;
-  msg._streamRafScheduled = true;
-  const flush = () => {
-    msg._streamRafScheduled = false;
-    msg._streamRafHandle = null;
-    const buf = msg.dataset.streamBuf || '';
-    const display = _stripSkillCreateBlocksForStream(
-      _stripAgentCreateBlocksForStream(
-        _stripAutoTaskBlocksForStream(
-          _stripAgentFormBlockForStream(
-            _stripExpenseCardBlockForStream(
-              _stripDashboardBlocksForStream(
-                _stripSkillFileBlocksForStream(buf),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    msg.dataset.streamDisplay = display;
-    _paintStreamingFinalMarkdown(msg, finalEl, display, { stickBottom: true });
-  };
-  if (typeof requestAnimationFrame === 'function') {
-    msg._streamRafHandle = requestAnimationFrame(flush);
-  } else {
-    setTimeout(flush, 0);
+
+  const sinceLastPaint = Date.now() - (msg._streamLastPaintAt || 0);
+  const atBoundary = piece.indexOf('\n') >= 0;
+  if (!atBoundary && sinceLastPaint < STREAM_PAINT_MIN_INTERVAL_MS) {
+    if (!msg._streamTrailTimer) {
+      msg._streamTrailTimer = setTimeout(() => {
+        msg._streamTrailTimer = null;
+        if (msg.isConnected === false) return;
+        _scheduleStreamingFinalPaint(msg, finalEl);
+      }, Math.max(16, STREAM_PAINT_MIN_INTERVAL_MS - sinceLastPaint));
+    }
+    return;
   }
+  if (msg._streamTrailTimer) {
+    clearTimeout(msg._streamTrailTimer);
+    msg._streamTrailTimer = null;
+  }
+  _scheduleStreamingFinalPaint(msg, finalEl);
 }
 
 // Format a raw openclaw event into one process-pane line. Returns null for
@@ -18055,6 +19622,9 @@ function _resolveConvReply(cid, text, isError) {
         const md = el.querySelector('.chat-bubble .markdown-body');
         if (md) typesetMath(md);
       }
+      if (typeof window.decorateChatPathCodes === 'function') {
+        void window.decorateChatPathCodes(el.querySelector('.chat-bubble .markdown-body'), { fresh: true, cid });
+      }
     } else {
       _attachFailedAssistantActions(el, () => _messageTextForActions(el, text));
       _handleModelOutputErrorForUi(cid, el, text, {
@@ -18133,6 +19703,8 @@ function _renderConvDisabledBanner(cid) {
 
 function _refreshTaskSurfacesAfterAbort(cid) {
   if (!cid) return;
+  // 用户中止 → 该 run 的 pending 唤醒会被判死/执行，标记必须立刻重算。
+  void _syncWaitingApprovalFlags();
   try {
     if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid, { silent: true });
   } catch (_) {}
@@ -18221,25 +19793,94 @@ function _refreshAllConvBadges() {
   }
 }
 
-// Right-aligned chip on the Commander sidebar button that surfaces "N in
-// flight" while group_chat streams are running. Source = pendingConvs Map
-// (same backing store the conv-item streaming dot reads), so chip + dot stay
-// in sync without a separate event channel.
-function _refreshCommanderRunningChip() {
-  const chip = document.getElementById('commander-running-chip');
-  if (!chip) return;
-  let count = 0;
-  pendingConvs.forEach((state) => { if (!(state && state.aborted)) count++; });
-  if (count <= 0) {
-    chip.hidden = true;
-    chip.textContent = '';
+// 正在执行的会话（cid 列表，COGSEED-496）。pendingConvs 是唯一数据源：侧栏行
+// 流式点、左轨计数、跳转入口都读它，不另算一套。
+function _runningConversationIds() {
+  const ids = [];
+  pendingConvs.forEach((state, cid) => {
+    if (state && state.aborted) return;
+    if (typeof cid === 'string' && cid) ids.push(cid);
+  });
+  return ids;
+}
+
+function _runningConversationTitle(cid) {
+  const list = Array.isArray(conversations) ? conversations : [];
+  const conv = list.find((c) => c && c.conversation_id === cid);
+  const title = conv && conv.title;
+  return title || t('chat.new_conv_title');
+}
+
+// 执行计数入口的点击行为（COGSEED-496）：单个任务直接进入会话，多个任务弹任务
+// 列表让用户选。菜单复用共享的 showContextMenu，不新造浮层。
+function _openRunningConversationMenu(ev) {
+  const ids = _runningConversationIds();
+  if (!ids.length) return;
+  if (ids.length === 1) {
+    if (typeof setView === 'function') setView('conversation', ids[0]);
     return;
   }
-  chip.hidden = false;
-  const label = t('sidebar.commander_running', { n: count });
-  // t() returns the raw key on miss — when the i18n table doesn't carry this
-  // string yet (locales added in Step 9), fall back to a neutral English form.
-  chip.textContent = (label && label !== 'sidebar.commander_running') ? label : `${count} running`;
+  if (typeof showContextMenu !== 'function') return;
+  showContextMenu(ev, ids.map((cid) => ({
+    label: _runningConversationTitle(cid),
+    icon: 'activity',
+    onClick: () => {
+      if (typeof setView === 'function') setView('conversation', cid);
+    },
+  })));
+}
+
+// Count badge on the rail "任务" entry (specs/008-shell-rail-layout) that
+// surfaces how many conversations are in flight. Source = pendingConvs Map
+// (same backing store the conv-item streaming dot reads), so badge + dot stay
+// in sync without a separate event channel. The full "N running" sentence is
+// appended to the rail button's accessible name.
+// 徽标同时是执行入口（COGSEED-496）：单个任务直接进入，多个任务弹列表；按钮渲染
+// 在徽标挂载点里，样式由 .app-rail-badge 收窄成胶囊本身。
+function _refreshCommanderRunningChip() {
+  const mount = document.getElementById('commander-running-chip');
+  if (!mount) return;
+  const ids = _runningConversationIds();
+  // 完整句子只进无障碍名与 title：左轨按钮只有 36px 宽，徽标里放数字。
+  const spoken = t('sidebar.commander_running', { n: ids.length });
+  // t() returns the raw key on miss — fall back to a neutral English form.
+  const sentence = (spoken && spoken !== 'sidebar.commander_running') ? spoken : `${ids.length} running`;
+  const railBtn = document.getElementById('task-nav-btn');
+  const railBase = t('rail.task');
+  if (!ids.length) {
+    mount.hidden = true;
+    if (railBtn) railBtn.setAttribute('aria-label', railBase);
+    return;
+  }
+  if (railBtn) railBtn.setAttribute('aria-label', `${railBase} · ${sentence}`);
+  const text = ids.length > 99 ? '99+' : String(ids.length);
+  let btn = mount.querySelector('button');
+  if (!btn) {
+    mount.innerHTML = uiButton({
+      label: text,
+      role: 'ghost',
+      size: 'sm',
+      className: 'sidebar-btn-running-chip',
+      attrs: { 'data-running-chip': '1', title: sentence, 'aria-label': sentence },
+    });
+    btn = mount.querySelector('button');
+    if (btn) {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        _openRunningConversationMenu(e);
+      });
+    }
+  } else {
+    const labelEl = btn.querySelector('.ui-button__label');
+    if (labelEl) labelEl.textContent = text;
+    else btn.textContent = text;
+    if (typeof btn.setAttribute === 'function') {
+      btn.setAttribute('title', sentence);
+      btn.setAttribute('aria-label', sentence);
+    }
+  }
+  mount.hidden = false;
 }
 
 // ─── Chat-history right-click menu (selection-only) ───────────────────────
@@ -18290,6 +19931,14 @@ function _initChatSelectionMenu() {
 }
 
 if (typeof window !== 'undefined') {
+  // T6: an authoritative contacts refresh has already updated persisted names
+  // under the state lock. Refresh the visible roster through its normal read
+  // seam; identities, routing and historical message snapshots stay unchanged.
+  window.addEventListener('contacts-changed', event => {
+    if (event.detail?.namesChanged && currentView === 'conversation' && currentCid) {
+      void _refreshGroupMembers(currentCid, { addMissingMembers: false });
+    }
+  });
   const initConversationComposerControls = () => {
     _initChatSelectionMenu();
     _bindPermissionModeSelect();

@@ -5,6 +5,22 @@
 
   const queue = [];
   let showing = false;
+  // 同一次请求被重复推送（队列重投递、重连补发）时只处理一次：主进程的审批
+  // 记录按 request_id 唯一，重复弹窗只会让用户重复决定同一件事（P01）。
+  // 这里的集合只标识「已排过队/已决定」，不承担授权语义——真正的授权仍在主进程。
+  const seenRequestIds = new Set();
+  const SEEN_LIMIT = 200;
+
+  function rememberRequestId(requestId) {
+    if (seenRequestIds.has(requestId)) return false;
+    seenRequestIds.add(requestId);
+    if (seenRequestIds.size > SEEN_LIMIT) {
+      // 插入有序：丢掉最早的一个，避免集合无界增长。
+      const oldest = seenRequestIds.values().next().value;
+      if (oldest !== undefined) seenRequestIds.delete(oldest);
+    }
+    return true;
+  }
   const log = typeof root.createLogger === 'function' ? root.createLogger('action-approval') : { warn() {} };
 
   function tr(key, fallback, vars) {
@@ -53,7 +69,8 @@
 
   async function showRequest(info) {
     const actor = text(info.actor, tr('action_approval.actor_fallback', 'CogSeed Agent'));
-    const target = text(info.target, tr('action_approval.target_unknown', '未提供执行目标'));
+    const target = info.target_verbatim === true && typeof info.target === 'string'
+      ? info.target : text(info.target, tr('action_approval.target_unknown', '未提供执行目标'));
     const scope = text(info.scope, tr('action_approval.scope_unknown', '仅限本次明确操作'));
     const risk = info.risk === 'critical' ? 'critical' : 'high';
     const riskLabel = tr(`action_approval.risk.${risk}`, risk === 'critical' ? '高危' : '需要确认');
@@ -110,6 +127,7 @@
     try {
       root.cogseed.onPushEvent('action-approval:request', (info) => {
         if (!info || typeof info.request_id !== 'string' || !info.request_id) return;
+        if (!rememberRequestId(info.request_id)) return;
         queue.push(info);
         void drain();
       });

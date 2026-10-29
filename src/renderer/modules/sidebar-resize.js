@@ -112,44 +112,81 @@
     });
   }
 
-  // ── 收起侧边栏与 Shell 恢复入口 ───────────────────────────────────────
-  // 按钮位于侧边栏外的全局 Shell 层；收起后侧边栏不再占宽，
-  // 展开入口也不会被 macOS 的原生拖拽区域吞掉。
+  // ── 收起 / 展开侧边栏（specs/008-shell-rail-layout, D13）────────────────
+  // 收起按钮在侧栏顶部行内；收起后展开入口在当前页面 header 的外壳位
+  // （每个页面一份，无 id），统一按 `data-shell-action` 委托处理。按钮都是
+  // header 行的真实子元素，不会被 macOS 原生拖拽区吞掉。
   const COLLAPSE_KEY = 'cogseed:sidebar-collapsed';
 
+  // `shell-sidebar-hidden`: the user collapsed a sidebar this module has, so
+  // page headers show their shell slot with the expand entry. Modules without
+  // a sidebar (`shell-no-sidebar`) show the slot too, minus the expand entry.
+  // The collapse preference itself stays one global value.
   function syncCollapseButton(collapsed) {
-    document.body.classList.toggle('shell-sidebar-hidden', collapsed);
-    const btn = document.getElementById('sidebar-collapse-btn');
-    if (btn) {
-      const key = collapsed ? 'sidebar.expand_title' : 'sidebar.collapse_title';
-      const fallback = collapsed ? '展开侧边栏' : '收起侧边栏';
-      const translated = typeof t === 'function' ? t(key) : key;
-      btn.title = translated && translated !== key ? translated : fallback;
-      btn.setAttribute('aria-label', btn.title);
-      btn.setAttribute('aria-expanded', String(!collapsed));
-      btn.setAttribute('data-i18n-title', key);
-      btn.setAttribute('data-i18n-aria-label', key);
-    }
+    const noSidebar = document.body.classList.contains('shell-no-sidebar');
+    document.body.classList.toggle('shell-sidebar-hidden', collapsed && !noSidebar);
+  }
+
+  // Hover flyout: while collapsed, hovering the active rail entry shows the
+  // sidebar as an overlay; it closes shortly after the pointer leaves both.
+  const PEEK_CLOSE_DELAY = 250;
+  let peekTimer = 0;
+
+  function setPeek(on) {
+    if (peekTimer) { clearTimeout(peekTimer); peekTimer = 0; }
+    document.body.classList.toggle('sidebar-peek', on);
+  }
+
+  function initPeek() {
+    document.addEventListener('mouseover', (event) => {
+      const body = document.body;
+      if (!body.classList.contains('sidebar-collapsed') || body.classList.contains('shell-no-sidebar')) return;
+      const t = event.target;
+      if (!t || typeof t.closest !== 'function') return;
+      const overTrigger = !!t.closest('.app-rail-btn.is-active[data-rail-module]');
+      const overSidebar = !!t.closest('.sidebar');
+      if (overTrigger || (overSidebar && body.classList.contains('sidebar-peek'))) {
+        if (peekTimer) { clearTimeout(peekTimer); peekTimer = 0; }
+        body.classList.add('sidebar-peek');
+      } else if (body.classList.contains('sidebar-peek') && !peekTimer) {
+        peekTimer = setTimeout(() => setPeek(false), PEEK_CLOSE_DELAY);
+      }
+    });
+    document.documentElement.addEventListener('mouseleave', () => setPeek(false));
   }
 
   function applyCollapsed(collapsed) {
+    setPeek(false);
     document.body.classList.toggle('sidebar-collapsed', collapsed);
     syncCollapseButton(collapsed);
-    if (collapsed && typeof window.closeRunCenterGlobal === 'function') window.closeRunCenterGlobal();
     try { localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (_) {}
   }
 
+  window.syncSidebarShellState = () => {
+    syncCollapseButton(document.body.classList.contains('sidebar-collapsed'));
+  };
+
+  // Keyboard users keep their place: focus follows the toggle to the control
+  // that undoes it.
+  function focusVisibleExpand() {
+    const expand = Array.from(document.querySelectorAll('.panel.active [data-shell-action="expand-sidebar"]'))
+      .find((el) => el.getClientRects().length > 0);
+    expand?.focus();
+  }
+
   function initCollapse() {
-    const btn = document.getElementById('sidebar-collapse-btn');
-    if (!btn) return;
     let collapsed = false;
     try { collapsed = localStorage.getItem(COLLAPSE_KEY) === '1'; } catch (_) {}
     applyCollapsed(collapsed);
-    btn.addEventListener('click', () => {
-      applyCollapsed(!document.body.classList.contains('sidebar-collapsed'));
-    });
-    window.addEventListener('i18n-change', () => {
-      syncCollapseButton(document.body.classList.contains('sidebar-collapsed'));
+    document.addEventListener('click', (event) => {
+      const control = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('[data-shell-action="collapse-sidebar"], [data-shell-action="expand-sidebar"]')
+        : null;
+      if (!control) return;
+      const collapse = control.dataset.shellAction === 'collapse-sidebar';
+      applyCollapsed(collapse);
+      if (collapse) focusVisibleExpand();
+      else document.getElementById('sidebar-collapse-btn')?.focus();
     });
   }
 
@@ -169,8 +206,10 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
     document.addEventListener('DOMContentLoaded', initCollapse, { once: true });
+    document.addEventListener('DOMContentLoaded', initPeek, { once: true });
   } else {
     init();
     initCollapse();
+    initPeek();
   }
 })();

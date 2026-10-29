@@ -22,9 +22,7 @@ const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {
   maxSkillContentLength: 100_000,
   metacognition: {
     enabled: false,
-    reflectThreshold: 0.7,
     competenceCharLimit: 3000,
-    strategiesCharLimit: 2500,
   },
 };
 

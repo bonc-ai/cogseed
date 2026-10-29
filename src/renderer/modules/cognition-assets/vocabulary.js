@@ -73,20 +73,24 @@
     no_candidate: ['cognition.capture_status_no_candidate', '没有发现可留存的内容'],
     configuration_required: ['cognition.capture_status_configuration_required', '需要配置模型'],
     active: ['cognition.capture_status_active', '进行中'],
+    pending: ['cognition.capture_status_pending', '等待开始'],
+    unavailable: ['cognition.capture_status_unavailable', '当前不可用'],
+    evaluated_only: ['cognition.capture_status_evaluated_only', '仅评估，未留存'],
   };
 
-  /** 展示状态（后端 captureDisplayStatus 的七值全集）。 */
+  /** 展示状态（后端 captureDisplayStatus 的八值全集）。 */
   const CAPTURE_DISPLAY_STATUS = {
     waiting: ['cognition.capture_display_waiting', '等待中'],
     extracting: ['cognition.capture_display_extracting', '提炼中'],
     review_ready: ['cognition.capture_display_review', '待确认'],
     writing: ['cognition.capture_display_writing', '写入中'],
     completed: ['cognition.capture_display_completed', '已完成'],
+    partial: ['cognition.capture_display_partial', '部分完成'],
     failed: ['cognition.capture_display_failed', '失败'],
     cancelled: ['cognition.capture_display_cancelled', '已取消'],
   };
 
-  /** 展示原因（后端 captureDisplayReason 的十七值全集）——状态之外讲清
+  /** 展示原因（后端 captureDisplayReason 的十八值全集）——状态之外讲清
    *  「为什么停在这个状态」，是整理记录每行的主文案。 */
   const CAPTURE_DISPLAY_REASON = {
     quiet_period: ['cognition.capture_reason_quiet_period', '会话刚结束，正在静默期观察'],
@@ -100,6 +104,7 @@
     review_pending: ['cognition.capture_reason_review_pending', '候选已就绪，等你确认'],
     no_candidate: ['cognition.capture_reason_no_candidate', '整理完成，没有发现需要保存的内容'],
     review_completed: ['cognition.capture_reason_review_completed', '候选已处理完'],
+    partial_support: ['cognition.capture_reason_partial_support', '部分建议已保留，仍有内容未处理完成'],
     model_not_configured: ['cognition.capture_reason_model_not_configured', '还没有配置可用模型'],
     model_auth_required: ['cognition.capture_reason_model_auth_required', '模型授权已失效，需要重新授权'],
     asset_write_failed: ['cognition.capture_reason_asset_write_failed', '资产写入失败'],
@@ -123,6 +128,8 @@
 
   /** 提炼阶段（后端 RecallCaptureStage 五值）：整理详情页讲「现在做到哪一步」。 */
   const CAPTURE_STAGE = {
+    context_summary: ['cognition.capture_stage_context_summary', '整理对话摘要'],
+    value_judgment: ['cognition.capture_stage_value_judgment', '判断是否值得提取'],
     model_check: ['cognition.capture_stage_model_check', '检查模型'],
     recall_view: ['cognition.capture_stage_recall_view', '读取会话内容'],
     model_extraction: ['cognition.capture_stage_model_extraction', '模型提炼中'],

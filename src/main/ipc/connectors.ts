@@ -10,14 +10,18 @@
  *   connectors.refresh       → { tools, instance }
  *   connectors.set_subtools  → { instance }
  *
- * Catalog installs are OAuth-only — no API-key fallback. Server-bridge providers use an
- * CogSeed-registered OAuth app; MCP DCR providers issue a per-device client whose credentials stay
+ * Catalog onboarding follows the provider's OAuth, local CLI, email credentials, or
+ * interactive-token flow. Server-bridge providers use a registered OAuth app; MCP DCR
+ * providers issue a per-device client whose credentials stay
  * in the encrypted local registry. Custom MCP servers are the separate, explicitly user-authored
  * path: `connectors.add_custom` is the single validated route
  * (features/connectors/custom-transport.ts), the renderer form is the consent surface, and the
  * stored transport lives inside `secrets_enc`. See docs/plans/open-ecosystem-architecture.md §C.
  */
 import * as path from 'node:path';
+import { prepareConnectorRuntime, cancelConnectorRuntime } from '../features/connectors/cli-runtime';
+import { connectEmail, emailConnectionSettings, type EmailServerSettings } from '../features/connectors/email-auth';
+import { cancelTencentSurveyAuth } from '../features/connectors/tencent-survey-auth';
 
 import * as connectors from '../features/connectors';
 import type { ConnectorInstance, ConnectorStatus, ToolSchema } from '../features/connectors';
@@ -49,6 +53,7 @@ interface ClientConnectorInstance {
   created_at: string;
   updated_at: string;
   enabled?: boolean;
+  email_settings?: EmailServerSettings & { address: string; has_saved_password: boolean };
 }
 
 function _safeTransportSummary(inst: ConnectorInstance): ClientConnectorInstance['transport'] | undefined {
@@ -90,6 +95,7 @@ function toClientInstance(inst: ConnectorInstance, enabled?: boolean): ClientCon
   if (inst.oauth_grant?.account_label) {
     out.oauth_grant = { account_label: inst.oauth_grant.account_label };
   }
+  try { const settings = emailConnectionSettings(inst); if (settings) out.email_settings = settings; } catch { /* Invalid stored settings stay hidden; explicit edit repairs them. */ }
   if (typeof enabled === 'boolean') out.enabled = enabled;
   return out;
 }
@@ -97,13 +103,23 @@ function toClientInstance(inst: ConnectorInstance, enabled?: boolean): ClientCon
 export const _toClientInstanceForTest = toClientInstance;
 
 export const invokeHandlers = {
-  'connectors.catalog': async () => ({ catalog: catalogWithAvailability(connectors.CONNECTOR_CATALOG) }),
+  'connectors.catalog': async (_payload: unknown, ctx: { userId: string }) => ({ catalog: catalogWithAvailability(ctx.userId, connectors.CONNECTOR_CATALOG) }),
+
+  'connectors.prepare_runtime': async (payload: { catalog_id?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.catalog_id !== 'string') throw new Error('invalid catalog_id');
+    return prepareConnectorRuntime(ctx.userId, payload.catalog_id);
+  },
+
+  'connectors.cancel_runtime': async (payload: { catalog_id?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.catalog_id !== 'string') throw new Error('invalid catalog_id');
+    return cancelConnectorRuntime(ctx.userId, payload.catalog_id);
+  },
 
   'connectors.list': async (_payload: unknown, ctx: { userId: string }) => {
     // Attach the per-user `enabled` flag so the renderer can render the "停用 / 启用" toggle
     // without a second IPC. Defaults to true when the user hasn't toggled it (the file only
     // stores `false` overrides — see features/component_enabled.ts).
-    const raw = connectors.listInstances(ctx.userId).filter((inst) => isConnectorRuntimeEnabled(inst.id));
+    const raw = connectors.listInstances(ctx.userId).filter((inst) => isConnectorRuntimeEnabled(ctx.userId, inst.id));
     const instances = raw.map((inst) => toClientInstance(inst, isConnectorEnabled(ctx.userId, inst.id)));
     return { instances };
   },
@@ -115,7 +131,7 @@ export const invokeHandlers = {
    *  panel opens cost nothing — see `verifyUsableConnectors` for the full cost rationale. */
   'connectors.verify': async (_payload: unknown, ctx: { userId: string }) => {
     const verified = await connectors.verifyUsableConnectors(ctx.userId, 'connectors_panel');
-    const raw = connectors.listInstances(ctx.userId).filter((inst) => isConnectorRuntimeEnabled(inst.id));
+    const raw = connectors.listInstances(ctx.userId).filter((inst) => isConnectorRuntimeEnabled(ctx.userId, inst.id));
     const instances = raw.map((inst) => toClientInstance(inst, isConnectorEnabled(ctx.userId, inst.id)));
     return { verified, instances };
   },
@@ -130,13 +146,37 @@ export const invokeHandlers = {
     return { ok: true, enabled: payload.enabled };
   },
 
+  'connectors.connect_email': async (payload: { catalog_id?: unknown; address?: unknown; password?: unknown; settings?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.catalog_id !== 'string') throw new Error('email_invalid_credentials');
+    const instance = await connectEmail(ctx.userId, payload.catalog_id, payload.address, payload.password, payload.settings);
+    return { instance: toClientInstance(instance, isConnectorEnabled(ctx.userId, instance.id)) };
+  },
+
   'connectors.start_oauth': async (payload: { catalog_id?: unknown }, ctx: { userId: string }) => {
     if (typeof payload?.catalog_id !== 'string') throw new Error('invalid catalog_id');
     const started = connectors.beginOAuthConnect(ctx.userId, payload.catalog_id);
     return { started: true, attempt_id: started.attempt_id };
   },
 
-  'connectors.cancel_oauth': async () => {
+  /** Connect an `interactive_token` connector from a credential the user supplied (pasted from the
+   *  provider's console). The `browser_poll` variant does NOT come through here — it authorizes
+   *  itself and is started by `connectors.start_oauth` like any other long-running connect.
+   *
+   *  Unlike `start_oauth` this resolves once the connector is actually up, because there is no
+   *  browser step to hand off: the caller's next paint is the connected card. Validation beyond the
+   *  shape (emptiness, whitespace, length) lives in the manager, next to the storage rules. */
+  'connectors.connect_interactive_token': async (
+    payload: { catalog_id?: unknown; credential?: unknown },
+    ctx: { userId: string },
+  ) => {
+    if (typeof payload?.catalog_id !== 'string' || !payload.catalog_id) throw new Error('invalid catalog_id');
+    if (typeof payload?.credential !== 'string') throw new Error('invalid credential');
+    const instance = await connectors.connectInteractiveToken(ctx.userId, payload.catalog_id, payload.credential);
+    return { ok: true, id: instance.id, status: instance.status };
+  },
+
+  'connectors.cancel_oauth': async (payload: { catalog_id?: unknown }, ctx: { userId: string }) => {
+    if (payload?.catalog_id === 'tencent-survey') return { cancelled: cancelTencentSurveyAuth(ctx.userId) };
     // Both authorization shapes are cancellable through the one renderer affordance: the
     // Server-driven/deep-link OAuth flows, and the `local_cli` login that waits on a browser tab.
     // Whichever is in flight aborts; the other is a no-op.

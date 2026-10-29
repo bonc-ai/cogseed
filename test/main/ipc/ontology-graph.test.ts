@@ -20,47 +20,26 @@ describe('ontology graph IPC', () => {
     vi.clearAllMocks();
   });
 
-  it('binds every graph read and mutation to the authenticated IPC user', async () => {
+  it('keeps legacy reads authenticated and prevents legacy writes from bypassing common governance', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/ontology-graph');
     const ctx = { userId: 'authenticated-user' };
     graphApi.readOntologyGraph.mockResolvedValue({ schemaVersion: 1, categories: [], entities: [], relations: [] });
-    graphApi.createOntologyCategory.mockResolvedValue({ id: 'category-1' });
-    graphApi.updateOntologyCategory.mockResolvedValue({ id: 'category-1' });
-    graphApi.deleteOntologyCategory.mockResolvedValue(undefined);
-    graphApi.createOntologyEntity.mockResolvedValue({ id: 'entity-1' });
-    graphApi.updateOntologyEntity.mockResolvedValue({ id: 'entity-1' });
-    graphApi.deleteOntologyEntity.mockResolvedValue(undefined);
-    graphApi.createOntologyRelation.mockResolvedValue({ id: 'relation-1' });
-    graphApi.updateOntologyRelation.mockResolvedValue({ id: 'relation-1' });
-    graphApi.deleteOntologyRelation.mockResolvedValue(undefined);
 
     await invokeHandlers['ontology.graph.read']({ userId: 'attacker' }, ctx);
-    await invokeHandlers['ontology.category.create']({ domain: 'affairs', name: 'Project', userId: 'attacker' }, ctx);
-    await invokeHandlers['ontology.category.update']({ categoryId: 'category-1', name: 'Projects' }, ctx);
-    await invokeHandlers['ontology.category.delete']({ categoryId: 'category-1' }, ctx);
-    await invokeHandlers['ontology.entity.create']({ categoryId: 'category-1', name: 'Release' }, ctx);
-    await invokeHandlers['ontology.entity.update']({ entityId: 'entity-1', name: 'Release 1' }, ctx);
-    await invokeHandlers['ontology.entity.delete']({ entityId: 'entity-1' }, ctx);
-    await invokeHandlers['ontology.relation.create']({ predicate: 'owns' }, ctx);
-    await invokeHandlers['ontology.relation.update']({ relationId: 'relation-1', predicate: 'leads' }, ctx);
-    await invokeHandlers['ontology.relation.delete']({ relationId: 'relation-1' }, ctx);
+    for (const channel of ['ontology.category.create', 'ontology.category.update', 'ontology.category.delete',
+      'ontology.entity.create', 'ontology.entity.update', 'ontology.entity.delete',
+      'ontology.relation.create', 'ontology.relation.update', 'ontology.relation.delete']) {
+      await expect(invokeHandlers[channel]({ userId: 'attacker' }, ctx)).rejects.toMatchObject({ code: 'legacy_write_disabled' });
+    }
 
     expect(graphApi.readOntologyGraph).toHaveBeenCalledWith('authenticated-user');
-    expect(graphApi.createOntologyCategory).toHaveBeenCalledWith('authenticated-user', { domain: 'affairs', name: 'Project', userId: 'attacker' });
-    expect(graphApi.updateOntologyCategory).toHaveBeenCalledWith('authenticated-user', { categoryId: 'category-1', name: 'Projects' });
-    expect(graphApi.deleteOntologyCategory).toHaveBeenCalledWith('authenticated-user', 'category-1');
-    expect(graphApi.createOntologyEntity).toHaveBeenCalledWith('authenticated-user', { categoryId: 'category-1', name: 'Release' });
-    expect(graphApi.updateOntologyEntity).toHaveBeenCalledWith('authenticated-user', { entityId: 'entity-1', name: 'Release 1' });
-    expect(graphApi.deleteOntologyEntity).toHaveBeenCalledWith('authenticated-user', 'entity-1');
-    expect(graphApi.createOntologyRelation).toHaveBeenCalledWith('authenticated-user', { predicate: 'owns' });
-    expect(graphApi.updateOntologyRelation).toHaveBeenCalledWith('authenticated-user', { relationId: 'relation-1', predicate: 'leads' });
-    expect(graphApi.deleteOntologyRelation).toHaveBeenCalledWith('authenticated-user', 'relation-1');
+    for (const method of ['createOntologyCategory', 'updateOntologyCategory', 'deleteOntologyCategory', 'createOntologyEntity', 'updateOntologyEntity', 'deleteOntologyEntity', 'createOntologyRelation', 'updateOntologyRelation', 'deleteOntologyRelation'])
+      expect(graphApi[method]).not.toHaveBeenCalled();
   });
 
-  it('normalizes non-object payloads to empty input so the feature validator rejects them', async () => {
+  it('returns the same governance error for malformed legacy writes', async () => {
     const { invokeHandlers } = await import('../../../src/main/ipc/ontology-graph');
-    graphApi.createOntologyEntity.mockRejectedValue(new Error('entity category id required'));
-    await expect(invokeHandlers['ontology.entity.create'](null, { userId: 'user-1' })).rejects.toThrow('entity category id required');
-    expect(graphApi.createOntologyEntity).toHaveBeenCalledWith('user-1', {});
+    await expect(invokeHandlers['ontology.entity.create'](null, { userId: 'user-1' })).rejects.toMatchObject({ code: 'legacy_write_disabled' });
+    expect(graphApi.createOntologyEntity).not.toHaveBeenCalled();
   });
 });

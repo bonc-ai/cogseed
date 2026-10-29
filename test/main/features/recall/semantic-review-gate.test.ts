@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -48,7 +49,7 @@ async function modules() {
 
 async function pendingCandidate() {
   const { candidates } = await modules();
-  return candidates.saveRecallCandidate('user-a', {
+  return createNightlyCandidateFixture('user-a', {
     judgment: 'Keep architecture decisions in a decision log before changing runtime boundaries.',
     summary: 'Use decision logs for architecture changes',
     suggestedType: 'rule',
@@ -60,82 +61,31 @@ async function pendingCandidate() {
   });
 }
 
-describe('Recall auto promotion × semantic review gate (N-2)', () => {
-  it('defers the candidate when semantic review flags a MEDIUM+ finding', async () => {
-    const { candidates } = await modules();
+describe('自动来源只能形成候选，模型语义复核不能替代用户授权', () => {
+  it.each([
+    { name: '模型发现高风险', response: { ok: true, findings: [{ level: 'MEDIUM', rule: 'semantic_sensitive_personal_data' }] } },
+    { name: '模型认为没有问题', response: { ok: true, findings: [] } },
+    { name: '模型不可用', response: { ok: false, reason: 'model_unavailable' } },
+    { name: '模型只有低风险提示', response: { ok: true, findings: [{ level: 'LOW', rule: 'advisory' }] } },
+  ])('$name 不得发布资产或自行决定候选', async ({ response }) => {
+    const { candidates, assets } = await modules();
     const candidate = await pendingCandidate();
-    semanticReviewMock.reviewCandidateSemantically.mockResolvedValue({
-      ok: true,
-      findings: [{ rule: 'semantic_sensitive_personal_data', level: 'MEDIUM', field: 'semantic', snippet: 'phone number', suggested_fix: 'Remove the personal identifier' }],
-    });
-
+    semanticReviewMock.reviewCandidateSemantically.mockResolvedValue(response);
     const result = await candidates.autoApplyRecallCandidate('user-a', candidate.id);
-
     expect(result.asset).toBeUndefined();
-    expect(result.candidate.status).toBe('deferred');
-    expect(result.candidate.failureCode).toBe('semantic_review_flagged');
-    // 落账：review-decision 里留 defer 记录，列表层可据此抑制重复提示。
-    const review = await import('../../../../src/main/features/cognition/review-decision');
-    const decisions = await review.listReviewDecisions('user-a', `recall_candidate:${candidate.id}`);
-    expect(decisions[decisions.length - 1]).toMatchObject({
-      decision_type: 'defer',
-      actor: 'system',
-    });
-    // 没有资产被创建。
-    const { assets } = await modules();
+    expect(result.candidate).toMatchObject({ id: candidate.id, status: candidate.status, sourceRefs: candidate.sourceRefs });
+    expect(semanticReviewMock.reviewCandidateSemantically).not.toHaveBeenCalled();
     await expect(assets.listAbilityAssets('user-a')).resolves.toHaveLength(0);
+    const review = await import('../../../../src/main/features/cognition/review-decision');
+    await expect(review.listReviewDecisions('user-a', `recall_candidate:${candidate.id}`)).resolves.toEqual([]);
   });
-
-  it('promotes normally when semantic review finds nothing', async () => {
-    const { candidates } = await modules();
+  it('重复自动调用保持候选身份、原文和待处理状态，不能产生版本或决定', async () => {
+    const { candidates, assets } = await modules();
     const candidate = await pendingCandidate();
-    semanticReviewMock.reviewCandidateSemantically.mockResolvedValue({ ok: true, findings: [] });
-
-    const result = await candidates.autoApplyRecallCandidate('user-a', candidate.id);
-
-    expect(result.asset).toBeDefined();
-    expect(result.candidate.status).toBe('confirmed');
-    expect(result.asset.lifecycleStatus).toBe('user_confirmed_unverified');
-  });
-
-  it('promotes normally when semantic review is unavailable (degraded, not blocked)', async () => {
-    const { candidates } = await modules();
-    const candidate = await pendingCandidate();
-    semanticReviewMock.reviewCandidateSemantically.mockResolvedValue({ ok: false, reason: 'model_unavailable' });
-
-    const result = await candidates.autoApplyRecallCandidate('user-a', candidate.id);
-
-    expect(result.asset).toBeDefined();
-    expect(result.candidate.status).toBe('confirmed');
-  });
-
-  it('keeps LOW findings advisory-only (no defer)', async () => {
-    const { candidates } = await modules();
-    const candidate = await pendingCandidate();
-    semanticReviewMock.reviewCandidateSemantically.mockResolvedValue({
-      ok: true,
-      findings: [{ rule: 'semantic_overbroad_scope', level: 'LOW', field: 'semantic', snippet: 'maybe too broad', suggested_fix: 'Narrow the claim' }],
-    });
-
-    const result = await candidates.autoApplyRecallCandidate('user-a', candidate.id);
-
-    expect(result.asset).toBeDefined();
-    expect(result.candidate.status).toBe('confirmed');
-  });
-
-  it('does not re-review a deferred candidate (idempotent deferral)', async () => {
-    const { candidates } = await modules();
-    const candidate = await pendingCandidate();
-    semanticReviewMock.reviewCandidateSemantically.mockResolvedValue({
-      ok: true,
-      findings: [{ rule: 'semantic_sensitive_personal_data', level: 'MEDIUM', field: 'semantic', snippet: 'phone number', suggested_fix: 'Remove the personal identifier' }],
-    });
-
-    await candidates.autoApplyRecallCandidate('user-a', candidate.id);
-    const reviewCalls = semanticReviewMock.reviewCandidateSemantically.mock.calls.length;
-
-    // deferred 候选不在 reviewable 集合 → 再次自动晋升应抛错，不再触发复核。
-    await expect(candidates.autoApplyRecallCandidate('user-a', candidate.id)).rejects.toThrow(/not ready for automatic capture/i);
-    expect(semanticReviewMock.reviewCandidateSemantically.mock.calls.length).toBe(reviewCalls);
+    const first = await candidates.autoApplyRecallCandidate('user-a', candidate.id);
+    const retry = await candidates.autoApplyRecallCandidate('user-a', candidate.id);
+    expect(retry).toEqual(first);
+    expect(retry.candidate.judgment).toBe(candidate.judgment);
+    await expect(assets.listAbilityAssets('user-a')).resolves.toHaveLength(0);
   });
 });

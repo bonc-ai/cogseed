@@ -50,7 +50,11 @@ const events = [
     sequence: 1,
     type: 'task.recoverable' as const,
     createdAt: '2026-08-05T00:01:00.000Z',
-    payload: { summary: 'Worker restarted at /Users/secret/project', secret: 'token=do-not-leak' },
+    payload: {
+      errorCode: 'runtime_restart',
+      error: 'Worker restarted at /Users/secret/project with token=do-not-leak',
+      secret: 'token=do-not-leak',
+    },
   },
   {
     schemaVersion: 1 as const,
@@ -60,7 +64,10 @@ const events = [
     sequence: 2,
     type: 'task.failed' as const,
     createdAt: '2026-08-05T00:01:01.000Z',
-    payload: { name: 'Authorization: Bearer do-not-leak', outputPath: '/Users/secret/output.txt' },
+    payload: {
+      message: 'Authorization: Bearer do-not-leak failed at /Users/secret/output.txt',
+      outputPath: '/Users/secret/output.txt',
+    },
   },
 ];
 
@@ -159,6 +166,11 @@ describe('CogSeed renderer-safe projections', () => {
     ]));
     expect(result.timeline[0]).toMatchObject({ type: 'task.recoverable', summary: 'Task requires recovery.' });
     expect(result.timeline[1]).toMatchObject({ type: 'task.failed', summary: 'Task failed.' });
+    expect(result.timeline[0]).toMatchObject({
+      errorCode: 'runtime_restart',
+      failureReason: 'Worker restarted at [path] with token=[redacted]',
+    });
+    expect(result.timeline[1].failureReason).toBe('Authorization: Bearer [redacted] failed at [path]');
     expect(JSON.stringify(result.timeline)).not.toContain('/Users/secret');
     expect(JSON.stringify(result.timeline)).not.toContain('do-not-leak');
     expect(JSON.stringify(result)).not.toContain('renderer-user');
@@ -168,6 +180,177 @@ describe('CogSeed renderer-safe projections', () => {
     expect(JSON.stringify(result)).not.toContain('"output":');
     expect(JSON.stringify(result)).not.toContain('Coordinate the release plan.');
     expect(JSON.stringify(result)).not.toContain('Inspect /Users/secret/project');
+  });
+
+  // R-08 / R-04 / R-10：失败原因之外，还要能独立回答"最后进展"和"该怎么恢复"，
+  // 且只允许安全投影（不得带路径/token/工具参数/原始错误文本）。
+  it('projects an independent last-progress snapshot and a child-degradation recovery advice', async () => {
+    const groupParent = {
+      ...parentTask,
+      status: 'running' as const,
+      executionKind: 'group-chat' as const,
+      conversationId: 'conv-degraded',
+      groupChatRunId: 'run-degraded',
+    };
+    const degradedChild = {
+      ...childTask,
+      status: 'failed' as const,
+      errorCode: 'coordinator_agent_idle',
+      parentTaskId: groupParent.taskId,
+      task: 'Inspect /Users/alice/private/report.md and report with secret-token',
+    };
+    const childEvents = [
+      {
+        schemaVersion: 1 as const,
+        eventId: 'cogseed-event-child-started',
+        taskId: degradedChild.taskId,
+        sessionId: degradedChild.sessionId,
+        sequence: 1,
+        type: 'task.started' as const,
+        createdAt: '2026-08-05T00:00:11.000Z',
+        payload: {},
+      },
+      {
+        schemaVersion: 1 as const,
+        eventId: 'cogseed-event-child-tool-start',
+        taskId: degradedChild.taskId,
+        sessionId: degradedChild.sessionId,
+        sequence: 2,
+        type: 'tool.started' as const,
+        createdAt: '2026-08-05T00:00:12.000Z',
+        payload: { toolName: 'read_file', arguments: { path: '/Users/alice/private/report.md' } },
+      },
+      {
+        schemaVersion: 1 as const,
+        eventId: 'cogseed-event-child-tool-done',
+        taskId: degradedChild.taskId,
+        sessionId: degradedChild.sessionId,
+        sequence: 3,
+        type: 'tool.finished' as const,
+        createdAt: '2026-08-05T00:00:13.000Z',
+        payload: { toolName: 'read_file', isError: false, output: 'secret-token' },
+      },
+      {
+        schemaVersion: 1 as const,
+        eventId: 'cogseed-event-child-failed',
+        taskId: degradedChild.taskId,
+        sessionId: degradedChild.sessionId,
+        sequence: 4,
+        type: 'task.failed' as const,
+        createdAt: '2026-08-05T00:00:14.000Z',
+        payload: { errorCode: 'coordinator_agent_idle' },
+      },
+    ];
+    const service = createCogSeedIpcService({
+      readTask: vi.fn(async (_userId: string, taskId: string) => (taskId === groupParent.taskId ? groupParent : taskId === degradedChild.taskId ? degradedChild : null)),
+      listTasks: vi.fn(async () => [groupParent, degradedChild]),
+      listSessions: vi.fn(async () => [session]),
+      readSession: vi.fn(async (_userId: string, sessionId: string) => (sessionId === session.sessionId ? session : null)),
+      readEvents: vi.fn(async (_userId: string, taskId: string) => (taskId === degradedChild.taskId ? childEvents : [])),
+      readCoordination: vi.fn(async () => null),
+    } as any);
+
+    const result = await service.collaborationSnapshot('renderer-user', { taskId: groupParent.taskId });
+
+    expect(result.lastProgress).toEqual(expect.objectContaining({
+      taskId: degradedChild.taskId,
+      labelKey: 'run_center.progress_tool_finished',
+      toolName: 'read_file',
+    }));
+    expect(result.recoveryAdvice).toEqual(expect.objectContaining({
+      kind: 'inspect',
+      reasonKey: 'run_center.recovery_child_degraded',
+      taskId: degradedChild.taskId,
+    }));
+    expect(JSON.stringify(result)).not.toContain('/Users/alice');
+    expect(JSON.stringify(result)).not.toContain('secret-token');
+    expect(JSON.stringify(result)).not.toContain('"arguments"');
+  });
+
+  it('classifies a timeout-shaped failure as retryable instead of leaving it running', async () => {
+    const timedOut = {
+      ...parentTask,
+      status: 'failed' as const,
+      errorCode: 'provider_timeout',
+      task: 'Timed out while reading /Users/alice/private/timeout.md',
+    };
+    const service = createCogSeedIpcService({
+      readTask: vi.fn(async (_userId: string, taskId: string) => (taskId === timedOut.taskId ? timedOut : null)),
+      listTasks: vi.fn(async () => [timedOut]),
+      listSessions: vi.fn(async () => [session]),
+      readSession: vi.fn(async (_userId: string, sessionId: string) => (sessionId === session.sessionId ? session : null)),
+      readEvents: vi.fn(async () => []),
+      readCoordination: vi.fn(async () => null),
+    } as any);
+
+    const timeoutResult = await service.collaborationSnapshot('renderer-user', { taskId: timedOut.taskId });
+
+    expect(timeoutResult.recoveryAdvice).toEqual(expect.objectContaining({
+      kind: 'retry',
+      reasonKey: 'run_center.recovery_timeout_retry',
+    }));
+    expect(timeoutResult.recoveryAdvice?.taskId).toBe(timedOut.taskId);
+    expect(JSON.stringify(timeoutResult)).not.toContain('/Users/alice');
+  });
+
+  // C-09：工作流步骤只有在拿到**安全非空** stepId 时才可操作；否则必须投影成
+  // 确定的占位（actionable:false），否则前端会渲染出点了没反应的"空 chip"。
+  it('normalizes an unsafe workflow step id into a non-actionable placeholder', async () => {
+    const coordinated = { ...parentTask, status: 'failed' as const, errorCode: 'step_failed' };
+    const service = createCogSeedIpcService({
+      readTask: vi.fn(async (_userId: string, taskId: string) => (taskId === coordinated.taskId ? coordinated : null)),
+      listTasks: vi.fn(async () => [coordinated]),
+      listSessions: vi.fn(async () => [session]),
+      readSession: vi.fn(async (_userId: string, sessionId: string) => (sessionId === session.sessionId ? session : null)),
+      readEvents: vi.fn(async () => []),
+      readCoordination: vi.fn(async () => ({
+        schemaVersion: 1,
+        coordinationId: coordinated.coordinationId,
+        ownerId: 'renderer-user',
+        parentTaskId: coordinated.taskId,
+        parentRuntimeSessionId: coordinated.runtimeSessionId,
+        status: 'failed',
+        workflowRunId: 'workflow-run-private',
+        childTaskIds: [],
+        maxChildren: 4,
+        maxDepth: 1,
+        createdAt: coordinated.createdAt,
+        updatedAt: coordinated.updatedAt,
+      })),
+      readWorkflowContext: vi.fn(async () => null),
+      readWorkflowEvents: vi.fn(async () => []),
+      readWorkflowRun: vi.fn(async () => ({
+        id: 'workflow-run-private',
+        coordinationId: coordinated.coordinationId,
+        contextId: 'context-private',
+        status: 'failed',
+        phase: 'review',
+        created_at: coordinated.createdAt,
+        updated_at: coordinated.updatedAt,
+        steps: [
+          { id: '', type: 'review', status: 'failed', actor_id: '', depends_on: ['../escape', 'step-safe'], attempts: [] },
+          { id: 'step-safe', type: 'review', status: 'pending', actor_id: 'agent-a', depends_on: ['../escape'], attempts: [] },
+        ],
+      })),
+    } as any);
+
+    const result = await service.collaborationSnapshot('renderer-user', { taskId: coordinated.taskId });
+
+    expect(result.workflow.steps).toEqual([
+      expect.objectContaining({
+        stepId: 'workflow-step-unavailable',
+        actionable: false,
+        titleKey: 'run_center.workflow_step_unavailable',
+        dependsOn: ['step-safe'],
+      }),
+      expect.objectContaining({
+        stepId: 'step-safe',
+        actionable: true,
+        titleKey: 'run_center.workflow_step',
+        dependsOn: [],
+      }),
+    ]);
+    expect(JSON.stringify(result.workflow)).not.toContain('../escape');
   });
 
   it('projects Group Chat parents as runs and deduplicates repeated actor turns', async () => {

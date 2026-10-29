@@ -2,6 +2,11 @@
  * One-shot migration: relocate the connectors registry from `<uid>/local/config/connectors.json`
  * to `<uid>/cloud/config/connectors.json`.
  *
+ * Reachability (2026-10-08 audit): the open-source build always defers — `_oauthUserId()`
+ * returns null here, so the write path below is only reachable in a build that supplies an
+ * account id. Kept hardened anyway because the same code runs there, and because a
+ * half-written cloud registry would be treated as authoritative and synced outward.
+ *
  * Historical PC-only migration. The open-source build has no account-backed connector
  * sync, so this function always defers and leaves existing local connector
  * files in place.
@@ -74,7 +79,17 @@ export function migrateConnectorsToCloud(uid: string): boolean {
   }
   try {
     fs.mkdirSync(cloudDir, { recursive: true });
-    fs.writeFileSync(newPath, plain, { mode: 0o600 });
+    // Atomic publish: a half-written authoritative cloud file would be read as
+    // the connector registry on the next launch (and synced to other devices).
+    // Write beside it with the same 0600 mode, then rename into place.
+    const tmpPath = `${newPath}.tmp-${process.pid}`;
+    try {
+      fs.writeFileSync(tmpPath, plain, { mode: 0o600 });
+      fs.renameSync(tmpPath, newPath);
+    } catch (err) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+      throw err;
+    }
   } catch (err) {
     log.error(`migrate write failed: ${(err as Error).message}`);
     return false;

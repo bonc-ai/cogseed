@@ -1,0 +1,26 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.design.review
+  name: ui-design-review
+  version: 1.0.0
+  description: Review HTML pages, screenshots, or implemented UI with prioritized
+    fixable findings, evidence, fixes, and validation guidance.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

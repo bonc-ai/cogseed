@@ -15,7 +15,10 @@ import { createLogger, redact } from '../logger';
 const log = createLogger('action-approval');
 export const ACTION_APPROVAL_TTL_MS = 10 * 60 * 1000;
 
-export type ActionApprovalKind = 'bash' | 'run_skill' | 'connector_call';
+// write_file/edit_file 也走同一个审批闸门：A2A 接待里「写」必须由接收方逐次批准
+// （设计 §3.6 L3），而运行时内核的写工具本身没有审批客户端，所以由宿主侧的
+// ontology_operation_preflight 在接待会话里发起这次审批。
+export type ActionApprovalKind = 'bash' | 'run_skill' | 'connector_call' | 'write_file' | 'edit_file';
 export type ActionApprovalRisk = 'high' | 'critical';
 export type ActionApprovalDecision = 'approve' | 'deny';
 export type ActionApprovalExecutionPhase = 'started' | 'succeeded' | 'failed';
@@ -28,6 +31,8 @@ export interface ActionApprovalInput {
   action: ActionApprovalKind;
   /** Full human-readable target, delivered to the approval modal only. */
   target: string;
+  /** Shell intent only: preserve the exact command and its working-directory scope. */
+  verbatimTarget?: boolean;
   /** Full human-readable least-privilege scope, delivered to the modal only. */
   scope: string;
   /** Safe, compact labels used in the persistent audit instead of raw inputs. */
@@ -38,6 +43,8 @@ export interface ActionApprovalInput {
   /** SHA-256 of the exact worker-side action intent; never shown to the user. */
   fingerprint: string;
   signal?: AbortSignal | null;
+  /** Optional provider deadline. May shorten, never extend, the host approval lifetime. */
+  expiresAt?: number;
 }
 
 export type ActionApprovalResult =
@@ -90,7 +97,8 @@ function compact(value: unknown, max = 500): string {
 }
 
 function isApprovalKind(value: unknown): value is ActionApprovalKind {
-  return value === 'bash' || value === 'run_skill' || value === 'connector_call';
+  return value === 'bash' || value === 'run_skill' || value === 'connector_call'
+    || value === 'write_file' || value === 'edit_file';
 }
 
 function isRisk(value: unknown): value is ActionApprovalRisk {
@@ -176,12 +184,13 @@ function clearPending(item: PendingApproval): void {
 }
 
 async function settlePending(item: PendingApproval, decision: ActionApprovalDecision | 'expired' | 'cancelled' | 'unavailable'): Promise<void> {
+  if (decision === 'approve' && Date.now() >= item.expiresAt) decision = 'expired';
   if (!pending.delete(item.requestId)) return;
   clearPending(item);
   if (decision === 'approve') {
     const timer = setTimeout(() => {
       const grant = approved.get(item.requestId);
-      if (!grant) return;
+      if (!grant || grant.started) return;
       approved.delete(item.requestId);
       void appendAudit(grant.input, grant.requestId, 'expired', 'approval_not_consumed');
     }, Math.max(1, item.expiresAt - Date.now()));
@@ -210,12 +219,14 @@ export async function requestActionApproval(input: ActionApprovalInput): Promise
   if (input.signal?.aborted) return { approved: false, code: 'E_ACTION_APPROVAL_CANCELLED' };
 
   const requestId = `approval-${crypto.randomBytes(12).toString('hex')}`;
-  const expiresAt = Date.now() + ACTION_APPROVAL_TTL_MS;
+  if (input.expiresAt !== undefined && !Number.isFinite(input.expiresAt)) return { approved: false, code: 'E_ACTION_APPROVAL_INVALID' };
+  const expiresAt = Math.min(Date.now() + ACTION_APPROVAL_TTL_MS, input.expiresAt ?? Infinity);
+  if (expiresAt <= Date.now()) return { approved: false, code: 'E_ACTION_APPROVAL_EXPIRED' };
   return new Promise<ActionApprovalResult>((resolve) => {
     const timer = setTimeout(() => {
       const item = pending.get(requestId);
       if (item) void settlePending(item, 'expired');
-    }, ACTION_APPROVAL_TTL_MS);
+    }, Math.max(1, expiresAt - Date.now()));
     timer.unref?.();
     const item: PendingApproval = { input, requestId, expiresAt, timer, resolve };
     const onAbort = () => { void settlePending(item, 'cancelled'); };
@@ -228,8 +239,9 @@ export async function requestActionApproval(input: ActionApprovalInput): Promise
         request_id: requestId,
         actor: compact(input.actor, 120),
         action: input.action,
-        target: compact(input.target, 2_000),
-        scope: compact(input.scope, 1_000),
+        target: input.verbatimTarget && input.action === 'bash' ? input.target : compact(input.target, 2_000),
+        ...(input.verbatimTarget && input.action === 'bash' ? { target_verbatim: true } : {}),
+        scope: input.verbatimTarget && input.action === 'bash' ? input.scope : compact(input.scope, 1_000),
         risk: input.risk,
         reasons: normalizedReasons(input.reasons),
         expires_at: new Date(expiresAt).toISOString(),
@@ -256,7 +268,7 @@ export async function grantAutoActionApproval(input: ActionApprovalInput): Promi
   const expiresAt = Date.now() + ACTION_APPROVAL_TTL_MS;
   const timer = setTimeout(() => {
     const grant = approved.get(requestId);
-    if (!grant) return;
+    if (!grant || grant.started) return;
     approved.delete(requestId);
     void appendAudit(grant.input, grant.requestId, 'expired', 'approval_not_consumed');
   }, ACTION_APPROVAL_TTL_MS);
@@ -281,7 +293,7 @@ export async function recordActionApprovalExecution(input: {
       || grant.input.runtimeRequestId !== input.runtimeRequestId) {
     return { handled: false };
   }
-  if (Date.now() >= grant.expiresAt) {
+  if (!grant.started && Date.now() >= grant.expiresAt) {
     approved.delete(input.requestId);
     clearTimeout(grant.timer);
     await appendAudit(grant.input, grant.requestId, 'expired', 'approval_expired_before_execution');
@@ -290,6 +302,8 @@ export async function recordActionApprovalExecution(input: {
   if (input.phase === 'started') {
     if (grant.started) return { handled: false };
     grant.started = true;
+    // TTL bounds the unused authorization, not the duration of execution.
+    clearTimeout(grant.timer);
     await appendAudit(grant.input, grant.requestId, 'execution_started');
     return { handled: true };
   }

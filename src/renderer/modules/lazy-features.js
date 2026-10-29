@@ -20,6 +20,8 @@ const _rendererFeatureManifest = Object.freeze({
   ],
   marketplace: [
     { src: './modules/marketplace.js' },
+    // S4：智能体页 / 技能页的平台分组与统一详情弹窗（registry S4-PV-001），依赖 marketplace.js 的安装 / 卸载。
+    { src: './modules/catalog.js' },
   ],
   agents: [],
   auto: [
@@ -47,17 +49,20 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './hub-contributions.css', type: 'style' },
     { src: './modules/hub-contributions-model.js' },
     { src: './modules/hub-contributions.js' },
+    // Agent 贡献页（registry HUBC-PV-004）复用上面模块的身份门与「我的贡献」，必须排在其后。
+    { src: './modules/hub-agent-contributions.js' },
     { src: './modules/skills-bindings.js' },
   ],
   recall: [
     { src: './modules/recall-information-architecture.js' },
     { src: './modules/cognition-assets/core.js' },
     { src: './modules/cognition-assets/vocabulary.js' },
+    { src: './modules/cognition-assets/settings.js' },
     { src: './modules/cognition-assets/views.js' },
     { src: './modules/cognition-assets/review-candidate.js' },
     { src: './modules/cognition-assets/review-views.js' },
+    { src: './modules/cognition-assets/library.js' },
     { src: './modules/cognition-assets/app.js' },
-    { src: './modules/personal-ontology.js' },
   ],
   'personal-ontology': [
     { src: './modules/cognition/pages.js' },
@@ -65,8 +70,21 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/personal-context-review.js' },
     { src: './modules/personal-ontology.js' },
   ],
+  'cognition-ontology': [
+    { src: './modules/cognition-ontology.css', type: 'style' },
+    { src: './modules/cognition-ontology-document.css', type: 'style' },
+    { src: './modules/cognition-ontology-graph.css', type: 'style' },
+    { src: './modules/cognition-ontology-document.js' },
+    { src: './modules/cognition-ontology-editor.js' },
+    { src: './modules/cognition-ontology-graph.js' },
+    { src: './modules/cognition-ontology-selection.js' },
+    { src: './modules/cognition-ontology.js' },
+  ],
   workspace: [
     { src: './modules/workspace.js' },
+  ],
+  contacts: [
+    { src: './modules/contacts-page.js' },
   ],
   kb: [
     { src: './modules/kb-eco.js' },

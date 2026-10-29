@@ -1,0 +1,3 @@
+cases:
+- id: smoke-ui-reference-packs
+  kind: manual-smoke

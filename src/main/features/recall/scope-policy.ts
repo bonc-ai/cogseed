@@ -8,23 +8,29 @@ import { safeId } from '../../storage';
 // 全部失效，只剩画像旁路在起作用（实机 09-12：proj-a3ae7e6a3646
 // assetIds=[]、两条身份资产 omittedRefs=scope_mismatch）。
 //
-// 词表与 KStar 线（extraction-service.scopeForTask）的五个任务类型词对齐，
+// 词表与经验域共享词表（experience-taxonomy.scopeForTask）的五个任务类型词对齐，
 // 另有 'space:<id>'（空间限定）与 '*'（显式通配）两个结构形态。词表是
 // **目标不是闸门**：产生线经 normalizeAssetScopeValue 尽力归一，归不了的
 // 保留原值（软着陆——匹配层的 token 软匹配本就兜底，硬拒会拦存量与
 // LLM 产出）。
-export const RECALL_SCOPE_TERMS = ['general', 'report', 'code', 'review', 'product'] as const;
+export const RECALL_SCOPE_TERMS = ['general', 'report', 'code', 'review', 'product', 'personal'] as const;
 export type RecallScopeTerm = (typeof RECALL_SCOPE_TERMS)[number];
 
 export function isRecallScopeTerm(value: string): boolean {
   return (RECALL_SCOPE_TERMS as readonly string[]).includes(String(value || '').trim().toLowerCase());
 }
 
-/** 明确的全局语义（中英文措辞）→ 'general'。中招即归一。 */
+/** 明确的全局语义（中英文措辞）→ 'general'。中招即归一。
+ *  2026-10-15 拍板⑤：personal/user 从全局提示中拆出——身份/偏好事实
+ *  归自己的 'personal' 档，不再与 general 混淆。 */
 const GLOBAL_SCOPE_HINTS = [
   '全局', '通用', '画像', '所有对话', '所有会话', '跨会话', '不限空间',
-  '任何任务', 'global', 'general', 'personal', 'user',
+  '任何任务', 'global', 'general',
 ];
+/** 个人身份/偏好语义 → 'personal'。exact 集合用词可宽（含裸 'user'），
+ *  substring 集合只用无歧义词（裸 '用户'/'身份' 会误伤"用户全局画像"）。 */
+const PERSONAL_SCOPE_HINTS_EXACT = ['personal', 'user', '个人', '身份'];
+const PERSONAL_SCOPE_HINTS_INCLUDES = ['personal', '个人偏好', '个人身份', '用户偏好'];
 
 /** 资产**写入点**的 scope 归一（2026-09-19 刀一）：三档——
  *  ① 词表值/中文全局提示 → 软归一为词表值；
@@ -37,18 +43,21 @@ const GLOBAL_SCOPE_HINTS = [
  *  只在 create/update 的输入口调用；读取口（asAsset）不动——存量自由文本
  *  由既有 migrateLegacyFreeTextScopes 轨道处理，读时强归一会破坏词条语义。 */
 export function resolveScopeForAsset(raw: string): string {
-  const normalized = normalizeAssetScopeValue(raw);
-  if (normalized) return normalized;
   const text = String(raw || '').trim();
   if (!text) return 'general';
-  // 组合词条（'review,project'）是合法形态：按分隔符拆段，每段都是合法
-  // 词条（≤20 字、非"…时"句式、无句号）才整串保留；任一段不合格（如
-  // "新增、审核、晋升认知资产条目时"的末段是适用条件句）兜底 general。
-  const segments = text.split(/[、,，;；]/).map((segment) => segment.trim()).filter(Boolean);
-  if (segments.length === 0) return 'general';
-  const allTerms = segments.every((segment) =>
-    segment.length <= 20 && !segment.endsWith('时') && !/[。！？]/.test(segment));
-  return allTerms ? text : 'general';
+  const aliases: Record<string, string> = {
+    '跨任务通用': 'general', '报告': 'report', '报告任务': 'report', '报告与文档': 'report',
+    '编程开发': 'code', '编程': 'code', '审查与评审': 'review', '产品与架构': 'product',
+    '个人偏好': 'personal', '个人身份': 'personal', '用户偏好': 'personal',
+  };
+  if (aliases[text]) return aliases[text];
+  if (isRecallScopeTerm(text.toLowerCase())) return text.toLowerCase();
+  if (PERSONAL_SCOPE_HINTS_EXACT.includes(text.toLowerCase())) return 'personal';
+  // A free-text task boundary must never silently become a global boundary.
+  // Existing legacy normalization remains in normalizeAssetScopeValue below.
+  if (GLOBAL_SCOPE_HINTS.includes(text.toLowerCase())) return 'general';
+  if (text.length > 500) throw new Error('invalid ability asset task scope');
+  return text;
 }
 
 /** 自由文本 scope → 词表值（软归一）。
@@ -57,6 +66,7 @@ export function normalizeAssetScopeValue(raw: string): RecallScopeTerm | null {
   const text = String(raw || '').trim().toLowerCase();
   if (!text) return null;
   if (isRecallScopeTerm(text)) return text as RecallScopeTerm;
+  if (PERSONAL_SCOPE_HINTS_INCLUDES.some((hint) => text.includes(hint))) return 'personal';
   if (GLOBAL_SCOPE_HINTS.some((hint) => text.includes(hint))) return 'general';
   return null;
 }
@@ -205,7 +215,9 @@ export function scopeIncludes(scope: string, text: string): boolean {
   // 特定 purpose（如 KSTAR 硬编码的 'review'）过滤掉。实机 72% 资产为
   // general scope，KSTAR 投影 purpose='review' 时 36% 投影因此为空
   // （2026-08-17 观测：84 个投影 31 个 assets=0）。
-  if (terms.includes('general')) return true;
+  // personal 同为通配（拍板⑤）：身份/偏好是用户域不是任务域，适用于所有
+  // 任务——否则身份资产会从多数任务里掉出来。
+  if (terms.includes('general') || terms.includes('personal')) return true;
   if (terms.some((term) => matchesScopeToken(text, term))) return true;
   const textTokens = splitScopeTerms(text);
   return splitScopeTerms(scope).some((token) => scopeTokenMatches(textTokens, token));

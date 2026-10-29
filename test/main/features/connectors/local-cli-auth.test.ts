@@ -115,6 +115,22 @@ async function load() {
 }
 
 describe('local CLI authorization', () => {
+  it.each(['tencent-meeting', 'feishu', 'dingtalk', 'wecom'])('keeps Tencent user directories exclusive to Tencent when authorizing %s', async id => {
+    mocks.callTool = vi.fn(async () => ({ logged_in: true, user_name: 'signed-in' }));
+    const { findCatalogEntry } = await import('../../../../src/main/features/connectors/catalog');
+    const mod = await load();
+    await mod.ensureLocalCliAuthorized('test-user', findCatalogEntry(id)!);
+    const env = mocks.transports[0].env || {};
+    if (id === 'tencent-meeting') {
+      expect(env.TMEET_CLI_CONFIG_DIR).toContain('test-user');
+      expect(env.TMEET_CLI_DATA_DIR).toContain('test-user');
+    } else {
+      expect(env.TMEET_CLI_CONFIG_DIR).toBeUndefined();
+      expect(env.TMEET_CLI_DATA_DIR).toBeUndefined();
+    }
+    expect(mocks.close).toHaveBeenCalledTimes(1);
+  });
+
   it('skips the login entirely when the CLI already holds a session', async () => {
     const calls: string[] = [];
     mocks.callTool = vi.fn(async (name: string) => {
@@ -124,7 +140,7 @@ describe('local CLI authorization', () => {
     });
 
     const mod = await load();
-    const result = await mod.ensureLocalCliAuthorized(ENTRY as any);
+    const result = await mod.ensureLocalCliAuthorized('test-user', ENTRY as any);
 
     expect(result).toEqual({ user_name: '晨曦' });
     // No authorization prompt, and no browser opened for a session that already exists.
@@ -151,7 +167,7 @@ describe('local CLI authorization', () => {
     });
 
     const mod = await load();
-    const result = await mod.ensureLocalCliAuthorized(ENTRY as any);
+    const result = await mod.ensureLocalCliAuthorized('test-user', ENTRY as any);
 
     expect(result).toEqual({ user_name: '晨曦' });
     expect(calls).toContain('start_login');
@@ -178,7 +194,7 @@ describe('local CLI authorization', () => {
     });
 
     const mod = await load();
-    await expect(mod.ensureLocalCliAuthorized(ENTRY as any)).resolves.toEqual({ user_name: '晨曦' });
+    await expect(mod.ensureLocalCliAuthorized('test-user', ENTRY as any)).resolves.toEqual({ user_name: '晨曦' });
     expect(mocks.broadcastAuthorizationUrl).toHaveBeenCalled();
   });
 
@@ -194,7 +210,7 @@ describe('local CLI authorization', () => {
     const mod = await load();
     // The manager maps this message to the renderer's `flow_timeout` outcome, so the wording is
     // load-bearing, not cosmetic.
-    await expect(mod.ensureLocalCliAuthorized(ENTRY as any)).rejects.toThrow(/flow timed out/);
+    await expect(mod.ensureLocalCliAuthorized('test-user', ENTRY as any)).rejects.toThrow(/flow timed out/);
     expect(calls).toContain('stop_login');
     expect(mocks.close).toHaveBeenCalledTimes(1);
   });
@@ -209,7 +225,7 @@ describe('local CLI authorization', () => {
     });
 
     const mod = await load();
-    const pending = mod.ensureLocalCliAuthorized(ENTRY as any);
+    const pending = mod.ensureLocalCliAuthorized('test-user', ENTRY as any);
     // Wait for the flow to actually be pending before cancelling, so the test asserts the real
     // window rather than racing it.
     await vi.waitFor(() => expect(calls).toContain('start_login'));
@@ -230,7 +246,7 @@ describe('local CLI authorization', () => {
     });
 
     const mod = await load();
-    await expect(mod.ensureLocalCliAuthorized(ENTRY as any)).rejects.toThrow(/returned no URL/);
+    await expect(mod.ensureLocalCliAuthorized('test-user', ENTRY as any)).rejects.toThrow(/returned no URL/);
     expect(mocks.close).toHaveBeenCalledTimes(1);
   });
 
@@ -244,10 +260,10 @@ describe('local CLI authorization', () => {
     });
 
     const mod = await load();
-    const first = mod.ensureLocalCliAuthorized(ENTRY as any);
+    const first = mod.ensureLocalCliAuthorized('test-user', ENTRY as any);
     await vi.waitFor(() => expect(calls).toContain('start_login'));
 
-    const second = mod.ensureLocalCliAuthorized(ENTRY as any);
+    const second = mod.ensureLocalCliAuthorized('test-user', ENTRY as any);
     await vi.waitFor(() => expect(mocks.transports.length).toBeGreaterThanOrEqual(2));
 
     await expect(first).rejects.toThrow(/superseded/);
@@ -258,7 +274,7 @@ describe('local CLI authorization', () => {
 
   it('refuses an entry that is not a local_cli connector', async () => {
     const mod = await load();
-    await expect(mod.ensureLocalCliAuthorized({ ...ENTRY, auth_mode: 'mcp_dcr' } as any))
+    await expect(mod.ensureLocalCliAuthorized('test-user', { ...ENTRY, auth_mode: 'mcp_dcr' } as any))
       .rejects.toThrow(/not a local_cli connector/);
   });
 
@@ -273,7 +289,7 @@ describe('local CLI authorization', () => {
     mocks.callTool = vi.fn(async () => toolError('tmeet auth status failed: not logged in'));
 
     const mod = await load();
-    await expect(mod.ensureLocalCliAuthorized(ENTRY as any))
+    await expect(mod.ensureLocalCliAuthorized('test-user', ENTRY as any))
       .rejects.toThrow(/tmeet auth status failed/);
   });
 
@@ -289,7 +305,7 @@ describe('local CLI authorization', () => {
     });
 
     const mod = await load();
-    const pending = mod.ensureLocalCliAuthorized(ENTRY as any);
+    const pending = mod.ensureLocalCliAuthorized('test-user', ENTRY as any);
     await vi.waitFor(() => expect(calls).toContain('start_login'));
     // Reached the poll stage, i.e. it unwrapped, failed to parse, and treated that as "signed out"
     // instead of surfacing a SyntaxError.

@@ -7,6 +7,7 @@ import {
   _resolveAgentInputsForRuntimeForTest,
 } from '../../../../src/main/features/group_chat/bus';
 import { prompts } from '../../../../src/main/prompts/loader';
+import { buildLanguageDirective } from '../../../../src/main/i18n';
 
 describe('dispatch tool-result redaction in the process rail', () => {
   // Assert the worker OUTPUT is gone (robust to the i18n'd replacement wording),
@@ -153,7 +154,7 @@ describe('group_chat CLI output_format prompt hints', () => {
       agent_name: 'CliAgent',
       agent_description: 'Runs local CLI tasks.',
       output_protocol_block: '',
-      language_block: '## User language\n\nUser UI language: **English**.',
+      language_block: buildLanguageDirective('en'),
       attachments_block: '',
       conversation_block: '',
       task_body: 'Summarize status.',
@@ -173,7 +174,7 @@ describe('group_chat CLI output_format prompt hints', () => {
       agent_name: 'CliAgent',
       agent_description: 'Runs local CLI tasks.',
       output_protocol_block: '',
-      language_block: '## User language\n\nUser UI language: **Simplified Chinese**. Write all human-readable prose in Simplified Chinese.',
+      language_block: buildLanguageDirective('zh'),
       attachments_block: '',
       conversation_block: '',
       task_body: 'Summarize status.',
@@ -181,7 +182,8 @@ describe('group_chat CLI output_format prompt hints', () => {
     });
 
     expect(rendered).toContain('## User language');
-    expect(rendered).toContain('Write all human-readable prose in Simplified Chinese');
+    expect(rendered).toContain('reply in the language of the latest user request');
+    expect(rendered).toContain('fallback response language: **Chinese (简体中文)**');
     expect(rendered.indexOf('## Runtime injection')).toBeLessThan(rendered.indexOf('## User language'));
     expect(rendered).toContain('## Current date');
   });

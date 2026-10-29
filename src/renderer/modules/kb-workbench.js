@@ -5694,6 +5694,7 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
                   </div>
                 </div>
                 ${_uiIconButton({ label: _tr('kb.workbench.reset_sort', '重置排序并刷新'), icon: 'refresh', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-refresh', 'data-wb-label': 'kb.workbench.reset_sort' } })}
+                ${_uiIconButton({ label: _tr('kb.workbench.glossary', '转写词表'), icon: 'book-open', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-glossary', 'data-wb-label': 'kb.workbench.glossary' } })}
                 <div class="kb-wb-import-wrap">
                   ${_uiIconButton({ label: _tr('kb.workbench.import', '导入内容'), icon: 'upload', className: 'kb-wb-icon-btn', attrs: { id: 'kb-wb-import', 'data-wb-label': 'kb.workbench.import' } })}
                   <div class="kb-wb-import-menu" id="kb-wb-import-menu" hidden>
@@ -5904,10 +5905,22 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
     const rightPanel = document.getElementById('kb-wb-right-panel');
     const rightExpandBtn = document.getElementById('kb-wb-right-expand');
     const rightCollapseBtn = document.getElementById('kb-wb-right-collapse');
-    const rightPanelMedia = typeof window.matchMedia === 'function'
+    // 窄/宽由知识库视图自身宽度决定（与 style.css 的 `@container kb-view
+    // (max-width: 999px)` 同一阈值）：外壳 rail / 侧栏（specs/008）会改变
+    // 工作台可用宽度，视口宽度不再可靠。无 ResizeObserver 的环境退回视口查询。
+    const kbView = document.getElementById('kb-view');
+    const useViewWidth = Boolean(kbView && typeof window.ResizeObserver === 'function'
+      && typeof kbView.getBoundingClientRect === 'function');
+    const rightPanelMedia = !useViewWidth && typeof window.matchMedia === 'function'
       ? window.matchMedia('(max-width: 1100px)')
       : null;
-    let rightPanelNarrow = Boolean(rightPanelMedia && rightPanelMedia.matches);
+    const viewIsNarrow = () => {
+      const width = kbView.getBoundingClientRect().width;
+      return width > 0 ? width <= 999 : null; // 隐藏中（0 宽）不判定
+    };
+    let rightPanelNarrow = useViewWidth
+      ? viewIsNarrow() === true
+      : Boolean(rightPanelMedia && rightPanelMedia.matches);
     _state.rightPanelOpen = !rightPanelNarrow;
     const applyRightPanel = () => {
       // 单一事实源：_state.rightPanelOpen。此前写成
@@ -5935,11 +5948,16 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       applyRightPanel();
       rightExpandBtn?.focus();
     });
-    rightPanelMedia?.addEventListener?.('change', (event) => {
-      rightPanelNarrow = Boolean(event.matches);
+    const onNarrowChange = (narrow) => {
+      if (narrow === null || narrow === rightPanelNarrow) return;
+      rightPanelNarrow = narrow;
       _state.rightPanelOpen = !rightPanelNarrow;
       applyRightPanel();
-    });
+    };
+    if (useViewWidth) {
+      new window.ResizeObserver(() => onNarrowChange(viewIsNarrow())).observe(kbView);
+    }
+    rightPanelMedia?.addEventListener?.('change', (event) => onNarrowChange(Boolean(event.matches)));
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || !rightPanelNarrow || !_state.rightPanelOpen) return;
       if (document.getElementById('kb-qa-history-panel') || document.querySelector('.kb-import-dlg-overlay')) return;
@@ -6067,6 +6085,16 @@ let _mmZoom = 1, _mmPanX = 0, _mmPanY = 0, _mmPanning = false, _mmPanStart = nul
       if (def) def.classList.add('is-selected');
       _loadAll();
       if (typeof uiToast === 'function') uiToast(_tr('kb.workbench.sort_reset', '已重置排序（更新时间）并刷新'), { variant: 'info', timeoutMs: 2000 });
+    });
+    // 词表按钮 → 转写词表面板（转写纠错词表的独立入口；此前只能从转写文件的
+    // 「转写纠错」面板内部进入，路径过深，知识库侧无法直接维护词表）。
+    document.getElementById('kb-wb-glossary')?.addEventListener('click', () => {
+      const mgr = window.KbGlossaryManager;
+      if (mgr && typeof mgr.open === 'function') {
+        mgr.open({ onChanged: () => { _loadAll(); } });
+      } else if (typeof uiToast === 'function') {
+        uiToast(_tr('kb.workbench.glossary_unavailable', '转写词表面板暂时不可用'), { variant: 'warning' });
+      }
     });
     // 导入按钮 → 多级导入菜单（对齐 ima：本地文件/文件夹/网页/笔记/新建文件夹等）
     const importMenu = document.getElementById('kb-wb-import-menu');

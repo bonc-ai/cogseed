@@ -1,4 +1,5 @@
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
+import { scopeForTask } from '../recall/experience-taxonomy';
 import { lessonLanguageMismatches } from '../../util/language';
 import { safeId } from '../../storage';
 import { attributionAllowsReusableLearning } from './secondary-attribution';
@@ -15,30 +16,16 @@ export function lessonTitleCore(text: string): string {
     .trim();
   // "遇到同类情况时，应注意修正："是"待修正经验"模板引导，整体移除。
   t = t.replace(/^(?:遇到同类情况时，)?(?:应|须|要)?注意修正[:：]/, '')
-    // 引导前缀（"当X时，"/"对于X，"/"处理X时，"等）惰性匹配到标点移除。
-    .replace(/^(?:当|对于|遇到|处理|在处理|在)[^，。；,.;:：]*?(?:时|后|中|之前|以后)?[，,。；;]/, '')
+    // 引导前缀（"当X时，"/"对于X，"/"回答X时，"/"处理X时，"等）惰性匹配到标点移除。
+    .replace(/^(?:当|对于|遇到|处理|在处理|回答|答复|解答|在)[^，。；,.;:：]*?(?:时|后|中|之前|以后)?[，,。；;：:]/, '')
     // 纯助动词引导（"可以/应该/需要"）——"先/再"是流程内容词（"先X再Y"），不移除。
     .replace(/^(?:可|应|须|要|建议|务必|注意)[^，。；,.;:：]{0,2}/, '')
     .replace(/^(?:“|『|「)/, '')
-    .replace(/([，。；,.;:：])[\s\S]*$/, '$1')
+    .replace(/[，。；,.;:：][\s\S]*$/, '')
     .trim();
   if (!t) return '通用经验';
   // 40 字截断：24 字太短，标题核心经常被截成无意义残片（用户反馈）。
   return t.length <= 40 ? t : `${t.slice(0, 40)}…`;
-}
-
-export function scopeForTask(task: string): string {
-  // Short ASCII tags by design (retrieval matches scope tokens whole-word /
-  // bidirectional + cross-language aliases); CJK keywords keep Chinese tasks
-  // out of the weak 'general' fallback.
-  // NOTE: `file`/`文件` are weak words — "文件不存在时返回默认值" is CODE
-  // logic, not a document/report task; matching them to 'report' mislabels
-  // refactor/code tasks and breaks retrieval. Strong document words only.
-  if (/report|summary|document|报告|总结/i.test(task)) return 'report';
-  if (/code|function|bug|test|代码|函数|缺陷|测试/i.test(task)) return 'code';
-  if (/review|audit|审查|审计|检查|评审/i.test(task)) return 'review';
-  if (/product|decision|architecture|产品|决策|架构/i.test(task)) return 'product';
-  return 'general';
 }
 
 export function gapType(review: KstarReviewRecord): KstarCandidateProposal['suggestedType'] | null {
@@ -270,18 +257,4 @@ export function buildKstarDetectionHints(
     hasWorkflowLearningSignal: workflowLearningSignal,
     hasReviewGap: review.confidence >= 0.7 && !!review.reason,
   };
-}
-
-/** 沉淀分支标签 → 经验目录类型轴（specs/016 T005）。
- *  与 `userFacingSummary`（task-level-precipitation.ts）的既有三分支同源：
- *  lesson=可复用经验 / workflow=已验证的工作流程 / gap=待修正经验；
- *  判不出（含 null/undefined/未来新增的 kind）→ uncategorized，不抛错、
- *  不新造第四种分类词（用户可后续在目录里手动调整类型）。 */
-export type KstarExperienceKind = 'lesson' | 'workflow' | 'gap';
-
-const EXPERIENCE_KINDS: ReadonlySet<string> = new Set(['lesson', 'workflow', 'gap']);
-
-export function experienceTypeOf(kind: unknown): KstarExperienceKind | 'uncategorized' {
-  const value = String(kind ?? '');
-  return EXPERIENCE_KINDS.has(value) ? value as KstarExperienceKind : 'uncategorized';
 }

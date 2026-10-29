@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -13,7 +14,7 @@ const RULE_BOUNDARY = { applicableWhen: ['performing delivery work'], forbiddenW
 
 async function seedAsset(statement: string, tag: string) {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
-  const candidate = await candidates.saveRecallCandidate(UID, {
+  const candidate = await createNightlyCandidateFixture(UID, {
     judgment: statement,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: `履历样本${tag}`,
@@ -101,7 +102,7 @@ describe('认知履历：摘要用的计数', () => {
     const { asset } = await seedAsset('两条来源的判断。', 'd');
     const view = await trace(asset.id);
 
-    expect(stage(view, 'formation').count).toBe(2);
+    expect(stage(view, 'formation').count).toBe(4); // two original refs plus the explicit nightly fixture session/message
     expect(view.assetVersion).toBe('1');
     expect(stage(view, 'settling').detail).toContain('当前第 1 版');
   });

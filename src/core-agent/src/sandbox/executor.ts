@@ -4,7 +4,7 @@
  * Provides resource limits, directory restrictions, command filtering,
  * and timeout enforcement. Inspired by OpenClaw's sandbox execution layer.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
@@ -284,6 +284,351 @@ function uniqueSandboxDirs(input: readonly string[] | undefined): string[] {
 
 function escapeSandboxString(input: string): string {
   return input.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+}
+
+/* ------------------------------------------------------------------------- *
+ * Strict reception sandbox (macOS, opt-in per shell call)
+ *
+ * The default macOS sandbox above is `(allow default) + (deny file-write*)`:
+ * it stops writes outside the allowed dirs but nothing else. A trusted
+ * reception turn additionally needs the denied *read* side and no network, so
+ * `local-tools` opts exactly one bash call in by setting the markers below in
+ * the injected `SandboxConfig.env`. They are read from that injected map only
+ * (never from `process.env`), so ordinary local turns cannot pick the strict
+ * profile up by accident and keep their existing behavior byte for byte.
+ *
+ * The profile is the deny-default baseline proven in
+ * `sandbox-deny-default-diagnosis.md` §2: `file-read-data "/"` is required by
+ * dyld4's CacheFinder (otherwise exit 134 with empty stderr) and
+ * `sysctl-read` keeps Node's os.cpus()/os.totalmem() from aborting with a
+ * native assertion. Anything not listed is denied — network, reads/writes
+ * outside ROOT/SCRATCH, and the mach/ipc lookups the sandbox evaluates. The
+ * launchd bootstrap port inherited by the process is *not* filtered by this
+ * profile (`launchctl print` still runs); that limitation is documented in
+ * `s2b-strict-sandbox.md` §9.13 and is not claimed as closed. Paths must be
+ * canonical (realpath): the sandbox matches vnode canonical paths, not the
+ * strings we pass.
+ * ------------------------------------------------------------------------- */
+
+/** Env keys that opt one shell call into the strict reception profile. */
+export const STRICT_SANDBOX_ENV = {
+  /** `"1"` enables the strict profile; any other present value fails closed. */
+  mode: "COGSEED_SANDBOX_STRICT",
+  /** Canonical confirmed reception root (the single read/write ceiling). */
+  root: "COGSEED_SANDBOX_STRICT_ROOT",
+  /** Writable scratch dir, must live inside ROOT. Default `<ROOT>/.cogseed-scratch`. */
+  scratch: "COGSEED_SANDBOX_STRICT_SCRATCH",
+  /** sandbox-exec override used by fail-closed tests/diagnosis. Validated like the default. */
+  execPath: "COGSEED_SANDBOX_EXEC",
+} as const;
+
+export const STRICT_SANDBOX_SCRATCH_DIRNAME = ".cogseed-scratch";
+export const DEFAULT_SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+export const E_SANDBOX_UNAVAILABLE = "E_SANDBOX_UNAVAILABLE";
+export const E_SANDBOX_SCOPE = "E_SANDBOX_SCOPE";
+
+/** System-only PATH for strict turns. Homebrew/node/npm roots live outside the
+ *  proven root, so advertising them would only produce metadata denials. */
+const STRICT_SANDBOX_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+export type StrictSandboxFailure = { code: string; message: string };
+
+export type StrictSandboxPolicy = {
+  /** Canonical confirmed reception root. */
+  root: string;
+  /** Canonical in-root scratch dir (allowed read+write, used as TMPDIR/HOME). */
+  scratch: string;
+  sandboxExec: string;
+  /** Full deny-default profile text passed through `sandbox-exec -p`. */
+  profile: string;
+};
+
+export type StrictSandboxResolution =
+  | { kind: "none" }
+  | { kind: "refused"; failure: StrictSandboxFailure }
+  | { kind: "strict"; policy: StrictSandboxPolicy };
+
+function isSameOrInsideSandboxPath(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/**
+ * Deny-default profile for a trusted reception shell. Exported so tests can
+ * pin the exact rule set; the parameterized `-D` form is deliberately not used
+ * — canonical paths are injected into the text and handed to `sandbox-exec -p`
+ * in-process, which avoids the lifetime/permissions of a temp `-f` profile.
+ */
+export function buildStrictReceptionSandboxProfile(roots: { root: string; scratch: string }): string {
+  const root = escapeSandboxString(roots.root);
+  const scratch = escapeSandboxString(roots.scratch);
+  return [
+    "(version 1)",
+    "(deny default)",
+    ";; process lifecycle: initial execve + fork for external commands",
+    "(allow process-exec)",
+    "(allow process-fork)",
+    ";; kernel state: Node os.cpus()/os.totalmem() abort without it",
+    "(allow sysctl-read)",
+    ';; dyld4 CacheFinder reads "/" before libSystem; metadata alone is not enough',
+    '(allow file-read-data (literal "/"))',
+    ";; PATH discovery only (bash stats candidates); read-DATA on /bin,/usr/bin stays denied",
+    '(allow file-read-metadata (subpath "/bin") (subpath "/usr/bin"))',
+    ";; proven root + scratch, plus the minimal system runtime literals",
+    `(allow file-read* (subpath "${root}") (subpath "${scratch}") (literal "/System/Library/OpenSSL/openssl.cnf") (literal "/dev/null") (literal "/private/var/select/sh"))`,
+    `(allow file-write* (subpath "${root}") (subpath "${scratch}") (literal "/dev/null"))`,
+  ].join("\n");
+}
+
+function strictSandboxRefused(message: string): StrictSandboxResolution {
+  return { kind: "refused", failure: { code: E_SANDBOX_UNAVAILABLE, message } };
+}
+
+/**
+ * Resolve the strict reception policy from host-injected env. Returns
+ * `{kind:"none"}` for ordinary turns and `{kind:"refused"}` for every state
+ * that cannot be proven (non-darwin, missing/odd marker, canonical root not
+ * stat-able, no allowed dirs, sandbox-exec missing, scratch outside ROOT).
+ * A refused result must never fall back to an unrestricted spawn.
+ */
+export function resolveStrictReceptionSandbox(input: {
+  env?: Record<string, string> | undefined;
+  allowedDirs: readonly string[];
+  platform?: NodeJS.Platform;
+}): StrictSandboxResolution {
+  const env = input.env ?? {};
+  const hasModeMarker = STRICT_SANDBOX_ENV.mode in env;
+  // A partially injected marker set is a host bug, not an ordinary turn: only
+  // the complete triple may opt in, and any leftover strict key fails closed
+  // instead of silently degrading to the allow-default write sandbox.
+  const partialMarkers = [
+    STRICT_SANDBOX_ENV.root,
+    STRICT_SANDBOX_ENV.scratch,
+    STRICT_SANDBOX_ENV.execPath,
+  ].filter((key) => key in env);
+  if (!hasModeMarker) {
+    if (partialMarkers.length) {
+      return strictSandboxRefused(
+        `a partial strict sandbox marker is set (${partialMarkers.join(", ")}) without ${STRICT_SANDBOX_ENV.mode}; refusing instead of falling back to allow-default.`,
+      );
+    }
+    return { kind: "none" };
+  }
+  if (env[STRICT_SANDBOX_ENV.mode] !== "1") {
+    return strictSandboxRefused(
+      `the strict sandbox marker ${STRICT_SANDBOX_ENV.mode} has an unexpected value; refusing instead of falling back to allow-default.`,
+    );
+  }
+  const platform = input.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return strictSandboxRefused(
+      `a trusted reception shell requires the macOS deny-default sandbox; ${platform} has no proven OS-enforced equivalent.`,
+    );
+  }
+  const rawRoot = (env[STRICT_SANDBOX_ENV.root] ?? "").trim();
+  if (!rawRoot || !path.isAbsolute(rawRoot)) {
+    return strictSandboxRefused("the confirmed reception root is missing or is not an absolute path.");
+  }
+  const root = canonicalSandboxPath(rawRoot);
+  let rootStat: fs.Stats;
+  try {
+    rootStat = fs.statSync(root);
+  } catch (err) {
+    return strictSandboxRefused(`the confirmed reception root cannot be proven (${(err as Error).message}).`);
+  }
+  if (!rootStat.isDirectory()) {
+    return strictSandboxRefused("the confirmed reception root is not a directory.");
+  }
+  // Defence in depth: an upstream regression that hands us "/" would turn the
+  // filesystem root into the reception scope. Only the exact filesystem root
+  // is refused here; a mount-point root such as "/Volumes/X" is still accepted
+  // as a user-confirmed reception root.
+  if (root === path.parse(root).root) {
+    return strictSandboxRefused(
+      "the confirmed reception root is the filesystem root; refusing to treat it as the reception scope.",
+    );
+  }
+  const allowedDirs = input.allowedDirs;
+  if (!allowedDirs.length) {
+    return strictSandboxRefused(
+      "the reception shell has no proven allowed directory; refusing instead of spawning an unsandboxed child.",
+    );
+  }
+  if (!allowedDirs.some((dir) => canonicalSandboxPath(dir) === root)) {
+    return strictSandboxRefused(
+      "the confirmed reception root is not one of the shell's allowed directories; refusing to widen or reinterpret the scope.",
+    );
+  }
+  const sandboxExec = (env[STRICT_SANDBOX_ENV.execPath] ?? "").trim() || DEFAULT_SANDBOX_EXEC;
+  if (!path.isAbsolute(sandboxExec)) {
+    return strictSandboxRefused("the sandbox-exec path is not absolute.");
+  }
+  let execStat: fs.Stats;
+  try {
+    execStat = fs.statSync(sandboxExec);
+  } catch {
+    return strictSandboxRefused(`sandbox-exec is unavailable at ${sandboxExec}.`);
+  }
+  if (!execStat.isFile()) {
+    return strictSandboxRefused(`sandbox-exec is not a regular file at ${sandboxExec}.`);
+  }
+  try {
+    fs.accessSync(sandboxExec, fs.constants.X_OK);
+  } catch {
+    return strictSandboxRefused(`sandbox-exec is not executable at ${sandboxExec}.`);
+  }
+  const rawScratch = (env[STRICT_SANDBOX_ENV.scratch] ?? "").trim()
+    || path.join(root, STRICT_SANDBOX_SCRATCH_DIRNAME);
+  const scratchCandidate = path.resolve(rawScratch);
+  if (!isSameOrInsideSandboxPath(root, scratchCandidate)) {
+    return strictSandboxRefused("the reception scratch directory is outside the proven root; refusing.");
+  }
+  let scratch: string;
+  try {
+    fs.mkdirSync(scratchCandidate, { recursive: true, mode: 0o700 });
+    scratch = fs.realpathSync.native(scratchCandidate);
+  } catch (err) {
+    return strictSandboxRefused(`cannot prepare the in-root scratch directory: ${(err as Error).message}`);
+  }
+  if (!isSameOrInsideSandboxPath(root, scratch)) {
+    return strictSandboxRefused("the reception scratch directory resolves outside the proven root; refusing.");
+  }
+  return {
+    kind: "strict",
+    policy: { root, scratch, sandboxExec, profile: buildStrictReceptionSandboxProfile({ root, scratch }) },
+  };
+}
+
+/** Successful self-checks, keyed by binary + exact profile text. Failures are
+ *  never cached: the next call re-probes and still fails closed. */
+const strictSandboxSelfChecks = new Set<string>();
+
+/** Run `sandbox-exec -p <profile>` against `/usr/bin/true` before the real
+ *  caller: a profile that cannot start must not be mistaken for a sandboxed
+ *  shell that merely failed. */
+function strictSandboxSelfCheck(policy: StrictSandboxPolicy): StrictSandboxFailure | null {
+  const key = `${policy.sandboxExec}\u0000${policy.profile}`;
+  if (strictSandboxSelfChecks.has(key)) return null;
+  let probe: ReturnType<typeof spawnSync>;
+  try {
+    probe = spawnSync(policy.sandboxExec, ["-p", policy.profile, "/usr/bin/true"], {
+      env: { PATH: STRICT_SANDBOX_PATH },
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 5_000,
+    });
+  } catch (err) {
+    return {
+      code: E_SANDBOX_UNAVAILABLE,
+      message: `the strict profile self-check could not start: ${(err as Error).message}`,
+    };
+  }
+  if (probe.error) {
+    return {
+      code: E_SANDBOX_UNAVAILABLE,
+      message: `the strict profile self-check could not start: ${probe.error.message}`,
+    };
+  }
+  if (probe.status !== 0) {
+    const detail = String(probe.stderr ?? "").trim().slice(0, 400);
+    return {
+      code: E_SANDBOX_UNAVAILABLE,
+      message: `the strict deny-default profile self-check exited ${probe.status ?? "null"}${detail ? `: ${detail}` : ""}.`,
+    };
+  }
+  if (strictSandboxSelfChecks.size > 64) strictSandboxSelfChecks.clear();
+  strictSandboxSelfChecks.add(key);
+  return null;
+}
+
+/** Per-invocation TMPDIR/HOME inside the proven scratch dir. Foreground calls
+ *  remove it when the process settles; background calls keep theirs because
+ *  the detached process outlives the turn. */
+function createStrictRunDir(scratch: string): { dir: string } | { error: string } {
+  const candidate = path.join(
+    scratch,
+    `run-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  try {
+    fs.mkdirSync(candidate, { recursive: true, mode: 0o700 });
+    const dir = fs.realpathSync.native(candidate);
+    if (!isSameOrInsideSandboxPath(scratch, dir)) {
+      fs.rmSync(candidate, { recursive: true, force: true });
+      return { error: "the per-command scratch directory resolves outside the in-root scratch directory." };
+    }
+    return { dir };
+  } catch (err) {
+    return { error: `cannot create the per-command scratch directory: ${(err as Error).message}` };
+  }
+}
+
+function removeStrictRunDir(runDir: string | null): void {
+  if (!runDir) return;
+  try { fs.rmSync(runDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+}
+
+/** Canonical env for a strict shell: everything that can hold state points at
+ *  the writable in-root scratch dir; PATH drops unreadable user toolchains. */
+function applyStrictSandboxEnv(env: Record<string, string>, runDir: string): void {
+  env.HOME = runDir;
+  env.TMPDIR = runDir;
+  env.TMP = runDir;
+  env.TEMP = runDir;
+  env.PATH = STRICT_SANDBOX_PATH;
+  env.SANDBOX_NO_NETWORK = "1";
+  delete env.COGSEED_PATH_PREPEND;
+}
+
+/** Resolve `target` against the writable roots by canonicalizing the deepest
+ *  existing ancestor first, so a symlinked parent cannot smuggle the target
+ *  outside. The final component is checked with `lstat` and must not be a
+ *  symlink (`executeBackground` additionally opens with O_NOFOLLOW): the
+ *  parent opens the log fd *after* this check, and following a final-component
+ *  symlink there could create a file outside the writable roots. Returns the
+ *  canonical target path or null when out of scope. */
+function resolveStrictWritablePath(policy: StrictSandboxPolicy, target: string): string | null {
+  const abs = path.resolve(target);
+  let probe = path.dirname(abs);
+  const rest: string[] = [];
+  let real = "";
+  for (;;) {
+    try {
+      real = fs.realpathSync.native(probe);
+      break;
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) return null;
+      rest.unshift(path.basename(probe));
+      probe = parent;
+    }
+  }
+  const resolved = path.join(real, ...rest, path.basename(abs));
+  if (!isSameOrInsideSandboxPath(policy.root, resolved)
+    && !isSameOrInsideSandboxPath(policy.scratch, resolved)) {
+    return null;
+  }
+  try {
+    const finalStat = fs.lstatSync(resolved);
+    // A symlink, directory, FIFO or device is never a valid background log:
+    // only a regular file (or a not-yet-created name) may be opened.
+    if (!finalStat.isFile()) return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return null;
+  }
+  return resolved;
+}
+
+function strictSandboxFailureResult(failure: StrictSandboxFailure, startTime: number): SandboxResult {
+  const text = `${failure.code}: ${failure.message}`;
+  return {
+    stdout: "",
+    stderr: text,
+    exitCode: 1,
+    timedOut: false,
+    outputLimitExceeded: false,
+    stdoutBytes: 0,
+    stderrBytes: Buffer.byteLength(text),
+    durationMs: Date.now() - startTime,
+  };
 }
 
 function macWriteSandboxAvailable(platform: NodeJS.Platform = process.platform): boolean {
@@ -569,6 +914,25 @@ export class SandboxExecutor {
   }
 
   /**
+   * Resolve and self-check the strict reception profile for one invocation.
+   * A refused result must be reported as a failed call: it never degrades to
+   * an unrestricted spawn or to the allow-default write sandbox.
+   */
+  private prepareStrictSandbox(): StrictSandboxResolution {
+    const resolution = resolveStrictReceptionSandbox({
+      env: this.config.env,
+      allowedDirs: this.config.allowedDirs ?? [],
+    });
+    if (resolution.kind !== "strict") return resolution;
+    const failure = strictSandboxSelfCheck(resolution.policy);
+    if (failure) {
+      log.warn(`strict reception sandbox unavailable: ${failure.message}`);
+      return { kind: "refused", failure };
+    }
+    return resolution;
+  }
+
+  /**
    * Execute a command inside the sandbox.
    *
    * The command runs as a child process with:
@@ -595,6 +959,26 @@ export class SandboxExecutor {
         durationMs: Date.now() - startTime,
       };
     }
+
+    // A trusted reception shell opts into the deny-default profile through
+    // host-injected env. Every unprovable state fails closed before spawn.
+    const strict = this.prepareStrictSandbox();
+    if (strict.kind === "refused") {
+      log.warn(`strict reception shell refused (${strict.failure.code})`);
+      return strictSandboxFailureResult(strict.failure, startTime);
+    }
+    if (strict.kind === "strict") {
+      const cwdReal = canonicalSandboxPath(this.config.workingDir);
+      if (!isSameOrInsideSandboxPath(strict.policy.root, cwdReal)) {
+        const failure = {
+          code: E_SANDBOX_SCOPE,
+          message: `the shell working directory is outside the confirmed reception root ${strict.policy.root}: ${this.config.workingDir}.`,
+        };
+        log.warn(`strict reception shell refused (${failure.code})`);
+        return strictSandboxFailureResult(failure, startTime);
+      }
+    }
+    const strictPolicy = strict.kind === "strict" ? strict.policy : null;
 
     // Validate working directory
     const cwd = this.config.workingDir;
@@ -641,20 +1025,53 @@ export class SandboxExecutor {
         env.SANDBOX_NO_NETWORK = "1";
       }
 
-      const invocation = maybeWrapWithWriteSandbox(
-        buildShellInvocation(this.config.shell, command),
-        this.config.allowedDirs,
-      );
+      // Strict reception turns get a private writable TMPDIR/HOME inside the
+      // proven root; ordinary turns keep the legacy write sandbox untouched.
+      let strictRunDir: string | null = null;
+      let invocation: SpawnInvocation;
+      if (strictPolicy) {
+        const runDir = createStrictRunDir(strictPolicy.scratch);
+        if ("error" in runDir) {
+          log.warn(`strict reception shell refused (${E_SANDBOX_UNAVAILABLE}): ${runDir.error}`);
+          resolve(strictSandboxFailureResult(
+            { code: E_SANDBOX_UNAVAILABLE, message: runDir.error },
+            startTime,
+          ));
+          return;
+        }
+        strictRunDir = runDir.dir;
+        applyStrictSandboxEnv(env, strictRunDir);
+        const shell = buildShellInvocation(this.config.shell, command);
+        invocation = {
+          command: strictPolicy.sandboxExec,
+          args: ["-p", strictPolicy.profile, shell.command, ...shell.args],
+        };
+      } else {
+        invocation = maybeWrapWithWriteSandbox(
+          buildShellInvocation(this.config.shell, command),
+          this.config.allowedDirs,
+        );
+      }
       if (invocation.envPatch) {
         Object.assign(env, invocation.envPatch);
       }
-      const child = spawn(invocation.command, invocation.args, {
-        cwd,
-        env,
-        detached: process.platform !== "win32",
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      });
+      let child: ChildProcess;
+      try {
+        child = spawn(invocation.command, invocation.args, {
+          cwd,
+          env,
+          detached: process.platform !== "win32",
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+        });
+      } catch (err) {
+        removeStrictRunDir(strictRunDir);
+        if (!strictPolicy) throw err;
+        const message = `the strict sandbox could not start the shell: ${(err as Error).message}`;
+        log.warn(`strict reception shell refused (${E_SANDBOX_UNAVAILABLE}): ${message}`);
+        resolve(strictSandboxFailureResult({ code: E_SANDBOX_UNAVAILABLE, message }, startTime));
+        return;
+      }
 
       const abortSignal = this.config.signal;
       if (abortSignal) {
@@ -724,6 +1141,8 @@ export class SandboxExecutor {
         clearTimeout(timeoutId);
         if (forceSettleTimer) clearTimeout(forceSettleTimer);
         if (abortSignal && abortListener) abortSignal.removeEventListener("abort", abortListener);
+        // The foreground shell is gone; its private scratch dir has no owner.
+        removeStrictRunDir(strictRunDir);
         let stdout: string;
         let stderr: string;
         let stdoutStreamedOutput: StreamedToolOutput | undefined;
@@ -804,21 +1223,65 @@ export class SandboxExecutor {
     if (violation) {
       return { pid: null, error: `Command blocked by sandbox policy: ${violation}` };
     }
+    // Same opt-in strict profile as `execute`. The log fd is opened by the
+    // parent but written by the sandboxed child, so it must live inside the
+    // writable reception roots or the child's writes would be denied.
+    const strict = this.prepareStrictSandbox();
+    if (strict.kind === "refused") {
+      log.warn(`strict reception background shell refused (${strict.failure.code})`);
+      return { pid: null, error: `${strict.failure.code}: ${strict.failure.message}` };
+    }
+    const strictPolicy = strict.kind === "strict" ? strict.policy : null;
+    let strictRunDir: string | null = null;
+    let effectiveLogPath = logPath;
+    if (strictPolicy) {
+      const cwdReal = canonicalSandboxPath(this.config.workingDir);
+      if (!isSameOrInsideSandboxPath(strictPolicy.root, cwdReal)) {
+        return {
+          pid: null,
+          error: `${E_SANDBOX_SCOPE}: the background shell working directory is outside the confirmed reception root ${strictPolicy.root}: ${this.config.workingDir}.`,
+        };
+      }
+      const runDir = createStrictRunDir(strictPolicy.scratch);
+      if ("error" in runDir) {
+        return { pid: null, error: `${E_SANDBOX_UNAVAILABLE}: ${runDir.error}` };
+      }
+      strictRunDir = runDir.dir;
+      const scopedLog = resolveStrictWritablePath(strictPolicy, logPath);
+      if (!scopedLog) {
+        removeStrictRunDir(strictRunDir);
+        return {
+          pid: null,
+          error: `${E_SANDBOX_SCOPE}: the background log path is outside the writable reception roots (root/scratch): ${logPath}`,
+        };
+      }
+      effectiveLogPath = scopedLog;
+    }
     const env = buildSandboxEnv(this.config.env);
+    if (strictPolicy && strictRunDir) applyStrictSandboxEnv(env, strictRunDir);
     let logFd: number;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require("node:fs") as typeof import("node:fs");
-      fs.mkdirSync(path.dirname(logPath), { recursive: true });
-      logFd = fs.openSync(logPath, "a");
+      fs.mkdirSync(path.dirname(effectiveLogPath), { recursive: true });
+      // The scope check above is check-then-use. O_NOFOLLOW closes the final
+      // component race: a symlink swapped in after `lstat` makes this open fail
+      // instead of following the link and creating a file outside the roots.
+      const openFlags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND
+        | (fs.constants.O_NOFOLLOW ?? 0);
+      logFd = fs.openSync(effectiveLogPath, openFlags);
     } catch (err) {
+      removeStrictRunDir(strictRunDir);
       return { pid: null, error: `cannot open log file: ${(err as Error).message}` };
     }
     try {
-      const invocation = maybeWrapWithWriteSandbox(
-        buildShellInvocation(this.config.shell, command),
-        this.config.allowedDirs,
-      );
+      const shell = buildShellInvocation(this.config.shell, command);
+      const invocation: SpawnInvocation = strictPolicy
+        ? {
+          command: strictPolicy.sandboxExec,
+          args: ["-p", strictPolicy.profile, shell.command, ...shell.args],
+        }
+        : maybeWrapWithWriteSandbox(shell, this.config.allowedDirs);
       if (invocation.envPatch) {
         Object.assign(env, invocation.envPatch);
       }
@@ -830,10 +1293,27 @@ export class SandboxExecutor {
         windowsHide: true,
       });
       child.unref();
+      // spawn() reports ENOENT/EACCES (and any later start failure) through an
+      // asynchronous 'error' event. Without a listener that event is an
+      // uncaught exception; the caller already gets the synchronous `pid:null`
+      // result, so this only records the cause.
+      child.once("error", (err: Error) => {
+        log.warn(`background command failed to start: ${err.message}`);
+      });
       const pid = child.pid ?? null;
-      log.info(`background command started pid=${pid} log=${logPath}`);
+      if (pid == null) {
+        // spawn() reports ENOENT/EACCES asynchronously; without a pid there is
+        // no owner for the strict run dir, so clean it up like other failures.
+        removeStrictRunDir(strictRunDir);
+        return { pid: null, error: "the background shell did not produce a process id." };
+      }
+      log.info(`background command started pid=${pid} log=${effectiveLogPath}`);
+      // A detached child owns its scratch dir until it exits; only the agent
+      // can decide when that is, so `<ROOT>/.cogseed-scratch` entries for
+      // background runs are intentionally left in place (documented contract).
       return { pid };
     } catch (err) {
+      removeStrictRunDir(strictRunDir);
       return { pid: null, error: (err as Error).message };
     } finally {
       // The child holds its own duplicated descriptors after spawn.

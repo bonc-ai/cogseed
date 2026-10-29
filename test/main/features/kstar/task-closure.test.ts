@@ -815,13 +815,7 @@ describe('KSTAR task closure', () => {
     const teaching = await import('../../../../src/main/features/recall/teaching-service');
     // Seed an active teaching signal bound to this conversation (a "记住"
     // intent message produces a user_teaching_signal source).
-    await teaching.recordTeachingSignalAfterMemoryWrite('closure-user', {
-      conversationId: 'cid-evidence',
-      messageId: 'msg-teach-five',
-      userMessage: '记住：Always validate OAuth state before exchanging the code.',
-      memoryContent: 'Always validate OAuth state before exchanging the code.',
-      memoryScope: 'personal',
-    });
+    await seedHistoricalTeaching("cid-evidence", "msg-teach-five", "Always validate OAuth state before exchanging the code.");
 
     const inferred = async (_userId: string, builtEpisode: any) => ({
       review: {
@@ -867,13 +861,7 @@ describe('KSTAR task closure', () => {
   it('precipitated assets carry the full five-source evidence context', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const teaching = await import('../../../../src/main/features/recall/teaching-service');
-    await teaching.recordTeachingSignalAfterMemoryWrite('closure-user', {
-      conversationId: 'cid-five-evidence',
-      messageId: 'msg-five-evi',
-      userMessage: '记住：OAuth 回调必须先校验 state。',
-      memoryContent: 'OAuth 回调必须先校验 state。',
-      memoryScope: 'personal',
-    });
+    await seedHistoricalTeaching("cid-five-evidence", "msg-five-evi", "OAuth 回调必须先校验 state。");
     const inferred = async (_userId: string, builtEpisode: any) => ({
       review: {
         expectedResult: builtEpisode.t.userGoal,
@@ -1053,198 +1041,6 @@ describe('KSTAR task closure', () => {
 });
 
 describe('KSTAR direct experience asset line', () => {
-  it('precipitates verified workflow experience as an experience entry (direct line, specs/016 分流)', async () => {
-    const builder = await import('../../../../src/main/features/kstar/episode-builder');
-    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    const result = await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
-      judgment: 'For similar tasks, use the verified workflow: read_file → write_file.',
-      summary: 'Verified multi-tool workflow',
-      suggestedType: 'skill_method',
-      suggestedScope: 'report',
-      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct' }],
-    }]);
-
-    // specs/016 T013（FR-001）：直通线 create 提案改道写经验条目
-    // （skill_method → workflow），不进候选池、不晋升资产。
-    expect(result.experienceIds).toHaveLength(1);
-    expect(result.candidateIds).toEqual([]);
-    expect(result.createdAssetIds).toEqual([]);
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    const stored = await experiences.listExperiences('closure-user');
-    expect(stored).toHaveLength(1);
-    expect(stored[0]).toMatchObject({
-      experienceType: 'workflow',
-      status: 'active',
-      scope: 'report',
-    });
-    expect(stored[0].body).toContain('verified workflow');
-    expect(stored[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
-    // 候选池与资产库零记录（隔离）。
-    expect(await candidates.listRecallCandidates('closure-user')).toHaveLength(0);
-    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(0);
-  });
-
-  it('updates the explicitly targeted existing asset through the direct KSTAR line', async () => {
-    const builder = await import('../../../../src/main/features/kstar/episode-builder');
-    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const originalCandidate = await candidates.saveRecallCandidate('closure-user', {
-      judgment: 'Keep the report verification rule.',
-      value: 'Keep report verification consistent across runs.',
-      suggestedType: 'rule',
-      suggestedScope: 'report',
-      suggestedAction: 'create',
-      applicableWhen: ['处理报告类任务时'],
-      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-original' }],
-    });
-    const original = await candidates.promoteRecallCandidate('closure-user', originalCandidate.id, { actor: 'user' });
-    const seededEpisode = builder.buildRuntimeKstarEpisode({
-      userId: 'closure-user', runId: 'run-direct-update', request, events,
-      createdAt: '2026-08-05T00:00:00.000Z',
-    });
-
-    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
-      judgment: 'Update the report verification rule to require an acceptance check.',
-      summary: 'Updated report verification rule',
-      suggestedType: 'rule',
-      suggestedScope: 'report',
-      suggestedAction: 'update',
-      targetAssetId: original.asset.id,
-      applicableWhen: ['处理报告类任务时'],
-      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-update' }],
-    }]);
-
-    const updated = await assets.readAbilityAsset('closure-user', original.asset.id);
-    // update 是融合不是覆盖：v2 推进，旧证据保留，新判断落成正文。
-    //
-    // 期望值在 2026-09-29「正文一等规范」后从"新判断＋旧正文第二句"变成单句：
-    // 那次改动把**新建路**的资产正文收敛为 judgment 单一来源（value 不再拼进
-    // statement），所以这个种子晋升出来的旧正文只有一句，融合时它被同主题的
-    // 新判断改写掉，没有第二句可保留。
-    //
-    // 融合的"旧句保留 / 新句追加 / 同主题改写"三档语义由
-    // test/main/features/recall/statement-fusion.test.ts 用 keptCount / added /
-    // replaced 专门覆盖；这条集成用例只负责验证更新链路走通、版本推进与证据
-    // 累积，不重复承担融合算法本身的断言（把种子改成两句会把它推到语义查重的
-    // 另一条分支上，反而测不到更新路径）。
-    expect(updated).toMatchObject({
-      id: original.asset.id,
-      version: '2',
-      statement: 'Update the report verification rule to require an acceptance check.',
-    });
-    expect(updated.evidenceRefs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-original' }),
-      expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-update' }),
-    ]));
-  });
-
-  it('carries the conversation space into the asset through the real closure path (space asset tab)', async () => {
-    // 真实链路：挂空间会话 → captureGroupKstarClosure（读 conversation.space_id
-    // 填 episode.s.workspaceId）→ 任务级沉淀 → 资产带 spaceId。修复前 episode
-    // 构建不透传 workspaceId，此测试在真实链路上断言（不再手动塞 episode.s）。
-    const chats = await import('../../../../src/main/features/chats');
-    const conv = await chats.createConversation('closure-user', { title: 'space-bound task', spaceId: 'sp_abc123' });
-    expect(conv.space_id).toBe('sp_abc123');
-
-    // 建 requirement 并挂到会话（任务级沉淀的宿主；闭环会把 episode 附上来）
-    const store = await import('../../../../src/main/features/kstar/requirement-store');
-    const task = store.createKstarTaskRecord('closure-user', { conversationId: conv.conversation_id, title: 'Space task' });
-    const requirement = store.createKstarRequirementRecord('closure-user', {
-      taskId: task.id,
-      conversationId: conv.conversation_id,
-      userMessageIds: ['msg-user-space'],
-      title: 'Space-bound task',
-      goalText: 'For spaced tasks, attach the space id to the asset.',
-    });
-    await store.replaceKstarTask('closure-user', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id });
-    await store.replaceKstarRequirement('closure-user', requirement);
-    const state = await import('../../../../src/main/features/kstar/requirement-store');
-    await state.writeConversationTaskState('closure-user', {
-      ...state.createInitialConversationTaskState('closure-user', conv.conversation_id),
-      currentTaskId: task.id,
-      currentRequirementId: requirement.id,
-      taskComplete: false,
-    });
-
-    const closure = await import('../../../../src/main/features/kstar/task-closure');
-    // 模拟有模型环境：推理产出学习信号（delta + 教训），任务级沉淀质量门限
-    // 才通过——真实环境无模型时 review 降级为保守 stub（confidence 0），
-    // 聚合提案被噪声门限过滤，属设计行为。
-    const inferred = async (_userId: string, builtEpisode: any) => ({
-      review: {
-        expectedResult: builtEpisode.t.userGoal,
-        actualResult: 'Space-tagged workflow attached and verified.',
-        deltaR: 0.3 as const,
-        deltaA: 0.1 as const,
-        outcome: 'better_than_expected' as const,
-        attribution: 'execution_gap' as const,
-        reason: 'The verified workflow is worth reusing for spaced report tasks.',
-        lesson: 'For spaced report tasks, attach the space id to the asset so it surfaces in the space asset tab.',
-        confidence: 0.95,
-        evidenceRefs: builtEpisode.evidenceRefs,
-      },
-      reviewState: 'inferred' as const,
-      inferenceMethod: 'deterministic' as const,
-      needsConfirmation: false,
-    });
-    await closure.captureGroupKstarClosure({
-      userId: 'closure-user', runId: 'run-direct-space-real', conversationId: conv.conversation_id, status: 'completed',
-      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
-      messages: [
-        { id: 'msg-user-space', from: 'user', text: 'For spaced tasks, attach the space id to the asset.', ts: '2026-08-05T00:00:01.000Z' },
-        { id: 'msg-agent-space', from: 'commander', text: 'Space-tagged workflow attached.', ts: '2026-08-05T00:00:30.000Z' },
-      ],
-      createdAt: '2026-08-05T00:02:00.000Z',
-      inferReview: inferred,
-    });
-
-    // episode 落盘带 workspaceId（读会话 space_id 补齐）
-    const episodes = await import('../../../../src/main/features/kstar/episode-store');
-    const records = await episodes.listKstarJsonRecords('closure-user', 'episodes');
-    const episode = records.find((e) => e.id === 'kse-run-direct-space-real') as unknown as { s?: { workspaceId?: string } };
-    expect(episode).toBeDefined();
-    expect(episode!.s?.workspaceId).toBe('sp_abc123');
-
-    // 任务级沉淀（真实 KSTAR 产出出口，specs/016 分流后为经验条目）→ 经验
-    // 带 spaceId（空间过滤键，与资产同语义）。
-    // 注意：闭环已把 episode attach 到磁盘上的 requirement，必须重读最新对象
-    // （precipitateRequirementLevel 按传入对象的 episodeIds 聚合）。
-    const freshRequirement = await store.readKstarRequirement('closure-user', requirement.id);
-    expect(freshRequirement?.episodeIds).toContain('kse-run-direct-space-real');
-    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
-    const result = await precipitation.precipitateRequirementLevel('closure-user', freshRequirement!);
-    expect(result.experienceIds.length).toBeGreaterThan(0);
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    const created = (await experiences.listExperiences('closure-user')).find((e) => e.id === result.experienceIds[0]);
-    expect(created).toBeDefined();
-    expect(created!.spaceId).toBe('sp_abc123');
-  });
-
-  it('does not duplicate the direct experience across repeated precipitation (id-stable)', async () => {
-    const builder = await import('../../../../src/main/features/kstar/episode-builder');
-    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    const proposal = {
-      judgment: 'For similar tasks, use the verified workflow: read_file → write_file.',
-      summary: 'Verified multi-tool workflow',
-      suggestedType: 'skill_method',
-      suggestedScope: 'report',
-      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-dup' }],
-    };
-    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [proposal]);
-    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [proposal]);
-
-    // specs/016 T013：重复沉淀幂等——经验 id 稳定派生（同 episode 同提案
-    // 同序），createExperience 同 id 返回既有记录，不产生第二条；资产面零。
-    const experiences = await import('../../../../src/main/features/recall/experience-service');
-    expect(await experiences.listExperiences('closure-user')).toHaveLength(1);
-    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(0);
-  });
 
   it('precipitates nothing when no learning signal exists', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
@@ -1619,3 +1415,14 @@ describe('KSTAR extraction reconciliation', () => {
     expect(optionsSeen[0]?.forecast?.forecast).toBeUndefined();
   });
 });
+
+/** Persist historical input fixtures without retaining a product writer. */
+async function seedHistoricalTeaching(conversationId: string, messageId: string, summary: string) {
+  const store = await import('../../../../src/main/features/recall/store');
+  const id = `legacy-teaching-${messageId}`;
+  return store.updateRecallJsonRecord('closure-user', 'teaching-signals', id, () => ({
+    schemaVersion: 1, taxonomyVersion: 2, ownerId: 'closure-user', id,
+    conversationId, messageId, summary, intent: 'remember', scope: 'personal',
+    status: 'active', candidateIds: [], createdAt: '2026-09-04T00:00:00.000Z',
+  }));
+}

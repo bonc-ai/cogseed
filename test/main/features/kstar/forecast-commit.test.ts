@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -72,7 +73,8 @@ async function seedForecastBoundary(options: { confirmed: boolean; projectId?: s
     },
   });
 
-  const savedCandidate = await candidates.saveRecallCandidate('user-a', {
+  const savedCandidate = await createNightlyCandidateFixture('user-a', {
+    rawStatement: true,
     judgment: `Validate OAuth callback state. ${'x'.repeat(2_100)}`,
     summary: 'OAuth callback validation',
     suggestedType: 'rule',
@@ -172,7 +174,6 @@ describe('Commander Forecast host commit', () => {
       projectionId: seeded.projection.id,
       projectionConfirmedAt: seeded.projection.confirmedAt,
       provenanceComplete: true,
-      snapshotId: expect.stringMatching(/^snap-/),
       forecast: {
         selectedCandidateId: 'path-a',
         candidates: [
@@ -200,14 +201,19 @@ describe('Commander Forecast host commit', () => {
         },
       },
     });
-    expect(record.input.k.abilityAssets[0].statement.length).toBeLessThanOrEqual(2_000);
+    // K 的知识预算以「整资产」为粒度：正文不截断，超额资产整体省略
+    // （14k 预算见 projection-knowledge）。这里验证同一契约：正文完整携带，
+    // 资产数组仍受预算约束。
+    const embeddedAssets = record.input.k.abilityAssets;
+    expect(embeddedAssets[0].statement).toBe(seeded.selectedAsset.statement);
+    expect(JSON.stringify(embeddedAssets).length).toBeLessThanOrEqual(14_000);
     expect(JSON.stringify(record.input.s)).not.toContain(tmpDir);
     expect(await requirementStore.readKstarRequirement('user-a', seeded.requirement.id))
       .toMatchObject({ forecastId: record.id });
     expect(forecastFiles()).toEqual([`${record.id}.json`]);
   });
 
-  it('records measured model and tool capabilities in the persisted Snapshot', async () => {
+  it('records measured model and tool capabilities in the embedded simulation input（快照已停写，2026-10-15 拍板②）', async () => {
     const seeded = await seedForecastBoundary({ confirmed: true });
     const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
 
@@ -215,20 +221,15 @@ describe('Commander Forecast host commit', () => {
       ...seeded.input,
       allowedToolNames: new Set(['read_file']),
     });
-    const snapshotPath = path.join(
-      tmpDir,
-      'user-a',
-      'cloud',
-      'recall',
-      'records',
-      'world-model-snapshots',
-      `${record.snapshotId}.json`,
-    );
-    const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
 
-    expect(snapshot.environment.tools).toEqual({ fileSystem: true, bash: false });
-    expect(snapshot.environment.model.configured).toBeTypeOf('boolean');
-    expect(snapshot.environment.model.configured).not.toBe(true);
+    expect(record.input.s.environment).toMatchObject({ fileSystemAvailable: true, shellAvailable: false });
+    expect(record.input.s.environment.modelConfigured).toBeTypeOf('boolean');
+    expect(record.input.s.environment.modelConfigured).not.toBe(true);
+    // 独立快照文件不再写入（world-model-snapshots 停写，存量仅历史保留）。
+    expect(record.snapshotId).toBeUndefined();
+    expect(fs.existsSync(path.join(
+      tmpDir, 'user-a', 'cloud', 'recall', 'records', 'world-model-snapshots',
+    ))).toBe(false);
   });
 
   it('records unknown tool capability when the runtime tool scope is unavailable', async () => {
@@ -377,9 +378,10 @@ describe('Commander Forecast host commit', () => {
     // Ontology assets never pollute the projection-selected refs/versions.
     expect(record.input.k.abilityAssetRefs).toEqual([seeded.selectedAsset.id]);
     expect(Object.keys(record.input.k.assetVersions || {})).toEqual([seeded.selectedAsset.id]);
-    // Snapshot ontology totals include the memory-derived assets (1 selected
-    // + 3 ontology entries).
-    expect(record.snapshotId).toBeTruthy();
+    // 本体总量从 K 派生（快照停写后不再有独立 totals 落点）：
+    // 1 selected + 3 ontology entries。
+    expect(record.input.k.ontologyAssets.length + record.input.k.abilityAssets.length).toBe(4);
+    expect(record.snapshotId).toBeUndefined();
   });
 
   it('loads the T-Box ontology taxonomy into K from the group ledger (T-Box)', async () => {

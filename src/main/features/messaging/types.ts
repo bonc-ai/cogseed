@@ -236,6 +236,8 @@ export interface MessagingInboundLedgerFile {
 }
 
 export interface DeliveryLedgerEntry {
+  /** New agent sends require a current host gate on every attempt; missing recovery context never permits delivery. */
+  requiresOperationPreflight?: boolean;
   key: string;
   instanceId: string;
   /** The platform id the message is delivered to. Ordinary chat replies use
@@ -271,6 +273,9 @@ export interface DeliveryLedgerEntry {
   /** Feishu uses this as the API uuid; keeping it stable makes timeout retries
    * idempotent. Other adapters may ignore it. */
   idempotencyKey?: string;
+  /** Host-local preparation completed before transport. A2A uses this to
+   * avoid appending the same visible message again during restart recovery. */
+  localPreparedAt?: string;
   // A cancelled delivery is terminal: it was intentionally suppressed because
   // its runtime was disabled, unbound, or deleted. It must never be retried
   // after the instance is later enabled again.

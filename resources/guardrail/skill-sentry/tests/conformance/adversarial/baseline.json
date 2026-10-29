@@ -1,0 +1,154 @@
+{
+  "criterion": "escape = 裁决未达到该来源策略的 fail_on 阈值（逐来源判定）",
+  "engine_version": "2.3.0",
+  "ruleset": {
+    "rule_count": 181,
+    "rule_groups": 12,
+    "rules_source": "ruleset v1.2.0: secret-patterns.yaml, text-rules.yaml, 12 组规则",
+    "ruleset_resolved": true,
+    "ruleset_version": "v1.2.0"
+  },
+  "sandbox_tier": {
+    "expected_scanner_version": "2.3.0",
+    "image": "skill-security-scanner:local",
+    "known_gap": "沙箱镜像内的引擎仍是 1.0.0（旧布局 01_scanner/02_rules），对 `os.system('rm -rf /')` 只给 CAUTION/HIGH —— 正是 2.2.0 收紧前的行为；sandbox/build.sh 指向的 06_sandbox/Dockerfile 与 Dockerfile 里 COPY 的 01_scanner/02_rules 在当前树里都不存在，所以这个镜像也重建不了。已止损：sandbox/agent_gate.py::evaluate_skill 改为两层取更严（隔离层可以加强结论、不能削弱结论），落后镜像因此不再拉低安装门禁，两层结论与各自引擎版本都进 tier_evidence。但重建镜像前，隔离层作为「更强的证据」的价值仍然没有——它只会重复本地层的结论。镜像版本一致性由本记录与 test_sandbox_tier.py 继续钉住。",
+    "observed_recommendation_for_control": "CAUTION",
+    "observed_scanner_version": "1.0.0",
+    "observed_score_for_control": 40,
+    "status": "known_gap"
+  },
+  "schema_version": 1,
+  "vectors": {
+    "attack-assignment-docstring": {
+      "axis": "transform",
+      "channel": "`X = \"\"\"…\"\"\"` 之后的真实代码被判成 comment",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official"
+      ],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "medium",
+      "recommendation": "CAUTION",
+      "risk_classification": "MEDIUM",
+      "root_cause": "块注释解析：赋值形态的三引号字符串（闭合独占一行）被当成块注释起始，其后代码整体进入 comment 上下文、降 2 档。模块级 docstring（行首）与 JS 块注释都不触发——见 control 对照",
+      "security_score": 65
+    },
+    "attack-example-marker-doc": {
+      "axis": "context",
+      "channel": "文档围栏代码块 + 反例标记 → critical 洗成 info",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official"
+      ],
+      "example_info": 4,
+      "kind": "attack",
+      "max_severity": "high",
+      "recommendation": "CAUTION",
+      "risk_classification": "LOW",
+      "root_cause": "context.py::in_example_block 用 25 行回看窗口判定「示例区块」，命中即 severity→info：删掉了打分依据，也让 is_confirmed_critical 不再成立",
+      "security_score": 80
+    },
+    "attack-example-marker-source": {
+      "axis": "context",
+      "channel": "源码上下文里的载荷 + 反例标记 → 解除单条 critical 拒装",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official"
+      ],
+      "example_info": 4,
+      "kind": "attack",
+      "max_severity": "medium",
+      "recommendation": "CAUTION",
+      "risk_classification": "LOW",
+      "root_cause": "同上；这是最严重的一条：deployment_recommendation 的收紧分支（scoring.py::is_confirmed_critical）依赖 severity/confidence/demoted 三个可被文本变换影响的量",
+      "security_score": 92
+    },
+    "attack-nested-archive": {
+      "axis": "carrier",
+      "channel": "嵌套归档内的脚本不被解包",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official"
+      ],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "medium",
+      "recommendation": "CAUTION",
+      "risk_classification": "LOW",
+      "root_cause": "capabilities.yaml::structural_analysis「归档只报存在，不解包递归扫描」",
+      "security_score": 84
+    },
+    "attack-png-instruction": {
+      "axis": "carrier",
+      "channel": "图像 tEXt 块承载越权指令",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official",
+        "community",
+        "thirdparty"
+      ],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "none",
+      "recommendation": "ALLOW",
+      "risk_classification": "LOW",
+      "root_cause": "capabilities.yaml::hidden_content_detection 声明不处理图像/PDF 内隐写；扫描器没有 OCR 或多模态通道（研究条目 65：NCVA 在 9 种配置下 ASR 43.1%）",
+      "security_score": 100
+    },
+    "attack-variable-mediated-b64": {
+      "axis": "transform",
+      "channel": "base64 载荷落在资源文件 + 自研解码器还原",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official"
+      ],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "high",
+      "recommendation": "CAUTION",
+      "risk_classification": "MEDIUM",
+      "root_cause": "capabilities.yaml::obfuscation_detection「自定义解码器无法识别」；text_static_analysis「变量拼接后的字符串无法检出」——真命令（curl|bash）从未高于 low，只剩 os.system(变量) 这一条 high",
+      "security_score": 64
+    },
+    "control-comment-marker": {
+      "axis": "control",
+      "channel": "反例标记写在注释里",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "control",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "context.py::_EXAMPLE_MARKER_RE 不允许 `#` 前缀，标记不成立",
+      "security_score": 23
+    },
+    "control-indented-marker": {
+      "axis": "control",
+      "channel": "反例标记缩进深于载荷",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "control",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "context.py::in_example_block 要求 `indent <= base_indent`",
+      "security_score": 23
+    },
+    "control-source-plain": {
+      "axis": "control",
+      "channel": "真实源码里的破坏性命令",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "control",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "无需根因：这是判据的零点，用来证明判据本身有效（真阳性必须拒装）",
+      "security_score": 25
+    }
+  }
+}

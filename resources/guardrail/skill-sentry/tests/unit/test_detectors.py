@@ -12,6 +12,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from engine.scanner_core import (agentic_rules, baseline as baseline_mod, derived_views,
                                   hidden_content, mappings, obfuscation, sarif, structural,
                                   supply_chain)
@@ -349,7 +351,9 @@ class TestStructuralPositive:
         found = structural.scan_structure(root)["findings"]
         assert "nested_archive" in _rules(found)
 
-    def test_symlink_escape(self):
+    def test_symlink_escape(self, symlinks_supported):
+        if not symlinks_supported:
+            pytest.skip("host cannot create symlinks (Windows needs Developer Mode or an elevated token)")
         root = _mk_tree({"SKILL.md": "# T\n"})
         outside = Path(tempfile.mkdtemp(prefix="sentry-outside-")) / "secret.txt"
         outside.write_text("secret", "utf-8")
@@ -370,7 +374,9 @@ class TestStructuralNegative:
         root = _mk_tree({"SKILL.md": "# T\n", "scripts/run.py": "print(1)\n"})
         assert structural.scan_structure(root)["findings"] == []
 
-    def test_internal_symlink_is_allowed(self):
+    def test_internal_symlink_is_allowed(self, symlinks_supported):
+        if not symlinks_supported:
+            pytest.skip("host cannot create symlinks (Windows needs Developer Mode or an elevated token)")
         root = _mk_tree({"SKILL.md": "# T\n", "real.txt": "x\n"})
         (root / "link.txt").symlink_to(root / "real.txt")
         found = structural.scan_structure(root)["findings"]

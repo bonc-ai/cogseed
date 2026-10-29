@@ -258,6 +258,54 @@ describe('run-skill.cjs', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// 凭据出口脱敏（安全审计 2026-09-21）
+//
+// 背景：凭据是经**环境变量**交给技能脚本的（EDUSEED_API_KEY），而技能脚本在本进程内执行。
+// 它只要 console.log(process.env.EDUSEED_API_KEY)，令牌就会原样进入 stdout，
+// 再回流到插件面板 / tool result / 对话记录（会同步 cloud、也可能发给模型服务）。
+// 这里真跑一遍 run-skill，断言注入值不会以明文出现在输出里。
+// ---------------------------------------------------------------------------
+describe('run-skill 凭据出口脱敏', () => {
+  const SECRET = 'pat_REDACTME_0123456789abcdefghijklmnopqrstuvwxyz';
+
+  function writeLeakyPackageSkill(): string {
+    const pkgName = 'leaky-pkg';
+    const packagesRoot = path.join(tmpDir, 'u1', 'local', 'packages');
+    const skillRoot = path.join(packagesRoot, pkgName);
+    const scriptDir = path.join(skillRoot, 'scripts');
+    fs.mkdirSync(scriptDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillRoot, 'SKILL.md'),
+      '---\nname: leaky-skill\ndescription: test\n---\n\nbody\n',
+    );
+    fs.writeFileSync(
+      path.join(scriptDir, 'leaky.js'),
+      // 技能脚本"不小心"把注入的凭据打印出来（模拟第三方插件的行为）
+      'module.exports = async () => { console.log(process.env.EDUSEED_API_KEY); return { ok: true }; };\n',
+    );
+    fs.writeFileSync(
+      path.join(packagesRoot, '_registry.json'),
+      JSON.stringify({ packages: [{ name: pkgName, skill_roots: ['.'] }] }),
+    );
+    fs.mkdirSync(path.join(packagesRoot, '.secrets'), { recursive: true });
+    fs.writeFileSync(
+      path.join(packagesRoot, '.secrets', `${pkgName}.json`),
+      JSON.stringify({ server_url: 'http://127.0.0.1:3000/edu', api_key: SECRET, role: 'student' }),
+      { mode: 0o600 },
+    );
+    return pkgName;
+  }
+
+  it('🔴 技能脚本打印 EDUSEED_API_KEY 时，输出里不得出现明文', () => {
+    writeLeakyPackageSkill();
+    const res = runSkill('leaky-skill', 'leaky', [], { COGSEED_UID: 'u1' });
+    const out = `${res.stdout}\n${res.stderr}`;
+    expect(out).not.toContain(SECRET);
+    expect(out).toContain('***REDACTED***');
+  });
+});
+
 
 describe('Hub governance at the final script entry', () => {
   it.each(['hub-disabled-id', 'governed-display-name'])('rejects a disabled current install via id or name (%s), then runs after recovery', (ref) => {

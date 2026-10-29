@@ -44,6 +44,16 @@ function conversationsUpdatedHarness(input: {
 }
 
 describe('conversation run summary integration (FR-018/019)', () => {
+  it.each(['zh', 'en', 'ja', 'pt'])('renders actionable correction reasons in %s', (lang) => {
+    const locale = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../../src/renderer/locales/${lang}.json`), 'utf8'));
+    const label = vm.runInNewContext(`(${functionSource('_runSummaryReasonLabel', '_renderRunSummaryHtml')})`, {
+      t: (key: string) => locale[key] || key,
+    });
+    for (const code of ['transcript_correction_incomplete', 'transcript_confirmation_required', 'transcript_scope_mismatch']) {
+      expect(label(code)).toBe(locale[`chat.run_summary.reason.${code}`]);
+      expect(label(code)).not.toBe(locale['chat.run_summary.reason.unknown']);
+    }
+  });
   it('汇总块用共享按钮，且只在有可重跑成员时生成操作', () => {
     const render = functionSource('_renderRunSummaryHtml', '_hydrateRunSummary');
     expect(render).toContain('memberWorkState.retryableAgentIds');

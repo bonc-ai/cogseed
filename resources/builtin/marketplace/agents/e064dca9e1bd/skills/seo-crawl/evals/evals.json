@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "id": "smoke-seo-crawl",
+      "kind": "smoke",
+      "input": "A synthetic public URL and a mocked provider response.",
+      "expected": "Read-only result; private/loopback targets are never fetched by the local runtime."
+    }
+  ]
+}

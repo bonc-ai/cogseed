@@ -14,8 +14,7 @@ const COGNITION_MAIN_ROOTS = [
   'src/main/ipc/cognition.ts',
 ] as const;
 const COGNITION_RENDERER_ROOTS = [
-  'src/renderer/modules/cognition/cognition.js',
-  'src/renderer/modules/cognition/pages.js',
+  'src/renderer/modules/cognition-assets',
 ] as const;
 
 function repoPath(file: string): string {

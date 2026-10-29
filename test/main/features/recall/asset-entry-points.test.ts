@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -49,7 +50,7 @@ async function seedAsset(
   extra: Record<string, unknown> = {},
 ) {
   const now = new Date().toISOString();
-  return assets.createAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_${id.slice(3)}padpadpad`,
     // 标题不能是正文前缀（3.1 判定第 3 项）：取正文尾部片段做合规标题种子。

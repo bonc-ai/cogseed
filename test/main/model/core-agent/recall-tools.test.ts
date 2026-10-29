@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -31,9 +32,12 @@ beforeEach(async () => {
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
+  const config = await import('../../../../src/main/features/config');
+  config.writePreferences({ semantica_enabled: true });
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -41,16 +45,17 @@ afterEach(() => {
 let _seedSeq = 0;
 async function seedAsset(
   judgment: string,
-  opts: { spaceId?: string; scope?: string; pause?: boolean } = {},
+  opts: { spaceId?: string; scope?: string; pause?: boolean; title?: string } = {},
 ) {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   const assets = await import('../../../../src/main/features/recall/asset-service');
   _seedSeq += 1;
-  const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+  const candidate = await createNightlyCandidateFixture(TEST_UID, {
     judgment,
-    // 标题闸门（设计 3.2）：judgment 前缀兜底命中「与正文开头重复」，
+    rawStatement: true,
+    // 标题闸门：judgment 前缀兜底命中「与正文开头重复」，
     // 改为与正文首字不同的合规样本标题。
-    summary: `检索样本${_seedSeq}`,
+    summary: opts.title || `检索样本${_seedSeq}`,
     suggestedType: 'rule',
     applicableWhen: ['正式评审与架构决策时'],
     forbiddenWhen: ['内部快速对齐'],
@@ -66,13 +71,203 @@ async function seedAsset(
 }
 
 describe('recall search_ability_assets tool', () => {
+  it('returns and validates the complete long cognition including its final restrictions before recording a full-version read', async () => {
+    const tail = '末尾限制：仅用于人工审核，不授权发布；证据不足时应停止判断。';
+    const body = '逐项保存本次判断的原始依据，并标明不能确定的部分。'.repeat(110) + tail;
+    expect(body.length).toBeGreaterThan(2000); expect(body.length).toBeLessThanOrEqual(4000);
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const candidate = await createNightlyCandidateFixture(TEST_UID, { judgment: body, rawStatement: true,
+      summary: '完整判断依据', suggestedType: 'cognition', contentCategory: 'method', suggestedScope: 'general',
+      sourceRefs: [], value: '以后人工审核时按完整依据和停止条件作出判断。' });
+    const { asset } = await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: 'user' });
+    const validation = await import('../../../../src/main/features/recall/ontology-answer-validation');
+    const inspect = vi.spyOn(validation, 'validateOntologyAnswer');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const suite = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-complete-body', taskText: '人工审核这次判断依据' });
+    const tool = suite.tools.find(tool => tool.name === 'search_ability_assets')!;
+    const result = await tool.execute({ assetIds: [asset.id] }, {} as never);
+    expect(result.content).toContain(body);
+    expect(result.content).toContain(tail);
+    await suite.finalResponseGate.validate({ text: '证据不足时停止判断，不发布。' });
+    expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ assets: [expect.objectContaining({
+      assetId: asset.id, version: asset.version, statement: body,
+    })] }), expect.any(Object));
+    const receipts = await import('../../../../src/main/features/recall/injection-receipt');
+    expect(await receipts.listInjectionReceipts(TEST_UID, 'turn-complete-body')).toEqual([
+      expect.objectContaining({ channel: 'agent_read', assetId: asset.id, assetVersion: asset.version, status: 'injected' }),
+    ]);
+    // The shared runner budget can spill a whole result when context is full;
+    // it keeps exact bytes and a read-chunk reference rather than cutting the
+    // cognition locally or needing another recall-specific quota.
+    const { capToolResult, DEFAULT_INLINE_RESULT_TOKENS } = await import('../../../../src/main/util/tool-result-cap');
+    const spilled = capToolResult('search_ability_assets', result, { state: {
+      toolResultInlineLedger: { initialTokens: 0, remainingTokens: 0 },
+    } } as never, { maxInlineTokens: DEFAULT_INLINE_RESULT_TOKENS, toolResultsDir: path.join(tmpDir, 'complete-read-results') });
+    expect(spilled.persistedOutput?.path).toBeTruthy();
+    expect(fs.readFileSync(spilled.persistedOutput!.path, 'utf8')).toBe(result.content);
+    expect(spilled.content).toContain('tool_result_read_chunk');
+    expect(spilled.content).toContain('source_truncated="false"');
+    inspect.mockRestore();
+  });
+
+  it('ontology_query follows governed asset relations and excludes paused assets', async () => {
+    const gateway = await seedAsset('网关是服务调用的统一入口。', { scope: 'general', title: '本体查询示例：API网关' });
+    const auth = await seedAsset('认证服务通过网关对外提供能力。', { scope: 'general', title: '本体查询示例：认证服务' });
+    const client = await seedAsset('调用客户端先访问认证服务。', { scope: 'general', title: '本体查询示例：调用客户端' });
+    const paused = await seedAsset('旧认证服务已经停用。', { scope: 'general', title: '本体查询示例：旧认证' });
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await assets.updateAbilityAsset(TEST_UID, auth.id, {
+      relations: [{ kind: 'depends_on', assetId: gateway.id }], actor: 'user', reason: 'test relation',
+    });
+    await assets.updateAbilityAsset(TEST_UID, client.id, {
+      relations: [{ kind: 'depends_on', assetId: auth.id }], actor: 'user', reason: 'test relation',
+    });
+    await assets.updateAbilityAsset(TEST_UID, paused.id, {
+      relations: [{ kind: 'depends_on', assetId: gateway.id }], actor: 'user', reason: 'test relation',
+    });
+    await assets.pauseAbilityAsset(TEST_UID, paused.id, { actor: 'user', reason: 'not available' });
+
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const suite = createRecallToolSuite({
+      userId: TEST_UID, turnId: 'turn-ontology01', cid: 'chat-ontology01',
+    });
+    const ontologyTool = suite.tools.find((tool) => tool.name === 'ontology_query')!;
+    expect(suite.finalResponseGate.isRequired()).toBe(false);
+    const response = await ontologyTool.execute({
+      query: '哪些资产依赖 本体查询示例：API网关', maxHops: 2,
+    }, {} as never);
+    const result = JSON.parse(response.content);
+
+    expect(response.isError).not.toBe(true);
+    expect(result.status).toBe('ok');
+    expect(result.target.id).toBe(gateway.id);
+    expect(result.matches.map((match: { asset: { id: string }; distance: number }) => [match.asset.id, match.distance])).toEqual([
+      [auth.id, 1],
+      [client.id, 2],
+    ]);
+    expect(response.content).not.toContain(paused.id);
+    expect(response.content).not.toContain('网关是服务调用的统一入口');
+    expect(suite.finalResponseGate.isRequired()).toBe(true);
+  });
+
+  it('keeps the final response gate inactive for catalog and semantic-search modes', async () => {
+    await seedAsset('竞品调研应先明确可比维度再收集证据。', { scope: 'general' });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const suite = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-gate-search' });
+    const searchTool = suite.tools.find((tool) => tool.name === 'search_ability_assets')!;
+
+    await searchTool.execute({}, {} as never);
+    expect(suite.finalResponseGate.isRequired()).toBe(false);
+    await searchTool.execute({ query: '竞品调研' }, {} as never);
+    expect(suite.finalResponseGate.isRequired()).toBe(false);
+  });
+
+  it('activates final validation from automatic Semantica projection evidence', async () => {
+    const entry = await seedAsset('聚餐前先确认参与人数和忌口。', { title: '周末聚会安排' });
+    const venue = await seedAsset('餐厅选择依赖参与人数和忌口信息。', { title: '聚会地点筛选' });
+    const answerValidation = await import('../../../../src/main/features/recall/ontology-answer-validation');
+    const validateSpy = vi.spyOn(answerValidation, 'validateOntologyAnswer');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const initialEvidence = {
+      taskText: '原始任务：安排一次预算内的周末聚会。\n当前补充：改成周日下午。',
+      assets: [
+        { assetId: entry.id, title: entry.title, version: entry.version, statement: entry.statement },
+        { assetId: venue.id, title: venue.title, version: venue.version, statement: venue.statement },
+      ],
+      relations: [{
+        query: '下周聚餐怎么安排',
+        paths: [{
+          entryAssetId: entry.id,
+          entryTitle: entry.title,
+          assetId: venue.id,
+          assetTitle: venue.title,
+          distance: 1,
+          relationKind: 'depends_on' as const,
+          direction: 'incoming' as const,
+          maxHops: 1,
+          evidencePath: [{
+            fromAssetId: venue.id, fromTitle: venue.title, kind: 'depends_on' as const,
+            toAssetId: entry.id, toTitle: entry.title,
+          }],
+        }],
+      }],
+    };
+    const suite = createRecallToolSuite({
+      userId: TEST_UID,
+      taskText: '下周聚餐怎么安排',
+      turnId: 'turn-auto-evidence',
+      initialEvidence,
+    });
+
+    expect(suite.finalResponseGate.isRequired()).toBe(true);
+    const accepted = await suite.finalResponseGate.validate({
+      text: `${venue.title} [asset:${venue.id}] 直接依赖${entry.title} [asset:${entry.id}]。`,
+    });
+    expect(accepted.text).toContain('直接依赖');
+
+    const natural = await suite.finalResponseGate.validate({
+      text: '先确认参与人数和忌口，再据此筛选合适的聚餐地点。',
+    });
+    expect(natural.text).toBe('先确认参与人数和忌口，再据此筛选合适的聚餐地点。');
+    expect(natural.text).not.toContain('[asset:');
+    expect(validateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      query: initialEvidence.taskText,
+    }), expect.objectContaining({ mode: 'observe' }));
+
+    const reversed = await suite.finalResponseGate.validate({
+      text: `${entry.title} [asset:${entry.id}] 直接依赖${venue.title} [asset:${venue.id}]。`,
+    });
+    expect(reversed.text).toContain('当前已确认可用的经验');
+    expect(reversed.text).toContain('先确认参与人数和忌口');
+    expect(reversed.text).not.toContain('[asset:');
+    expect(reversed.text).not.toContain('-depends_on->');
+    expect(reversed.text).not.toContain('跳');
+    expect(reversed.text).not.toBe(`${entry.title} [asset:${entry.id}] 直接依赖${venue.title} [asset:${venue.id}]。`);
+  });
+
+  it('ignores automatic initial evidence while Semantica is disabled', async () => {
+    const live = await seedAsset('关闭本体模式时仍可按原流程读取的经验。', { title: '传统检索经验' });
+    vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '0');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const suite = createRecallToolSuite({
+      userId: TEST_UID,
+      initialEvidence: {
+        assets: [{ assetId: 'aa-hidden', title: '不应进入', version: '1', statement: '隐藏正文' }],
+        relations: [],
+      },
+    });
+    expect(suite.finalResponseGate.isRequired()).toBe(false);
+    expect(suite.tools.some((tool) => tool.name === 'ontology_query')).toBe(false);
+
+    const searchTool = suite.tools.find((tool) => tool.name === 'search_ability_assets')!;
+    await searchTool.execute({ assetIds: [live.id] }, {} as never);
+    expect(suite.finalResponseGate.isRequired()).toBe(false);
+    await expect(suite.finalResponseGate.validate({ text: '保留模型生成的完整回答。' }))
+      .resolves.toEqual({ text: '保留模型生成的完整回答。' });
+  });
+
+  it('采用工具只交给宿主待核验报告，版本未供应时拒绝且不写回执', async () => {
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const claims: unknown[] = [];
+    const report = createRecallToolSuite({ userId: TEST_UID, turnId: 'usage-turn',
+      suppliedAbilityAssets: [{ assetId: 'asset-report', assetVersion: '1' }],
+      onAssetUsageClaim: (claim) => { claims.push(claim); },
+    }).tools.find((tool) => tool.name === 'report_ability_asset_usage')!;
+    const input = { assetId: 'asset-report', assetVersion: 'v1', outputExcerpt: '每项待办都明确写出责任人以及可核对的验收条件。' };
+    expect((await report.execute(input, {} as never)).content).toContain('尚未生成采用回执');
+    expect(claims).toEqual([input]);
+    expect((await report.execute({ ...input, assetVersion: '2' }, {} as never)).isError).toBe(true);
+    expect(claims).toHaveLength(1);
+    const { listAssetUsageReceipts } = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    expect(await listAssetUsageReceipts(TEST_UID)).toEqual([]);
+  });
   it('searches the GLOBAL pool (all spaces + general assets) and returns citation format', async () => {
     await seedAsset('发布类公告应包含背景、变更点、影响范围、生效时间、联系方式五段。', { spaceId: 'sp_a', scope: 'space' });
     await seedAsset('竞品调研应先明确可比维度（范围/功能/定价/体验）再收集证据。', { spaceId: 'sp_b', scope: 'space' });
     await seedAsset('番茄工作法：25 分钟专注加 5 分钟休息。', { scope: 'general' });
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
     const result = await tool.execute({ query: '竞品调研' }, {} as never);
 
     expect(result.isError).not.toBe(true);
@@ -92,8 +287,8 @@ describe('recall search_ability_assets tool', () => {
     await seedAsset('另一个空间的经验。', { spaceId: 'sp_b', scope: 'space' });
     await seedAsset('已停用的经验。', { spaceId: 'sp_a', scope: 'space', pause: true });
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
 
     const filtered = await tool.execute({ query: '经验', spaceId: 'sp_a' }, {} as never);
     expect(filtered.content).toContain('只在本空间使用');
@@ -106,13 +301,33 @@ describe('recall search_ability_assets tool', () => {
     expect(scopeFiltered.content).not.toContain('番茄工作法');
   });
 
-  it('目录模式（2026-09-18）：不给 query 也不给 assetIds 时返回全量目录，含判断适配需要的字段', async () => {
+  it('applies role, conversation-kind and file-kind scope from the turn context', async () => {
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const asset = await seedAsset('受角色与会话限制的经验：仅在评审场景使用。', { scope: 'general', title: '范围上下文样本' });
+    await assets.updateAbilityAsset(TEST_UID, asset.id, {
+      scopePolicy: { roleIds: ['role-a'], conversationKinds: ['group'], fileKinds: ['pdf'] },
+      reason: 'scope context test', actor: 'user',
+    });
+
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [allowedTool] = createRecallToolSuite({
+      userId: TEST_UID, roleId: 'role-a', conversationKind: 'group', fileKinds: ['pdf'],
+    }).tools;
+    const allowed = await allowedTool.execute({ query: '受角色与会话限制' }, {} as never);
+    expect(allowed.content).toContain(`[asset:${asset.id}]`);
+
+    const [deniedTool] = createRecallToolSuite({ userId: TEST_UID }).tools;
+    const denied = await deniedTool.execute({ query: '受角色与会话限制' }, {} as never);
+    expect(denied.content).not.toContain(`[asset:${asset.id}]`);
+  });
+
+  it('目录模式：不给 query 也不给 assetIds 时返回全量目录，含判断适配需要的字段', async () => {
     const a = await seedAsset('发布类公告应包含背景、变更点、影响范围、生效时间、联系方式五段。', { spaceId: 'sp_a', scope: 'space' });
     await seedAsset('已停用的经验。', { spaceId: 'sp_a', scope: 'space', pause: true });
     await seedAsset('番茄工作法：25 分钟专注加 5 分钟休息。', { scope: 'general' });
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
 
     const catalog = await tool.execute({}, {} as never);
     expect(catalog.isError).not.toBe(true);
@@ -122,7 +337,7 @@ describe('recall search_ability_assets tool', () => {
     expect(catalog.content).toContain('番茄工作法');
     expect(catalog.content).not.toContain('已停用的经验');
     expect(catalog.content).toContain(`[asset:${a.id}]`);
-    // 模型据此判断适配所需的字段（2026-09-18 压缩为短标签两行制）：
+    // 模型据此判断适配所需的字段：
     // 标题 — 一句话 / 类型·范围·成熟度·版本·使用次数 ｜ 适用首条。
     expect(catalog.content).toContain('规则');
     expect(catalog.content).toContain('space');
@@ -149,14 +364,16 @@ describe('recall search_ability_assets tool', () => {
     expect(page2.content).toContain('本页 2-2 条');
   });
 
-  it('正文模式（2026-09-18）：按 id 取正文，过准入门，并写 agent_read 注入回执 + 使用流水', async () => {
+  it('正文模式：按 id 取正文，过准入门，并写 agent_read 注入回执 + 使用流水', async () => {
     const live = await seedAsset('性能类提问需用真实日志做分层归因，先给链路再给瓶颈。', { scope: 'general' });
     const paused = await seedAsset('已停用的经验。', { scope: 'general', pause: true });
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
     const receipts = await import('../../../../src/main/features/recall/injection-receipt');
     const usage = await import('../../../../src/main/features/recall/usage-service');
-    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-read0001' });
+    const suite = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-read0001' });
+    const tool = suite.tools.find((entry) => entry.name === 'search_ability_assets')!;
+    expect(suite.finalResponseGate.isRequired()).toBe(false);
 
     const read = await tool.execute({ assetIds: [live.id] }, {} as never);
     expect(read.isError).not.toBe(true);
@@ -165,8 +382,7 @@ describe('recall search_ability_assets tool', () => {
     expect(read.content).toContain('正文:');
     expect(read.content).toContain('先给链路再给瓶颈');
     expect(read.content).toMatch(/版本:v\d/);
-    // 生命周期元数据行已随出身收敛移除（2026-09-20）。
-
+    expect(suite.finalResponseGate.isRequired()).toBe(true);
     // 留痕：模型自己取用也算一次真实带入（否则自选资产进不了升档链）。
     const rows = await receipts.listInjectionReceipts(TEST_UID, 'turn-read0001');
     expect(rows.map((row) => `${row.channel}:${row.assetId}`)).toEqual([`agent_read:${live.id}`]);
@@ -199,16 +415,16 @@ describe('recall search_ability_assets tool', () => {
       const asset = await seedAsset(`第 ${i} 条经验：用于验证正文模式的条数上限。`, { scope: 'general' });
       ids.push(asset.id);
     }
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
     const receipts = await import('../../../../src/main/features/recall/injection-receipt');
-    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-read0002' });
+    const [tool] = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-read0002' }).tools;
     const read = await tool.execute({ assetIds: ids }, {} as never);
     expect(read.content).toContain('已取出 6 条资产正文');
     expect(read.content).toContain('单次最多 6 条');
     expect(await receipts.listInjectionReceipts(TEST_UID, 'turn-read0002')).toHaveLength(6);
 
     // 缺 turnId（没有回合并定位）：只读不记账，绝不写脏回执。
-    const [noTurn] = createRecallTools({ userId: TEST_UID });
+    const [noTurn] = createRecallToolSuite({ userId: TEST_UID }).tools;
     const readNoTurn = await noTurn.execute({ assetIds: [ids[0]] }, {} as never);
     expect(readNoTurn.isError).not.toBe(true);
     expect(await receipts.listInjectionReceipts(TEST_UID)).toHaveLength(6);
@@ -216,9 +432,9 @@ describe('recall search_ability_assets tool', () => {
 
   it('检索结果只记展示；按 ID 取正文后才记 agent_read', async () => {
     const asset = await seedAsset('竞品调研应先明确可比维度（范围/功能/定价/体验）再收集证据。', { scope: 'general' });
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
     const receipts = await import('../../../../src/main/features/recall/injection-receipt');
-    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-search001' });
+    const [tool] = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-search001' }).tools;
     const result = await tool.execute({ query: '竞品调研' }, {} as never);
     expect(result.content).toContain('竞品调研');
     expect(await receipts.listInjectionReceipts(TEST_UID, 'turn-search001')).toHaveLength(0);
@@ -230,14 +446,14 @@ describe('recall search_ability_assets tool', () => {
     expect(rows.some((row) => row.assetId === asset.id && row.channel === 'agent_read')).toBe(true);
   });
 
-  it('searches profile memory with an explicit source label (T1.3 画像进池)', async () => {
+  it('searches profile memory with an explicit source label', async () => {
     const paths = await import('../../../../src/main/paths');
     const profileFile = paths.userProfileFile(TEST_UID);
     fs.mkdirSync(path.dirname(profileFile), { recursive: true });
     fs.writeFileSync(profileFile, '用户是本程序的开发人员，技术问题按内部排查口径处理。', 'utf8');
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
 
     const result = await tool.execute({ query: '开发人员' }, {} as never);
     expect(result.isError).not.toBe(true);
@@ -255,9 +471,8 @@ describe('recall search_ability_assets tool', () => {
   });
 
   /**
-   * 输出预算（2026-09-18 质量门）：目录是索引不是正文。"可用高效"的第一层
-   * 含义就是"模型读得起"——这里把预算写成断言，任何一条超了都说明目录正在
-   * 长回"又一坨正文"。
+   * Catalog output is an index, not full asset content. These assertions bound
+   * its request cost independently of the full-text read path.
    */
   it('目录预算：每条平均 ≤ 110 字符，一句话不残缺（不以标点结尾）', async () => {
     const filler = '先给结论、再给依据、最后给下一步动作；遇到数据缺口时先说明缺口而不是硬给结论。'.repeat(3);
@@ -265,8 +480,8 @@ describe('recall search_ability_assets tool', () => {
     for (let index = 0; index < 8; index += 1) {
       await seedAsset(`${longBody}（第 ${index + 1} 条）`, { scope: 'general' });
     }
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
     const catalog = await tool.execute({ k: 30 }, {} as never);
 
     const lines = catalog.content.split('\n');
@@ -293,17 +508,17 @@ describe('recall search_ability_assets tool', () => {
 
   it('目录采用次数与带入流水分开；同回合重复正文读取只记一次', async () => {
     const asset = await seedAsset('口径核对：目录里的使用次数必须与使用流水一致。', { scope: 'general' });
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
     const usage = await import('../../../../src/main/features/recall/usage-service');
 
-    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-count0001' });
+    const [tool] = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-count0001' }).tools;
     await tool.execute({ assetIds: [asset.id] }, {} as never);
     await tool.execute({ assetIds: [asset.id] }, {} as never);   // 同回合第二次取用
     const catalog1 = await tool.execute({ k: 30 }, {} as never);
     expect(catalog1.content).toContain('没用过');
     expect(await usage.listRecallUsage(TEST_UID, asset.id)).toHaveLength(1);
 
-    const [nextTurn] = createRecallTools({ userId: TEST_UID, turnId: 'turn-count0002' });
+    const [nextTurn] = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-count0002' }).tools;
     await nextTurn.execute({ assetIds: [asset.id] }, {} as never);
     const catalog2 = await nextTurn.execute({ k: 30 }, {} as never);
     expect(catalog2.content).toContain('没用过');
@@ -314,8 +529,8 @@ describe('recall search_ability_assets tool', () => {
     for (let index = 0; index < 3; index += 1) {
       await seedAsset(`分页用例第 ${index + 1} 条经验。`, { scope: 'space' });
     }
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
 
     const beyond = await tool.execute({ offset: 99 }, {} as never);
     expect(beyond.isError).not.toBe(true);
@@ -338,8 +553,8 @@ describe('recall search_ability_assets tool', () => {
   it('读取硬闸（可用性）：命中禁用场景的资产被拒且给原因；暂停资产同样被拒', async () => {
     const forbidden = await seedAsset('这条资产声明了禁用场景：只在内部快速对齐时不可用。', { scope: 'general' });
     const paused = await seedAsset('这条资产已暂停。', { scope: 'general', pause: true });
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID, taskText: '内部快速对齐：先对齐口径' });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID, taskText: '内部快速对齐：先对齐口径' }).tools;
 
     const blocked = await tool.execute({ assetIds: [forbidden.id] }, {} as never);
     expect(blocked.content).toContain('当前不可使用');
@@ -352,8 +567,8 @@ describe('recall search_ability_assets tool', () => {
 
   it('读取去重与非法 id（可用性）：重复 id 只取一次；不存在与非安全 id 各给明确提示', async () => {
     const asset = await seedAsset('去重用例：同一条资产传两次只应返回一份正文。', { scope: 'general' });
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-dedup0001' });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-dedup0001' }).tools;
     const usage = await import('../../../../src/main/features/recall/usage-service');
 
     const dup = await tool.execute({ assetIds: [asset.id, asset.id] }, {} as never);
@@ -368,8 +583,8 @@ describe('recall search_ability_assets tool', () => {
 
   it('关键词降级（健壮性）：embedding 不可用时仍按关键词命中，不报错', async () => {
     await seedAsset('竞品调研维度：范围、功能、定价、体验四层先定清楚。', { scope: 'general' });
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
     embedState.fail = true;
     try {
       const result = await tool.execute({ query: '竞品调研' }, {} as never);
@@ -385,9 +600,9 @@ describe('recall search_ability_assets tool', () => {
     const profileFile = paths.userProfileFile(TEST_UID);
     fs.mkdirSync(path.dirname(profileFile), { recursive: true });
     fs.writeFileSync(profileFile, '用户的画像记忆：偏好结论先行。', 'utf8');
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
     const receipts = await import('../../../../src/main/features/recall/injection-receipt');
-    const [tool] = createRecallTools({ userId: TEST_UID, turnId: 'turn-profile001' });
+    const [tool] = createRecallToolSuite({ userId: TEST_UID, turnId: 'turn-profile001' }).tools;
     const result = await tool.execute({ query: '画像记忆' }, {} as never);
     expect(result.content).toMatch(/\[asset:onto-/);
     const rows = await receipts.listInjectionReceipts(TEST_UID, 'turn-profile001');
@@ -398,8 +613,8 @@ describe('recall search_ability_assets tool', () => {
     const asset = await seedAsset('秘密画像规则：只允许正式评审使用。', { scope: 'general' });
     const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
     await updateRecallJsonRecord(TEST_UID, 'ability-assets', asset.id, (current) => ({ ...(current || {}), type: 'personal' } as never));
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID, taskText: '内部快速对齐' });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID, taskText: '内部快速对齐' }).tools;
     const result = await tool.execute({ query: '秘密画像规则' }, {} as never);
     expect(result.content).not.toContain('秘密画像规则');
     expect(result.content).not.toContain(`[asset:${asset.id}]`);
@@ -411,8 +626,8 @@ describe('recall search_ability_assets tool', () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
     await assets.archiveAbilityAsset(TEST_UID, archived.id, { actor: 'user', reason: 'merge target' });
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
     const catalog = await tool.execute({ k: 30 }, {} as never);
     expect(catalog.content).toContain('保留资产');
     expect(catalog.content).not.toContain('归档资产');
@@ -489,16 +704,16 @@ describe('recall search_ability_assets tool', () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const list = (await assets.listAbilityAssets(TEST_UID)).filter((asset) => asset.status === 'active');
     const line = shared.formatCatalogEntries(list, new Map(), 1)[0];
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
     const catalog = await tool.execute({ k: 30 }, {} as never);
     expect(catalog.content).toContain(line);
   });
 
   it('模式优先级（契约）：同时给 query 与 assetIds 走正文模式；只给 k 走目录模式', async () => {
     const asset = await seedAsset('模式优先级：assetIds 优先于 query。', { scope: 'general' });
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
     const both = await tool.execute({ query: '模式优先级', assetIds: [asset.id] }, {} as never);
     expect(both.content).toContain('已取出 1 条资产正文');
     expect(both.content).not.toContain('返回最相关的');
@@ -511,9 +726,9 @@ describe('recall search_ability_assets tool', () => {
     const body = `性能类提问必须用真实日志做分层归因：先拆链路、再定位瓶颈、最后只给一个可优化项。${filler}`;
     for (let index = 0; index < 8; index += 1) await seedAsset(`${body}（第 ${index + 1} 条）`, { scope: 'general' });
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
     const assets = await import('../../../../src/main/features/recall/asset-service');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
     const catalog = await tool.execute({ k: 30 }, {} as never);
     const ids = (await assets.listAbilityAssets(TEST_UID)).slice(0, 6).map((asset) => asset.id);
     const fullText = await tool.execute({ assetIds: ids }, {} as never);
@@ -524,7 +739,7 @@ describe('recall search_ability_assets tool', () => {
     expect(fullText.content.length).toBeGreaterThan(catalog.content.length);
   });
 
-// 目录相关度标记（2026-09-22）：★ 标记 + 相关优先排序（在 hint 侧，工具目录
+// 目录相关度标记：★ 标记 + 相关优先排序（在 hint 侧，工具目录
 // 模式共条目格式——此测试锁 formatCatalogEntry 的标记输出）。
 describe('catalog relevance mark', () => {
   it('formatCatalogEntry marks relevant assets with a star', async () => {
@@ -540,10 +755,10 @@ describe('catalog relevance mark', () => {
   });
 });
 
-// 推荐排序接线（specs/012 T018）：工具目录模式与提示词常驻目录共调
+// 推荐排序接线：工具目录模式与提示词常驻目录共调
 // asset-ranking.rankAssets 的同一推荐分——同一次会话里两处看到同一顺序；
 // 语义检索（runSearch）保持纯余弦，不受行为信号（采用回执）影响。
-describe('catalog ranking parity (T018)', () => {
+describe('catalog ranking parity', () => {
   const idsOf = (text: string) => [...text.matchAll(/^\d+\.\s(?:★)?\[asset:([^\]]+)\]/gm)].map((m) => m[1]);
 
   it('工具目录第一页与提示词常驻目录同序（同一 scene 输入下逐位一致）', async () => {
@@ -551,8 +766,8 @@ describe('catalog ranking parity (T018)', () => {
     await seedAsset('普通资产甲：不命中场景，靠其余因子与兜底序。', { scope: 'general' });
     await seedAsset('普通资产乙：不命中场景，靠其余因子与兜底序。', { scope: 'general' });
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID, spaceId: 'sp-rank-01', projectId: 'pj-rank-01' });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID, spaceId: 'sp-rank-01', projectId: 'pj-rank-01' }).tools;
     const catalog = await tool.execute({ k: 30 }, {} as never);
     expect(catalog.isError).not.toBe(true);
     const toolIds = idsOf(catalog.content);
@@ -578,8 +793,8 @@ describe('catalog ranking parity (T018)', () => {
     const first = await seedAsset('较早创建的资产：写采用回执后应在目录里升到第一。', { scope: 'general' });
     const second = await seedAsset('较晚创建的资产：兜底序（updatedAt）原本在前面。', { scope: 'general' });
 
-    const { createRecallTools } = await import('../../../../src/main/model/core-agent/recall-tools');
-    const [tool] = createRecallTools({ userId: TEST_UID });
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const [tool] = createRecallToolSuite({ userId: TEST_UID }).tools;
     const searchBefore = await tool.execute({ query: '资产', k: 30 }, {} as never);
     const catalogBefore = idsOf((await tool.execute({ k: 30 }, {} as never)).content);
     expect(new Set(catalogBefore)).toEqual(new Set([first.id, second.id]));
@@ -610,4 +825,24 @@ describe('catalog ranking parity (T018)', () => {
 
 });
 
+});
+
+it('reports unassessed search results, reuses that batch and preserves explicit full reads', async () => {
+  const asset = await seedAsset('Synthetic reviews retain the signed decision evidence.', { title: 'Synthetic decision method' });
+  const semantic = await import('../../../../src/main/features/recall/semantic-applicability');
+  const assess = vi.spyOn(semantic, 'assessSemanticApplicability').mockResolvedValue({ decisions: [],
+    unassessed: [{ assetId: asset.id, version: asset.version, reason: 'candidate_limit' }] });
+  try {
+    const { createRecallToolSuite } = await import('../../../../src/main/model/core-agent/recall-tools');
+    const suite = createRecallToolSuite({ userId: TEST_UID, taskText: 'Review the signed decision evidence.', turnId: 'unassessed-search' });
+    const search = suite.tools.find(tool => tool.name === 'search_ability_assets')!;
+    const first = await search.execute({ query: 'signed decision evidence' }, {} as never);
+    expect(first.content).toContain('not_evaluated: semantic_applicability_candidate_limit');
+    expect(first.content).not.toContain(asset.statement);
+    await search.execute({ query: 'signed decision evidence' }, {} as never);
+    expect(assess).toHaveBeenCalledTimes(1);
+    const explicit = await search.execute({ assetIds: [asset.id] }, {} as never);
+    expect(explicit.content).toContain(asset.statement);
+    expect(assess).toHaveBeenCalledTimes(1);
+  } finally { assess.mockRestore(); }
 });

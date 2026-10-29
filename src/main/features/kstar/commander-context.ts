@@ -1,3 +1,4 @@
+import { cognitionIntegrationIsolated } from '../cognition/integration-boundary';
 import { safeId } from '../../storage';
 import { readContextProjection } from '../recall/context-projection';
 import { readWorldModelForecast } from '../recall/world-model';
@@ -77,6 +78,7 @@ export async function readCommanderKstarContext(
       : {}),
   };
 
+  if (cognitionIntegrationIsolated()) return context;
   if (requirement.projectionId) {
     try {
       const projection = await readContextProjection(userId, requirement.projectionId);

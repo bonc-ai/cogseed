@@ -30,7 +30,7 @@ const legacyRawControlBaseline: Record<string, number> = {
   'chat-lightbox.js': 3,
   'cognition/pages.js': 5,
   'connectors.js': 2,
-  'context-menu.js': 1,
+  'context-menu.js': 0,
   'contexts.js': 0,
   'continue-work.js': 3,
   'conversation-info.js': 6,
@@ -142,8 +142,19 @@ function rendererModules(directory: string): string[] {
   });
 }
 
+/**
+ * Comments are not rendered markup. Without stripping them, a module that
+ * documents its own usage (`// <button data-ui-tooltip>` in a header block)
+ * trips the frozen raw-control baseline even though it ships no control.
+ */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/^[ \t]*\/\/.*$/gm, ' ');
+}
+
 function rawControlCount(source: string): number {
-  return (source.match(/<(?:button|input|textarea|select)\b/gi) || []).length;
+  return (withoutComments(source).match(/<(?:button|input|textarea|select)\b/gi) || []).length;
 }
 
 function dynamicControlCount(source: string): number {
@@ -152,8 +163,9 @@ function dynamicControlCount(source: string): number {
 }
 
 function rawCheckboxCount(source: string): number {
-  return (source.match(/<input\b[^>]*\btype\s*=\s*['"]checkbox['"]/gi) || []).length
-    + (source.match(/\.type\s*=\s*['"]checkbox['"]/gi) || []).length;
+  const code = withoutComments(source);
+  return (code.match(/<input\b[^>]*\btype\s*=\s*['"]checkbox['"]/gi) || []).length
+    + (code.match(/\.type\s*=\s*['"]checkbox['"]/gi) || []).length;
 }
 
 /**
@@ -176,7 +188,10 @@ const emojiAsIconBaseline: Record<string, number> = {
   'settings.js': 1,
   'skills.js': 1,
   'touchpoint-settings.js': 1,
-  'workspace.js': 11,
+  // workspace.js: 11 -> 8（2026-10-08 自 feat/space-project-dir 迁移）。
+  // 该分支把注释里的 🔴 强调标记清掉了（emoji 检测按「含 emoji 的行数」计），
+  // 剩下 8 处是勾选标记 `✓` 的既有用法，未被本次改动触碰。
+  'workspace.js': 8,
 };
 
 /**

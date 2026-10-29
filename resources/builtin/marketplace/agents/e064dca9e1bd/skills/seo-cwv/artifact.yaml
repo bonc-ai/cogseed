@@ -1,0 +1,29 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.seo.cwv
+  name: seo-cwv
+  version: 1.0.0
+  description: 'Fetch Core Web Vitals via Google PageSpeed Insights: LCP/CLS/INP/FCP
+    and the performance score, separating CrUX real-user field data (Measured) from
+    lab data (Estimated); emits performance-dimension findings; free, no OAuth; For:
+    ''check this page''s load performance'', ''how are the'
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: python
+    scripts:
+    - scripts/cwv.py
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

@@ -6,6 +6,7 @@
  *   hub-account.start_login    → { started, authorize_url }
  *   hub-account.logout         → { signed_out }
  *   hub-account.me             → { me }
+ *   hub-account.update_profile → { me } (strict self-profile, no credentials)
  *   hub-account.devices        → { devices }
  *   hub-account.revoke_device  → { revoked_sessions }
  *   hub-account.consents       → { consents }
@@ -23,6 +24,9 @@ import * as hubAccount from '../features/hub_account';
 import { HubApiError } from '../features/hub_account';
 import { assertHubAccountReleaseEnabled, isHubAccountReleaseEnabled } from '../features/hub_account/gate';
 import { broadcastHubStateChanged } from '../features/hub_account/account-events';
+import { createLogger } from '../logger';
+
+const log = createLogger('ipc.hub-account');
 
 function assertString(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`invalid ${name}`);
@@ -62,6 +66,16 @@ export const invokeHandlers = {
       // before the next contribution starts.
     }
     await hubAccount.logout(ctx.userId);
+    // T2.3：会话已清，撤销由旧身份派生的内存状态（账号缓存、在线心跳、
+    // 排队中的接待提示），避免退出后还有路径用旧身份继续动作。
+    try {
+      const { onSignedOut } = await import('../features/hub_account/session-lifecycle');
+      await onSignedOut(ctx.userId);
+    } catch (error) {
+      log.warn('hub identity teardown failed after sign-out', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     // 状态已落盘；广播让所有 renderer 表面（左下角账号区 / 设置-账号页）
     // 立即刷新，避免两处显示不一致。
     broadcastHubStateChanged({ reason: 'signed_out' });
@@ -71,6 +85,21 @@ export const invokeHandlers = {
   'hub-account.me': async (_payload: unknown, ctx: { userId: string }) => {
     requireReleaseGate();
     return { me: await hubAccount.getAccountMe(ctx.userId) };
+  },
+
+  'hub-account.update_profile': async (payload: unknown, ctx: { userId: string }) => {
+    requireReleaseGate();
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+      || Object.keys(payload).length !== 1 || !Object.prototype.hasOwnProperty.call(payload, 'display_name')) {
+      throw new Error('invalid profile');
+    }
+    const raw = (payload as { display_name?: unknown }).display_name;
+    if (typeof raw !== 'string' || /\p{Cc}/u.test(raw)) throw new Error('invalid display_name');
+    const display_name = raw.trim();
+    if (!display_name || display_name.length > 32) throw new Error('invalid display_name');
+    const me = await hubAccount.updateProfile(ctx.userId, { display_name });
+    broadcastHubStateChanged({ reason: 'profile_updated' });
+    return { me };
   },
 
   'hub-account.devices': async (_payload: unknown, ctx: { userId: string }) => {

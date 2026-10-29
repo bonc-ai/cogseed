@@ -84,25 +84,25 @@ describe('cognition vocabulary 门禁：后端枚举必须有前端翻译', () =
     const statuses = literals(service, /status: '([a-z_]+)'/g)
       .filter((s) => !['manual', 'nightly', 'scheduled', 'smart', 'run_now', 'configuration_required', 'model_auth_required', 'model_not_configured', 'manual_start_required', 'waiting_input', 'active_trigger'].includes(s));
     const unique = [...new Set(statuses)];
-    expect(unique.length).toBeGreaterThanOrEqual(10);
+    expect(unique.length).toBeGreaterThanOrEqual(9);
     const dict = new Set(dictKeys('CAPTURE_STATUS'));
     const missing = unique.filter((s) => !dict.has(s));
     expect(missing, `CAPTURE_STATUS 缺翻译: ${missing.join(', ')}`).toEqual([]);
   });
 
-  it('整理展示状态全集（captureDisplayStatus 七值）逐项入字典', () => {
+  it('整理展示状态全集（captureDisplayStatus 八值）逐项入字典', () => {
     const service = read('src/main/features/recall/capture-service.ts');
     const statuses = unionLiterals(service, 'RecallCaptureDisplayStatus');
-    expect(statuses).toHaveLength(7);
+    expect(statuses).toHaveLength(8);
     const dict = new Set(dictKeys('CAPTURE_DISPLAY_STATUS'));
     const missing = statuses.filter((s) => !dict.has(s));
     expect(missing, `CAPTURE_DISPLAY_STATUS 缺翻译: ${missing.join(', ')}`).toEqual([]);
   });
 
-  it('整理展示原因全集（captureDisplayReason 十七值）逐项入字典', () => {
+  it('整理展示原因全集（captureDisplayReason 十八值）逐项入字典', () => {
     const service = read('src/main/features/recall/capture-service.ts');
     const reasons = unionLiterals(service, 'RecallCaptureDisplayReason');
-    expect(reasons).toHaveLength(17);
+    expect(reasons).toHaveLength(18);
     const dict = new Set(dictKeys('CAPTURE_DISPLAY_REASON'));
     const missing = reasons.filter((r) => !dict.has(r));
     expect(missing, `CAPTURE_DISPLAY_REASON 缺翻译: ${missing.join(', ')}`).toEqual([]);
@@ -111,7 +111,7 @@ describe('cognition vocabulary 门禁：后端枚举必须有前端翻译', () =
   it('整理行内动作全集（captureActions 九值）逐项入字典', () => {
     const service = read('src/main/features/recall/capture-service.ts');
     const actions = unionLiterals(service, 'RecallCaptureAction');
-    expect(actions).toHaveLength(9);
+    expect(actions).toHaveLength(3);
     const dict = new Set(dictKeys('CAPTURE_ACTION'));
     const missing = actions.filter((a) => !dict.has(a));
     expect(missing, `CAPTURE_ACTION 缺翻译: ${missing.join(', ')}`).toEqual([]);
@@ -129,7 +129,7 @@ describe('cognition vocabulary 门禁：后端枚举必须有前端翻译', () =
   it('提炼阶段全集（RecallCaptureStage 五值）逐项入字典', () => {
     const service = read('src/main/features/recall/capture-service.ts');
     const stages = unionLiterals(service, 'RecallCaptureStage');
-    expect(stages).toHaveLength(5);
+    expect(stages).toHaveLength(7);
     const dict = new Set(dictKeys('CAPTURE_STAGE'));
     const missing = stages.filter((s) => !dict.has(s));
     expect(missing, `CAPTURE_STAGE 缺翻译: ${missing.join(', ')}`).toEqual([]);

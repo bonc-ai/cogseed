@@ -123,11 +123,27 @@ function sanitizeHtml(html) {
   const s = (html === null || html === undefined) ? '' : String(html);
   const DP = _domPurify();
   if (!DP || typeof DP.sanitize !== 'function') {
-    if (typeof window !== 'undefined' && !_sanitizeMissingWarned) {
+    // 没有 DOM 的调用方（Node 测试、非浏览器上下文）：
+    // 这里的字符串永远到不了 innerHTML，所以透传是安全的 —— 而且必须透传，
+    // 否则 Node 侧所有 markdown 渲染断言都会被转义掉（既有测试依赖此语义）。
+    if (typeof window === 'undefined') return s;
+  // 浏览器里 DOMPurify 缺席 = 净化收口失效，此处**必须 fail-closed**
+    //    （安全审计 2026-09-21 加固；原先这里 `return s` 原样放行）。
+    //
+    //    为什么严重：`renderMarkdownFull` 末尾的这一次 `sanitizeHtml` 是**全部**消息
+    //    渲染的唯一净化点（聊天气泡、技能详情、KB 阅读器、流式收尾都走它），而它
+    //    跑在 App **主框架**里 —— 主框架握有 `window.cogseed.invoke`（任意 IPC 通道）。
+    //    原样放行 HTML 等于把任意 IPC 交给一段注入脚本。而"DOMPurify 缺席"并不是
+    //    臆想：它靠 `index.html` 的脚本顺序加载（见该处 1916 行注释），打包漏文件、
+    //    顺序被改、CSP 拦截都会命中这一支。
+    //
+    //    降级为**转义文本**而不是丢空串：内容仍然看得见，但标记不会被执行
+    //    （比把整条消息变成空白更不容易被误判成"渲染坏了"而回滚这次加固）。
+    if (!_sanitizeMissingWarned) {
       _sanitizeMissingWarned = true;
-      try { console.error('[security] DOMPurify unavailable — HTML sanitization is OFF'); } catch (_) {}
+      try { console.error('[security] DOMPurify unavailable — escaping HTML instead of passing it through'); } catch (_) {}
     }
-    return s;
+    return escapeHtml(s);
   }
   if (!_sanitizeHookInstalled && typeof DP.addHook === 'function') {
     // Any link opening a new browsing context must carry rel=noopener noreferrer.
@@ -1259,8 +1275,8 @@ function _aiSelectMount(el, config) {
     }
   };
 
-  // Portal the popover to <body> while open so an ancestor with
-  // `overflow: auto / hidden` (modals, settings panes) can't clip it.
+  // Portal fixed-position popovers out of the widget to avoid scroll clipping.
+  // A modal owns its listbox; other pages use <body>.
   // We set `position: fixed` + viewport coords from the trigger's
   // bounding rect; on scroll/resize we re-measure. This replaces the
   // earlier "popover lives inside .ai-select" layout — the markup
@@ -1268,6 +1284,9 @@ function _aiSelectMount(el, config) {
   // open/close moves it back and forth.
   let portalParent = null;
   let portalNextSibling = null;
+  let focusTimer = null;
+  let outsideTimer = null;
+  let destroyed = false;
   const reposition = () => {
     if (!state.open) return;
     const rect = trigger.getBoundingClientRect();
@@ -1283,7 +1302,7 @@ function _aiSelectMount(el, config) {
     popover.style.zIndex = String(_aiSelectPopoverZIndexFor(el));
   };
   const open = () => {
-    if (state.open) return;
+    if (state.open || destroyed) return;
     state.open = true;
     state.query = state.initialQuery || '';
     el.classList.add('open');
@@ -1291,22 +1310,37 @@ function _aiSelectMount(el, config) {
     popover.hidden = false;
     portalParent = popover.parentNode;
     portalNextSibling = popover.nextSibling;
-    document.body.appendChild(popover);
+    // aria-modal hides sibling portals from assistive technology. Keep a modal's
+    // fixed-position listbox inside its dialog while retaining body portals elsewhere.
+    (el.closest('[role="dialog"]') || document.body).appendChild(popover);
     const visibleOptions = _aiSelectFilterOptions(state.options, state.query);
     const selectedIndex = visibleOptions.findIndex(o => o.value === state.value);
     state.activeIdx = visibleOptions.length ? Math.max(0, selectedIndex) : -1;
     renderPopover();
     reposition();
     if (state.searchable) {
-      setTimeout(() => popover.querySelector('.ai-select-search-input')?.focus(), 0);
+      focusTimer = setTimeout(() => {
+        focusTimer = null;
+        if (state.open && !destroyed) popover.querySelector('.ai-select-search-input')?.focus();
+      }, 0);
     }
-    setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
+    outsideTimer = setTimeout(() => {
+      outsideTimer = null;
+      if (state.open && !destroyed) document.addEventListener('mousedown', onDocDown, true);
+    }, 0);
     document.addEventListener('keydown', onKey, true);
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition, true);
   };
 
   const close = (restoreFocus = false) => {
+    if (focusTimer != null) clearTimeout(focusTimer);
+    if (outsideTimer != null) clearTimeout(outsideTimer);
+    focusTimer = outsideTimer = null;
+    document.removeEventListener('mousedown', onDocDown, true);
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('scroll', reposition, true);
+    window.removeEventListener('resize', reposition, true);
     if (!state.open) return;
     state.open = false;
     el.classList.remove('open');
@@ -1330,10 +1364,6 @@ function _aiSelectMount(el, config) {
       portalParent = null;
       portalNextSibling = null;
     }
-    document.removeEventListener('mousedown', onDocDown, true);
-    document.removeEventListener('keydown', onKey, true);
-    window.removeEventListener('scroll', reposition, true);
-    window.removeEventListener('resize', reposition, true);
     if (restoreFocus && trigger.isConnected && !trigger.disabled) trigger.focus();
   };
 
@@ -1365,7 +1395,8 @@ function _aiSelectMount(el, config) {
     }
   };
 
-  trigger.addEventListener('click', () => state.open ? close() : open());
+  const onTriggerClick = () => state.open ? close() : open();
+  trigger.addEventListener('click', onTriggerClick);
 
   const api = {
     el,
@@ -1407,6 +1438,21 @@ function _aiSelectMount(el, config) {
     },
     open,
     close,
+    // Rebuilt pages must release the instance as well as its visible portal.
+    // close() remains reusable; destroy() is terminal and safe to call twice.
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      close();
+      trigger.removeEventListener('click', onTriggerClick);
+      popover.remove();
+      state.onChange = () => {};
+      _aiSelectInstances.delete(api);
+      if (el._uiSelectApi === api) {
+        delete el._uiSelectApi;
+        delete el.dataset.uiSelectHydrated;
+      }
+    },
   };
 
   _aiSelectInstances.add(api);
@@ -1418,8 +1464,7 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   window.addEventListener('i18n-change', () => {
     for (const api of _aiSelectInstances) {
       if (!api.el?.isConnected) {
-        api.close();
-        _aiSelectInstances.delete(api);
+        api.destroy();
         continue;
       }
       api.refreshI18n();

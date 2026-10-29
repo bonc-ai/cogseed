@@ -1,0 +1,45 @@
+{
+  "name": "报销材料预检助手",
+  "description_zh": "整理报销材料，按制度规则预检，输出补件清单与可提交的材料摘要；适合“帮我看看这批报销材料齐不齐”；触发词：报销、发票、补件、预检",
+  "workflow": "### 1. 读取材料\n读取用户选择的材料。\n\n### 2. 预检\n调用技能 报销制度预检，逐项核对。\n\n### 3. 汇总\n输出补件清单与材料摘要。",
+  "icon": "calculator",
+  "color": "mint",
+  "category": "office",
+  "skill_list": [
+    "5e1c8a02d9b3",
+    "9b27f4a1c0e6"
+  ],
+  "inputs": [
+    {
+      "id": "expense_note",
+      "label": "报销说明",
+      "type": "textarea",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "materials",
+      "label": "材料文件",
+      "type": "file",
+      "multiple": true,
+      "accept": ".pdf,.png,.jpg",
+      "default": []
+    }
+  ],
+  "interactive": false,
+  "knowhow": [
+    "核对发票抬头、金额、日期是否齐全",
+    "对照制度规则标出缺失材料"
+  ],
+  "standards": [
+    "给出需补件清单，缺项逐条列明",
+    "给出预检结论，不代替审批"
+  ],
+  "output_format": "auto",
+  "runtime": {
+    "kind": "in_process"
+  },
+  "enabled_connectors": [
+    "conn_ab12cd"
+  ]
+}

@@ -111,6 +111,8 @@ function loadConnectorsRenderer(
   context.window.window = context.window;
   context.window.globalThis = context.globalThis;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-status.js'), 'utf8'), context);
+  context.uiStatusDot = context.window.uiStatusDot;
   vm.runInContext(code, context, { filename: 'connectors.js' });
   // `_connectorsState` is a top-level `let`, so it is NOT a property of the context object (only
   // function declarations are). Reach it by running code inside the context instead.

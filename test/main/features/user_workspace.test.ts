@@ -122,14 +122,12 @@ describe('user_workspace › setWorkspacePath', () => {
     if (result.ok) expect(result.path).toBe(dir);
   });
 
-  it.runIf(process.platform === 'darwin')('rejects macOS privacy-protected workspace roots selected by the user', async () => {
+  it.runIf(process.platform === 'darwin')('rejects macOS privacy-protected workspace roots outside the user-selectable set', async () => {
     await _pinZh();
     process.env.COGSEED_TCC_GUARD_FORCE = '1';
     const home = path.join(tmpDir, 'fake-home');
     const protectedRoots = [
-      path.join(home, 'Downloads'),
       path.join(home, 'Pictures'),
-      path.join(home, 'Desktop'),
       path.join(home, 'Library', 'Containers', 'com.apple.mail'),
     ];
     protectedRoots.forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
@@ -147,6 +145,28 @@ describe('user_workspace › setWorkspacePath', () => {
       expect(ws.getWorkspacePath(userId)).toBe(p.DEFAULT_USER_WORKSPACE);
       const info = ws.getWorkspaceInfo(userId);
       expect(info.currentPath).toBe(p.DEFAULT_USER_WORKSPACE);
+    }
+  });
+
+  it.runIf(process.platform === 'darwin')('accepts macOS Desktop, Documents and Downloads as user-selected workspaces', async () => {
+    process.env.COGSEED_TCC_GUARD_FORCE = '1';
+    const home = path.join(tmpDir, 'fake-home');
+    const selectable = [
+      path.join(home, 'Downloads'),
+      path.join(home, 'Documents'),
+      path.join(home, 'Desktop'),
+    ];
+    selectable.forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+    process.env.HOME = home;
+    const ws = await import('../../../src/main/features/user_workspace');
+
+    for (const [idx, dir] of selectable.entries()) {
+      const userId = `userSelectable${idx}`;
+      const result = ws.setWorkspacePath(userId, dir);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.path).toBe(dir);
+      expect(ws.getWorkspacePath(userId)).toBe(dir);
+      expect(ws.getWorkspaceInfo(userId).isDefault).toBe(false);
     }
   });
 
@@ -335,15 +355,15 @@ describe('user_workspace › scoped (projects)', () => {
   it.runIf(process.platform === 'darwin')('falls back from a legacy protected selectedPath without statting it', async () => {
     process.env.COGSEED_TCC_GUARD_FORCE = '1';
     const home = path.join(tmpDir, 'fake-home');
-    const desktop = path.join(home, 'Desktop');
-    fs.mkdirSync(desktop, { recursive: true });
+    const pictures = path.join(home, 'Pictures');
+    fs.mkdirSync(pictures, { recursive: true });
     process.env.HOME = home;
     const ws = await import('../../../src/main/features/user_workspace');
     const p = await import('../../../src/main/paths');
     const cfgFile = path.join(tmpDir, 'userLegacyProtected', 'local', 'workspace.json');
     fs.mkdirSync(path.dirname(cfgFile), { recursive: true });
     fs.writeFileSync(cfgFile, JSON.stringify({
-      selectedPath: desktop,
+      selectedPath: pictures,
       updatedAt: '2026-06-03T00:00:00.000Z',
       recentPaths: [path.join(home, 'Downloads')],
     }));
@@ -353,7 +373,7 @@ describe('user_workspace › scoped (projects)', () => {
     expect(info.currentPath).toBe(p.DEFAULT_USER_WORKSPACE);
     expect(info.defaultPath).toBe(p.DEFAULT_USER_WORKSPACE);
     expect(info.isDefault).toBe(true);
-    expect(info.recentPaths).toEqual([]);
+    expect(info.recentPaths).toContain(path.join(home, 'Downloads'));
   });
 
   it('reset on project scope falls through to default; default scope intact', async () => {

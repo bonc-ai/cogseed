@@ -66,7 +66,7 @@ export interface CogSeedGroupChatProjectionDeps {
     metrics?: unknown;
     failureKind?: 'runtime';
     failureCode?: string;
-    terminalStatus?: 'completed' | 'failed';
+    terminalStatus?: 'completed' | 'failed' | 'waiting_input';
   }): Promise<void | boolean>;
 }
 
@@ -81,6 +81,8 @@ interface ProjectionState {
   processedEventIds: string[];
   process: ProjectionProcessItem[];
   terminalProjected: boolean;
+  executionId?: string;
+  continuationRequestId?: string;
   stopped: boolean;
   updatedAt: string;
 }
@@ -129,8 +131,10 @@ function processItem(event: CogSeedProjectionEvent): ProjectionProcessItem | nul
     const text = typeof event.payload.text === 'string' ? event.payload.text : '';
     return text ? { type: 'progress', text } : null;
   }
-  if (event.type === 'tool.started' || event.type === 'tool.finished'
-    || event.type === 'task.started' || event.type === 'task.failed'
+  if (event.type === 'tool.started' || event.type === 'tool.finished') {
+    return groupChatProcessDataForProjection(event.type, event.payload) as ProjectionProcessItem;
+  }
+  if (event.type === 'task.started' || event.type === 'task.waiting_user' || event.type === 'task.failed'
     || event.type === 'task.cancelled' || event.type === 'task.recoverable'
     || event.type === 'artifact') {
     return { type: 'event', event: { stream: event.type, ...(Object.keys(event.payload).length ? { data: event.payload } : {}) } };
@@ -151,7 +155,9 @@ export function groupChatProcessDataForProjection(
       event: {
         stream: 'tool',
         data: {
-          phase: kind === 'tool.started' ? 'start' : 'result',
+          phase: kind === 'tool.started' ? 'start' : 'end',
+          ...(typeof payload.id === 'string' ? { id: payload.id } : {}),
+          ...(payload.arguments && typeof payload.arguments === 'object' ? { arguments: payload.arguments } : {}),
           ...(typeof payload.name === 'string' ? { name: payload.name } : {}),
           ...(kind === 'tool.finished' && typeof payload.isError === 'boolean' ? { isError: payload.isError } : {}),
           ...(kind === 'tool.finished' && payload.isError === true && typeof payload.error === 'string' && payload.error ? { error: payload.error.slice(0, 500) } : {}),
@@ -169,7 +175,7 @@ export function groupChatProcessDataForProjection(
 }
 
 function isTerminal(type: CogSeedTaskEventType): boolean {
-  return type === 'task.completed' || type === 'task.failed' || type === 'task.cancelled';
+  return type === 'task.waiting_user' || type === 'task.completed' || type === 'task.failed' || type === 'task.cancelled';
 }
 
 type ProjectionConversationEffect<T> =
@@ -207,11 +213,21 @@ async function withProjectionConversationEffect<T>(
 }
 
 function terminalText(event: CogSeedProjectionEvent): { text: string; failureKind?: 'runtime'; failureCode?: string } | null {
-  if (event.type === 'task.completed') {
+  if (event.type === 'task.completed' || (event.type === 'task.waiting_user' && event.payload.text)) {
     const text = typeof event.payload.text === 'string' ? event.payload.text.trim() : '';
     return text ? { text } : null;
   }
-  if (event.type === 'task.failed') {
+  if (event.type === 'task.failed' || event.type === 'task.waiting_user') {
+    const code = event.payload.code;
+    if (code === 'transcript_correction_incomplete' || code === 'transcript_confirmation_required'
+      || code === 'transcript_scope_mismatch') {
+      const reply = code === 'transcript_confirmation_required' && typeof event.payload.reply === 'string'
+        ? event.payload.reply.trim().slice(0, 4000) : '';
+      const candidates = reply ? `\n\n${reply}` : code === 'transcript_confirmation_required'
+        && typeof event.payload.error === 'string' && event.payload.error.startsWith('- 「')
+        ? `\n\n${event.payload.error.slice(0, 6000)}` : '';
+      return { text: t(`cogseed.${code}`) + candidates, ...(event.type === 'task.failed' ? { failureKind: 'runtime' as const, failureCode: code } : {}) };
+    }
     // Append the executor's failure detail (when the adapter recorded one)
     // so the conversation bubble shows the actual cause instead of only the
     // generic retry notice.
@@ -306,7 +322,14 @@ export function createCogSeedGroupChatProjection(
       }
       const stateFile = cogseedTaskProjectionFile(input.userId, input.taskId);
       return fileEditLock(stateFile).runExclusive(async () => {
-        const state = await readState(input.userId, input.taskId);
+        let state = await readState(input.userId, input.taskId);
+        const continuationRequestId = typeof input.event.payload.continuationRequestId === 'string'
+          && safeId(input.event.payload.continuationRequestId) ? input.event.payload.continuationRequestId : undefined;
+        if (input.event.type === 'task.started' && (state.executionId !== input.executionId
+          || state.continuationRequestId !== continuationRequestId)) {
+          state = { ...freshState(input.userId, input.taskId), executionId: input.executionId, continuationRequestId };
+        }
+        const turnId = (input.executionId || input.taskId) + (state.continuationRequestId ? '-' + state.continuationRequestId : '');
         if (state.processedEventIds.includes(input.event.eventId)) return 'duplicate';
         if ((state.terminalProjected || state.stopped) && input.event.type !== 'task.cancelled') return 'dropped';
 
@@ -325,7 +348,7 @@ export function createCogSeedGroupChatProjection(
                 userId: input.userId,
                 conversationId: input.conversationId,
                 agentId: input.agentId,
-                turnId: input.executionId || input.taskId,
+                turnId,
                 kind: input.event.type,
                 data: input.event.payload,
               }),
@@ -348,14 +371,14 @@ export function createCogSeedGroupChatProjection(
                   userId: input.userId,
                   conversationId: input.conversationId,
                   agentId: input.agentId,
-                  turnId: input.executionId || input.taskId,
+                  turnId,
                   ...(input.groupChatRunId ? { runId: input.groupChatRunId } : {}),
                   text: terminal?.text || '',
                   process: nextState.process,
                   ...(metricsMeta ? { metrics: metricsMeta } : {}),
                   ...(terminal?.failureKind ? { failureKind: terminal.failureKind } : {}),
                   ...(terminal?.failureCode ? { failureCode: terminal.failureCode } : {}),
-                  terminalStatus: input.event.type === 'task.failed' ? 'failed' : 'completed',
+                  terminalStatus: input.event.type === 'task.waiting_user' ? 'waiting_input' : input.event.type === 'task.failed' ? 'failed' : 'completed',
                 }),
               );
               if (!terminalProjection.available) return 'dropped';

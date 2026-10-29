@@ -1,0 +1,11 @@
+name: ui-craft-checks
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: UIDesigner's comprehensive HTML quality gate for formal review, QA, launch
+  handoff, exact fidelity, or high-risk complex UI across accessibility, states, forms,
+  typography, responsive behavior, anti-template quality, and runtime; ordinary single-page
+  work uses the fast validator.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

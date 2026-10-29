@@ -1,23 +1,15 @@
 /**
  * Per-conversation workspace subdirectory resolver.
  *
- * Background: every main conversation used to share one root `userWorkSpace/`,
- * which meant repeated agent runs writing the same basename (`requirements.md`)
- * piled up `requirements-2.md / -3.md / ...` via `util/uniquify-path`. The
- * uniquify itself is correct (don't silently overwrite the prior run's
- * artifact), but the workspace clutter is bad UX. Scoping the cwd to a
- * conversation-specific subdir keeps the lineage grouped and the root tidy.
- *
  * Semantics:
- *   - Lazy: subdir is resolved + mkdir'd on the first call from `bus.ts`,
- *     which only fires when there's actual conversation activity. Old convs
- *     that never call this stay at the root workspace (= legacy behaviour).
+ *   - Lazy: execution resolution persists the subdirectory choice, but tools
+ *     create it only when needed. Read-only resolution never persists or moves
+ *     anything. Legacy conversations may still use the workspace root.
  *   - Frozen: once chosen and persisted to `state.json::workspace_dir`, the
  *     subdir basename is never re-derived. Renaming the conv title later
  *     does NOT move the directory.
- *   - No sandbox change: the existing path-sandbox (`util/path-sandbox`)
- *     still allows the entire user workspace tree, so cross-conv reads via
- *     absolute path remain possible.
+ *   - Read roots come only from conversation membership and current workspace
+ *     selections; a produced-file path cannot grant itself access.
  *
  * Slug rules — see `slugifyConvTitle()` body. Goal: human-readable Finder
  * navigation (CJK preserved, English lowercased, no opaque cid hex).
@@ -28,15 +20,16 @@
  * a Windows reserved name, we fall back to `chat-{YYYY-MM-DD}-{N}`. The
  * fallback is also frozen on first use, so a write that fired before the
  * conv got its real auto-generated title locks in the date-based name —
- * that's the accepted cost of lazy resolution.
+ * the directory name remains stable after that first choice.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { isSystemTmpDir } from '../../util/path-sandbox';
-import { getWorkspacePath } from '../user_workspace';
-import { getConversation } from '../chats';
+import { canonicalizePath, isSystemTmpDir, isPathAllowed } from '../../util/path-sandbox';
+import { spaceWorkspaceDir } from '../../paths';
+import { getWorkspacePath, getWorkspacePathReadOnly } from '../user_workspace';
+import { getConversation, type Conversation } from '../chats';
 import { readState, replaceWorkspaceDir, setWorkspaceDirOnce } from './state';
 import { PLACEHOLDER_TITLES } from './conv_title';
 import { createLogger } from '../../logger';
@@ -55,6 +48,35 @@ const WINDOWS_RESERVED: ReadonlySet<string> = new Set([
 ]);
 
 const ILLEGAL_CHARS_RE = /[\\/:*?"<>|]/g;
+
+/** Share the execution resolver's explicit-selection contract with read-only
+ * consumers. A stale, implicit or system/temp-root binding grants no access. */
+function existingExplicitWorkspace(state: { coding_project_dir?: string; coding_project_dir_explicit?: boolean }): string | undefined {
+  const dir = state.coding_project_dir;
+  if (state.coding_project_dir_explicit !== true || !dir || !path.isAbsolute(dir)) return undefined;
+  try {
+    if (fs.statSync(dir).isDirectory() && !isSystemTmpDir(canonicalizePath(dir))) return dir;
+  } catch { /* Missing or inaccessible selections are not effective roots. */ }
+  return undefined;
+}
+
+/** Existing authorization roots for a persisted conversation result. Unlike
+ * getConversationWorkspacePath, this neither chooses/persists a slug nor
+ * creates or migrates directories. Keep the existing default/project root so
+ * older produced paths remain readable, then add the conversation's space and
+ * its currently effective explicit selection. Attachments are scoped by the
+ * caller. A missing conversation grants no filesystem access. */
+export async function getConversationWorkspaceReadRoots(uid: string, cid: string): Promise<string[]> {
+  const conversation = await getConversation(uid, cid);
+  if (!conversation) return [];
+  const roots = [getWorkspacePath(uid, conversation.project_id || undefined)];
+  if (conversation.space_id) roots.push(spaceWorkspaceDir(uid, conversation.space_id));
+  try {
+    const explicit = existingExplicitWorkspace(await readState(uid, cid));
+    if (explicit) roots.push(explicit);
+  } catch { /* Unreadable state cannot grant an explicit root. */ }
+  return [...new Set(roots.filter(Boolean))];
+}
 
 /** Pure slug derivation. Returns empty string on placeholder / unusable input;
  *  callers fall back to the date-based name. Exported for unit testing. */
@@ -123,26 +145,7 @@ function uniquifySlug(workspaceRoot: string, slug: string): string {
   return `${slug}-${Date.now()}`;
 }
 
-/**
- * Resolve the absolute working directory for `(uid, cid)`. Lazy + frozen:
- * - if `state.json::workspace_dir` is already set → return `<workspace>/<dir>`
- * - else if the conv has no entry yet (genuinely a legacy conv without a
- *   conversation record, or `state.json` not yet written) → return the
- *   user-level workspace verbatim, do NOT persist anything (legacy behaviour)
- * - else → derive slug from current title, fall back to date-based name on
- *   placeholder, uniquify against sibling dirs, persist the slug choice to
- *   `state.json::workspace_dir`, return the absolute path
- *
- * **Does NOT mkdir** — the directory is materialised lazily by the producing
- * tool (write_file mkdirs parent before write; markdown_to_pdf / image gen
- * follow the same pattern). For tools that need cwd-as-existing-directory
- * (bash via child_process.spawn), the wrapped `bash` tool mkdirs `cwd`
- * defensively before delegating. Skipping the eager mkdir here means a
- * commander turn that only chats (no file output, no bash) leaves zero
- * footprint on disk — which is what users expect when the conversation
- * never produced anything.
- */
-/** 会话工作区随空间归属迁移（方案 Y：解绑/换空间/删空间都不丢文件）。
+/** 会话工作区随空间归属迁移，解绑、换空间、删除空间均保留文件。
  *  fromSpaceId/toSpaceId：null = userWorkSpace 根；非空 = 空间工作区目录。
  *  依据 state.workspace_dir（相对 slug）计算新旧落点；同盘 rename，跨设备 copy+rm。
  *  幂等：源不存在 → 跳过不搬；目标 slug 被占用 → 选择唯一后缀，避免覆盖/串目录。
@@ -159,6 +162,10 @@ export async function migrateConversationWorkspace(
     workspaceDir = st.workspace_dir;
   } catch { /* no state */ }
   if (!workspaceDir) return { moved: false };
+
+  // 目标空间绑定了本地项目目录 → 该空间在用户自己的目录里原地工作，没有"空间
+  // 工作区子目录"可搬。搬过去只会把文件藏进一个不再被当作 cwd 的目录里。
+  if (toSpaceId && await _resolveSpaceProjectDir(uid, toSpaceId)) return { moved: false };
 
   const { spaceWorkspaceDir } = await import('../../paths');
   const from = fromSpaceId
@@ -204,9 +211,78 @@ export async function migrateConversationWorkspace(
   return { moved: true };
 }
 
+/**
+ * 只读解析「这次接待会用到哪一个目录」（T4 / D4 单根契约）。
+ *
+ * 按执行优先级只读预览，不持久化选择——不选
+ * slug、不建目录、不迁移、不改 state。预览与确认前的展示用它，执行仍以
+ * `marker.workspace`（确认时写入的单一根）为准。
+ *
+ * 优先级与既有解析器一致：显式目录（已存在且不是系统临时目录）→ 空间/项目根
+ * → 已冻结的 `workspace_dir` → 按标题 slug（占位标题用日期兜底名）。
+ * 无会话记录或显式选择已失效时返回 null，不回落到更宽的目录。
+ */
+export async function resolveReceptionWorkspaceReadOnly(
+  uid: string,
+  cid: string,
+  current?: Readonly<Conversation>,
+): Promise<{ root: string; source: 'explicit' | 'space' | 'project' | 'default' } | null> {
+  const conversation = current ?? await getConversation(uid, cid);
+  if (!conversation) return null;
+  const state = await readState(uid, cid);
+  // A reception must fail closed on a broken explicit selection, rather than
+  // borrowing the ordinary execution resolver's missing-directory fallback.
+  if (state.coding_project_dir_explicit === true) {
+    const explicit = existingExplicitWorkspace(state);
+    return explicit ? { root: canonicalizePath(explicit), source: 'explicit' } : null;
+  }
+  const projectId = conversation.project_id || undefined;
+  const spaceId = conversation.space_id || undefined;
+  if (spaceId) {
+    const { safeId } = await import('../../storage');
+    const { getSpace } = await import('../spaces');
+    if (!safeId(spaceId) || !(await getSpace(uid, spaceId))) return null;
+  }
+  const root = spaceId ? spaceWorkspaceDir(uid, spaceId) : getWorkspacePathReadOnly(uid, projectId);
+  const source = spaceId ? 'space' : (projectId ? 'project' : 'default');
+  let slug = state.workspace_dir;
+  if (slug && (slug === '.' || slug === '..' || /[\\/]/.test(slug) || path.isAbsolute(slug))) return null;
+  if (!slug) {
+    const titleSlug = slugifyConvTitle(conversation.title);
+    slug = titleSlug ? uniquifySlug(root, titleSlug) : pickFallbackSlug(root);
+  }
+  const target = path.join(root, slug);
+  if (!isPathAllowed(target, [root])) return null;
+  return { root: canonicalizePath(target), source };
+}
+
+/** 空间绑定的本地项目目录：可用时返回该绝对路径，否则 null（回退空间工作区）。
+ *
+ *  语义：空间创建时绑定、空间内所有会话共享；会话级 `coding_project_dir`
+ *  仍然更具体、优先级更高。每次解析都重读一次空间元数据（小 JSON）而不是
+ *  加缓存——绑定/解绑/目录消失必须立刻生效，宁可多一次读盘也不要陈旧工作区。 */
+async function _resolveSpaceProjectDir(uid: string, spaceId: string): Promise<string | null> {
+  try {
+    const { getSpace, isUsableSpaceProjectDir } = await import('../spaces');
+    const space = await getSpace(uid, spaceId);
+    const bound = space?.project_dir;
+    if (!bound) return null;
+    if (isUsableSpaceProjectDir(bound)) return bound;
+    log.warn(`space project_dir unusable — falling back to space workspace sid=${spaceId} dir=${bound}`);
+    return null;
+  } catch (err) {
+    log.warn(`space project_dir resolve failed sid=${spaceId}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/** Resolve the execution directory, persisting a stable slug when needed.
+ * Missing conversation records retain the legacy root-workspace contract.
+ * The slug directory is created by producing tools, not by slug selection;
+ * an existing legacy directory may be migrated to its current space here. */
 export async function getConversationWorkspacePath(uid: string, cid: string): Promise<string> {
   // Resolve the conv's project/space membership ONCE so workspace resolution
-  // picks up the scoped selection. 空间化重构：空间会话（space_id 有值）的工作目录
+  // picks up the scoped selection. 空间会话（space_id 有值）的工作目录
   // 进各自空间目录（spaces/<sid>/workspace/），未绑空间会话保持 userWorkSpace 根。
   let projectId: string | undefined;
   let spaceId: string | undefined;
@@ -236,7 +312,6 @@ export async function getConversationWorkspacePath(uid: string, cid: string): Pr
   // 空间会话 → 空间工作区根（产物按空间分开存放）
   let root: string;
   if (spaceId) {
-    const { spaceWorkspaceDir } = await import('../../paths');
     root = spaceWorkspaceDir(uid, spaceId);
   } else {
     root = getWorkspacePath(uid, projectId);
@@ -249,21 +324,24 @@ export async function getConversationWorkspacePath(uid: string, cid: string): Pr
   // coding_project_dir 向用户如实显示「已被移动或删除」并引导重新选择。
   try {
     const st0 = await readState(uid, cid);
+    const explicit = existingExplicitWorkspace(st0);
+    if (explicit) return explicit;
     if (st0.coding_project_dir_explicit === true
       && st0.coding_project_dir
       && path.isAbsolute(st0.coding_project_dir)) {
-      try {
-        if (fs.statSync(st0.coding_project_dir).isDirectory()
-          && !isSystemTmpDir(st0.coding_project_dir)) {
-          return st0.coding_project_dir;
-        }
-      } catch {
-        // dir gone — fall through to the default workspace for execution
-      }
       log.warn(`coding_project_dir missing or system/tmp cid=${cid} dir=${st0.coding_project_dir} — using default workspace for execution`);
     }
   } catch {
     // state unreadable — proceed with the default workspace path below
+  }
+
+  // 空间绑定的本地项目目录（Codex 式工作区）：空间级默认，在用户自己的项目里
+  // 原地工作、不复制。优先级：会话显式 coding_project_dir > 空间绑定 > 空间工作区子目录
+  // —— 显式选择永远最具体，空间绑定只是这层空间的默认值。
+  // 目录被删 / 外接盘未挂载 → 回退空间工作区：绝不让会话跑在一个不存在的 cwd 上。
+  if (spaceId) {
+    const bound = await _resolveSpaceProjectDir(uid, spaceId);
+    if (bound) return bound;
   }
 
   // Fast path: state already has a workspace_dir baked in.

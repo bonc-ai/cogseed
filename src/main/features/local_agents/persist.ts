@@ -35,7 +35,7 @@ export interface RunMeta {
   model?: string;
   startedAt: string;
   endedAt?: string;
-  status?: 'completed' | 'failed' | 'cancelled' | 'timeout' | 'missing_cli';
+  status?: 'completed' | 'failed' | 'cancelled' | 'timeout' | 'missing_cli' | 'background';
   durationMs?: number;
   cliPath?: string;
   sessionId?: string;

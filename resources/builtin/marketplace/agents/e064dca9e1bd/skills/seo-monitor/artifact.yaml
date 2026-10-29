@@ -1,0 +1,29 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.seo.monitor
+  name: seo-monitor
+  version: 1.0.0
+  description: 'SEO/GEO drift monitoring: op=snapshot distills a crawl (+ health/GEO
+    scores) into a comparable baseline (with content hash); op=compare diffs the current
+    snapshot against the baseline via a rule engine and emits ranked drift findings
+    (schema removed, noindex added, canonical chan'
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: python
+    scripts:
+    - scripts/monitor.py
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

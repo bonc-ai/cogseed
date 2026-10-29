@@ -2,260 +2,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-require('../../src/renderer/modules/icons.js');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-require('../../src/renderer/modules/ui-button.js');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-require('../../src/renderer/modules/ui-form.js');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-require('../../src/renderer/modules/ui-empty.js');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-require('../../src/renderer/modules/ui-page-header.js');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pages = require('../../src/renderer/modules/cognition/pages.js') as {
-  renderCognitionPage: (input: {
-    assets?: Array<Record<string, unknown>>;
-    activeId?: string;
-    activeAsset?: Record<string, unknown> | null;
-    detailLoading?: boolean;
-    pagination?: { page: number; pageSize: number; total: number; totalPages: number };
-    view?: string;
-  }) => string;
-  renderCognitionCapture: (input: {
-    state?: 'loading' | 'ready' | 'error';
-    title: string;
-    summary: string;
-    value?: string;
-    sourceLabel: string;
-    suggestedType?: string;
-    conversationId: string;
-    messageId?: string;
-    error?: string;
-  }) => string;
-  escapeHtml: (value: string) => string;
-};
-
-const summary = {
-  id: 'cog_1',
-  title: '复杂任务拆解',
-  summary: '先澄清边界、拆分依赖，再安排执行顺序',
-  stage: 'sprout',
-  reviewState: 'pending',
-  evidenceCount: 1,
-  reuseCount: 0,
-  updatedAt: '2026-08-03T19:00:00.000Z',
-};
-
-const asset = {
-  ...summary,
-  evidence: [{ summary: '用户要求先调研，再确认方案', sourceLabel: '当前会话' }],
-  reuseEvents: [],
-};
-
-describe('cognition pages', () => {
-  it('shows generation progress before exposing editable model output', () => {
-    const loading = pages.renderCognitionCapture({
-      state: 'loading', title: '', summary: '', value: '', sourceLabel: '', conversationId: 'conv_1',
-    });
-    expect(loading).toContain('data-cognition-capture-status');
-    expect(loading).toContain('正在从会话中提炼可复用认知');
-    expect(loading).not.toContain('data-cognition-capture-submit');
-
-    const ready = pages.renderCognitionCapture({
-      state: 'ready', title: '模型生成名称', summary: '模型生成方法', value: '模型生成价值',
-      sourceLabel: '当前会话', conversationId: 'conv_1',
-    });
-    expect(ready).toContain('模型生成名称');
-    expect(ready).toContain('模型生成方法');
-    expect(ready).toContain('模型生成价值');
-    expect(ready).toContain('当前会话');
-    expect(ready).toContain('data-cognition-capture-submit');
-  });
-
-  it('五类分类是必填项，模型预判只作默认值', () => {
-    // 气泡沉淀产出的是 recall 候选，saveRecallCandidate 会 requireAssetType，
-    // 所以分类必须在面板上收齐——不能靠后端兜底猜一个。
-    const withGuess = pages.renderCognitionCapture({
-      state: 'ready', title: 't', summary: 's', value: 'v',
-      sourceLabel: '当前会话', suggestedType: 'rule',
-      conversationId: 'conv_1', messageId: 'msg_1',
-    });
-    expect(withGuess).toContain('data-cognition-capture-type');
-    expect(withGuess).toContain('<option value="rule" selected>');
-    // 锚点消息 id 必须带进表单：evidenceRefs 要靠它，而不是靠用户手填的来源文本。
-    expect(withGuess).toContain('data-cognition-capture-message value="msg_1"');
-
-    // 模型给不出合法五类时留空占位，强制用户自己选，不替他猜一个默认分类。
-    const noGuess = pages.renderCognitionCapture({
-      state: 'ready', title: 't', summary: 's', value: 'v',
-      sourceLabel: '当前会话', suggestedType: 'not_a_type',
-      conversationId: 'conv_1', messageId: 'msg_1',
-    });
-    expect(noGuess).toContain('<option value="" selected>');
-    expect(noGuess).not.toContain('<option value="skill_method" selected>');
-  });
-
-  it('摘要列表可渲染成长树，但完整详情未加载前不冒充零证据', () => {
-    const html = pages.renderCognitionPage({ assets: [summary], activeId: summary.id, view: 'tree' });
-    expect(html).toContain('data-cognition-growth-visual');
-    expect(html).toContain('复杂任务拆解');
-    expect(html).toContain('完整详情暂不可用');
-    expect(html).not.toContain('用户要求先调研，再确认方案');
-    expect(html).not.toContain('data-cognition-action="confirm"');
-    expect(html).not.toContain('还没有证据');
-  });
-
-  it('完整详情加载后才渲染证据和人工确认操作', () => {
-    const html = pages.renderCognitionPage({ assets: [summary], activeId: summary.id, activeAsset: asset, view: 'tree' });
-    expect(html).toContain('用户要求先调研，再确认方案');
-    expect(html).toContain('data-cognition-action="confirm"');
-    expect(html).toContain('长期记忆');
-  });
-
-  it('成长记录页展示结构化生命周期轨迹并保留失效原因', () => {
-    const html = pages.renderCognitionPage({
-      assets: [{ ...summary, stage: 'growing', reviewState: 'confirmed' }],
-      activeAsset: {
-        ...asset,
-        stage: 'growing',
-        reviewState: 'confirmed',
-        transitions: [
-          { id: 'tr_1', kind: 'created', at: '2026-08-03T09:00:00' },
-          { id: 'tr_2', kind: 'evidence_added', at: '2026-08-03T09:01:00' },
-          { id: 'tr_3', kind: 'confirmed', at: '2026-08-03T09:02:00' },
-          { id: 'tr_4', kind: 'invalidated', at: '2026-08-03T09:03:00', reason: 'content_changed' },
-        ],
-      },
-      view: 'history',
-    });
-    expect(html).toContain('生命周期记录');
-    expect(html).toContain('创建认知候选');
-    expect(html).toContain('确认并写入长期记忆');
-    expect(html).toContain('长期记忆内容与这项认知已不一致');
-  });
-
-  it('详情请求进行中显示加载态而不是错误态', () => {
-    const html = pages.renderCognitionPage({
-      assets: [summary], activeId: summary.id, detailLoading: true, view: 'tree',
-    });
-    expect(html).toContain('正在加载完整证据和复用记录');
-    expect(html).not.toContain('data-cognition-action="retry-detail"');
-  });
-
-  it('只在确认状态展示复用操作，不跳过人工确认点', () => {
-    const pending = pages.renderCognitionPage({ assets: [summary], activeAsset: asset, view: 'tree' });
-    const confirmedSummary = { ...summary, stage: 'growing', reviewState: 'confirmed' };
-    const confirmedAsset = { ...asset, ...confirmedSummary };
-    const confirmed = pages.renderCognitionPage({
-      assets: [confirmedSummary], activeAsset: confirmedAsset, view: 'tree',
-    });
-    expect(pending).not.toContain('data-cognition-action="reuse"');
-    expect(confirmed).toContain('data-cognition-action="reuse"');
-  });
-
-  it('失效认知解释原因，只提供显式重新确认且不允许复用', () => {
-    const invalidatedSummary = {
-      ...summary,
-      reviewState: 'invalidated',
-      invalidation: { at: '2026-08-03T20:00:00.000Z', reason: 'content_changed' },
-    };
-    const invalidatedAsset = { ...asset, ...invalidatedSummary };
-    const html = pages.renderCognitionPage({ assets: [invalidatedSummary], activeAsset: invalidatedAsset, view: 'history' });
-    expect(html).toContain('需要重新确认');
-    expect(html).toContain('长期记忆内容与这项认知已不一致');
-    expect(html).toContain('重新确认并写入长期记忆');
-    expect(html).toContain('data-cognition-action="confirm"');
-    expect(html).not.toContain('data-cognition-action="reuse"');
-    expect(html).not.toContain('复用记录');
-  });
-
-  it('长期记忆写入失败后显示可恢复的重试操作', () => {
-    const retrySummary = { ...summary, confirmationRequestedAt: '2026-08-03T19:00:00' };
-    const html = pages.renderCognitionPage({
-      assets: [retrySummary], activeAsset: { ...asset, ...retrySummary }, view: 'tree',
-    });
-    expect(html).toContain('重试写入长期记忆');
-    expect(html).toContain('data-cognition-action="confirm"');
-  });
-
-  it('非数组摘要输入安全降级为空页', () => {
-    const html = pages.renderCognitionPage({ assets: undefined, view: 'tree' });
-    expect(html).toContain('还没有认知资产');
-  });
-
-  it('分页展示边界正确', () => {
-    const html = pages.renderCognitionPage({
-      assets: [summary],
-      activeAsset: asset,
-      pagination: { page: 2, pageSize: 50, total: 101, totalPages: 3 },
-    });
-    expect(html).toContain('data-cognition-page="1"');
-    expect(html).toContain('data-cognition-page="3"');
-    expect(html).toContain('第 2 / 3 页');
-  });
-
-  it('从对话沉淀的候选保留可编辑正文、价值和来源', () => {
-    const html = pages.renderCognitionCapture({
-      title: '先确认边界再执行',
-      summary: '先确认边界，再安排执行顺序。',
-      value: '后续任务可沿用这套执行顺序。',
-      sourceLabel: '任务：方案设计',
-      conversationId: 'c_capture',
-    });
-    expect(html).toContain('data-cognition-capture-form');
-    expect(html).toContain('任务：方案设计');
-    expect(html).toContain('先确认边界，再安排执行顺序。');
-    expect(html).toContain('后续任务可沿用这套执行顺序。');
-    expect(html).toContain('c_capture');
-  });
-
-  it('转义资产和属性内容', () => {
-    const hostileSummary = { ...summary, title: '<script>alert(1)</script>' };
-    const html = pages.renderCognitionPage({ assets: [hostileSummary], view: 'tree' });
-    expect(html).not.toContain('<script>alert(1)</script>');
-    expect(pages.escapeHtml('"<>&\'')).toBe('&quot;&lt;&gt;&amp;&#39;');
-  });
-
-  it('四套 renderer locale 都包含详情、失效和分页文案', () => {
-    for (const locale of ['zh', 'en', 'ja', 'pt']) {
-      const strings = JSON.parse(readFileSync(
-        resolve(__dirname, `../../src/renderer/locales/${locale}.json`),
-        'utf8',
-      )) as Record<string, string>;
-      for (const key of [
-        'cognition.detail.loading',
-        'cognition.detail.unavailable',
-        'cognition.action.reconfirm',
-        'cognition.action.retry_detail',
-        'cognition.invalidated.title',
-        'cognition.invalidated.reason.removed',
-        'cognition.invalidated.reason.replaced',
-        'cognition.invalidated.reason.content_changed',
-        'cognition.invalidated.reason.metadata_missing',
-        'cognition.section.history',
-        'cognition.history.empty',
-        'cognition.transition.created',
-        'cognition.transition.evidence_added',
-        'cognition.transition.confirmation_requested',
-        'cognition.transition.defer_requested',
-        'cognition.transition.confirmed',
-        'cognition.transition.reconfirmed',
-        'cognition.transition.deferred',
-        'cognition.transition.reused',
-        'cognition.transition.invalidated',
-        'cognition.transition.unknown',
-        'cognition.pagination.previous',
-        'cognition.pagination.next',
-      ]) expect(strings[key]).toBeTruthy();
-    }
-  });
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
-// 2026-09-21 认知资产迁移:HTML 原型 v7 的五页签结构守护(源码级契约,
-// 与上方旧模块 require 测试并存——旧模块仍被 personal-ontology 懒加载组使用)。
-// 迁移终态:tree / ontology / overview / review / organize,默认路由 tree。
+// 2026-09-21 认知资产迁移:HTML 原型 v7 的页签结构守护(源码级契约)。
+// 2026-10-07 旧模块 personal-ontology.js 随停驻页退役删除——同名懒加载组只余
+// personal-context-review.js，手动沉淀模块已下线。
 // ─────────────────────────────────────────────────────────────────────────────
 describe('cognition-assets 五页签结构(迁移终态)', () => {
   const core2 = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/core.js'), 'utf8');
@@ -263,33 +13,34 @@ describe('cognition-assets 五页签结构(迁移终态)', () => {
   const html2 = readFileSync(resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
 
   /** 解析 core.js 的 TABS 数组为 [{id, titleKey}]。 */
-  function parseTabs(source: string): Array<{ id: string; titleKey: string }> {
+  function parseTabs(source: string): Array<{ id: string, titleKey: string }> {
     const start = source.indexOf('const TABS = [');
     const end = source.indexOf('];', start);
     const block = source.slice(start, end);
-    const tabs: Array<{ id: string; titleKey: string }> = [];
+    const tabs: Array<{ id: string, titleKey: string }> = [];
     for (const m of block.matchAll(/\{ id: '([a-z-]+)', titleKey: '([A-Za-z_.]+)'/g)) {
       tabs.push({ id: m[1], titleKey: m[2] });
     }
     return tabs;
   }
 
-  it('TABS 是六页签且顺序固定:认知树 / 我的认知 / 个人本体 / 待我处理 / 系统活动 / 设置', () => {
-    // specs/018 + 2026-09-26 子安真机否决树降级:认知树恢复顶级页签与默认
-    // 落地;经验仍是「我的认知」分类档;整理页与整理设置保留为独立入口。
+  it('TABS 保留五个位置但认知树禁用，顺序固定', () => {
+    // 认知树暂禁用并由旧路由归一到「我的认知」。2026-10-08 U04:独立「待我处理」页签
+    // 下线,治理动作收敛到系统活动(需要关注/已处理),旧 review 路由归一。
     // 2026-09-27 子安定序:「我的认知」提到「个人本体(关于我)」之前。
     const tabs = parseTabs(core2);
-    expect(tabs.map((t) => t.id)).toEqual(['tree', 'overview', 'ontology', 'review', 'activity', 'settings']);
+    expect(tabs.map((t) => t.id)).toEqual(['tree', 'overview', 'ontology', 'activity', 'settings']);
     expect(tabs.map((t) => t.titleKey)).toEqual([
       'cognition.tab_tree', 'cognition.tab_overview', 'cognition.tab_ontology',
-      'cognition.tab_review', 'cognition.tab_activity', 'cognition.tab_settings',
+      'cognition.tab_activity', 'cognition.tab_settings',
     ]);
+    expect(core2).toContain("{ id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树', disabled: true }");
   });
 
-  it('默认路由是认知树,深链归一化键保留', () => {
-    // 2026-09-26 子安真机否决:默认落地恢复认知树(全景第一眼)。
-    expect(core2).toContain("route: { name: 'tree'");
-    expect(core2).toContain("Object.assign({ name: 'tree'");
+  it('默认路由是我的认知，旧树深链归一且详情键保留', () => {
+    expect(core2).toContain("route: { name: 'overview'");
+    expect(core2).toContain("Object.assign({ name: 'overview'");
+    expect(core2).toContain("if (legacyName === 'tree') target = Object.assign({}, target, { name: 'overview' })");
     // 深链兼容:既有详情路由键一个都不能少(资产/候选/整理/版本/KSTAR)。
     for (const key of ['assetId', 'candidateId', 'captureId', 'assetVersionId', 'kstarEpisodeId', 'assetEdit']) {
       expect(core2).toContain(`${key}: ''`);
@@ -309,13 +60,18 @@ describe('cognition-assets 五页签结构(迁移终态)', () => {
     expect(overviewBlock).not.toContain('treeBlocks(');
   });
 
-  it('页面壳只建一次:持久壳 + 内容区局部重绘', () => {
+  it('页面壳只建一次:持久壳 + 内容区局部重绘(旧停驻页已退役)', () => {
     expect(views2).toContain('ca-ontology-mount');
     expect(views2).toContain('unmountPersonalOntology');
     expect(views2).toContain('ca-banner-slot');
-    expect(html2).toContain('id="ca-ontology-parking"');
-    expect(core2).toContain('ca-ontology-parking');
-    expect(core2).toContain('renderPersonalOntology');
+    // 2026-10-07 退役:HTML 不再有停车区壳,core 不再有归还逻辑。
+    expect(html2).not.toContain('ca-ontology-parking');
+    expect(html2).not.toContain('id="panel-personal-ontology"');
+    expect(core2).not.toContain('ca-ontology-parking');
+    expect(core2).toContain("await load('cognition-ontology')");
+    expect(core2).toContain('mountCognitionOntology(mount, options)');
+    expect(core2).not.toContain('renderPersonalOntology()');
+    expect(core2).not.toContain('refreshPersonalOntology');
   });
 
   it('五页签标题四语齐全', () => {
@@ -344,6 +100,8 @@ describe('cognition-assets a11y(Phase 10)', () => {
     expect(app3).toContain('#ca-scroll');
     expect(app3).toMatch(/preventScroll/);
     expect(app3).toContain('data-go-asset="${CSS.escape');
-    expect(app3).toContain('scroll.querySelector(\'button, [role="button"]\')');
+    // Drawer 打开时回落范围收敛到 drawer，找不到再回全域首个可聚焦控件。
+    expect(app3).toContain("first('button, [role=\"button\"]')");
+    expect(app3).toContain('const scope = drawer || scroll');
   });
 });

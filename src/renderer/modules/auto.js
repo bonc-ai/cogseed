@@ -95,6 +95,8 @@ function _autoAttachDisplayName(item) {
 }
 
 let _autoTasks = [];           // last fetched global list
+const _autoRunningTaskIds = new Set();
+const _autoRunFailures = new Set();
 let _autoLoadedOnce = false;
 let _autoFormMounted = false;  // shared dialog chrome + _aiSelectMount only once
 let _autoEditingTaskId = null; // null = create mode, taskId = edit mode
@@ -150,9 +152,8 @@ let _autoCurrentRecipient = { kind: 'commander' };
 let _autoCurrentTaskId = '';
 let _autoCurrentAttachments = []; // [{ name, displayName?, kind?, bytes?, status? }]
 
-// Execution-history data is paged independently from the sidebar's bounded
-// startup conversation cache. Counts are loaded in one batch for every
-// visible auto task; pages are fetched only when a task card is expanded.
+// Legacy execution-history helpers retain their independent paging cache.
+// Compact task cards do not render or prefetch this history.
 const _autoTaskConversationCounts = new Map(); // taskId -> total
 const _autoTaskConversationPages = new Map();  // taskId -> page state
 
@@ -219,8 +220,14 @@ function _autoFormatLastRun(iso) {
   let when;
   if (typeof formatIsoForList === 'function') when = formatIsoForList(iso);
   else {
-    try { when = new Date(iso).toLocaleString(); }
-    catch { when = String(iso).slice(0, 16).replace('T', ' '); }
+    try {
+      const date = new Date(iso);
+      if (!Number.isFinite(date.getTime())) throw new Error('invalid date');
+      when = date.toLocaleString(typeof getLang === 'function' ? getLang() : undefined, {
+        ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}),
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+    } catch { when = String(iso).slice(0, 16).replace('T', ' '); }
   }
   return t('auto.last_run', { when });
 }
@@ -319,139 +326,99 @@ function _autoTaskMessagePreviewHtml(task, maxLength = 160) {
 
 // ─── Row rendering (shared between global tab and project-detail card) ──
 
+function _autoTaskCardTitle(task) {
+  return String(task.title || '').trim() || String(task.content || '').replace(/\s+/g, ' ').trim() || t('auto.invalid_content');
+}
+
+function _autoTaskCardMeta(task) {
+  const parts = [];
+  if (_autoRunningTaskIds.has(task.id)) parts.push(t('auto.running_now'));
+  else if (_autoRunFailures.has(task.id)) parts.push(t('auto.start_failed'));
+  if (!task.enabled) parts.push(t('auto.paused'));
+  if (!_autoIsTaskOnCurrentDevice(task)) parts.push(t('auto.remote_device', { name: _autoDisplayDeviceName(task.device_name || task.device_id) }));
+  parts.push(_autoFormatSummary(task));
+  const lastRunAt = [task.last_run_at, task.last_manual_run_at].filter(Boolean).sort().pop();
+  parts.push(_autoFormatLastRun(lastRunAt));
+  return parts.join(' · ');
+}
+
 function _autoRenderRow(task, opts) {
-  // opts: { showProjectBadge?: boolean, onEdit: (task) => void, afterChange: () => void }
-  const row = document.createElement('div');
-  row.className = 'auto-row ui-resource-card ui-resource-card--row' + (task.enabled ? '' : ' is-disabled');
-  row.dataset.taskId = task.id;
-
-  // ── Main column (left) ────────────────────────────────────────────────
-  // Layout: message preview (with inline skill / connector chips) → metadata
-  // chips (recipient / attachment / project / device). Title is folded into
-  // the content area as a secondary line below the message preview, since the
-  // schedule summary moved to the right column.
-  const contentText = String(task.content || '');
-  const contentHtml = contentText
-    ? `<div class="auto-row-content">${_autoTaskMessagePreviewHtml(task)}</div>`
-    : `<div class="auto-row-content auto-row-content-empty muted">${escapeHtml(t('auto.invalid_content'))}</div>`;
-  const titleHtml = task.title
-    ? `<div class="auto-row-title muted">${escapeHtml(task.title)}</div>`
-    : '';
-
-  // Metadata chip row — skill and connector belong to the message preview
-  // above, matching the current chat composer instead of forming a second row.
-  const chips = [];
-  if (task.recipient && task.recipient.kind === 'agent' && task.recipient.name) {
-    chips.push(`<span class="auto-row-chip is-agent">${escapeHtml('@' + task.recipient.name)}</span>`);
-  }
-  const attachCount = Array.isArray(task.attachments) ? task.attachments.length : 0;
-  if (attachCount > 0) {
-    const attachmentIcon = typeof window.uiIconHtml === 'function' ? window.uiIconHtml('paperclip', 'ui-icon') : '';
-    chips.push(`<span class="auto-row-chip is-attach">${attachmentIcon}${escapeHtml(t('auto.attachment_count', { n: attachCount }))}</span>`);
-  }
-  if (opts && opts.showProjectBadge && task.project_id) {
-    const pname = _buildProjectNameLookup()(task.project_id) || task.project_id;
-    chips.push(`<span class="auto-row-chip is-project">${escapeHtml(t('auto.project_scope', { name: pname }))}</span>`);
-  }
-  // Device chip — always shown so the user can tell at a glance which
-  // machine each task is bound to. "本机" when the task is assigned here
-  // (or for legacy tasks created before device-stamping shipped — treated
-  // as current-device since they live in this uid's local cloud tree).
-  // Otherwise the assigned device's hostname; hover tooltip spells out that
-  // remote-device tasks don't fire locally.
-  if (_autoCurrentDevice) {
-    const isHere = _autoIsTaskOnCurrentDevice(task);
-    if (isHere) {
-      chips.push(`<span class="auto-row-chip is-device is-device-here">${escapeHtml(t('auto.device_current'))}</span>`);
-    } else {
-      const hostname = _autoDisplayDeviceName(task.device_name || task.device_id);
-      const hint = t('auto.device_remote_hint', { name: hostname });
-      chips.push(`<span class="auto-row-chip is-device is-device-remote" title="${escapeHtml(hint)}">${escapeHtml(hostname)}</span>`);
-    }
-  }
-  const chipsHtml = chips.length ? `<div class="auto-row-chips">${chips.join('')}</div>` : '';
-
-  // ── Right column (schedule + last run + ⋯) ───────────────────────────
-  const summary = escapeHtml(_autoFormatSummary(task));
-  const lastRun = escapeHtml(_autoFormatLastRun(task.last_run_at));
-  const enabledLabel = escapeHtml(t(task.enabled ? 'common.enabled' : 'common.disabled'));
-  const moreTitle = escapeHtml(t('auto.more_menu'));
-
-  // Conversation count badge — number of convs in the global cache whose
-  // origin_auto_task_id matches this task. Used for the "Conversations (N)"
-  // expand header.
-  const convCount = _autoCountConvsForTask(task.id);
-  const expandButton = uiIconButton({
-    icon: 'chevron-down',
-    label: t('auto.task_convs', { n: convCount }),
-    className: 'auto-row-expand',
-    attrs: { 'data-act': 'expand', 'aria-expanded': 'false' },
+  const template = document.createElement('template');
+  template.innerHTML = uiResourceCard({
+    layout: 'compact-row', title: _autoTaskCardTitle(task), description: _autoTaskCardMeta(task),
+    className: 'auto-row', attrs: { 'data-task-id': task.id },
+    menu: { label: t('auto.more_menu'), attrs: { 'data-act': 'more' } },
   });
-  const moreButton = uiIconButton({
-    icon: 'more-horizontal',
-    label: t('auto.more_menu'),
-    className: 'auto-row-more',
-    attrs: { 'data-act': 'more' },
+  const row = template.content.firstElementChild;
+  row._autoTask = task;
+  row.querySelector('.ui-resource-card__description').setAttribute('aria-live', 'polite');
+  row._autoMenuController = uiDropdownMenu({
+    trigger: row.querySelector('[data-act="more"]'), items: () => _autoTaskMenuItems(task, opts),
   });
-
-  row.innerHTML = `
-    <div class="auto-row-head">
-      ${expandButton}
-      <div class="auto-row-main">
-        ${contentHtml}
-        ${titleHtml}
-        ${chipsHtml}
-      </div>
-      <div class="auto-row-side">
-        <div class="auto-row-status${task.enabled ? ' is-enabled' : ' is-disabled'}"><span class="auto-row-status-dot" aria-hidden="true"></span><span>${enabledLabel}</span></div>
-        <div class="auto-row-schedule">${summary}</div>
-        <div class="auto-row-lastrun">${lastRun}</div>
-      </div>
-      ${moreButton}
-    </div>
-    <div class="auto-row-convs" hidden>
-      <div class="auto-row-convs-head muted">${escapeHtml(t('auto.task_convs', { n: convCount }))}</div>
-      <div class="auto-row-convs-list"></div>
-    </div>
-  `;
-
-  // ── ⋯ menu (enable/disable + edit + delete) ──────────────────────────
-  const moreBtn = row.querySelector('[data-act="more"]');
-  moreBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    _openAutoRowMenu(moreBtn, task, opts);
-  });
-  // ── Expand toggle ────────────────────────────────────────────────────
-  // Clicking anywhere on the row toggles expand/collapse — chevron is just
-  // a visual cue. Interactive controls inside the card (⋯ button, chips,
-  // nested conv items) stop propagation so they don't trigger the toggle.
-  const expandBtn = row.querySelector('[data-act="expand"]');
-  const convsWrap = row.querySelector('.auto-row-convs');
-  const convsList = row.querySelector('.auto-row-convs-list');
-  const toggleExpand = () => {
-    const expanded = expandBtn.getAttribute('aria-expanded') === 'true';
-    if (expanded) {
-      expandBtn.setAttribute('aria-expanded', 'false');
-      row.classList.remove('is-expanded');
-      convsWrap.hidden = true;
-    } else {
-      expandBtn.setAttribute('aria-expanded', 'true');
-      row.classList.add('is-expanded');
-      convsWrap.hidden = false;
-      _autoRenderTaskConvs(task.id, convsList);
-    }
-  };
-  // Whole-row click → toggle, including clicks on the expanded panel's
-  // header / empty hint (so the user can collapse by clicking anywhere
-  // outside an actual interactive control). Only the conv-item rows
-  // inside the panel and the ⋯ menu keep their own click semantics —
-  // those would otherwise navigate to a conversation, which we don't want
-  // to accidentally trigger when the user is trying to collapse the card.
-  row.addEventListener('click', (e) => {
-    if (e.target.closest('.auto-row-more, .auto-row-menu, .conv-item, .conv-item-action')) return;
-    toggleExpand();
-  });
+  _autoUpdateCard(row);
   return row;
+}
+
+function _autoUpdateCard(row) {
+  const task = row._autoTask;
+  const heading = row.querySelector('.ui-resource-card__title');
+  heading.textContent = heading.title = _autoTaskCardTitle(task);
+  const metadata = row.querySelector('.ui-resource-card__description');
+  metadata.textContent = metadata.title = _autoTaskCardMeta(task);
+  row.dataset.state = _autoRunFailures.has(task.id) ? 'error' : _autoRunningTaskIds.has(task.id) ? 'loading' : 'idle';
+  const trigger = row.querySelector('[data-act="more"]');
+  trigger.setAttribute('aria-label', t('auto.more_menu'));
+  trigger.title = t('auto.more_menu');
+  row._autoMenuController.refresh();
+}
+
+function _autoPaintRunState(task, updates = {}) {
+  for (const row of document.querySelectorAll('.auto-row[data-task-id]')) {
+    if (row.dataset.taskId === task.id) {
+      // Only apply confirmed changes, never overwrite newer edits with the
+      // snapshot captured when a long-running dispatch began.
+      Object.assign(row._autoTask, updates);
+      _autoUpdateCard(row);
+    }
+  }
+}
+
+async function _autoRunNow(task, opts) {
+  if (_autoRunningTaskIds.has(task.id) || !_autoIsTaskOnCurrentDevice(task)) return;
+  _autoRunFailures.delete(task.id);
+  _autoRunningTaskIds.add(task.id);
+  _autoPaintRunState(task);
+  _autoTrackClick('auto_task_run_now', { task_id: task.id });
+  try {
+    const result = await window.cogseed.invoke('autoTasks.runNow', { taskId: task.id });
+    if (!result || !result.ok) {
+      _autoRunFailures.add(task.id);
+      const error = result && result.error;
+      const key = error === 'already_running' ? 'auto.run_already_running'
+        : error === 'device_mismatch' ? 'auto.run_device_mismatch'
+        : error === 'recipient_unavailable' ? 'auto.run_recipient_unavailable' : 'auto.run_failed';
+      uiToast(t(key), { variant: 'error' });
+      return;
+    }
+    task.last_manual_run_at = new Date().toISOString();
+    _autoPaintRunState(task, { last_manual_run_at: task.last_manual_run_at });
+    if (opts && typeof opts.afterChange === 'function') opts.afterChange();
+    if (result.cid) {
+      if (typeof loadConversations === 'function') {
+        await loadConversations().catch((err) => _autoLog.warn('reload after manual run failed', err));
+      }
+      setView('conversation', result.cid);
+    } else {
+      uiToast(t('auto.run_delivered'), { variant: 'success' });
+    }
+  } catch (err) {
+    _autoRunFailures.add(task.id);
+    _autoLog.warn('manual run failed', err);
+    uiToast(t('auto.run_failed'), { variant: 'error' });
+  } finally {
+    _autoRunningTaskIds.delete(task.id);
+    _autoPaintRunState(task);
+  }
 }
 
 function _autoCachedTaskConversations(taskId) {
@@ -669,95 +636,36 @@ function _refreshAutoExpandedTaskConvs() {
   }
 }
 
-// One shared popover for all auto-task ⋯ menus. Mirrors `.agent-row-menu`:
-// fixed-position, click-outside closes, Escape closes.
-let _autoMenuEl = null;
-function _ensureAutoMenu() {
-  if (_autoMenuEl) return _autoMenuEl;
-  const m = document.createElement('div');
-  m.className = 'auto-row-menu';
-  m.style.display = 'none';
-  document.body.appendChild(m);
-  document.addEventListener('click', (e) => {
-    if (!_autoMenuEl || _autoMenuEl.style.display === 'none') return;
-    if (_autoMenuEl.contains(e.target)) return;
-    if (e.target.closest('.auto-row-more')) return;
-    _closeAutoRowMenu();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && _autoMenuEl && _autoMenuEl.style.display !== 'none') _closeAutoRowMenu();
-  });
-  window.addEventListener('scroll', _closeAutoRowMenu, true);
-  window.addEventListener('resize', _closeAutoRowMenu);
-  _autoMenuEl = m;
-  return m;
-}
-function _closeAutoRowMenu() {
-  if (_autoMenuEl) {
-    _autoMenuEl.style.display = 'none';
-    _autoMenuEl.innerHTML = '';
-  }
-  for (const el of document.querySelectorAll('.auto-row.is-menu-open')) {
-    el.classList.remove('is-menu-open');
-  }
-}
-
-function _openAutoRowMenu(anchorBtn, task, opts) {
-  const menu = _ensureAutoMenu();
-  // Toggle off if already open for this task.
-  if (menu.style.display !== 'none' && menu.dataset.taskId === task.id) {
-    _closeAutoRowMenu();
-    return;
-  }
-  for (const el of document.querySelectorAll('.auto-row.is-menu-open')) el.classList.remove('is-menu-open');
-  anchorBtn.closest('.auto-row')?.classList.add('is-menu-open');
-  menu.dataset.taskId = task.id;
-  const toggleLabel = task.enabled ? t('auto.disable_btn') : t('auto.enable_btn');
-  menu.innerHTML = [
-    uiButton({ label: toggleLabel, role: 'ghost', size: 'sm', className: 'auto-row-menu-item', attrs: { 'data-action': 'toggle-enabled' } }),
-    uiButton({ label: t('auto.edit_btn'), role: 'ghost', size: 'sm', className: 'auto-row-menu-item', attrs: { 'data-action': 'edit' } }),
-    uiButton({ label: t('auto.delete_btn'), role: 'danger', size: 'sm', className: 'auto-row-menu-item', attrs: { 'data-action': 'delete' } }),
-  ].join('');
-  for (const item of menu.querySelectorAll('.auto-row-menu-item')) {
-    item.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const action = item.dataset.action;
-      _closeAutoRowMenu();
-      if (action === 'toggle-enabled') {
-        const next = !task.enabled;
+// Business actions only; the shared dropdown owns the shell and interaction.
+function _autoTaskMenuItems(task, opts) {
+  const running = _autoRunningTaskIds.has(task.id);
+  return [
+    { label: t(running ? 'auto.running_now' : 'auto.run_now'), loading: running,
+      disabled: !_autoIsTaskOnCurrentDevice(task),
+      attrs: { 'data-act': 'run-now', title: t(_autoIsTaskOnCurrentDevice(task) ? 'auto.run_now_hint' : 'auto.run_device_mismatch') },
+      onClick: () => _autoRunNow(task, opts) },
+    { label: t('auto.edit_btn'), attrs: { 'data-action': 'edit' },
+      onClick: () => opts?.onEdit?.(task) },
+    { label: t(task.enabled ? 'auto.disable_btn' : 'auto.enable_btn'), attrs: { 'data-action': 'toggle-enabled' },
+      onClick: async () => {
         try {
-          const res = await window.cogseed.invoke('autoTasks.setEnabled', { taskId: task.id, enabled: next });
-          if (res && res.ok && res.task) {
-            Object.assign(task, res.task);
-            const row = document.querySelector(`.auto-row[data-task-id="${task.id}"]`);
-            if (row) row.classList.toggle('is-disabled', !next);
-            if (opts && typeof opts.afterChange === 'function') opts.afterChange();
-          }
-        } catch (err) { _autoLog.warn('toggle failed', err); }
-      } else if (action === 'edit') {
-        if (opts && typeof opts.onEdit === 'function') opts.onEdit(task);
-      } else if (action === 'delete') {
+          const res = await window.cogseed.invoke('autoTasks.setEnabled', { taskId: task.id, enabled: !task.enabled });
+          if (!res || !res.ok || !res.task) throw new Error('toggle rejected');
+          Object.assign(task, res.task);
+          _autoPaintRunState(task, res.task);
+          opts?.afterChange?.();
+        } catch (err) { _autoLog.warn('toggle failed', err); uiToast(t('auto.update_failed'), { variant: 'error' }); }
+      } },
+    { label: t('auto.delete_btn'), danger: true, separatorBefore: true, attrs: { 'data-action': 'delete' },
+      onClick: async () => {
         if (!(await uiConfirm(t('auto.delete_confirm')))) return;
         try {
           const res = await window.cogseed.invoke('autoTasks.delete', { taskId: task.id });
-          if (res && res.deleted && opts && typeof opts.afterChange === 'function') opts.afterChange();
-        } catch (err) {
-          await uiAlert(t('auto.delete_failed', { reason: (err && err.message) || err }));
-        }
-      }
-    });
-  }
-  // Position the menu just below the anchor, right-aligned.
-  const rect = anchorBtn.getBoundingClientRect();
-  menu.style.display = 'block';
-  const w = menu.offsetWidth;
-  const h = menu.offsetHeight;
-  let top = rect.bottom + 4;
-  let left = rect.right - w;
-  if (top + h > window.innerHeight) top = rect.top - h - 4;
-  if (left < 8) left = 8;
-  menu.style.top = top + 'px';
-  menu.style.left = left + 'px';
+          if (!res || !res.deleted) throw new Error('delete rejected');
+          opts?.afterChange?.();
+        } catch (err) { await uiAlert(t('auto.delete_failed', { reason: err?.message || err })); }
+      } },
+  ];
 }
 
 // ─── Empty-state templates ────────────────────────────────────────
@@ -902,6 +810,11 @@ function _autoRenderTemplates(container, opts = {}) {
   });
 }
 
+function _autoClearTaskRows(container) {
+  for (const row of container.querySelectorAll('.auto-row')) row._autoMenuController?.destroy();
+  container.replaceChildren();
+}
+
 // ─── Global auto tab — list rendering + form wiring ────────────────
 
 async function loadAutoList(force) {
@@ -910,17 +823,15 @@ async function loadAutoList(force) {
   _autoRenderPageHeader();
   if (_autoLoadedOnce && !force) return;
   _autoRenderPageState('loading');
-  listEl.innerHTML = '';
+  _autoClearTaskRows(listEl);
   const tplEl = document.getElementById('auto-templates');
   if (tplEl) tplEl.hidden = true;
   await _refreshAutoSyncNotice();
-  // Fetch device fingerprint in parallel with the task list so the device
-  // chip can paint on the first render.
+  // Fetch device ownership before showing manual-run availability.
   await _ensureAutoCurrentDevice();
   try {
     const res = await window.cogseed.invoke('autoTasks.list', {});
     _autoTasks = (res && Array.isArray(res.tasks)) ? res.tasks : [];
-    await _autoLoadTaskConversationCounts(_autoTasks.map((task) => task && task.id));
   } catch (err) {
     _autoTasks = [];
     _autoLog.warn('list failed', err);
@@ -947,7 +858,6 @@ async function loadAutoList(force) {
   const afterChange = () => loadAutoList(true);
   for (const task of _autoTasks) {
     listEl.appendChild(_autoRenderRow(task, {
-      showProjectBadge: true,
       onEdit,
       afterChange,
     }));
@@ -968,7 +878,7 @@ async function loadProjectAutoList(projectId) {
   await _ensureAutoCurrentDevice();
   await _refreshAutoSyncNotice();
   if (!projectId) {
-    listEl.innerHTML = '';
+    _autoClearTaskRows(listEl);
     if (emptyEl) emptyEl.style.display = '';
     if (countEl) countEl.textContent = '0';
     return;
@@ -977,11 +887,10 @@ async function loadProjectAutoList(projectId) {
   try {
     const res = await window.cogseed.invoke('autoTasks.list', { projectId });
     tasks = (res && Array.isArray(res.tasks)) ? res.tasks : [];
-    await _autoLoadTaskConversationCounts(tasks.map((task) => task && task.id));
   } catch (err) {
     _autoLog.warn('project list failed', err);
   }
-  listEl.innerHTML = '';
+  _autoClearTaskRows(listEl);
   if (countEl) countEl.textContent = String(tasks.length);
   if (!tasks.length) {
     if (emptyEl) emptyEl.style.display = '';
@@ -1001,7 +910,6 @@ async function loadProjectAutoList(projectId) {
   };
   for (const task of tasks) {
     listEl.appendChild(_autoRenderRow(task, {
-      showProjectBadge: false,
       onEdit,
       afterChange,
     }));
@@ -1905,6 +1813,7 @@ function _autoRefreshRunDevicePicker(resetValue = false) {
 }
 
 function _autoRepaintLabels() {
+  for (const row of document.querySelectorAll('.auto-row[data-task-id]')) _autoUpdateCard(row);
   const titleEl = document.getElementById('auto-task-dialog-title');
   if (titleEl) {
     titleEl.textContent = t(_autoEditingTaskId

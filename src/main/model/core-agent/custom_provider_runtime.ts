@@ -97,11 +97,17 @@ function apiForProtocol(protocol: CustomProvider['protocol']): Api {
  * 值取 provider 级稳定 id：服务端要求"稳定"即可；逐对话一一对应需要请求级
  * 上下文（模型层拿不到），先满足路由的最低要求。
  */
-function customProviderHeaders(baseUrl: string, providerId: string): Record<string, string> | undefined {
-  if (/^https:\/\/(?:[a-z0-9-]+\.)?opencode\.ai\//i.test(String(baseUrl || ''))) {
-    return { 'x-opencode-session': `cogseed-${providerId}` };
-  }
-  return undefined;
+export function customProviderHeaders(baseUrl: string, providerId: string): Record<string, string> | undefined {
+  // Send the OpenCode routing header unconditionally.
+  //
+  // Relays in front of OpenCode Zen/Go answer 400 {"type":"MissingSessionID"}
+  // when it is absent — and the *configured* baseUrl is the relay, not
+  // opencode.ai, so a host-based match never fires for exactly the setups that
+  // need it (2026-10-13: provider cp-mv55dx7q-1 returned OpenCode's error while
+  // its baseUrl is not an opencode host; the earlier "trailing slash" fix could
+  // not help). Unknown request headers are ignored by other endpoints, and the
+  // value only has to be stable per provider for routing.
+  return { 'x-opencode-session': `cogseed-${providerId}` };
 }
 
 /**
@@ -177,9 +183,15 @@ export function buildCustomProviderModelMeta(
 ): { contextWindow: number; maxTokens: number } {
   const id = String(modelId || '').trim();
   const model = cp.models.find((candidate) => candidate.id === id);
-  return model
-    ? { contextWindow: model.contextWindow, maxTokens: model.maxTokens }
-    : { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_OUTPUT_TOKENS };
+  const known = publicModelAbilitiesFor(id);
+  const contextWindow = model?.contextWindow ?? known.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  // Keep smaller user limits. Bound legacy oversized records and models that
+  // were not persisted yet before both runner budgeting and wire construction.
+  return {
+    contextWindow,
+    maxTokens: Math.min(model?.maxTokens ?? known.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      known.maxTokens ?? Infinity, contextWindow),
+  };
 }
 
 /**

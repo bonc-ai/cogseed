@@ -1,22 +1,8 @@
 /**
- * 红队探针 r3：个人本体 JSON 单源零容量限额（对照 cognition store 的双上限）。
- *
- * 靶点（读码推演）：
- * - cognition/assets.json 有双重上限：MAX_ASSETS=500 条（index.ts:25）+
- *   COGNITION_STORE_BYTE_LIMIT=8MB（index.ts:24，读写双侧都查）；
- * - personal-ontology.json 的写路径 editPoDoc → writeJson（po/store.ts:235）
- *   **没有任何条数/字节上限**；poAddValue 单条 2000 字符、poAddEntry 4000、
- *   importApply 逐条灌入——限额面完全缺失；
- * - 该文件参与云同步（与 assets.json 同目录同耐久级别），无界增长会拖垮
- *   同步与全量 snapshot 通道（po.snapshot 一次交付整棵）。
- *
- * 预言：连续写入远超 cognition 上限口径的条数与字节均全部成功、无任何拒绝。
- *
- * 2026-09-30 r3 收尾（记账员）：对应待议 P-r3-7（写侧统一门 / 入口增量门 /
- * 组合，条数口径与数值需产品确认；读侧是否硬拒也需定）→ it.skip。断言
- * 锁定的是「现状零限额全写入」，拍板加门后反转。见 round-3-甄别.md。
+ * 本体写入总量边界：与 cognition 单店同口径（8MB）。
+ * 限额内大批量写入照常；把文档推过上限的写被拒绝并给可操作错误；
+ * 存量超限文档不追溯——不使总量变大的编辑（清理/删减）照常可写。
  */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -24,7 +10,7 @@ import * as path from 'node:path';
 
 vi.mock('../../src/main/features/kb_indexer', () => ({
   enqueue: () => {},
-  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+  kbEvents: { on: () => {}, emit: () => {}, off: () => {} },
 }));
 vi.mock('../../src/main/features/search', () => ({
   upsertContext: () => {},
@@ -34,6 +20,8 @@ vi.mock('../../src/main/features/search', () => ({
 let tmpDir: string;
 let prevWs: string | undefined;
 const UID = 'probe-user-r3b';
+const LIMIT = 8 * 1024 * 1024;
+const T = '2026-09-01T00:00:00Z';
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-probe-r3b-'));
@@ -51,8 +39,54 @@ function poDocFile(): string {
   return path.join(tmpDir, UID, 'cloud', 'cognition', 'personal-ontology.json');
 }
 
-describe('probe r3: 个人本体单源零容量限额（待议 P-r3-7，拍板前 skip）', () => {
-  it.skip('600 条 2000 字符值全部写入成功，文档超 cognition 字节上限口径仍照写', async () => {
+function docOf(values: unknown[], title: string): Record<string, unknown> {
+  return {
+    schemaVersion: 2,
+    groups: [{
+      id: 'g-big', title, kind: 'user',
+      fields: [{ id: 'f-big', name: '长文本', origin: 'user', createdAt: T }],
+      values, entries: [], createdAt: T, updatedAt: T,
+    }],
+    trash: [],
+  };
+}
+
+function compactBytes(values: unknown[], title: string): number {
+  return Buffer.byteLength(JSON.stringify(docOf(values, title)), 'utf8');
+}
+
+/**
+ * 盘上直接种入临界/超限档（不走逐条写路径）：长值（'限'=3 字节 UTF-8，每条
+ * ≈5.9KB）粗调到 LIMIT−12KB 以内，再用一条 ASCII 顶部值把余量收敛到 ≈LIMIT−3KB
+ *（ASCII 逐字节可控）；mode='over' 再压一条长值越过上限。
+ */
+function seedCapacityDoc(mode: 'near' | 'over'): { groupId: string; fieldId: string; valueIds: string[] } {
+  const longText = '限'.repeat(1900);
+  const mk = (i: number, text: string) => ({ id: `vb${i}`, fieldId: 'f-big', text, source: '手动', createdAt: T, updatedAt: T });
+  const title = mode === 'near' ? '临界档' : '超限档';
+  const values: Array<ReturnType<typeof mk>> = [];
+  // 先测单条增量再跳数（避免逐条全量 stringify 的 O(n²)）；再校准至多几条。
+  const base = compactBytes(values, title);
+  const per = compactBytes([mk(0, `${longText}#0`)], title) - base;
+  const count = Math.max(1, Math.floor((LIMIT - 12_000 - base) / per));
+  for (let i = 0; i < count; i += 1) values.push(mk(i, `${longText}#${i}`));
+  while (compactBytes(values, title) < LIMIT - 12_000) {
+    values.push(mk(values.length, `${longText}#${values.length}`));
+  }
+  const sizeNow = compactBytes(values, title);
+  const pad = Math.max(1, LIMIT - sizeNow - 3_000 - 250);
+  values.push(mk(values.length, 'x'.repeat(pad)));
+  // 超限档多压 6 条长值（≈+35KB）：删一条后仍稳定在限上，增量必被拒。
+  if (mode === 'over') {
+    for (let k = 0; k < 6; k += 1) values.push(mk(values.length, `${longText}#over${k}`));
+  }
+  fs.mkdirSync(path.dirname(poDocFile()), { recursive: true });
+  fs.writeFileSync(poDocFile(), JSON.stringify(docOf(values, title)), 'utf8');
+  return { groupId: 'g-big', fieldId: 'f-big', valueIds: values.map((v) => v.id) };
+}
+
+describe('个人本体写入总量门（8MB，与 cognition 同口径）', () => {
+  it('限额内大批量写入照常：150 条 1900 字符值全部成功', async () => {
     const groups = await import('../../src/main/features/personal_ontology_groups');
     const api = await import('../../src/main/features/po/api');
 
@@ -64,17 +98,48 @@ describe('probe r3: 个人本体单源零容量限额（待议 P-r3-7，拍板�
 
     const longText = '限'.repeat(1900);
     let accepted = 0;
-    // 600 条 × 2000 字符 ≈ 1.2MB+ 元数据——条数超 cognition MAX_ASSETS(500)、
-    // （加上 JSON 结构）逼近其 8MB 字节口径的 1/6；足以证明零 gate。
-    for (let i = 0; i < 600; i += 1) {
+    for (let i = 0; i < 150; i += 1) {
       const r = await api.poAddValue(UID, groupId, fieldId, { text: `${longText}#${i}` });
       if (r.ok) accepted += 1;
     }
-    expect(accepted).toBe(600);
+    expect(accepted).toBe(150);
 
     const bytes = fs.statSync(poDocFile()).size;
-    expect(bytes).toBeGreaterThan(1_200_000); // 1.2MB，全无拒绝
+    expect(bytes).toBeGreaterThan(300_000); // 30 万字节量级照写，无误伤
     const doc = JSON.parse(fs.readFileSync(poDocFile(), 'utf8'));
-    expect(doc.groups[0].values).toHaveLength(600);
+    expect(doc.groups[0].values).toHaveLength(150);
+  });
+
+  it('把文档推过 8MB 的写被拒绝并给可操作错误，盘上字节不变', async () => {
+    // 盘上种入紧凑口径 ≈LIMIT−3KB 的临界档（余量小于一条长值的增量）。
+    const { groupId, fieldId } = seedCapacityDoc('near');
+    const bytesBefore = fs.readFileSync(poDocFile(), 'utf8');
+    expect(Buffer.byteLength(bytesBefore, 'utf8')).toBeLessThan(LIMIT);
+    expect(Buffer.byteLength(bytesBefore, 'utf8')).toBeGreaterThan(LIMIT - 6_000);
+
+    const api = await import('../../src/main/features/po/api');
+    const refused = await api.poAddValue(UID, groupId, fieldId, { text: `${'限'.repeat(1900)}#push` });
+    expect(refused.ok).toBe(false);
+    expect(String(refused.error)).toContain('exceeds');
+    expect(String(refused.error)).toContain('remove or trim');
+    // 盘上字节原样（拒绝发生在落盘前）。
+    expect(fs.readFileSync(poDocFile(), 'utf8')).toBe(bytesBefore);
+  });
+
+  it('存量超限不追溯：删减照常可写，增量仍被拒', async () => {
+    // 盘上种入紧凑口径已越过 LIMIT 的超限档。
+    const { groupId, fieldId, valueIds } = seedCapacityDoc('over');
+    expect(Buffer.byteLength(fs.readFileSync(poDocFile(), 'utf8'), 'utf8')).toBeGreaterThan(LIMIT);
+
+    const api = await import('../../src/main/features/po/api');
+    // 清理：删一条值（总量变小）——照常可写，不因存量超限锁死。
+    const shrink = await api.poDeleteValue(UID, groupId, valueIds[0]);
+    expect(shrink.ok).toBe(true);
+    // 增量：再加一条（总量变大）——仍被拒。
+    const grow = await api.poAddValue(UID, groupId, fieldId, { text: '还想再长' });
+    expect(grow.ok).toBe(false);
+    expect(String(grow.error)).toContain('exceeds');
+    const doc = JSON.parse(fs.readFileSync(poDocFile(), 'utf8'));
+    expect(doc.groups[0].values).toHaveLength(valueIds.length - 1);
   });
 });

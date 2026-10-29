@@ -458,6 +458,7 @@ async function closeChatFileViewer(opts) {
     document.removeEventListener('keydown', _viewerKeyHandler);
     _viewerKeyHandler = null;
   }
+  document.dispatchEvent(new CustomEvent('cogseed:file-viewer-closed'));
   return true;
 }
 

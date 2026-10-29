@@ -23,13 +23,13 @@ const storeDefaults = {
   loading: false,
   errors: [],
   assets: [],
+  assetCapabilities: { versionedUpdate: true },
   candidates: [],
   captures: [],
   captureCounts: {},
   captureBuckets: null,
   captureSettings: null,
   sources: [],
-  tree: null,
   proofs: [],
   // 与真实载荷同默认（主进程随 recall.timeline.list 下发）：列表与详情共用它。
   // 用例要考「白名单缺失时 fail-closed」就显式传 []。
@@ -67,14 +67,14 @@ function loadModule(
 
   // ui-structure.js 提供 uiAccordion：设置页（含 2026-09-28 挪入的旧记忆迁移
   // 工具卡）的高级设置折叠用它。
-  for (const file of ['ui-button.js', 'ui-form.js', 'ui-empty.js', 'ui-status.js', 'ui-segmented-control.js', 'ui-structure.js']) {
+  for (const file of ['ui-button.js', 'ui-card.js', 'ui-form.js', 'ui-empty.js', 'ui-status.js', 'ui-segmented-control.js', 'ui-structure.js']) {
     vm.runInContext(
       fs.readFileSync(path.join(rendererRoot, 'modules', file), 'utf8'),
       context,
       { filename: file },
     );
   }
-  for (const file of ['core.js', 'views.js', 'review-candidate.js', 'review-views.js']) {
+  for (const file of ['core.js', 'vocabulary.js', 'settings.js', 'views.js', 'review-candidate.js', 'review-views.js', 'library.js']) {
     vm.runInContext(
       fs.readFileSync(path.join(rendererRoot, 'modules/cognition-assets', file), 'utf8'),
       context,
@@ -83,6 +83,8 @@ function loadModule(
   }
 
   Object.assign(context.window.CogAssets.store, storeDefaults, state, {
+    blockStatus: state.blockStatus || Object.fromEntries(['assets', 'ontology', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox']
+      .map(name => [name, { loaded: state.loaded !== false, loading: Boolean(state.loading) }])),
     route: { ...routeDefaults, ...route },
   });
   return { cogAssets: context.window.CogAssets, root, context };
@@ -117,4 +119,13 @@ export function loadCognitionAssets(
       return root.innerHTML;
     },
   };
+}
+
+/** Read the actual prototype dialog bodies alongside the visible detail. This
+ * helper is for data contracts which span the three distinct entry points. */
+export function renderCognitionWithDialogs(route: Record<string, unknown>, state: Record<string, unknown> = {}, windowStubs: Record<string, unknown> = {}): string {
+  const loaded = loadCognitionAssets(state, route, windowStubs);
+  const html = loaded.render();
+  const assetId = String(route.assetId || loaded.store.route.assetId || '');
+  return html + ['sources', 'versions', 'records'].map(kind => loaded.ns.renderLibraryDialog(kind, assetId, route.assetVersionId)).join('');
 }

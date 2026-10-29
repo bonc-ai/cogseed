@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -30,7 +31,23 @@ afterEach(() => {
 });
 
 async function loadSync() {
-  return import('../../../../src/main/features/recall/personal-profile-sync');
+  const mod = await import('../../../../src/main/features/recall/personal-profile-sync');
+  return {
+    ...mod,
+    // Tests inject an in-memory asset list. Give the lock-time liveness check
+    // the same source unless the test provides its own reader.
+    syncPersonalProfileFromRecallAssets: async (
+      userId: string,
+      dependencies: Record<string, any> = {},
+      options: Record<string, any> = {},
+    ) => mod.syncPersonalProfileFromRecallAssets(userId, {
+      ...dependencies,
+      ...(dependencies.readAsset || !dependencies.listAssets ? {} : {
+        readAsset: async (uid: string, assetId: string) =>
+          (await dependencies.listAssets(uid)).find((row: { id: string }) => row.id === assetId),
+      }),
+    }, options),
+  };
 }
 
 async function loadTemplates() {
@@ -135,6 +152,32 @@ describe('Recall personal profile projection', () => {
     const memory = await import('../../../../src/main/features/memory');
     expect(memory.listEntries(UID, 'user').entries).toEqual([assets[0].statement]);
     expect(assets).toEqual(originalAssets);
+  });
+
+  it('does not recreate a projection when the source asset changes while routing', async () => {
+    const { templates, row } = await installStudentTemplate();
+    const sync = await loadSync();
+    const assets = [asset('aa-personal-race', 'personal', 'Race body must not be projected.')];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const routeAsset = vi.fn(async () => {
+      await gate;
+      return { action: 'field' as const, group_title: '学习背景', field_name: '教育阶段', confidence: 'high' as const };
+    });
+
+    const pending = sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => assets,
+      routeAsset,
+    });
+    await vi.waitFor(() => expect(routeAsset).toHaveBeenCalledTimes(1));
+    assets[0] = { ...assets[0], version: '2' };
+    release();
+    const result = await pending;
+
+    expect(result.written).toBe(0);
+    expect(result.failed).toEqual([{ assetId: 'aa-personal-race', error: 'profile_asset_changed' }]);
+    const fields = await templates.listFieldsByRef(UID, templates.buildContentRef(row.group_id, '学习背景'));
+    expect(fields.fields?.find((field) => field.name === '教育阶段')?.values || []).toEqual([]);
   });
 
   it('writes USER.md even when no role template is installed', async () => {
@@ -258,6 +301,33 @@ describe('Recall personal profile projection', () => {
       profileFailed: [],
     });
     expect(routeAsset).not.toHaveBeenCalled();
+  });
+
+  it('retired default writer records skipped as-is: no applied projection, no profileWritten', async () => {
+    // 生产默认路径不注入 writeProfileEntry：画像记忆桥已退役（背景块改读资产库），
+    // 「没写」必须如实记 skipped——不能落一张 applied 投影再把 profileWritten
+    // 虚高一年（退役 no-op 曾伪造 ok+record 假成功）。
+    const sync = await loadSync();
+    const personal = asset('aa-personal-retired', 'personal', '退役写入器下的个人偏好。');
+
+    const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => [personal],
+      listCatalog: async () => [],
+    });
+
+    expect(result).toMatchObject({
+      eligible: 1,
+      profileWritten: 0,
+      profileSkipped: 1,
+      profileFailed: [],
+      failed: [],
+    });
+    const memory = await import('../../../../src/main/features/memory');
+    expect(memory.listEntries(UID, 'user').entries).toEqual([]);
+    const { readRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    const { createHash } = await import('node:crypto');
+    const projectionId = `profile-memory-${createHash('sha256').update(personal.id).digest('hex').slice(0, 24)}`;
+    expect(await readRecallJsonRecord(UID, 'personal-profile-memory-projections', projectionId)).toBeUndefined();
   });
 
   it('shows an ontology-linked Personal asset in USER.md without re-routing it to a role template', async () => {
@@ -603,6 +673,24 @@ describe('Recall personal profile projection', () => {
     ]);
   });
 
+  it('removes source-tagged template values when the projection record is missing', async () => {
+    const { templates, row } = await installStudentTemplate();
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
+    const sync = await loadSync();
+    const fieldRef = (await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '教育阶段'))!;
+    const fieldFileRef = templates.buildContentRef(row.group_id, '学习背景');
+    await templates.appendFieldValueToRef(UID, fieldFileRef, '教育阶段', '本科', '手动');
+    expect((await templates.appendExistingTemplateFieldValueToRef(
+      UID, fieldFileRef, '教育阶段', '历史投影原文', '手动', undefined, 'aa-legacy-projection')).ok).toBe(true);
+
+    const retired = await sync.removePersonalProfileProjectionForAsset(UID, 'aa-legacy-projection');
+    expect(retired).toMatchObject({ ok: true, removed: 1 });
+    const fields = await templates.listFieldsByRef(UID, fieldFileRef);
+    expect(fields.fields?.find((field) => field.name === '教育阶段')?.values).toEqual([
+      { value: '本科', source: '手动' },
+    ]);
+  });
+
   it('caches a stable no-match decision for the same asset and template catalog', async () => {
     await installStudentTemplate();
     const sync = await loadSync();
@@ -723,7 +811,7 @@ describe('personal profile projection is driven from the main process', () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser(UID);
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const candidate = await candidates.saveRecallCandidate(UID, {
+    const candidate = await createNightlyCandidateFixture(UID, {
       judgment: '我偏好先看结论，再看实现细节。',
       summary: '先看结论的偏好',
       value: '后续回答应优先给出明确结论。',
@@ -754,7 +842,7 @@ describe('personal profile projection is driven from the main process', () => {
     });
 
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const candidate = await candidates.saveRecallCandidate(UID, {
+    const candidate = await createNightlyCandidateFixture(UID, {
       judgment: '我长期偏好先给整体结构，再补细节。',
       summary: '结构优先的偏好',
       value: '后续任务可以直接按结构优先的方式组织输出。',
@@ -784,7 +872,7 @@ describe('personal profile projection is driven from the main process', () => {
     });
 
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const candidate = await candidates.saveRecallCandidate(UID, {
+    const candidate = await createNightlyCandidateFixture(UID, {
       judgment: '正式评审必须先讲产品模型，再谈实现细节。',
       summary: '评审次序纪律',
       value: '避免评审跑偏到实现细节上。',
@@ -817,7 +905,7 @@ describe('personal profile projection is driven from the main process', () => {
     const PROFILE_FIELD_REF = (await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '专业与学习方向'))!;
     expect(PROFILE_FIELD_REF).toBeTruthy();
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const candidate = await candidates.saveRecallCandidate(UID, {
+    const candidate = await createNightlyCandidateFixture(UID, {
       judgment: '我长期从事程序开发。',
       summary: '程序开发背景',
       value: '后续可按技术工作者的背景理解我的需求。',

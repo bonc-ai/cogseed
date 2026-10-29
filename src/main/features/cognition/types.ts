@@ -2,13 +2,11 @@ import type { RecallAbilityAssetScopePolicy } from '../recall/scope-policy';
 
 export type CognitionCandidateSource = 'personal_ontology';
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
-export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
-
-// Union merged across both sides: develop added `modify`/`defer`, this branch
-// added `deep_review`. Dropping either would silently disable an action the
-// renderer already emits.
-export type CognitionCandidateAction = 'source' | 'accept' | 'modify' | 'defer'
-  | 'reject' | 'deep_review' | 'open_personal_ontology' | 'import_to_recall';
+// P-r1-17：八值联合里六个动作值（source/accept/modify/defer/reject/deep_review）
+// 只由 actionsForCandidate 的非本体分支生产，而唯一调用方恒传 'personal_ontology'
+// ——六值零生产零消费，分支已删。候选确认的活出口是
+// recall.candidates.importPersonalOntology（「待我处理」确认闸），不经这里。
+export type CognitionCandidateAction = 'open_personal_ontology' | 'import_to_recall';
 
 /**
  * Security / admission status — the axis that answers "is this safe to admit".
@@ -52,7 +50,9 @@ export interface CognitionCandidateView {
   source: CognitionCandidateSource;
   sourceId: string;
   type: CognitionCandidateType;
-  status: CognitionCandidateStatus;
+  // P-r1-1：个人本体候选池是追加式 md 文件，没有状态机——唯一映射口恒置
+  // 'pending'，原四态联合里 accepted/deferred/rejected 零生产，类型已收窄。
+  status: 'pending';
   title: string;
   summary: string;
   confidence?: 'low' | 'medium' | 'high';
@@ -63,8 +63,6 @@ export interface CognitionCandidateView {
   targetAssetTitle?: string;
   diffAvailable: boolean;
   actions: CognitionCandidateAction[];
-  conversationId?: string;
-  skillId?: string;
   createdAt?: string;
   updatedAt?: string;
   /**
@@ -100,7 +98,7 @@ export interface CognitionReuseReceiptView {
   completedAt?: string;
 }
 
-export type CognitionAssetType = 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
+export type CognitionAssetType = 'cognition' | 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
 // 与 RecallAbilityAssetRecord 的治理状态保持同步，另加展示层特有的 `candidate`
 // ——候选还没 promote 成资产，在资产侧没有对应状态。
 // PRD 3.6 的成熟度阶梯顶到 effectiveness_validated。曾经多出的 'stable' 档
@@ -110,27 +108,14 @@ export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'ef
 export type CognitionAssetStatus =
   | 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked' | 'candidate';
 
-export interface CognitionRecallSkillDraftSummary {
-  draftHash: string;
-  fileCount: number;
-  workflowSteps: string[];
-  validationOk: boolean;
-  mode?: 'install' | 'upgrade';
-  reviewDecision?: 'deferred' | 'rejected' | 'accepted';
-  targetSkillId?: string;
-  baseRevisionId?: string;
-  baseManifestHash?: string;
-  diffSummary?: {
-    added: number;
-    modified: number;
-    deleted: number;
-    unchanged: number;
-  };
-  recallContext?: {
-    assetCount: number;
-    sourceCount: number;
-  };
-}
+// P-r3-1（2026-10-01 死代码真删批）：以下字段已整删，登记备查——
+// lifecycleStatus（正式资产侧已退役仍在此透传）、candidateCount/reuseCount/
+// lastReusedAt（每列表做候选池+回执读盘只为算三个零消费计数，enrichAssetCounts
+// 已删）、workspaceRefs/receiptRefs（恒空数组）、baselineSkillRef（恒 undefined）、
+// generatedSkillId/recallSkillDraft*（每个 skill 资产 3-7 次读盘、零渲染消费，
+// skill 草稿详情有自己的活读口 recall.skillDraft.*）。渲染层唯一消费方
+// （conversation-info.js 认知资产段）只用 id/title/summary/type/category/
+// relationRefs/candidateRefs。
 
 export interface CognitionAssetSummary {
   id: string;
@@ -138,7 +123,6 @@ export interface CognitionAssetSummary {
   title: string;
   summary?: string;
   source: string;
-  lifecycleStatus?: 'user_confirmed_unverified' | 'automatically_extracted_unverified' | 'system_precipitated_unverified';
   version?: string;
   status?: CognitionAssetStatus | string;
   enabled?: boolean;
@@ -157,18 +141,8 @@ export interface CognitionAssetSummary {
   recommendedAction?: 'pause' | 'rework';
   recommendationReason?: string;
   recommendationAt?: string;
-  workspaceRefs: string[];
-  receiptRefs: string[];
   candidateRefs: string[];
-  baselineSkillRef?: string;
-  generatedSkillId?: string;
-  recallSkillDraftStatus?: 'failed' | 'draft';
-  recallSkillDraftErrorCode?: string;
-  recallSkillDraft?: CognitionRecallSkillDraftSummary;
   relationRefs: CognitionRelationRef[];
-  candidateCount: number;
-  reuseCount: number;
-  lastReusedAt?: string;
 }
 
 export interface CognitionSkillVersionSummary {
@@ -209,28 +183,6 @@ export interface SkillCognitionSummary {
   installedAssetVersion?: string;
   sourceAssetId?: string;
   baselineStatus: 'available' | 'unversioned';
-  pendingCandidateCount: number;
   recentReceipts: CognitionReuseReceiptView[];
   versions: CognitionSkillVersionSummary[];
-}
-
-export interface CognitionSkillMigrationAudit {
-  boundSkillCount: number;
-  fullTreeVersionCount: number;
-  legacyVersionCount: number;
-  legacyOrphanSkillCount: number;
-  unversionedBoundSkillCount: number;
-}
-
-export interface CognitionDashboard {
-  counts: {
-    skills: number;
-    pendingCandidates: number;
-    receipts: number;
-    assets: number;
-  };
-  pendingCandidates: CognitionCandidateView[];
-  recentReceipts: CognitionReuseReceiptView[];
-  warnings: Array<{ code: string; count: number }>;
-  degraded: boolean;
 }

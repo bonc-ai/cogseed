@@ -15,13 +15,13 @@ require('./proxy-bootstrap.cjs');
 // spawns us). This adapter's own `tmeet` subprocess is the layer that rule does not cover —
 // **reviewed exception, recorded in the PR description**, not an accident.
 //
-// ── Read-only surface ────────────────────────────────────────────────────────
-// COGSEED-314.4 is "只读接入适配". We expose records/transcripts and the *preview* half of the
-// recording-permission application only. No `meeting create|update|cancel`, no
-// `record permission-apply-commit`. Tencent's own docs require a self-built agent to implement
-// write confirmation itself; shipping no write tool satisfies that by construction and keeps the
-// `bridge_permissions` always-allow grant (which is per (agent, connector), not per tool) from
-// silently covering a mutation.
+// Meeting writes use a host-only prepare/commit protocol. Public mutation names cannot
+// execute directly. Main presents validated arguments through action_approval and only
+// then consumes the adapter's random one-use receipt. Read tools remain directly callable.
+// Recording access applications additionally bind the official preview and its expiry to that
+// receipt. Permission evidence must come from a recent meeting query, never model arguments.
+// The CLI is bundled as a pinned native resource; globally installed copies are a legacy fallback.
+// Auth and data directories are scoped to the active user's local storage by the host.
 //
 // ── Two traps from the real CLI (verified against v1.0.18, not just the docs) ──
 // 1. TWO DIFFERENT IDS. Transcript tools need `--record-file-id`; `record address` and
@@ -63,6 +63,8 @@ const { resolveCliLaunch } = require('./cli-launch.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
+const meetingActions = require('./tencent-meeting-actions.cjs');
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const {
@@ -176,6 +178,12 @@ const MAX_TRANSCRIPT_CHARS = 200000;
 // ── Tool definitions ──────────────────────────────────────────────────
 
 const TOOLS = [
+  ...meetingActions.TOOLS,
+  ...[...meetingActions.INTERNAL_NAMES].map((name) => ({
+    name,
+    description: 'Host-only meeting approval protocol. Never expose this action to the model.',
+    inputSchema: { type: 'object' },
+  })),
   {
     name: 'list_recordings',
     description:
@@ -183,6 +191,8 @@ const TOOLS = [
       'returns a `云录制` (audio/video) record and a `文字转写` (transcript) record. Each record ' +
       'carries record_files[], and ONLY records with at least one file can drive the transcript ' +
       'tools — prefer `preferred_transcript_records`, and treat `unusable_records` as a dead end. ' +
+      'This list excludes recordings without access; use get_meeting/list_ended_meetings to ' +
+      'discover permission_status=can_apply recordings and apply_record_permission to request access. ' +
       'Supply one of: start+end, meeting_id, or meeting_code. Time ranges are capped at 31 days.',
     inputSchema: {
       type: 'object',
@@ -254,8 +264,8 @@ const TOOLS = [
       'Preview the recording-permission application for one meeting record, WITHOUT submitting it. ' +
       'Recording permission belongs to the meeting creator by default; if a meeting cannot be read ' +
       'because the account lacks recording permission, this shows what would be requested so the ' +
-      'user can decide. Submitting the application is a write action and is deliberately NOT ' +
-      'exposed by this connector.',
+      'user can decide. To submit, use apply_record_permission; the host refreshes the preview ' +
+      'and requires explicit human confirmation.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -363,10 +373,9 @@ function _execTmeet(args) {
         const detail = String(stderr || '').trim() || String(stdout || '').trim() || err.message;
         let hint = '';
         if (err.code === 'ENOENT') {
-          hint = ` (the Tencent Meeting CLI was not found at "${bin}". Install it with ` +
-            '`npm install -g @tencentcloud/tmeet`, or point COGSEED_TMEET_BIN at the binary.)';
+          hint = ' (the bundled Tencent Meeting component is unavailable; repair or update the desktop client)';
         } else if (/not logged in|auth login|user config is empty/i.test(detail)) {
-          hint = ' (the Tencent Meeting account is not connected — the user must run `tmeet auth login` first)';
+          hint = ' (the Tencent Meeting account needs authorization — reconnect it in the Connectors panel)';
         }
         reject(new Error(`tmeet ${args[0]} ${args[1] || ''} failed: ${detail.slice(0, 400)}${hint}`));
         return;
@@ -413,8 +422,7 @@ function _execTmeetText(args) {
         const detail = String(stderr || '').trim() || String(stdout || '').trim() || err.message;
         let hint = '';
         if (err.code === 'ENOENT') {
-          hint = ` (the Tencent Meeting CLI was not found at "${bin}". Install it with ` +
-            '`npm install -g @tencentcloud/tmeet`, or point COGSEED_TMEET_BIN at the binary.)';
+          hint = ' (the bundled Tencent Meeting component is unavailable; repair or update the desktop client)';
         }
         reject(new Error(`tmeet ${args.join(' ')} failed: ${detail.slice(0, 400)}${hint}`));
         return;
@@ -694,7 +702,98 @@ function _normalizeRecord(row) {
 
 // ── Tool dispatch ─────────────────────────────────────────────────────
 
+const pendingChanges = new Map();
+// Observed permission evidence is scoped to this user-owned adapter process. Cache meeting
+// queries briefly: get cannot page older recordings, whereas list-ended can discover them.
+const permissionRecords = new Map();
+const permissionApplications = new Set();
+function rememberPermissionRecords(payload) {
+  const meetings = _data(payload).meeting_info_list;
+  if (!Array.isArray(meetings)) return;
+  for (const meeting of meetings) {
+    for (const record of Array.isArray(meeting.records) ? meeting.records : []) {
+      const key = JSON.stringify([String(meeting.meeting_id), String(record.meeting_record_id)]);
+      permissionRecords.delete(key);
+      permissionRecords.set(key, { status: record.permission_status, state: record.state, expires: Date.now() + 60_000 });
+      if (permissionRecords.size > 256) permissionRecords.delete(permissionRecords.keys().next().value);
+    }
+  }
+}
+
+async function prepareRecordPermission(args) {
+  const key = JSON.stringify([args.meeting_id, args.meeting_record_id]);
+  let evidence = permissionRecords.get(key);
+  if (!evidence || evidence.expires <= Date.now()) {
+    rememberPermissionRecords(await tmeet('meeting', 'get', `--meeting-id=${args.meeting_id}`));
+    evidence = permissionRecords.get(key);
+  }
+  if (!evidence || evidence.expires <= Date.now()) throw new Error('Cannot verify recording permission. Query get_meeting or list_ended_meetings again; no application was submitted.');
+  if (evidence.status !== 'can_apply') throw new Error('Recording permission is not can_apply; no application was submitted.');
+  if (typeof evidence.state !== 'string' || !evidence.state.trim() || /录制中|转码中|recording|transcoding/i.test(evidence.state)) {
+    throw new Error('Recording is not ready for a permission application; wait for transcoding to complete.');
+  }
+  const started = Date.now();
+  const data = _data(await tmeet('record', 'permission-apply-prepare', `--meeting-record-id=${args.meeting_record_id}`, `--meeting-id=${args.meeting_id}`));
+  const raw = data.preview;
+  if (!raw || raw.meeting_record_id !== args.meeting_record_id) throw new Error('Recording permission preview does not match the requested recording');
+  const preview = {};
+  for (const field of ['approval_name', 'subject', 'file_owner', 'apply_note', 'applicant']) {
+    if (typeof raw[field] !== 'string' || (field !== 'apply_note' && !raw[field].trim())) throw new Error(`Invalid recording permission preview: ${field}`);
+    preview[field] = raw[field];
+  }
+  // The approval surface caps targets at 2000 characters. Never approve a truncated preview.
+  if (Object.values(preview).join('').length > 1200) throw new Error('Recording permission preview is too long to confirm safely');
+  if (!Number.isFinite(data.expires_in) || data.expires_in <= 0) throw new Error('Recording permission preview has no valid expiry');
+  const expires = started + Math.min(data.expires_in * 1000, 10 * 60 * 1000);
+  if (expires <= Date.now()) throw new Error('Recording permission preview expired; request a new preview');
+  return { preview, expires, permissionKey: key };
+}
+
+function discardChange(token) {
+  const draft = pendingChanges.get(token);
+  pendingChanges.delete(token);
+  if (draft?.permissionKey) permissionApplications.delete(draft.permissionKey);
+  return draft;
+}
+
 async function callTool(name, args = {}) {
+  if (name === 'prepare_meeting_change') {
+    if (!meetingActions.WRITE_NAMES.has(args.tool_name)) throw new Error('Unknown meeting mutation');
+    const action = meetingActions.normalizeAction(args.tool_name, args.arguments);
+    for (const [key, draft] of pendingChanges) if (draft.expires <= Date.now()) discardChange(key);
+    if (pendingChanges.size >= 32) throw new Error('Too many pending meeting changes');
+    const permission = args.tool_name === 'apply_record_permission';
+    const key = JSON.stringify([action.args.meeting_id, action.args.meeting_record_id]);
+    if (permission && permissionApplications.has(key)) throw new Error('A permission application for this recording is already pending');
+    if (permission) permissionApplications.add(key);
+    let extra;
+    try { extra = permission ? await prepareRecordPermission(action.args) : {}; }
+    catch (error) { if (permission) permissionApplications.delete(key); throw error; }
+    const token = crypto.randomBytes(32).toString('hex');
+    pendingChanges.set(token, { ...action, expires: Date.now() + 10 * 60 * 1000, ...extra });
+    return { token, arguments: action.args, preview: extra.preview, expires_at: extra.expires };
+  }
+  if (name === 'discard_meeting_change') {
+    discardChange(args.token);
+    return { discarded: true };
+  }
+  if (name === 'commit_meeting_change') {
+    const draft = pendingChanges.get(args.token);
+    // Consume before execution. A timeout or failed response must never replay a mutation.
+    pendingChanges.delete(args.token);
+    try {
+      if (!draft || draft.expires <= Date.now()) throw new Error('Meeting approval is missing, expired or already used');
+      return await tmeet(...draft.argv);
+    } finally {
+      if (draft?.permissionKey) permissionApplications.delete(draft.permissionKey);
+    }
+  }
+  if (meetingActions.WRITE_NAMES.has(name)) throw new Error('Meeting changes require host human approval');
+  if (meetingActions.TOOLS.some((tool) => tool.name === name)) {
+    const payload = await tmeet(...meetingActions.normalizeAction(name, args).argv);
+    if (name === 'get_meeting' || name === 'list_ended_meetings') rememberPermissionRecords(payload);
+    return payload;
+  }
   if (name === 'start_login') {
     const authorization_url = await startLogin();
     return {
@@ -808,8 +907,7 @@ async function callTool(name, args = {}) {
     const payload = await tmeet('record', 'permission-apply-prepare', '--meeting-record-id', id);
     return {
       meeting_record_id: id,
-      // No `commit` path is exposed: applying is a write action the user performs themselves.
-      note: 'Preview only. Submitting a recording-permission application is a write action and is not available through this connector.',
+      note: 'Preview only. Use apply_record_permission to obtain a fresh preview and submit after host human confirmation.',
       preview: payload,
     };
   }

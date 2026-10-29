@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 保留期清理链（specs/008 T005/T006 · US-306 交付项，验收归 specs/010）。
  *
@@ -69,7 +70,7 @@ const JUDGMENTS: Record<string, string> = {
 async function seedAsset(uid: string, marker: string) {
   const { candidates } = await modules();
   const judgment = JUDGMENTS[marker] || `Record the lesson behind ${marker} before shipping.`;
-  const candidate = await candidates.saveRecallCandidate(uid, {
+  const candidate = await createNightlyCandidateFixture(uid, {
     judgment,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: 'Cascade fixture lesson',
@@ -163,6 +164,35 @@ describe('彻底清除的级联完整性（四类残留归零，且不误伤兄�
     expect((await assets.readAbilityAsset(uid, asset.id)).status).toBe('purged');
   });
 
+  /** P-r1-29：候选池里带资产正文全文的 pending 候选不止 `asset-backflow-<id>`
+   *  一条（历史投放/池满等），按 id 清不掉——purge 后确认即复活正文。
+   *  级联按文本全文相等兜底清；不同正文的候选必须原样保留。 */
+  it('P-r1-29：purge 级联按文本清掉带资产正文全文的候选池残留，不误伤他文候选', async () => {
+    const uid = 'user-cascade-text';
+    const { assets } = await modules();
+    const asset = await seedAsset(uid, 'cascade');
+    const statement = (await assets.readAbilityAsset(uid, asset.id)).statement;
+    expect(statement).toBeTruthy();
+    const pool = await import('../../../../src/main/features/personal_ontology_candidates');
+    // 同文残留（非 backflow id，按 id 的级联清不到）+ 无关候选（必须活着）。
+    await pool.addCandidate(uid, {
+      candidate_id: 'leftover-pending-1', kind: 'rule', memory_scope: 'shared',
+      summary: '历史投放残留', memory_text: statement, confidence: 'low', write_actor: 'llm',
+    });
+    await pool.addCandidate(uid, {
+      candidate_id: 'unrelated-pending-2', kind: 'rule', memory_scope: 'shared',
+      summary: '无关候选', memory_text: `${statement} — 但这是另一句话`, confidence: 'low', write_actor: 'llm',
+    });
+
+    await assets.deleteAbilityAsset(uid, asset.id, userAction('enter retention window'));
+    await assets.purgeAbilityAsset(uid, asset.id, userAction('彻底清除'));
+
+    const after = await pool.listCandidates(uid);
+    const ids = after.candidate_updates.map((candidate) => candidate.candidate_id);
+    expect(ids).not.toContain('leftover-pending-1');
+    expect(ids).toContain('unrelated-pending-2');
+  });
+
   it('彻底删除后 restore 被拒绝，且墓碑不携带正文与族名', async () => {
     const uid = 'user-cascade-restore';
     const { assets, store } = await modules();
@@ -187,6 +217,11 @@ describe('到期自动彻底删除', () => {
     await assets.deleteAbilityAsset(uid, stale.id, userAction('delete'));
     await store.updateRecallJsonRecord(uid, 'ability-assets', fresh.id, (raw) => ({ ...raw!, deletedAt: daysAgo(29) }));
     await store.updateRecallJsonRecord(uid, 'ability-assets', stale.id, (raw) => ({ ...raw!, deletedAt: daysAgo(31) }));
+    await store.appendRecallJsonlRecord(uid, 'ability-asset-audit', stale.id, {
+      schemaVersion: 1, ownerId: uid, id: 'legacy-user-retention-note', assetId: stale.id,
+      action: 'updated', actor: 'user', at: new Date().toISOString(),
+      note: '用户手写的保留期说明', reason: '用户手写的保留期理由',
+    });
 
     const result = await retention.runAbilityAssetRetentionSweep(uid);
     expect(result.purged).toEqual([stale.id]);
@@ -197,6 +232,10 @@ describe('到期自动彻底删除', () => {
     const purgeRow = audit.find((row) => row.action === 'purged')!;
     expect(purgeRow.actor).toBe('system');
     expect(String(purgeRow.reason)).toContain('保留期');
+    // 只有系统自己的到期说明可以留下；用户提到"保留期"的手写内容照常清除。
+    const userRow = audit.find((row) => row.id === 'legacy-user-retention-note')!;
+    expect(userRow.note).toBeUndefined();
+    expect(userRow.reason).toBeUndefined();
   });
 
   it('重复执行幂等：第二轮无对象、不重复记账', async () => {

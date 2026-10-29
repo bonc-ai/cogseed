@@ -122,6 +122,8 @@ export interface AutoTask {
   created_at: string;
   updated_at: string;
   last_run_at?: string;
+  /** Manual runs are receipts only; last_run_at remains the scheduler baseline. */
+  last_manual_run_at?: string;
 }
 
 function genTaskId(): string { return 'at_' + crypto.randomBytes(4).toString('hex'); }
@@ -1096,7 +1098,28 @@ function _buildSeedText(task: AutoTask): string {
   if (task.recipient && task.recipient.kind === 'agent' && task.recipient.name) {
     text = `@${task.recipient.name} ${text}`;
   }
-  return text;
+  return `${_fireFramingLine(task)}${text}`;
+}
+
+/** Fixed origin line prepended to every fired message.
+ *
+ *  A fired task lands in a fresh conversation as an ordinary user-role message,
+ *  so without this line the model reads a schedule's output as something the
+ *  user just typed — it answers the schedule ("why are you telling me this?")
+ *  instead of doing the task, and treats a briefing as a live request. The line
+ *  states the origin inside the message the model actually reads; the trailing
+ *  clock icon in the sidebar (conv.origin_auto_task_id) only tells the human.
+ *
+ *  Deliberately carries no timestamp: the runtime injection block already
+ *  carries the current time for the turn, and a per-fire timestamp here would
+ *  make otherwise identical fires read as different messages. */
+function _fireFramingLine(task: AutoTask): string {
+  const label = (task.title || '').trim() || task.id;
+  return _formatSeedPrefix(
+    'auto_tasks.fire_prefix',
+    { task: label },
+    `Automated task "${label}": sent by a schedule, not typed by the user just now.\n\n`,
+  );
 }
 
 export function _buildSeedTextForTest(task: AutoTask): string {
@@ -1112,11 +1135,59 @@ function _buildFireTitle(task: AutoTask): string {
   return firstLine.length > 40 ? firstLine.slice(0, 40) + '…' : firstLine;
 }
 
-async function _fireTask(uid: string, task: AutoTask): Promise<void> {
+export type TaskRunResult = { ok: true; cid?: string } | { ok: false; error: string };
+
+// Serialize dispatch per user/task. A manual double-click fails promptly;
+// a scheduled boundary waits for an in-progress dispatch, then re-checks due time.
+const _taskRuns = new Map<string, Promise<unknown>>();
+
+function _startTaskRun<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const pending = run().finally(() => {
+    if (_taskRuns.get(key) === pending) _taskRuns.delete(key);
+  });
+  _taskRuns.set(key, pending);
+  return pending;
+}
+
+/** Execute the saved task once without consuming or changing its schedule. */
+export async function runTaskNow(uid: string, taskId: string): Promise<TaskRunResult> {
+  if (!_isValidTaskId(taskId)) return { ok: false, error: 'invalid_id' };
+  const key = `${uid}/${taskId}`;
+  if (_taskRuns.has(key)) return { ok: false, error: 'already_running' };
+  return _startTaskRun(key, async () => {
+    const task = await _readOne(uid, taskId);
+    if (!task) return { ok: false, error: 'not_found' };
+    if (task.device_id && task.device_id !== getCurrentDevice().id) {
+      return { ok: false, error: 'device_mismatch' };
+    }
+    const at = new Date().toISOString();
+    try {
+      const result = await _fireTask(uid, task, crypto.randomUUID());
+      if (result.ok) {
+        // Persist only after dispatch succeeds. Receipt failures must not turn
+        // an accepted run into an apparent failure that invites duplicate retries.
+        try {
+          await _runExclusive(uid, async () => {
+            const current = await _readOne(uid, taskId);
+            if (current) await _writeOne(uid, { ...current, last_manual_run_at: at });
+          });
+        } catch (err) {
+          log.warn(`manual receipt failed id=${taskId}: ${(err as Error).message}`);
+        }
+      }
+      return result;
+    } catch (err) {
+      log.warn(`manual run failed id=${taskId}: ${(err as Error).message}`);
+      return { ok: false, error: 'run_failed' };
+    }
+  });
+}
+
+async function _fireTask(uid: string, task: AutoTask, manualRunId?: string): Promise<TaskRunResult> {
   const startedAt = Date.now();
   const title = _buildFireTitle(task);
   let cid = '';
-  const emitFailure = (errorCode: string): void => {
+  const emitFailure = (errorCode: string): TaskRunResult => {
     _emitFire({
       type: 'fire_failed',
       task_id: task.id,
@@ -1124,26 +1195,24 @@ async function _fireTask(uid: string, task: AutoTask): Promise<void> {
       error_code: errorCode,
       duration_ms: Math.max(0, Date.now() - startedAt),
     });
+    return { ok: false, error: errorCode };
   };
   if (task.recipient?.kind === 'agent') {
     if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, task.recipient.id))) {
       log.warn(`fire rejected uid=${uid} id=${task.id} reason=recipient_unavailable`);
-      emitFailure('recipient_unavailable');
-      return;
+      return emitFailure('recipient_unavailable');
     }
     const agent = await getAgentForChatDispatch(uid, task.recipient.id);
     if (!isAgentChatDispatchable(agent)) {
       log.warn(`fire rejected uid=${uid} id=${task.id} reason=recipient_unavailable`);
-      emitFailure('recipient_unavailable');
-      return;
+      return emitFailure('recipient_unavailable');
     }
   }
   // 外部通道目标（messaging）：不建 PC 会话，直接投递归属人主页会话。
   // 与 commander/agent 路径完全隔离，互不影响（向后兼容）。
   const messagingRecipient = task.recipient;
   if (messagingRecipient?.kind === 'messaging') {
-    await _fireMessagingTask(uid, task, messagingRecipient, emitFailure);
-    return;
+    return _fireMessagingTask(uid, task, messagingRecipient, emitFailure, manualRunId);
   }
   try {
     const conv = await chats.createConversation(uid, {
@@ -1155,28 +1224,32 @@ async function _fireTask(uid: string, task: AutoTask): Promise<void> {
     cid = conv.conversation_id;
   } catch (err) {
     log.error(`fire conv-create failed uid=${uid} id=${task.id}: ${(err as Error).message}`);
-    emitFailure('conv_create_failed');
-    return;
+    return emitFailure('conv_create_failed');
   }
   // Copy attachments into the new conversation's chat_attachments dir
   // BEFORE dispatch. The originals stay under the task's attachments/ so
   // recurring schedules re-use them next fire.
-  const attachmentNames = await _copyAttachmentsForFire(uid, task, cid);
-  const text = _buildSeedText(task);
   const rollbackEmptyConv = async (reason: string): Promise<void> => {
     try { await chats.deleteConversation(uid, cid, task.project_id || null); }
     catch (e) { log.warn(`fire rollback failed uid=${uid} id=${task.id} cid=${cid} reason=${reason}: ${(e as Error).message}`); }
   };
   try {
+    const attachmentNames = await _copyAttachmentsForFire(uid, task, cid);
+    const text = _buildSeedText(task);
     const res = await groupChat.send({
       userId: uid, cid, text,
+      // The saved recipient is an explicit user selection. The canonical
+      // submit path treats @name in text as presentation, never as routing.
+      ...(task.recipient?.kind === 'agent' ? {
+        recipient_agent_id: task.recipient.id,
+        recipient_origin: 'user_selection' as const,
+      } : {}),
       ...(attachmentNames.length ? { attachments: attachmentNames } : {}),
     });
     if (!res.ok) {
       log.warn(`fire send failed uid=${uid} id=${task.id} cid=${cid}: ${res.error || 'unknown'}`);
       await rollbackEmptyConv('send_not_ok');
-      emitFailure('send_not_ok');
-      return;
+      return emitFailure('send_not_ok');
     }
     log.info(`fired uid=${uid} id=${task.id} cid=${cid} project=${task.project_id || '-'} attachments=${attachmentNames.length}`);
     _emitFire({
@@ -1185,10 +1258,11 @@ async function _fireTask(uid: string, task: AutoTask): Promise<void> {
       task_id: task.id,
       duration_ms: Math.max(0, Date.now() - startedAt),
     });
+    return { ok: true, cid };
   } catch (err) {
     log.error(`fire send threw uid=${uid} id=${task.id} cid=${cid}: ${(err as Error).message}`);
     await rollbackEmptyConv('send_threw');
-    emitFailure('send_threw');
+    return emitFailure('send_threw');
   }
 }
 
@@ -1207,25 +1281,24 @@ async function _fireMessagingTask(
   uid: string,
   task: AutoTask,
   recipient: Extract<TaskRecipient, { kind: 'messaging' }>,
-  emitFailure: (errorCode: string) => void,
-): Promise<void> {
+  emitFailure: (errorCode: string) => TaskRunResult,
+  manualRunId?: string,
+): Promise<TaskRunResult> {
   const startedAt = Date.now();
   let text: string;
   try {
     text = task.briefing ? await assembleBriefingText(uid) : _buildSeedText(task);
   } catch (err) {
     log.error(`fire messaging compose failed uid=${uid} id=${task.id}: ${(err as Error).message}`);
-    emitFailure('compose_failed');
-    return;
+    return emitFailure('compose_failed');
   }
   if (!text.trim()) {
     log.warn(`fire messaging empty text uid=${uid} id=${task.id}`);
-    emitFailure('empty_text');
-    return;
+    return emitFailure('empty_text');
   }
   // 幂等键：简报任务 briefing:${taskId}:${触发日}；普通 messaging 任务
   // auto-task:${taskId}:${触发日}。同一触发日重入不会重复投递（ledger 去重）。
-  const sourceKey = `${task.briefing ? 'briefing' : 'auto-task'}:${task.id}:${_localDateKey(new Date())}`;
+  const sourceKey = `${task.briefing ? 'briefing' : 'auto-task'}:${task.id}:${manualRunId ? `manual:${manualRunId}` : _localDateKey(new Date())}`;
   // 简报走触达点管线（可交互卡片 + 动作回执）；普通 messaging 任务保持文本直发。
   const res = task.briefing
     ? await dispatchBriefingTouchpoint(uid, {
@@ -1242,8 +1315,7 @@ async function _fireMessagingTask(
   // 必须用字面量比较 `res.ok === false` 才能收窄到失败分支。
   if (res.ok === false) {
     log.warn(`fire messaging send failed uid=${uid} id=${task.id} code=${res.code}: ${res.error}`);
-    emitFailure(res.code);
-    return;
+    return emitFailure(res.code);
   }
   log.info(`fired messaging uid=${uid} id=${task.id} instance=${recipient.instanceId} briefing=${task.briefing ? 1 : 0} sourceKey=${sourceKey}`);
   _emitFire({
@@ -1251,6 +1323,7 @@ async function _fireMessagingTask(
     task_id: task.id,
     duration_ms: Math.max(0, Date.now() - startedAt),
   });
+  return { ok: true };
 }
 
 async function _copyAttachmentsForFire(uid: string, task: AutoTask, cid: string): Promise<string[]> {
@@ -1461,6 +1534,12 @@ function _scheduleTask(uid: string, task: AutoTask, baselineOverride?: Date | nu
 /** Fire handler: re-read the task (may have been edited since scheduled),
  *  real-clock due-check, fire if due, then reschedule for the next due. */
 async function _onTimerFire(uid: string, taskId: string): Promise<void> {
+  const key = `${uid}/${taskId}`;
+  while (_taskRuns.has(key)) await _taskRuns.get(key)!.catch(() => undefined);
+  return _startTaskRun(key, () => _onTimerFireUnlocked(uid, taskId));
+}
+
+async function _onTimerFireUnlocked(uid: string, taskId: string): Promise<void> {
   _timers.delete(taskId);
   const task = await _readOne(uid, taskId);
   if (!task) return;

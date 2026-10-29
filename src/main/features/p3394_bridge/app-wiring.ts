@@ -18,19 +18,20 @@ import * as http from 'node:http';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { createLogger } from '../../logger';
+import { settleBackgroundJob } from '../background-job-settler';
+import { t } from '../../i18n';
 import { getActiveUserId } from '../users';
 import { p3394StateFile, variantRoot } from './runtime-paths';
 import { P3394BridgeKernel } from './bridge';
 import { P3394BridgeExecutor, isP3394LoopbackEndpoint } from './executor';
 import { buildP3394BridgeManifest } from './manifest';
 import { P3394CogseedRuntimeAdapter } from './cogseed-runtime-adapter';
-import { P3394ConversationRuntimeAdapter } from './conversation-runtime';
+import { P3394ConversationRuntimeAdapter, p3394PeerActorId, stableCid } from './conversation-runtime';
 import { P3394HttpChannel } from './http-channel';
 import { missingP3394ChannelCapabilities } from './channel-adapter';
-import { P3394OutboundHub } from './outbound-hub';
+import { P3394OutboundHub, type P3394BackgroundResultInput } from './outbound-hub';
 import { P3394PeerRegistry, type P3394Locality, type P3394NodeKind } from './registry';
 import type { P3394Envelope } from './envelope';
-import { recordP3394Episode } from './kstar-episodes';
 import { projectP3394NodeToTeam, projectedTeamAgentId, removeProjection, suppressNodeProjection } from './team-projection';
 import { buildP3394WiringDoctorInput, runP3394BridgeDoctor, type P3394DoctorReport } from './doctor';
 import { loadP3394EventCursors, persistP3394EventCursors, recordP3394EventCursor } from './event-cursor-store';
@@ -165,6 +166,18 @@ function resolveToken(): string {
   return fresh;
 }
 
+/** Deterministic projected-message key for one background job: the same job
+ *  hit twice must reuse its bubble, while two jobs that sanitize to the same
+ *  readable prefix still get distinct turn ids. */
+function backgroundResultTurnId(jobId: string): string {
+  const readable = String(jobId || 'job').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 60);
+  let hash = 0;
+  for (let index = 0; index < jobId.length; index += 1) {
+    hash = ((hash << 5) - hash + jobId.charCodeAt(index)) | 0;
+  }
+  return 'bgjob_' + readable + '_' + Math.abs(hash).toString(36);
+}
+
 async function buildBridge(port: number, token: string, conversation: boolean): Promise<P3394AppBridgeHandle | null> {
   const resultFile = path.join(variantRoot(), 'p3394-bridge-result.jsonl');
 
@@ -234,7 +247,59 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
   });
   channel.setLocalManifest(manifestOf('cogseed'));
 
-  outboundHub = new P3394OutboundHub({ listPeers: () => bridge.registry.list() });
+  // 决策 2 两段式（第二段）：后台结果走独立通道落回发起会话——按 job_id
+  // 幂等（`appendProjectedAgentMessage` 的 turn_id 即 job_id），不触发额外模型
+  // 回合；会话已被删除时返回 null → 上层按「丢弃不重试」处理。
+  const deliverBackgroundResultToConversation = async (input: P3394BackgroundResultInput): Promise<'delivered' | 'discarded'> => {
+    const uid = userId;
+    if (!uid) return 'discarded';
+    const cid = input.job.conversation_id || stableCid(input.job.session_id);
+    const actorId = projectedTeamAgentId(input.job.peer) || p3394PeerActorId(input.job.peer);
+    const headingKey = input.result.outcome === 'completed'
+      ? 'p3394.background.completed'
+      : input.result.outcome === 'timeout'
+        ? 'p3394.background.timeout'
+        : 'p3394.background.failed';
+    const heading = t(headingKey, { job_id: input.result.job_id });
+    const detail = input.result.summary
+      || input.result.error?.message
+      || (input.result.outcome === 'timeout' ? t('p3394.background.retry_hint') : '');
+    const text = [heading, detail, ...(input.result.artifacts ?? [])].filter(Boolean).join('\n');
+    const appended = await groupChatBus.appendProjectedAgentMessage({
+      uid,
+      cid,
+      agentId: actorId,
+      // Deterministic idempotency key: a duplicate phase 2 must reuse the same
+      // projected message instead of creating a second bubble.
+      turnId: backgroundResultTurnId(input.result.job_id),
+      text,
+      ...(input.result.outcome !== 'completed' ? { failureKind: 'runtime' as const } : {}),
+    });
+    // Decision 1B/2: tell the backend the job finished so it can close the task
+    // (`background` → completed/failed). Delivery already happened; this must not
+    // fail the turn if the task is gone.
+    await settleBackgroundJob({
+      uid,
+      job_id: input.result.job_id,
+      outcome: input.result.outcome,
+      ...(input.result.summary ? { summary: input.result.summary } : {}),
+      ...(input.result.error?.message ? { errorMessage: input.result.error.message } : {}),
+    });
+    return appended ? 'delivered' : 'discarded';
+  };
+  outboundHub = new P3394OutboundHub({
+    listPeers: () => bridge.registry.list(),
+    userId: () => userId,
+    deliverBackgroundResult: deliverBackgroundResultToConversation,
+    // A turn may bind its P3394 session to the user-visible conversation
+    // (`bindSessionCid`); persist that binding with the job so phase 2 reaches
+    // the same conversation after a restart.
+    conversationIdFor: (sessionId) => (
+      adapter instanceof P3394ConversationRuntimeAdapter
+        ? adapter.conversationIdForSession(sessionId)
+        : stableCid(sessionId)
+    ),
+  });
 
   // 事件游标（R-06/S-05）：记录最后确认写入 resultFile 的事件序列，
   // 断线恢复按游标续读，不重放已确认事件。
@@ -259,14 +324,6 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
       allowEndpoint: (endpoint) => {
         return bridge.registry.list().some((peer) => (peer.endpoints ?? []).includes(endpoint));
       },
-    },
-    recordEpisode: (episode) => {
-      // KSTAR 闭环（guide §5.4）：任务终态落盘 episode（含自动 AAR）。
-      try {
-        recordP3394Episode(episode);
-      } catch (error) {
-        log.warn('P3394 KSTAR episode record failed', { error: error instanceof Error ? error.message : String(error) });
-      }
     },
     onEvent: (sessionId, event) => {
       const line = redactP3394Secrets(JSON.stringify({ at: new Date().toISOString(), session_id: sessionId, event }));
@@ -551,6 +608,16 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
     }
   } catch (error) {
     log.warn('P3394 outbox replay failed', { error: error instanceof Error ? error.message : String(error) });
+  }
+  // 决策 2 · 第 4 步：扫未投递的后台作业——已完成的补发一次，未完成未超时
+  // 的重挂 watchdog，超时的补发 timeout。job_id 幂等，重复不会二次入站。
+  try {
+    const outcome = await outboundHub.replayBackgroundJobs();
+    if (outcome.replayed || outcome.timedOut || outcome.delivered || outcome.isolated) {
+      log.info('P3394 background job replay done', outcome);
+    }
+  } catch (error) {
+    log.warn('P3394 background job replay failed', { error: error instanceof Error ? error.message : String(error) });
   }
   // 托管网关恢复：应用重启会清掉所有托管网关（quit/boot 清理），这里按
   // state 文件逐 CLI respawn，否则「外接」agent 依赖手动起的网关进程，

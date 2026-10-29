@@ -26,7 +26,7 @@ const zh: Record<string, string> = JSON.parse(
 function installSharedUi(context: vm.Context) {
   // ui-status.js（uiTag 等）与 ui-segmented-control.js 同为 index.html 静态共享层——
   // 夹具必须与真机同构（specs/010 T026 起详情页有档位章，缺它整页渲染抛错）。
-  for (const file of ['icons.js', 'ui-button.js', 'ui-form.js', 'ui-empty.js', 'ui-status.js', 'ui-segmented-control.js']) {
+  for (const file of ['icons.js', 'ui-button.js', 'ui-card.js', 'ui-form.js', 'ui-empty.js', 'ui-status.js', 'ui-segmented-control.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, 'src/renderer/modules', file), 'utf8'), context, { filename: file });
   }
 }
@@ -87,6 +87,7 @@ function renderAssets(route: Record<string, unknown>, patch: (store: any) => voi
   NS.store.candidates = [];
   NS.store.loaded = true;
   NS.store.loading = false;
+  NS.store.blockStatus = Object.fromEntries(['assets', 'inbox', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'ontology'].map((name) => [name, { loaded: true, loading: false }]));
   NS.store.errors = [];
   NS.store.route = route;
   patch(NS.store);
@@ -192,10 +193,14 @@ describe('认知资产 · 候选行的就地处理', () => {
 
   it('候选详情里就地提供「稍后处理 / 拒绝」，动作带候选 id（不跳页、走 IPC）', () => {
     const html = renderAssets({ name: 'review', candidateId: 'c-1' }, (store) => {
-      store.candidates = [candidate('c-1', 'pending_review', CAPS)];
+      const item = candidate('c-1', 'pending_review', CAPS);
+      item.origin = 'stock_organization';
+      item.value = '用于把长任务拆成可验收的小步';
+      item.stockOrganizationProvenance = { jobId: 'job-1', checkedAt: '2026-09-20T10:00:00.000Z' };
+      store.candidates = [item];
     });
     expect(html).toContain(zh['cognition.candidate_defer_action']);
-    const deferButtons = [...html.matchAll(/<button[^>]*data-action="defer"[^>]*>/g)].map((m) => m[0]);
+    const deferButtons = [...html.matchAll(/<button[^>]*data-act="activity-defer"[^>]*>/g)].map((m) => m[0]);
     const rejectButtons = [...html.matchAll(/<button[^>]*data-action="reject"[^>]*>/g)].map((m) => m[0]);
     expect(deferButtons.length).toBeGreaterThan(0);
     expect(rejectButtons.length).toBeGreaterThan(0);
@@ -210,7 +215,7 @@ describe('认知资产 · 候选行的就地处理', () => {
         needsUserAction: false, countsAsPending: false, isTerminal: true,
       })];
     });
-    expect([...html.matchAll(/<button[^>]*data-action="defer"[^>]*>/g)].length).toBe(0);
+    expect([...html.matchAll(/<button[^>]*data-act="activity-defer"[^>]*>/g)].length).toBe(0);
     expect([...html.matchAll(/<button[^>]*data-action="reject"[^>]*>/g)].length).toBe(0);
   });
 
@@ -223,7 +228,8 @@ describe('认知资产 · 候选行的就地处理', () => {
       const html = renderAssets({ name: 'review', candidateId: 'c-legacy' }, (store) => {
         store.candidates = [candidate('c-legacy', 'pending_review', caps)];
       });
-      expect([...html.matchAll(/<button[^>]*data-action="(defer|reject)"[^>]*>/g)].length).toBe(0);
+      expect([...html.matchAll(/<button[^>]*data-act="activity-defer"[^>]*>/g)].length).toBe(0);
+      expect([...html.matchAll(/<button[^>]*data-action="reject"[^>]*>/g)].length).toBe(0);
       expect(html).not.toContain(zh['cognition.candidate_defer_action']);
       // 2026-09-29 A6 词根统一后「保存」成为公共词根（新建主按钮「保存」/
       // 更新「保存更新」、说明文案也含「保存」），子串断言不再能表达"没有

@@ -380,6 +380,31 @@ describe('file-tools › read_file scope guards', () => {
     } finally { fs.rmSync(path.dirname(outside), { recursive: true, force: true }); }
   });
 
+  it('creator workspace-only guard rejects outside paths even in all_files_approval mode', async () => {
+    const perm = await import('../../../../src/main/features/permissions');
+    const ws = await import('../../../../src/main/features/user_workspace');
+    const mod = await import('../../../../src/main/model/core-agent/file-tools');
+    const wsDir = path.join(tmpDir, 'creator-ws');
+    fs.mkdirSync(wsDir, { recursive: true });
+    const r0 = ws.setWorkspacePath(UID, wsDir);
+    if (!r0.ok) throw new Error(`setWorkspacePath failed: ${r0.error}`);
+    perm.setLocalExecMode('all_files_approval');
+    const inside = path.join(wsDir, 'creator-note.md');
+    fs.writeFileSync(inside, 'creator workspace content');
+    const outside = path.join(tmpDir, '..', 'creator-outside', 'secret.md');
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, 'must stay private');
+    const tools = mod.createFileTools({ userId: UID, workspaceOnly: true });
+    try {
+      const insideResult = await run(getTool(tools, 'read_file'), { path: inside });
+      expect(insideResult.isError).toBeFalsy();
+      expect(insideResult.content).toContain('creator workspace content');
+      const r = await run(getTool(tools, 'read_file'), { path: outside });
+      expect(r.isError).toBe(true);
+      expect(r.content).toContain('E_PATH_OUT_OF_SCOPE');
+    } finally { fs.rmSync(path.dirname(outside), { recursive: true, force: true }); }
+  });
+
   it('prompts and blocks sensitive outside paths in all_files_approval mode when denied', async () => {
     const perm = await import('../../../../src/main/features/permissions');
     const bashPerms = await import('../../../../src/main/model/core-agent/bash-permissions');
@@ -654,9 +679,11 @@ describe('file-tools › search_files', () => {
   it.runIf(process.platform === 'darwin')('does not recursively scan a legacy privacy-protected workspace root', async () => {
     process.env.COGSEED_TCC_GUARD_FORCE = '1';
     const home = path.join(tmpDir, 'home');
-    const downloads = path.join(home, 'Downloads');
-    fs.mkdirSync(downloads, { recursive: true });
-    fs.writeFileSync(path.join(downloads, 'secret-contract.md'), 'private');
+    // ADR-001 makes Desktop/Documents/Downloads user-selectable workspaces;
+    // a Library container stays a privacy-protected legacy selection.
+    const protectedRoot = path.join(home, 'Library', 'Containers', 'com.apple.mail');
+    fs.mkdirSync(protectedRoot, { recursive: true });
+    fs.writeFileSync(path.join(protectedRoot, 'secret-contract.md'), 'private');
     process.env.HOME = home;
     vi.resetModules();
     const users = await import('../../../../src/main/features/users');
@@ -667,7 +694,7 @@ describe('file-tools › search_files', () => {
     const cfgFile = paths.userWorkspaceConfigFile(UID);
     fs.mkdirSync(path.dirname(cfgFile), { recursive: true });
     fs.writeFileSync(cfgFile, JSON.stringify({
-      selectedPath: downloads,
+      selectedPath: protectedRoot,
       updatedAt: '2026-07-03T00:00:00.000Z',
       recentPaths: [],
     }), 'utf8');

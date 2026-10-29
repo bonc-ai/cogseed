@@ -25,6 +25,11 @@
   line-height: var(--line-height-body);
 }
 
+/* The render root #ws-view is itself a .ws-view and the markup nests another
+ * one inside it. Only the outer one scrolls; an inner overflow:auto would
+ * become the sticky headers' scrollport and they would never pin. */
+.ws-view > .ws-view { flex: none; overflow: visible; min-height: 0; }
+
 .ws-view *, .ws-view *::before, .ws-view *::after { box-sizing: border-box; }
 .ws-view button:not(.ui-button):not(.ui-icon-button), .ws-view input, .ws-view textarea, .ws-view select { font: inherit; color: inherit; }
 .ws-view button:not(.ui-button):not(.ui-icon-button) { cursor: pointer; border: 0; background: transparent; text-align: left; }
@@ -52,6 +57,8 @@
 .ws-center { max-width: var(--layout-card-grid-width); margin: 0 auto; padding: var(--space-4) var(--space-6) var(--space-page); }
 /* 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06），
    全宽通栏（.ws-center-header 是 .ws-view 的直接子级），副标题 tagline 移入正文区。 */
+/* .ws-view is the scroll container, so pin the header like .ws-space-head. */
+.ws-center-header { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-card); }
 .ws-center-header .ui-page-header { width: 100%; box-sizing: border-box; }
 
 .ws-section { margin-bottom: var(--space-6); }
@@ -453,6 +460,19 @@
 .ws-ability-main > nav span { color: #7d8982; font-size: var(--font-size-1); }
 .ws-ability-pane { min-width: 0; padding: 18px 20px; overflow-y: auto; }
 .ws-option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.ws-skill-picker { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+.ws-skill-picker-search { position: relative; padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line-default); }
+.ws-skill-picker-search-icon { position: absolute; z-index: var(--z-raised); top: 50%; left: calc(var(--space-5) + var(--space-3)); display: inline-flex; color: var(--text-muted); pointer-events: none; transform: translateY(-50%); }
+.ws-skill-picker-search-icon .ui-icon { width: 16px; height: 16px; }
+.ws-skill-picker-search .ui-input { padding-left: 38px; }
+.ws-skill-picker-content { display: grid; grid-template-columns: 158px minmax(0, 1fr); min-height: 0; }
+.ws-skill-category-nav { padding: var(--space-3) var(--space-2); overflow-y: auto; border-right: 1px solid var(--line-default); background: var(--surface-subtle); }
+.ws-skill-category-nav .ui-chip { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 34px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--font-size-2); text-align: left; }
+.ws-skill-category-nav .ui-chip:hover { background: var(--color-overlay-hover); color: var(--text-heading); }
+.ws-skill-category-nav .ui-chip.is-selected { color: var(--color-brand-hover); background: var(--color-brand-soft); font-weight: var(--font-weight-semibold); }
+/* 计数样式由共享 chip 的 `.ui-chip__count` 承载（muted / font-size-1 / tabular）。 */
+.ws-skill-picker-results { padding-top: var(--space-3); }
+.ws-skill-picker-result-count { margin-bottom: var(--space-3); color: var(--text-muted); font-size: var(--font-size-2); font-variant-numeric: tabular-nums; }
 .ws-ability-limit-hint { margin-bottom: 10px; padding: 8px 11px; border-radius: 8px; color: #7a5b22; background: #fbf3e2; font-size: 11px; line-height: 1.6; }
 .ws-option-card { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: var(--space-2); min-height: 80px; padding: var(--space-3); border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); text-align: left; }
 .ws-option-card:hover { border-color: var(--line-strong); background: var(--surface-subtle); }
@@ -505,6 +525,14 @@
 /* ── 响应式 ── */
 @media (max-width: 1260px) {
   .ws-task-page { grid-template-columns: minmax(480px,1fr) 290px; }
+}
+
+@media (max-width: 560px) {
+  .ws-skill-picker-content { grid-template-columns: minmax(0, 1fr); }
+  .ws-skill-category-nav { display: flex; gap: var(--space-1); padding: var(--space-2) var(--space-3); overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line-default); }
+  .ws-skill-category-nav .ui-chip { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  .ws-skill-picker-search { padding: var(--space-3); }
+  .ws-skill-picker-search-icon { left: calc(var(--space-3) + var(--space-3)); }
 }
 
 /* 本地文件夹导入：本地文件夹选择行——与表单输入控件同构（40px 高、同款边框圆角），

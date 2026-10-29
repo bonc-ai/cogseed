@@ -64,10 +64,16 @@ let shuttingDown = false;
 function startApp() {
   const passthrough = process.argv.slice(2);
   log(`启动 electron . ${passthrough.join(' ')}`.trim());
+  // ELECTRON_RUN_AS_NODE 会让 Electron 退化成纯 Node，此时
+  // `require('electron').app` 为 undefined，主进程会在 src/main/index.ts
+  // 第一行就崩（app.isPackaged）。它常由外层 npm 脚本回写进环境（npm 会把
+  // 环境变量按 npm_config_* 规则还原），因此这里必须显式剔除，与 run.sh 一致。
+  const childEnv = { ...process.env };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
   child = spawn(electronBin, ['.', ...passthrough], {
     cwd: PC_ROOT,
     stdio: 'inherit',
-    env: process.env,
+    env: childEnv,
   });
   child.on('exit', (code, signal) => {
     if (restarting || shuttingDown) return;

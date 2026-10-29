@@ -69,6 +69,9 @@ function loadCategoryRenderers() {
       'skills.more_actions': '更多',
       'skills.no_desc': '无描述',
       'skills.external_group': '外部包',
+      'catalog.origin_package': '外部包',
+      'catalog.origin_local': '本机已有',
+      'catalog.origin_custom': '自定义',
       'skills.global_group': '全局文件夹',
       'skills.global_group_hint': '来自本机共享的技能文件夹',
       'skills.global_group_expand': '展开',
@@ -186,6 +189,8 @@ describe('agent and skill category tabs', () => {
       { agent_id: 'a3', name: 'Data Agent', source: 'custom', category: 'data' },
     ];
 
+    // S4：自建智能体在「我的智能体」子视图里。
+    vm.runInContext('_agentsSubView = "mine"', context);
     context.renderAgentsGrid(agents);
     expect(el('agents-categories').innerHTML).toContain('通用');
     expect(el('agents-categories').innerHTML).not.toContain('未知');
@@ -213,9 +218,10 @@ describe('agent and skill category tabs', () => {
   it('maps missing and non-registry skill categories to General instead of Unknown', () => {
     const { context, el } = loadCategoryRenderers();
     const skills = [
-      { id: 's1', name: 'No Category', source: 'custom', category: '' },
-      { id: 's2', name: 'Bad Category', source: 'custom', category: 'not-in-registry' },
-      { id: 's3', name: 'Data Skill', source: 'custom', category: 'data' },
+      // S4：技能首页只有平台组，分类筛选作用于它。
+      { id: 's1', name: 'No Category', source: 'marketplace', category: '' },
+      { id: 's2', name: 'Bad Category', source: 'marketplace', category: 'not-in-registry' },
+      { id: 's3', name: 'Data Skill', source: 'marketplace', category: 'data' },
     ];
 
     context.renderSkillsGrid(skills);
@@ -249,6 +255,7 @@ describe('agent and skill category tabs', () => {
       return { ok: true };
     };
 
+    vm.runInContext('_skillsSubView = "mine"', context); // S4：本机已有的技能在「我的技能」里
     await context.loadSkills();
     expect(openFetches).toBe(1);
     expect(el('skills-grid').innerHTML).not.toContain('External Smoke');
@@ -294,6 +301,7 @@ describe('agent and skill category tabs', () => {
   it('renders CLI-only external packages as cards in the Skills tab', () => {
     const { context, el } = loadCategoryRenderers();
     vm.runInContext(`
+      _skillsSubView = 'mine';
       _skillsCache = [];
       _openSkillsCache = [];
       _packagesCache = [{
@@ -430,6 +438,7 @@ describe('agent and skill category tabs', () => {
   it('uses friendly external package display names while keeping the package key internal', () => {
     const { context, el } = loadCategoryRenderers();
     vm.runInContext(`
+      _skillsSubView = 'mine';
       _skillsCache = [];
       _openSkillsCache = [];
       _packagesCache = [{
@@ -453,6 +462,7 @@ describe('agent and skill category tabs', () => {
   it('aggregates namespace-shaped global-folder skills into source cards', () => {
     const { context, el } = loadCategoryRenderers();
     vm.runInContext(`
+      _skillsSubView = 'mine';
       _skillsCache = [];
       _openSkillsCache = [
         { id: 'lark-base', name: 'Lark Base', source: 'global', enabled: true, description: 'base' },
@@ -464,7 +474,7 @@ describe('agent and skill category tabs', () => {
     `, context);
 
     const html = el('skills-grid').innerHTML;
-    expect(html).toContain('全局文件夹');
+    expect(html).toContain('本机已有');
     expect(html).toContain('<span class="skill-card-name">lark</span>');
     expect(html).not.toContain('全局文件夹 · 2 个技能');
     expect(html).toContain('data-global-skill-group="lark"');
@@ -481,6 +491,7 @@ describe('agent and skill category tabs', () => {
   it('shows grouped global-folder skill cards after that source card is expanded', () => {
     const { context, el } = loadCategoryRenderers();
     vm.runInContext(`
+      _skillsSubView = 'mine';
       _skillsCache = [];
       _openSkillsCache = [
         { id: 'lark-base', name: 'Lark Base', source: 'global', enabled: true, description: 'base' },
@@ -898,6 +909,7 @@ describe('skills grid › security badge and summary', () => {
 
   it('summarizes counts and stays calm when nothing is withheld', () => {
     const { context, el } = loadCategoryRenderers();
+    vm.runInContext('_skillsSubView = "installed"', context); // S4：安检汇总条在「已安装的技能」页
     context.renderSkillsGrid([
       { id: 'a', name: 'A', source: 'marketplace', category: '', enabled: true, security: { status: 'verified' } },
       { id: 'b', name: 'B', source: 'marketplace', category: '', enabled: true, security: { status: 'verified' } },
@@ -915,6 +927,7 @@ describe('skills grid › security badge and summary', () => {
 
   it('escalates the summary when a skill is withheld', () => {
     const { context, el } = loadCategoryRenderers();
+    vm.runInContext('_skillsSubView = "installed"', context); // S4：安检汇总条在「已安装的技能」页
     context.renderSkillsGrid([
       { id: 'a', name: 'A', source: 'marketplace', category: '', enabled: true, security: { status: 'verified' } },
       { id: 'b', name: 'B', source: 'marketplace', category: '', enabled: true, security: { status: 'withheld', reason: 'payload_changed' } },
@@ -927,6 +940,14 @@ describe('skills grid › security badge and summary', () => {
 
   // Custom skills carry no receipt, so there is nothing truthful to summarize —
   // and a "0 verified" row on a custom-only library would be pure clutter.
+  it('keeps the security summary off the Skills home (it lives on the installed page)', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'a', name: 'A', source: 'marketplace', category: '', enabled: true, security: { status: 'verified' } },
+    ]);
+    expect(el('skills-grid').innerHTML).not.toContain('skills-security-summary');
+  });
+
   it('omits the summary entirely when no skill reports security state', () => {
     const { context, el } = loadCategoryRenderers();
     context.renderSkillsGrid([
@@ -940,6 +961,7 @@ describe('skills grid › security badge and summary', () => {
 
   it('offers contribution only for an owned local Skill and keeps a readable avatar', () => {
     const { context, el } = loadCategoryRenderers();
+    vm.runInContext('_skillsSubView = "mine"', context);
     context.renderSkillsGrid([
       { id: 'my-skill', name: '测试 Skill', source: 'custom', category: 'general', enabled: true },
       { id: 'codex:imagegen', name: 'External Skill', source: 'custom', category: 'external', enabled: true },
@@ -955,6 +977,7 @@ describe('skills grid › security badge and summary', () => {
 
   it('shows a local Skill icon while retaining the name initial if it fails to load', () => {
     const { context, el } = loadCategoryRenderers();
+    vm.runInContext('_skillsSubView = "mine"', context);
     context.renderSkillsGrid([
       { id: 'icon-skill', name: '图标 Skill', source: 'custom', category: 'general', enabled: true,
         icon_data_url: 'data:image/png;base64,iVBORw0KGgo=' },
@@ -1010,5 +1033,167 @@ describe('skills grid › security badge and summary', () => {
     // wear the clean one.
     expect(html).not.toContain('skill-card-shield is-verified');
     expect(html).toContain('skill-card-shield is-risk');
+  });
+});
+
+describe('S4 我的智能体 / 我的技能（specs/009 FR-017～021）', () => {
+  it('我的智能体只放自建的；首页不放自建的', () => {
+    const { context, el } = loadCategoryRenderers();
+    const agents = [
+      { agent_id: 'commander', name: 'Commander' },
+      { agent_id: 'mine', name: 'My Agent', source: 'custom' },
+      { agent_id: 'plat', name: 'Platform Agent', source: 'marketplace' },
+      { agent_id: 'cli', name: 'Codex', source: 'custom', runtime: { kind: 'cli', cli: 'codex' } },
+    ];
+    vm.runInContext('_agentsSubView = "mine"', context);
+    context.renderAgentsGrid(agents);
+    const mine = el('agents-grid').innerHTML;
+    expect(mine).toContain('My Agent');
+    expect(mine).not.toContain('Platform Agent');
+    expect(mine).not.toContain('Codex');
+
+    vm.runInContext('_agentsSubView = "home"', context);
+    context.renderAgentsGrid(agents);
+    const home = el('agents-grid').innerHTML;
+    expect(home).toContain('Platform Agent');
+    expect(home).not.toContain('My Agent');
+  });
+
+  it('从「我的贡献」等同级页面回到网格时，仍停在「我的」子视图（FR-019）', () => {
+    const { context, el } = loadCategoryRenderers();
+    const agents = [{ agent_id: 'mine', name: 'My Agent', source: 'custom' }, { agent_id: 'plat', name: 'Platform Agent', source: 'marketplace' }];
+    vm.runInContext('_agentsSubView = "mine"', context);
+    context._showAgentsGridView();
+    context.renderAgentsGrid(agents);
+    expect(el('agents-grid').innerHTML).toContain('My Agent');
+    expect(el('agents-grid').innerHTML).not.toContain('Platform Agent');
+    // 技能页的返回见 hub-contributions-flow.test.ts（_showSkillsGridView 依赖完整 DOM）。
+  });
+
+  it('「我的」为空：说明怎么创建；搜索无结果：提示并可清除筛选（FR-025）', () => {
+    const { context, el } = loadCategoryRenderers();
+    vm.runInContext('_skillsSubView = "mine"; _openSkillsCache = []; _packagesCache = []; _skillsGlobalRootsEnabled = true;', context);
+    context.renderSkillsGrid([]);
+    expect(el('skills-empty').innerHTML).toContain('catalog.mine_empty_skills');
+    expect(el('skills-grid').innerHTML).toContain('catalog-local-bar');
+
+    vm.runInContext('_skillsSearchQuery = "nothing-matches"', context);
+    context.renderSkillsGrid([{ id: 'own', name: 'Own Skill', source: 'custom', enabled: true }]);
+    expect(el('skills-empty').innerHTML).toContain('无匹配技能');
+    expect(el('skills-empty').innerHTML).toContain('data-skills-clear-search');
+
+    vm.runInContext('_agentsSubView = "mine"', context);
+    context.renderAgentsGrid([{ agent_id: 'commander', name: 'Commander' }]);
+    expect(el('agents-empty').innerHTML).toContain('catalog.mine_empty_agents');
+  });
+
+  function renderMineSkills(origin = '', globalOn = true) {
+    const { context, el } = loadCategoryRenderers();
+    vm.runInContext(`
+      _skillsSubView = 'mine';
+      _skillsMineOrigin = ${JSON.stringify(origin)};
+      _skillsGlobalRootsEnabled = ${globalOn};
+      _packagesCache = [{ name: 'pkg', display_name: 'Pkg', kind: 'skill', enabled: true, skill_count: 2, bin_names: [] }];
+      _openSkillsCache = [{ id: 'helper', name: 'Global Helper', source: 'global', enabled: true }];
+    `, context);
+    context.renderSkillsGrid([
+      { id: 'own', name: 'Own Skill', source: 'custom', category: 'general', enabled: true },
+      { id: 'plat', name: 'Platform Skill', source: 'marketplace', category: 'general', enabled: true },
+    ]);
+    return { html: el('skills-grid').innerHTML, chips: el('skills-categories').innerHTML };
+  }
+
+  it('我的技能：一个网格，自定义在前、本机已有在后；平台技能不在这里', () => {
+    const { html } = renderMineSkills();
+    expect(html.match(/ui-resource-grid/g)).toHaveLength(1);
+    expect(html.indexOf('Own Skill')).toBeLessThan(html.indexOf('Pkg'));
+    expect(html.indexOf('Pkg')).toBeLessThan(html.indexOf('Global Helper'));
+    expect(html).not.toContain('Platform Skill');
+  });
+
+  it('按来源筛：全部 / 自定义 / 本机已有，不按分类', () => {
+    expect(renderMineSkills().chips).toContain('data-skills-origin="local"');
+    expect(renderMineSkills().chips).not.toContain('data-skills-cat');
+    const custom = renderMineSkills('custom').html;
+    expect(custom).toContain('Own Skill');
+    expect(custom).not.toContain('Pkg');
+    const local = renderMineSkills('local').html;
+    expect(local).not.toContain('Own Skill');
+    expect(local).toContain('Pkg');
+    expect(local).toContain('Global Helper');
+  });
+
+  it('只有自建技能能贡献，本机已有的不能', () => {
+    const { html } = renderMineSkills();
+    expect(html.match(/data-skill-contribute/g)).toHaveLength(1);
+    const localPart = html.slice(html.indexOf('data-open-package-card'));
+    expect(localPart).not.toContain('data-skill-contribute');
+  });
+
+  it('顶部说明条带全局文件夹总开关；关闭时说明已关闭', () => {
+    const on = renderMineSkills('', true).html;
+    expect(on).toContain('catalog-local-bar');
+    expect(on).toContain('data-skills-global-roots');
+    expect(on).toContain('aria-checked="true"');
+    expect(on).not.toContain('catalog.global_roots_off_note');
+    const off = renderMineSkills('', false).html;
+    expect(off).toContain('aria-checked="false"');
+    expect(off).toContain('catalog.global_roots_off_note');
+  });
+});
+
+describe('S4 停用状态在卡片上写明（specs/009 FR-016 / FR-027）', () => {
+  it('用户自己停用的智能体卡片标「已停用」；Hub 停用的只标 Hub 停用', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderAgentsGrid([
+      { agent_id: 'u1', name: 'User Off', source: 'marketplace', enabled: false },
+      { agent_id: 'h1', name: 'Hub Off', source: 'marketplace', enabled: false, hub_disabled: true },
+      { agent_id: 'on1', name: 'On', source: 'marketplace' },
+    ]);
+    const html = el('agents-grid').innerHTML;
+    const card = (id: string) => html.slice(html.indexOf(`data-id="${id}"`), html.indexOf('</article>', html.indexOf(`data-id="${id}"`)) > 0
+      ? html.indexOf('</article>', html.indexOf(`data-id="${id}"`)) : html.indexOf(`data-id="`, html.indexOf(`data-id="${id}"`) + 10));
+    expect(card('u1')).toContain('component.disabled');
+    expect(card('h1')).toContain('agents.hub_disabled_chip');
+    expect(card('h1')).not.toContain('component.disabled');
+    expect(card('on1')).not.toContain('component.disabled');
+  });
+
+  it('依赖技能全是用户自己停用的：提示说「被你停用」，不说被 Hub 停用', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderAgentsGrid([
+      { agent_id: 'd1', name: 'User Dep Off', source: 'marketplace', skill_list: ['s1'],
+        dependency_state: { status: 'deps_blocked', reasons: { s1: 'user_disabled' } } },
+      { agent_id: 'd2', name: 'Hub Dep Off', source: 'marketplace', skill_list: ['s2'],
+        dependency_state: { status: 'deps_blocked', reasons: { s2: 'disabled' } } },
+      { agent_id: 'd3', name: 'Mixed', source: 'marketplace', skill_list: ['s3', 's4'],
+        dependency_state: { status: 'deps_blocked', reasons: { s3: 'user_disabled', s4: 'missing' } } },
+    ]);
+    const html = el('agents-grid').innerHTML;
+    const titleOf = (id: string) => {
+      const at = html.indexOf(`data-id="${id}"`);
+      const chip = html.indexOf('is-deps-warning', at);
+      const m = /title="([^"]*)"/.exec(html.slice(chip));
+      return m ? m[1] : '';
+    };
+    expect(titleOf('d1')).toBe('catalog.deps_user_disabled_hint');
+    expect(titleOf('d2')).toBe('agents.deps_blocked_hint');
+    // 缺失（missing）不阻止使用，不影响「谁停的」判断。
+    expect(titleOf('d3')).toBe('catalog.deps_user_disabled_hint');
+  });
+
+  it('用户自己停用的技能卡片标「已停用」', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'sk1', name: 'Skill Off', source: 'marketplace', enabled: false },
+      { id: 'sk2', name: 'Skill On', source: 'marketplace' },
+    ]);
+    const html = el('skills-grid').innerHTML;
+    const at1 = html.indexOf('data-id="sk1"');
+    const at2 = html.indexOf('data-id="sk2"');
+    const first = at1 < at2 ? html.slice(at1, at2) : html.slice(at1);
+    const second = at1 < at2 ? html.slice(at2) : html.slice(at2, at1);
+    expect(first).toContain('component.disabled');
+    expect(second).not.toContain('component.disabled');
   });
 });

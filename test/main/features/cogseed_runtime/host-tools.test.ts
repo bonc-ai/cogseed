@@ -27,3 +27,12 @@ describe('Runtime host tool client', () => {
     await expect(aborted).rejects.toThrow(/aborted/i);
   });
 });
+
+ it('preserves machine correction evidence across the host JSONL reply', async () => {
+  const sent: any[] = [];
+  const client = createRuntimeHostToolClient(message => sent.push(message));
+  const call = client.call({ requestId: 'req-correction', runtimeSessionId: 'mruntime-correction', name: 'transcript_glossary_apply', input: {} });
+  const correction = { state: 'needs_confirmation' as const, docId: 'meeting', sourceHash: 'abc' };
+  client.resolve(JSON.parse(JSON.stringify({ type: 'host_tool_result', request_id: 'req-correction', runtime_session_id: 'mruntime-correction', call_id: sent[0].call_id, content: 'draft', correction })));
+  await expect(call).resolves.toMatchObject({ correction });
+});

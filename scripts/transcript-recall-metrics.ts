@@ -2,10 +2,9 @@
 /**
  * transcript-recall-metrics — 用**真实转写**度量召回层的实际收益（只读，不写任何文件）
  *
- * 为什么必须有一个独立的度量脚本：
- *   在此之前"纠错率"一直是主观判断（复核文档自己写了"无 UsageReceipt → 命中率只能自测"）。
- *   本项目的第一条结论就是 **L0 评测优先**：先把数字拿到，再改组件；否则改完不知道
- *   是召回涨了还是误替换涨了。
+ * 度量范围：
+ *   对调用者提供的转写统计候选覆盖与未召回形态，分别展示字面词表和多路召回的结果。
+ *   覆盖统计与候选精度分开报告，避免把新增候选直接视为正确替换。
  *
  * 用法：
  *   npx tsx scripts/transcript-recall-metrics.ts <文件或目录> [更多路径…]
@@ -107,7 +106,7 @@ async function main(): Promise<void> {
   });
   console.log(`词表：种子 ${entries.length} 条（${new Set(entries.map((e) => e.correct)).size} 个概念）`);
 
-  // ── gold：真实错形 → 规范形（来自两份人工清理版附记的实测分布）──────
+  // ── gold：参考错形 → 规范形（用于覆盖统计，不驱动自动替换）──────────
   const GOLD: Record<string, { canonical: string; variants: string[] }> = {
     Cogseed: { canonical: 'Cogseed', variants: ['coxy', 'cox', 'coxs', 'coxseed', 'cogsed', 'CXXY', 'COS', 'coco', 'coke', 'code seat', 'coc', 'coxxy', 'coxx', 'coxed'] },
     KSTAR: { canonical: 'KSTAR', variants: ['K star', 'K星', 'k42', 'k32', 'K4', 'Case2', 'K2', 'kstar'] },
@@ -275,9 +274,8 @@ async function main(): Promise<void> {
   for (const { variants } of Object.values(GOLD)) for (const v of variants) goldKeys.add(normalizeKey(v));
   // 精度代理：被判为 suggest、但形态不在 gold 错形清单里的候选 = 需要逐条核对的"新形态"。
   //
-  // ⚠️ 这一节**不是误替换计数**。首轮跑出来的 10 条经逐条读上下文核对，**全部是真实变体**
-  // （证据见脚本下方 EXTRA_VERIFIED 的引文），说明"不在 gold 里"只代表 gold 不全，
-  // 不代表模型错了。真精度必须靠人工标注的 gold 集，故此处只负责把"该看的东西"摆出来。
+  // 此处不是误替换计数：不在 gold 中只表示覆盖清单未包含该形态。
+  // EXTRA_VERIFIED 保存已有核对标签；候选精度仍需结合当前输入逐条判断。
   const unexpected = [...suggestedSurfaces.entries()].filter(([k]) => !goldKeys.has(k));
   console.log(`  不在 gold 清单的 suggest 候选：${unexpected.length} 条（需逐条核对；见 EXTRA_VERIFIED 已验证结论）`);
   let verified = 0;
@@ -287,7 +285,7 @@ async function main(): Promise<void> {
     console.log(`    · ${detail}${note}`);
   }
   console.log(`    其中已人工核对为真实变体的：${verified}/${unexpected.length}`
-    + `（引文见 scripts/transcript-recall-metrics.ts 的 EXTRA_VERIFIED）`);
+    + `（核对标签见 scripts/transcript-recall-metrics.ts 的 EXTRA_VERIFIED）`);
 
   // ── 表④ 建议入册清单 ─────────────────────────────────────────────
   console.log(`\n表④ 建议入册清单（由表① 未召回形态生成；**入册需人工确认**，本脚本不自动改词表）`);
@@ -308,26 +306,22 @@ async function main(): Promise<void> {
 }
 
 /**
- * 首轮"不在 gold 清单的 suggest 候选"的**逐条上下文核对结果**。
- *
- * 结论：全部 10 条都是**真实变体**，不是误替换。之所以要写在这里，是因为
- * 该判断只能靠读原文上下文得出，必须让证据跟着代码走、可被复核。
- * 这也直接说明了为什么"字面/音形相似度"类的启发式护栏要慎加——
- * 我曾基于"这些都是误推荐"的错误判断加过一道音形字面地板，撤回。
+ * 已有上下文核对的技术标签。这里只用键的存在性标记已核对形态，不保存原始发言。
+ * 标签不参与候选生成、排序或替换，也不替代当前输入所需的人工确认。
  */
 // 键 = normalizeKey(形态)（去空格、小写），与查表口径一致。
 const EXTRA_VERIFIED: Record<string, string> = {
-  'carseat': '「咱们 cox seed 是一个是你的个人的大管家…这同一个 car seat 它可以对后面无数个不同的 task agent」→ 指 Cogseed',
-  'cockseed': '「你的这个 cock seed 的话，实际上是针对的是一个个人的角度来说」→ 指 Cogseed',
-  'coseat': '「我在我的 coseat 里面，我说一个提交」→ 指 Cogseed',
-  'codeset': '「当我在用 codeset 的过程中，比如说触发了一些假设」→ 指 Cogseed',
-  'cocet': '「我可以让我的 codex 让 cocet 也能生成插麦的图」→ 指 Cogseed',
-  'cocket': '「咱俩的 cocket 都是我们的 AI 工具之间去沟通」→ 指 Cogseed',
-  'personalcollege': '「我的 personal college 只要有这东西的话，我自动的给你填了」→ 指 Personal Ontology',
-  'personalquality': '「我觉得就是 personal quality 的话，其实按理说也应该是自己在」→ 指 Personal Ontology',
-  'personalholiday': '「What is in my personal holiday?」→ 上下文在讲 Personal Ontology',
-  'openclaw': '「大家经常提 OpenClaw、Claude Code 这些词」→ 本身就是正确写法，属大小写归一',
-  'personaloncology': '「如果是就是怎么说呢？人力资源管理啊，或者说 personal oncology 啊」→ 同句列举的都是资产/权限类概念，指 Personal Ontology',
+  'carseat': 'Cogseed：产品名分词变体',
+  'cockseed': 'Cogseed：产品名音近变体',
+  'coseat': 'Cogseed：产品名拼写变体',
+  'codeset': 'Cogseed：产品名拼写变体',
+  'cocet': 'Cogseed：产品名音近变体',
+  'cocket': 'Cogseed：产品名音近变体',
+  'personalcollege': 'Personal Ontology：术语音近变体',
+  'personalquality': 'Personal Ontology：术语音近变体',
+  'personalholiday': 'Personal Ontology：术语音近变体',
+  'openclaw': 'OpenClaw：大小写归一',
+  'personaloncology': 'Personal Ontology：术语音近变体',
 };
 
 /** 递归收集目录下的 .txt 转写（会议目录是多层嵌套的）。 */

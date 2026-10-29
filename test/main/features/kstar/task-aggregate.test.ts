@@ -238,12 +238,8 @@ describe('KSTAR task aggregation', () => {
     expect(bridgeCalls).toBe(0);
   });
 
-  it('creates the next task and requirement after closing a topic switch', async () => {
+  it('closing a task clears the conversation state without opening a follow-up task', async () => {
     const { store, task, requirement, state } = await seedClosedTask();
-    await store.replaceConversationTaskState('user-a', {
-      ...state,
-      pendingTaskStart: { userMessageId: 'msg-switch', text: '设计发票导出', reason: 'topic_switch' },
-    });
     vi.resetModules();
     const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
     const resumedStore = await import('../../../../src/main/features/kstar/requirement-store');
@@ -254,13 +250,10 @@ describe('KSTAR task aggregation', () => {
     expect(result?.task).toMatchObject({ id: task.id, status: 'closed' });
     expect(await resumedStore.readKstarTask('user-a', task.id)).toMatchObject({ status: 'closed', closeReason: 'user_complete' });
     expect(await resumedStore.readKstarRequirement('user-a', requirement.id)).toMatchObject({ status: 'closed' });
+    // The close path leaves nothing open: the next user message routes its own
+    // task. Opening one here would land it after the work it describes is done.
     expect(nextState?.taskComplete).toBe(false);
-    expect(nextState?.pendingTaskStart).toBeUndefined();
-    expect(nextState?.currentTaskId).toMatch(/^kst-/);
-    expect(nextState?.currentRequirementId).toMatch(/^ksreq-/);
-    expect(nextState?.currentTaskId).not.toBe(task.id);
-    expect(await resumedStore.readKstarRequirement('user-a', nextState!.currentRequirementId!)).toMatchObject({
-      taskId: nextState!.currentTaskId, goalText: '设计发票导出', userMessageIds: ['msg-switch'], status: 'open',
-    });
+    expect(nextState?.currentTaskId).toBeUndefined();
+    expect(nextState?.currentRequirementId).toBeUndefined();
   });
 });

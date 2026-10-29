@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { loadCognitionAssets } from './helpers/cognition-renderer';
 
 function readSrc(rel: string): string {
   return readFileSync(resolve(__dirname, `../../src/renderer/${rel}`), 'utf8');
@@ -168,13 +169,11 @@ describe('证明评价文案', () => {
   });
 });
 
-// 2026-09-16 #274 压绿时删掉了「每种原因都有对应文案，不落到显示机器码」。
-// 判 A 类（契约仍成立）：字典未命中裸出原始字符串是实现缺陷而非产品取消，
-// 本批随修复恢复守卫——lookup 与各内联字典未命中一律走「其他/未知」兜底文案。
+// 契约：每种原因都有对应文案，不落到显示机器码。字典未命中裸出原始字符串是
+// 实现缺陷而非产品取消；lookup 与各内联字典未命中一律走「其他/未知」兜底文案。
 
 describe('未知枚举不落到机器码', () => {
-  // 2026-09-29 views.js 机械拆分：候选状态字典随候选族迁入 review-candidate.js /
-  // review-views.js，按加载顺序合并三源扫描（断言语义不变）。
+  // 候选状态字典随候选族迁入 review-candidate.js / review-views.js，按加载顺序合并三源扫描（断言语义不变）。
   const views = ['views.js', 'review-candidate.js', 'review-views.js']
     .map((file) => readSrc(`modules/cognition-assets/${file}`))
     .join('\n');
@@ -220,6 +219,11 @@ describe('未知枚举不落到机器码', () => {
     // recordTitle 的契约是「绝不裸出 rcap- 内部 ID」；防御分支不能绕过它。
     expect(views).not.toContain('|| conv.id');
     expect(views).not.toContain('|| capture.id');
-    expect(views).toContain('cognition.capture_untitled_record');
+    const loaded = loadCognitionAssets({ captures: [{ id: 'rcap-internal-only', status: 'failed', actions: ['retry'] }] }, { name: 'activity' });
+    loaded.ns.vocabulary = null;
+    const rows = loaded.ns.activityModel().attention;
+    expect(rows).toHaveLength(0);
+    expect(loaded.render()).not.toContain('rcap-internal-only');
+    expect(loaded.store.captures).toHaveLength(1);
   });
 });

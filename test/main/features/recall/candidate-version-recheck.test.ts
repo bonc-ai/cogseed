@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 候选确认的**版本重检**（specs/015 · US-702 · T026，口径来自 plan.md D6/D7 与
  * `contracts/ipc.md` §二）。
@@ -74,7 +75,7 @@ async function service() {
 /** 用户确认一条 create 候选 → 得到 v1 资产（这就是"任务 A 用过的 v1"）。 */
 async function seedAsset(uid: string, judgment: string) {
   const { candidates } = await service();
-  const candidate = await candidates.saveRecallCandidate(uid, {
+  const candidate = await createNightlyCandidateFixture(uid, {
     judgment,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: '版本重检基线',
@@ -92,7 +93,7 @@ async function saveUpdateCandidate(
   input: { judgment: string; sourceId: string; targetVersionUsed?: string; action?: 'update' | 'limit_scope'; summary?: string },
 ) {
   const { candidates } = await service();
-  return candidates.saveRecallCandidate(uid, {
+  return createNightlyCandidateFixture(uid, {
     judgment: input.judgment,
     summary: input.summary || '更新型候选样本',
     suggestedType: target.type as 'rule',
@@ -420,7 +421,7 @@ describe('promote 通道的 IPC 契约（T021 / contracts/ipc.md §二）', () =
  * 守五条：
  *   ① 不传 `confirmBaselineVersion` → 行为与重锚机制落地前**逐字一致**
  *      （仍比候选原锚，不一致即结构化冲突）；
- *   ② 传了且等于当前在用版 → 用**当前正文**重新融合落库为下一版，原锚进决定
+ *   ② 传了且等于当前在用版 → 保存重新比较、编辑并确认的完整正文为下一版，原锚进决定
  *      账本（`rebasedFrom`）并随返回体回传；
  *   ③ 传了但已不是当前在用版（确认前又被改过）→ 仍结构化冲突、资产零改动、
  *      候选非终态，且账本**不留**重锚痕（没生效就谈不上重锚）；
@@ -456,7 +457,7 @@ describe('版本冲突后的显式重锚（T027）', () => {
     expect(rebasedTraces(decisions)).toHaveLength(0);
   });
 
-  it('传了且等于当前在用版：用当前正文重新融合落库为下一版，账本记原锚、返回体带 rebasedFrom', async () => {
+  it('传了且等于当前在用版：准确保存重新核对的完整建议，账本记原锚、返回体带 rebasedFrom', async () => {
     const uid = 'user-a';
     const { candidates, assets, reviewDecisions } = await service();
     const asset = await seedAsset(uid, V1_BODY);
@@ -470,14 +471,20 @@ describe('版本冲突后的显式重锚（T027）', () => {
       statement: EDITED_BODY, reason: 'user edit', actor: 'user',
     });
 
+    // 人工看过最新版本后，在确认前完成整条修订，而不是确认后才拼接。
+    const reviewed = await candidates.updateRecallCandidate(uid, update.id, {
+      ...update, judgment: `${EDITED_BODY}${update.judgment}`,
+    });
+
     const promoted = await candidates.promoteRecallCandidate(uid, update.id, {
       actor: 'user',
       confirmBaselineVersion: '2',
     });
 
     expect(promoted.asset).toMatchObject({ id: asset.id, version: '3', activeVersion: '3' });
-    // 融合主体是**当前正文**（v2），不是候选原锚那一版（v1）：
-    //   · v2 独有的句子被保留 → 证明"当前正文"真的参与了融合；
+    // v2 有效内容已在完整建议中保留；保存值就是用户看过的修订。
+    expect(promoted.asset.statement).toBe(reviewed.judgment);
+    //   · v2 独有的句子被保留 → 证明确认前已经核对了最新内容；
     //   · v1 独有的句子一个字都不许进来 → 证明没有拿旧正文糊当前版。
     expect(promoted.asset.statement).toContain('灰度发布前先跑一次冒烟用例');
     expect(promoted.asset.statement).toContain('演练记录');
@@ -552,6 +559,10 @@ describe('版本冲突后的显式重锚（T027）', () => {
       targetVersionUsed: '1',
     });
 
+    const reviewed = await candidates.updateRecallCandidate(uid, rebased.id, {
+      ...rebased, judgment: `${EDITED_BODY}${rebased.judgment}`,
+    });
+
     // 只有显式传参的那一条被重锚。
     const promoted = await candidates.promoteRecallCandidate(uid, rebased.id, {
       actor: 'user', confirmBaselineVersion: '2',
@@ -572,6 +583,7 @@ describe('版本冲突后的显式重锚（T027）', () => {
     // 撞冲突不会动资产：还是重锚后的 v3。
     const finalAsset = await assets.readAbilityAsset(uid, asset.id);
     expect(finalAsset.version).toBe('3');
+    expect(finalAsset.statement).toBe(reviewed.judgment);
     expect(finalAsset.statement).toContain('冒烟用例');
   });
 
@@ -652,6 +664,10 @@ describe('promote 通道的显式重锚 IPC 契约（T027 / contracts/ipc.md §�
       versionConflict: { baselineVersion: '1', currentVersion: '2', targetVersionUsed: '1' },
     });
 
+    const reviewed = await candidates.updateRecallCandidate(uid, update.id, {
+      ...update, judgment: `${EDITED_BODY}${update.judgment}`,
+    });
+
     // 「按当前版本重新确认」：带上当前在用版 → 这次生效，且返回体如实带原锚，
     // 让渲染层能告诉用户"这一条是从 v1 重锚过来的"。
     const rebased = await call('recall.candidates.promote', { candidateId: update.id, confirmBaselineVersion: '2' });
@@ -661,6 +677,7 @@ describe('promote 通道的显式重锚 IPC 契约（T027 / contracts/ipc.md §�
       asset: { id: asset.id, version: '3', activeVersion: '3' },
     });
     expect((rebased as { asset: { statement: string } }).asset.statement).toContain('灰度发布前先跑一次冒烟用例');
+    expect((rebased as { asset: { statement: string } }).asset.statement).toBe(reviewed.judgment);
     expect((await candidates.readRecallCandidate(uid, update.id)).status).toBe('confirmed');
   });
 });

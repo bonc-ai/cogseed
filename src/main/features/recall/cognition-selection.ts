@@ -23,7 +23,7 @@
 import type { CapabilityPackAssetRef } from '../p3394/capability-pack';
 import type { AgentGlossaryEntry } from '../agent_inheritance';
 import type { RecallAbilityAssetRecord } from './candidate-service';
-import type { RecallAbilityAssetScopePolicy } from './scope-policy';
+import { isAssetScopeAllowed, type AssetScopeContext, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import {
   type AbilityAssetUsePolicy,
 } from './asset-semantics';
@@ -35,10 +35,13 @@ import { inheritedAssetContentHash } from '../agent_inheritance';
  *  又不在作用域白名单里。只记第一条会让用户看到的解释取决于代码判断顺序。 */
 export type WithheldReason =
   // —— 权限/安全类 ——
+  | 'scope_purpose_not_allowed'
   | 'scope_agent_not_allowed'
   | 'scope_role_not_allowed'
   | 'scope_project_not_allowed'
   | 'scope_workspace_not_allowed'
+  | 'scope_conversation_not_allowed'
+  | 'scope_file_kind_not_allowed'
   // —— 状态类 ——
   | 'asset_paused'
   | 'asset_archived'
@@ -61,10 +64,13 @@ export type WithheldReason =
  *  「内容对不上」重，因为前者是决定、后者是状况。 */
 const WITHHELD_REASON_TIER: Record<WithheldReason, number> = {
   // 1 权限/安全：用户或策略明确不允许
+  scope_purpose_not_allowed: 1,
   scope_agent_not_allowed: 1,
   scope_role_not_allowed: 1,
   scope_project_not_allowed: 1,
   scope_workspace_not_allowed: 1,
+  scope_conversation_not_allowed: 1,
+  scope_file_kind_not_allowed: 1,
   // 2 状态：资产当下不可用
   asset_revoked: 2,
   asset_purged: 2,
@@ -80,10 +86,13 @@ const WITHHELD_REASON_TIER: Record<WithheldReason, number> = {
 
 /** 同档内的次序：数组里靠前的先出。只在同档时用得上，跨档一律看档位。 */
 const WITHHELD_REASON_ORDER: WithheldReason[] = [
+  'scope_purpose_not_allowed',
   'scope_agent_not_allowed',
   'scope_role_not_allowed',
   'scope_project_not_allowed',
   'scope_workspace_not_allowed',
+  'scope_conversation_not_allowed',
+  'scope_file_kind_not_allowed',
   'asset_revoked',
   'asset_purged',
   'asset_deleted',
@@ -104,15 +113,23 @@ export function primaryWithheldReason(reasons: WithheldReason[]): WithheldReason
   ))[0];
 }
 
-/** 本次运行的处境。缺省字段一律表示「这一维不设限」，不表示「限定为空」。 */
+/** 本次运行的处境。缺省字段一律表示「这一维不设限」，不表示「限定为空」。
+ *  声明了对应 scopePolicy 维度却缺上下文的读取按 fail-closed 拒绝
+ *  （isAssetScopeAllowed 语义）——不传 purpose 不能绕开 purposeTags。 */
 export interface CognitionSelectionContext {
   /** 目标 Agent。用来比对 scopePolicy.agentIds。 */
   agentId?: string;
-  /** 本次任务的作用域。与资产 scope 相同即同域（规范 10.2 矩阵按同域/跨域分档）。 */
+  /** 本次任务的作用域。与资产 scope 相同即同域。 */
   scope?: string;
+  /** 本次任务类型（比对 scopePolicy.purposeTags，词元匹配见 scope-policy）。 */
+  purpose?: string;
   roleId?: string;
   projectId?: string;
   workspaceId?: string;
+  /** 会话形态（比对 scopePolicy.conversationKinds）。 */
+  conversationKind?: string;
+  /** 本次运行携带的文件类别（比对 scopePolicy.fileKinds，混合输入须全部在界内）。 */
+  fileKinds?: readonly string[];
 }
 
 /** 一条被选中的认知。content 是只读快照，不是资产本体。 */
@@ -130,7 +147,7 @@ export interface SelectedCognition {
   /** 原样携带，交给模型自限并展示给用户。**本模块不判定它们。** */
   applicableWhen?: string[];
   forbiddenWhen?: string[];
-  /** 规范 10.2 算出来的默认使用档，渲染侧据此决定是直接带入还是需要确认。
+  /** 默认使用档，渲染侧据此决定带入任务或请求确认。
    *  已确认跨作用域的资产在这里已经从 confirm 抬到 prompt。 */
   usePolicy: Exclude<AbilityAssetUsePolicy, 'never'>;
   /** 是否与资产同作用域。跨域一律比同域更严，渲染侧要能说明白。 */
@@ -171,25 +188,43 @@ const STATUS_REASON: Record<Exclude<RecallAbilityAssetRecord['status'], 'active'
   purged: 'asset_purged',
 };
 
-/** 一维作用域白名单的三态判断（见 scope-policy）：
- *  缺失=不设限放行；空数组=谁都不给；非空=只放行列出的。 */
-function scopeDenies(allowed: string[] | undefined, actual: string | undefined): boolean {
-  if (allowed === undefined) return false;
-  if (allowed.length === 0) return true;
-  if (actual === undefined) return true;
-  return !allowed.includes(actual);
-}
+/** scopePolicy 全部七维的判定只有一个实现：scope-policy 的 isAssetScopeAllowed。
+ *  这里按维度拆开问它，只为给 withheld 留下「到底哪几维拦的」——判定语义
+ *  （三态、fail-closed、purposeTags 词元匹配、fileKinds 全体在界内）不再
+ *  本地重写一份，重写两份迟早分叉（旧实现只判四维，purposeTags /
+ *  conversationKinds / fileKinds 声明了也没人看，能力包继承因此越权）。 */
+const SCOPE_POLICY_DIMENSIONS: ReadonlyArray<{
+  field: keyof RecallAbilityAssetScopePolicy;
+  reason: WithheldReason;
+}> = [
+  { field: 'purposeTags', reason: 'scope_purpose_not_allowed' },
+  { field: 'agentIds', reason: 'scope_agent_not_allowed' },
+  { field: 'roleIds', reason: 'scope_role_not_allowed' },
+  { field: 'projectIds', reason: 'scope_project_not_allowed' },
+  { field: 'workspaceIds', reason: 'scope_workspace_not_allowed' },
+  { field: 'conversationKinds', reason: 'scope_conversation_not_allowed' },
+  { field: 'fileKinds', reason: 'scope_file_kind_not_allowed' },
+];
 
 function scopePolicyReasons(
   policy: RecallAbilityAssetScopePolicy | undefined,
   context: CognitionSelectionContext,
 ): WithheldReason[] {
   if (!policy) return [];
+  const scopeContext: AssetScopeContext = {
+    ...(context.purpose !== undefined ? { purpose: context.purpose } : {}),
+    ...(context.agentId !== undefined ? { agentId: context.agentId } : {}),
+    ...(context.roleId !== undefined ? { roleId: context.roleId } : {}),
+    ...(context.projectId !== undefined ? { projectId: context.projectId } : {}),
+    ...(context.workspaceId !== undefined ? { workspaceId: context.workspaceId } : {}),
+    ...(context.conversationKind !== undefined ? { conversationKind: context.conversationKind } : {}),
+    ...(context.fileKinds !== undefined ? { fileKinds: context.fileKinds } : {}),
+  };
   const reasons: WithheldReason[] = [];
-  if (scopeDenies(policy.agentIds, context.agentId)) reasons.push('scope_agent_not_allowed');
-  if (scopeDenies(policy.roleIds, context.roleId)) reasons.push('scope_role_not_allowed');
-  if (scopeDenies(policy.projectIds, context.projectId)) reasons.push('scope_project_not_allowed');
-  if (scopeDenies(policy.workspaceIds, context.workspaceId)) reasons.push('scope_workspace_not_allowed');
+  for (const { field, reason } of SCOPE_POLICY_DIMENSIONS) {
+    if (policy[field] === undefined) continue;
+    if (!isAssetScopeAllowed({ [field]: policy[field]! }, scopeContext)) reasons.push(reason);
+  }
   return reasons;
 }
 
@@ -222,6 +257,8 @@ export function classifyInheritedAsset(
     if (reason === 'status_not_active') reasons.push(STATUS_REASON[asset.status]);
     else if (reason === 'maturity_below_default_use') reasons.push('use_policy_never');
   }
+
+  if (runtime.defaultUsePolicy === 'never' && !reasons.includes('use_policy_never')) reasons.push('use_policy_never');
 
   // 内容完整性：出生时冻结的是哪一版、哪一份内容，现在还对不对得上。
   if (ref.version !== asset.version) reasons.push('version_changed');

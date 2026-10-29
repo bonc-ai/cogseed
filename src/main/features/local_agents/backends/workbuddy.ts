@@ -83,6 +83,7 @@ export const workbuddyBackend: LocalBackend = {
       timeoutMs: opts.timeoutMs,
       idleKillMs: opts.idleKillMs,
       lastEventAt: opts.lastEventAt,
+      ...(opts.onDeadline ? { onDeadline: opts.onDeadline } : {}),
     });
 
     // Prompt is passed as a `-p` argv value (see buildWorkbuddyArgs), so

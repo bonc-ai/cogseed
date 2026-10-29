@@ -36,6 +36,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { vi } from 'vitest';
 
+// 内置能力 `builtin:` 的总开关在正式安装里默认关闭；测试默认打开，用来验证“开放之后”的行为。
+// 默认关闭的行为由 test/main/features/agent_builtin_closed.test.ts 单独验证（会临时取消这个变量）。
+process.env.COGSEED_ENABLE_BUILTIN_CAPABILITIES = '1';
+
 // Register tsx/cjs so that any `require('./group_chat/bus')`-style CJS lookups
 // (used inside features/chats.ts to break the bus ↔ chats import cycle without
 // triggering the ESM dual-load bug described in 0268bce7) resolve `.ts` files

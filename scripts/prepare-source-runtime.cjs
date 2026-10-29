@@ -256,10 +256,12 @@ function parseVariant(argv) {
   return sourceRuntimeIdentity(values[0]).variant;
 }
 
-function parseCogSeedWorktreeVariant(argv) {
+function parseCogSeedWorktreeVariant(argv, packageMeta = require('../package.json')) {
   const variant = parseVariant(argv);
-  if (variant !== 'cogseed') {
-    throw new Error('this source worktree is locked to the cogseed runtime variant');
+  const { selectRuntimeVariant } = require('../src/main/install-data-root.cjs');
+  const locked = selectRuntimeVariant({ sourceVariant: packageMeta.cogseedSourceRuntimeVariant });
+  if (variant !== locked) {
+    throw new Error(`this source worktree is locked to ${locked}; requested ${variant} is not allowed`);
   }
   return variant;
 }

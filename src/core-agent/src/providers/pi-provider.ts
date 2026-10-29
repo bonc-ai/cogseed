@@ -12,7 +12,6 @@ import {
   stream as piStream,
   completeSimple as piCompleteSimple,
   streamSimple as piStreamSimple,
-  Type,
 } from "@earendil-works/pi-ai";
 import type {
   Model,
@@ -29,6 +28,10 @@ import type { Message, MessageContent, StreamEvent, StopReason, Usage } from "..
 import { AuthError, ProviderError, RateLimitError, ContextOverflowError } from "../shared/errors.js";
 import { createLogger } from "../shared/logger.js";
 import type { CompletionParams, CompletionResult, LLMProvider, ToolDefinition } from "./base.js";
+import {
+  TOOL_RESULT_IMAGE_BUDGET,
+  externalizeToolResultImages,
+} from "../shared/tool-result-images.js";
 
 const log = createLogger("pi-provider");
 
@@ -58,8 +61,11 @@ function cacheSafeSessionId(s: string | undefined): string | undefined {
 
 // ─── Type conversion helpers ──────────────────────────────────────────────
 
-/** Convert our internal Message[] to pi-ai Context. */
-function buildPiContext(
+/** Convert our internal Message[] to pi-ai Context.
+ *  Exported for the C1/R-09 contract test: tool-result image externalization happens
+ *  here, and pinning it through the real conversion is the only way to prove images
+ *  never leak back into a request whose model cannot take them. */
+export function buildPiContext(
   messages: Message[],
   systemPrompt?: string,
   tools?: ToolDefinition[],
@@ -86,11 +92,24 @@ function buildPiContext(
    * we accept that mid-chat switch may produce a turn the new model
    * rejects. Per-message stamping is the proper long-term fix.
    */
-  model?: { api: string; provider: string; id: string },
+  model?: { api: string; provider: string; id: string; input?: readonly string[] },
 ): PiContext {
   const piMessages: PiContext["messages"] = [];
 
-  for (const msg of messages) {
+  // C1/R-09 — tool-result image externalization (the DSH route). Images a tool
+  // produced stay attributed blocks in the session, but once a request exceeds the
+  // image budget they become text handles naming the read-only copy. A route whose
+  // model does not accept images externalizes all of them: sending them is either
+  // dropped by the converter or a 400, and the handle still tells the model how to
+  // read the file. User attachments keep their existing vision path — only blocks
+  // carrying the producing `tool_use` id take part.
+  const acceptsImages = model?.input ? model.input.includes("image") : true;
+  const projectedMessages = externalizeToolResultImages(
+    messages,
+    acceptsImages ? TOOL_RESULT_IMAGE_BUDGET : { maxImages: 0 },
+  );
+
+  for (const msg of projectedMessages) {
     if (msg.role === "system") continue;
 
     if (msg.role === "user") {
@@ -197,33 +216,10 @@ function buildPiContext(
   const piTools: PiTool[] | undefined = tools?.map((t) => ({
     name: t.name,
     description: t.description,
-    parameters: Type.Object(
-      Object.fromEntries(
-        Object.entries((t.inputSchema as Record<string, unknown>).properties ?? {}).map(
-          ([key, schema]) => {
-            const s = schema as Record<string, unknown>;
-            const required = ((t.inputSchema as Record<string, unknown>).required as string[] | undefined)?.includes(key);
-            const typeStr = s.type as string;
-            let tbType;
-            switch (typeStr) {
-              case "number":
-                tbType = Type.Number({ description: s.description as string });
-                break;
-              case "boolean":
-                tbType = Type.Boolean({ description: s.description as string });
-                break;
-              case "array":
-                tbType = Type.Array(Type.Any(), { description: s.description as string });
-                break;
-              default:
-                tbType = Type.String({ description: s.description as string });
-                break;
-            }
-            return [key, required ? tbType : Type.Optional(tbType)];
-          },
-        ),
-      ),
-    ),
+    // pi-ai accepts JSON Schema directly. Rebuilding just the top-level
+    // primitives loses nested objects, enums and constraints (and turned
+    // template slot maps into strings in real calls).
+    parameters: structuredClone(t.inputSchema) as PiTool["parameters"],
   }));
 
   return {
@@ -399,10 +395,7 @@ export function createPiProvider(config: {
         }
 
         if (result.stopReason === "error") {
-          throw new ProviderError(
-            result.errorMessage ?? "Unknown provider error",
-            providerId,
-          );
+          throw providerResultError(result, providerId);
         }
 
         return {
@@ -422,6 +415,13 @@ export function createPiProvider(config: {
       const reasoning = effectiveReasoning(params.reasoning);
       const sessionId = cacheSafeSessionId(params.sessionId);
 
+      // Request identity + whether the routing headers actually ride along. The
+      // 2026-10-13 pattern was "first attempt 400 MissingSessionID, retry fine", so the
+      // next step is comparing these two lines instead of guessing again.
+      log.info(
+        `stream ${providerId}/${model.id} customModel=${config.customModel ? 'yes' : 'no'}`
+        + ` headers=${model.headers ? Object.keys(model.headers).sort().join(',') : '-'}`,
+      );
       log.debug(`stream ${providerId}/${model.id}`);
 
       try {
@@ -435,7 +435,24 @@ export function createPiProvider(config: {
               reasoning,
               cacheRetention: params.cacheRetention,
               sessionId,
+              // pi-ai reads request headers from these per-call options, NOT from the
+              // Model object — omitting them silently dropped `x-opencode-session`, so
+              // OpenCode-fronting endpoints answered 400 {"type":"MissingSessionID"}
+              // (2026-10-13, three attempts: the header was set on the Model all along).
+              ...(model.headers ? { headers: model.headers as Record<string, string> } : {}),
               ...(config.onPayload ? { onPayload: config.onPayload as any } : {}),
+              // Diagnostics (2026-10-13): identify WHICH request the endpoint rejects.
+              // pi-ai calls this once per HTTP response with the status, so a 400 can be
+              // tied to a concrete call instead of the whole turn.
+              onResponse: (info: any) => {
+                try {
+                  log.info(
+                    `stream response ${providerId}/${model.id}`
+                    + ` status=${info?.status ?? "-"}`
+                    + ` baseUrl=${String((model as any).baseUrl || config.baseUrl || "-")}`,
+                  );
+                } catch { /* diagnostics must never break the stream */ }
+              },
             })
           : piStream(model, context, {
               apiKey: config.apiKey,
@@ -445,7 +462,24 @@ export function createPiProvider(config: {
               temperature: params.temperature,
               cacheRetention: params.cacheRetention,
               sessionId,
+              // pi-ai reads request headers from these per-call options, NOT from the
+              // Model object — omitting them silently dropped `x-opencode-session`, so
+              // OpenCode-fronting endpoints answered 400 {"type":"MissingSessionID"}
+              // (2026-10-13, three attempts: the header was set on the Model all along).
+              ...(model.headers ? { headers: model.headers as Record<string, string> } : {}),
               ...(config.onPayload ? { onPayload: config.onPayload as any } : {}),
+              // Diagnostics (2026-10-13): identify WHICH request the endpoint rejects.
+              // pi-ai calls this once per HTTP response with the status, so a 400 can be
+              // tied to a concrete call instead of the whole turn.
+              onResponse: (info: any) => {
+                try {
+                  log.info(
+                    `stream response ${providerId}/${model.id}`
+                    + ` status=${info?.status ?? "-"}`
+                    + ` baseUrl=${String((model as any).baseUrl || config.baseUrl || "-")}`,
+                  );
+                } catch { /* diagnostics must never break the stream */ }
+              },
             });
 
         for await (const event of eventStream) {
@@ -508,10 +542,7 @@ export function createPiProvider(config: {
               } catch (_) { /* best-effort */ }
               yield {
                 type: "error",
-                error: new ProviderError(
-                  event.error.errorMessage ?? "Stream error",
-                  providerId,
-                ),
+                error: providerResultError(event.error, providerId),
               };
               break;
           }
@@ -579,15 +610,25 @@ function resolveModel(
   throw new ProviderError(`No model found for provider: ${providerId}`, providerId);
 }
 
-/** Wrap pi-ai errors into our error hierarchy.
- *
- * Always preserves the original error as `.cause` so downstream consumers
- * (e.g. CogSeed's `auth-error.ts::classifyKeyFailure`) can walk the cause
- * chain to recover `status` (401 / 403 / 429 / 402) — the SDK-level
- * `APIError` carries status but our shared `AuthError` / `RateLimitError`
- * etc don't have dedicated status fields. Without the cause link, the
- * status signal would be dropped and classification would be forced to
- * fall back on fragile message-pattern matching alone. */
+/** Restore HTTP status when pi-ai returns a serialized failure result. */
+function providerResultError(result: unknown, providerId: string): ProviderError {
+  const record = result as Record<string, unknown>;
+  const message = typeof record?.errorMessage === 'string' ? record.errorMessage : 'Unknown provider error';
+  // pi-ai often serializes SDK APIError into errorMessage and drops status.
+  // Recover only recognized HTTP error prefixes, never arbitrary numbers in
+  // request ids, model names or quoted payload fields. Structured status wins.
+  const rawStatus = record?.statusCode ?? record?.status ?? record?.httpStatus ?? record?.http_status;
+  const structured = Number(rawStatus);
+  const prefix = message.match(/^(?:(?:OpenAI|Anthropic|Google|Gemini)(?: Responses)? API error\s*\((\d{3})\):|(?:HTTP\s+)?(\d{3})\b)/i);
+  const inferred = prefix ? Number(prefix[1] || prefix[2]) : undefined;
+  const candidate = Number.isInteger(structured) && structured >= 400 && structured <= 599
+    ? structured : inferred;
+  const status = candidate !== undefined && candidate >= 400 && candidate <= 599 ? candidate : undefined;
+  return new ProviderError(message, providerId, status);
+}
+
+/** Wrap thrown SDK errors, retaining their cause and structured status for
+ * credential rotation and retry classification. */
 function wrapError(err: unknown, providerId: string): Error {
   if (err instanceof AuthError || err instanceof RateLimitError || err instanceof ContextOverflowError || err instanceof ProviderError) {
     return err;

@@ -1,0 +1,28 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.live.artifact
+  name: ui-live-artifact
+  version: 1.0.0
+  description: Create or plan refreshable, auditable, data-backed HTML artifacts for
+    UIDesigner; use for live dashboards, refreshable reports, synced views, and connector
+    data views with template/data/provenance files, safe redaction, and static fallback
+    rules.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

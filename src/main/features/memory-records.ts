@@ -341,10 +341,15 @@ function ensureSourcedMemoryRecordWithKind(
   return result.ok ? { ...result, record } : result;
 }
 
+/** 剥除指定 kind 的来源标记（kind+sourceId 双重匹配，与 find/
+ * ensure/remove 三入口同口径）：sources 清空且非 independent 的记录一并
+ * 移除。不区分 kind 会误剥撞名 sourceId 的其它 kind 来源（如卸载认知
+ * 投影时误删 role_template 存量记忆）。 */
 export function detachMemorySource(
   filePath: string,
   sourceId: string,
   charLimit: number,
+  kind: MemorySource['kind'],
 ): MemoryRecordMutation {
   assertSourceId(sourceId);
   const loaded = loadMemoryRecordsWithStatus(filePath);
@@ -356,7 +361,7 @@ export function detachMemorySource(
   const next: MemoryRecord[] = [];
   for (const record of records) {
     const sources = record.sources.filter((source) => {
-      const match = source.sourceId === sourceId;
+      const match = source.kind === kind && source.sourceId === sourceId;
       found ||= match;
       return !match;
     });

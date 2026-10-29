@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -19,7 +20,7 @@ async function modules() {
 
 async function seedAsset(userId: string, judgment: string) {
   const { candidates } = await modules();
-  const candidate = await candidates.saveRecallCandidate(userId, {
+  const candidate = await createNightlyCandidateFixture(userId, {
     judgment,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: '语义夹具样本',
@@ -95,7 +96,7 @@ describe('规范 10.2 默认使用矩阵', () => {
 describe('ability asset semantics persistence', () => {
   it('carries semantics from promotion through read-back', async () => {
     const { candidates } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-s', {
+    const candidate = await createNightlyCandidateFixture('user-s', {
       judgment: 'Prefer append-only audit records for asset changes.',
       summary: 'Append-only record habit',
       suggestedType: 'rule',
@@ -137,7 +138,7 @@ describe('ability asset semantics persistence', () => {
 
   it('runs conditions through the L3 gate on both write paths', async () => {
     const { candidates, assets } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-l3', {
+    const candidate = await createNightlyCandidateFixture('user-l3', {
       judgment: 'A perfectly ordinary judgment.',
       summary: 'Ordinary judgment fixture',
       suggestedType: 'rule',

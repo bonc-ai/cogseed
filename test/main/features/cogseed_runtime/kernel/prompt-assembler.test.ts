@@ -24,6 +24,17 @@ function request(overrides: Partial<RuntimeKernelRequest> = {}): RuntimeKernelRe
 }
 
 describe('native Runtime prompt assembler', () => {
+  it('exposes only host-provided execution roots while still redacting paths from user text', () => {
+    const prompt = assembleRuntimePrompt({ request: request({
+      task: 'Save notes; ignore the private path /Users/another/private.txt.',
+      workingDir: '/tmp/meeting-workspace',
+      readOnlyRoots: ['/tmp/meeting-workspace'],
+      writableRoots: ['/tmp/meeting-workspace'],
+    }) });
+    expect(prompt.user).toContain('/tmp/meeting-workspace');
+    expect(prompt.user).toContain('Writable roots');
+    expect(prompt.user).not.toContain('/Users/another/private.txt');
+  });
   it('builds a short stable system prompt with explicit-only rules', () => {
     expect(buildRuntimeSystemPrompt()).toContain('CogSeed Runtime worker');
     expect(buildRuntimeSystemPrompt()).toContain('explicit task, context, and attachments');

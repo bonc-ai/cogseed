@@ -118,6 +118,7 @@
       if (errorCode === 'model_preflight') return 'run_center.error_help_model_preflight';
       if (errorCode === 'provider_error') return 'run_center.error_help_provider_error';
       if (errorCode === 'group_chat_run_failed') return 'run_center.error_help_group_chat_run_failed';
+      if (String(errorCode || '').startsWith('E_WORKSPACE_')) return 'run_center.error_help_workspace';
       return 'run_center.error_help_default';
     }
 

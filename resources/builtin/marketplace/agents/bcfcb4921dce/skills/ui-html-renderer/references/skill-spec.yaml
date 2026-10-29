@@ -1,0 +1,10 @@
+name: ui-html-renderer
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Handle complex stateful HTML, runtime-safety repair, strict source-to-HTML
+  fidelity, or detailed implementation handoff; ordinary single-page HTML is completed
+  directly by the compact executor.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

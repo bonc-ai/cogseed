@@ -32,6 +32,7 @@ function runner(
   return createRuntimeToolRunner({
     userId: UID,
     runtimeSessionId: SESSION,
+    requestId: 'req-tool-runtime',
     allowedRoots: [root],
     writableRoots: [root],
     toolPolicy: policy,
@@ -39,6 +40,7 @@ function runner(
     skillVersionPins,
     hostToolClient: {
       async call(call: { name: string }) {
+        if (call.name === 'ontology_operation_preflight') return { content: JSON.stringify({ allowed: true }) };
         if (call.name === 'action_approval_request') {
           return { content: JSON.stringify({ approved: true, request_id: 'approval-test-once', code: 'E_ACTION_APPROVAL_DENIED' }) };
         }
@@ -70,8 +72,23 @@ afterEach(() => {
 });
 
 describe('CogSeed Runtime tool runtime MVP', () => {
+  it('materializes a lazy writable shell workspace without creating read-only directories', async () => {
+    const root = makeRoot();
+    const writable = path.join(root, 'new-conversation');
+    const result = await runner(writable, undefined, { ...SHELL_POLICY, ...WRITE_POLICY, shell: SHELL_POLICY.shell }).run('bash', { command: 'pwd' });
+    expect(result.isError).not.toBe(true);
+    expect(fs.statSync(writable).isDirectory()).toBe(true);
+    expect(result.content).toContain('new-conversation');
+
+    const readonly = path.join(root, 'readonly-conversation');
+    const denied = await runner(readonly, undefined, SHELL_POLICY).run('bash', { command: 'pwd' });
+    expect(denied.isError).toBe(true);
+    expect(fs.existsSync(readonly)).toBe(false);
+  });
+
   it('has a fixed file catalog without group/chat tools', () => {
     expect(getRuntimeToolCatalog().map((tool) => tool.name)).toEqual([
+      'transcript_glossary_scan', 'transcript_glossary_apply', 'transcript_glossary_upsert', 'transcript_glossary_list',
       'stat_file',
       'read_file',
       'search_files',
@@ -86,8 +103,9 @@ describe('CogSeed Runtime tool runtime MVP', () => {
       'read_mate_kb',
       'office_read', 'office_create', 'office_edit', 'office_render',
       'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
-      'cogseed_delegate', 'cogseed_tasks', 'cogseed_cancel', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow', 'cogseed_workflow',
+      'cogseed_delegate', 'publish_outputs', 'cogseed_join', 'cogseed_tasks', 'cogseed_cancel', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow', 'cogseed_workflow',
       'messaging_list_targets', 'messaging_send', 'p3394_send',
+      'ontology_graph_read', 'ontology_projection_apply',
     ]);
     expect(JSON.stringify(getRuntimeToolCatalog())).not.toMatch(/group|chat|memory/i);
   });
@@ -131,6 +149,43 @@ describe('CogSeed Runtime tool runtime MVP', () => {
     const sent = await granted.run('messaging_send', { target: 'self', text: 'hello' });
     expect(sent.isError).toBeFalsy();
     expect(sent.content).toContain('messaging_send');
+  });
+
+  it('gates the whole delegation surface behind cogseed.coordination', async () => {
+    const root = makeRoot();
+    const hostToolClient = {
+      call: async (call: { name: string; input: Record<string, unknown> }) => ({
+        content: JSON.stringify({ name: call.name, input: call.input }),
+      }),
+    };
+    const delegatedTools = ['cogseed_delegate', 'cogseed_join', 'cogseed_tasks', 'cogseed_cancel'];
+    const denied = createRuntimeToolRunner({
+      userId: UID,
+      runtimeSessionId: SESSION,
+      allowedRoots: [root],
+      toolPolicy: DEFAULT_RUNTIME_TOOL_POLICY,
+      capabilities: ['messaging.proactive'],
+      hostToolClient: hostToolClient as never,
+    });
+    for (const name of delegatedTools) {
+      expect(denied.catalog.map((tool) => tool.name)).not.toContain(name);
+      // A model that writes the name as text still cannot reach the host.
+      const direct = await denied.run(name, {});
+      expect(direct.isError).toBe(true);
+      expect(direct.content).toContain('E_RUNTIME_UNKNOWN_TOOL');
+    }
+    const granted = createRuntimeToolRunner({
+      userId: UID,
+      runtimeSessionId: SESSION,
+      allowedRoots: [root],
+      toolPolicy: DEFAULT_RUNTIME_TOOL_POLICY,
+      capabilities: ['cogseed.coordination'],
+      hostToolClient: hostToolClient as never,
+    });
+    expect(granted.catalog.map((tool) => tool.name)).toEqual(expect.arrayContaining(delegatedTools));
+    const joined = await granted.run('cogseed_join', { timeout_ms: 1_000 });
+    expect(joined.isError).toBeFalsy();
+    expect(joined.content).toContain('cogseed_join');
   });
 
   it('stats, reads, searches, and greps files under explicit roots', async () => {

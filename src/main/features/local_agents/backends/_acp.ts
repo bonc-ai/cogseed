@@ -111,6 +111,7 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
         timeoutMs: opts.timeoutMs,
         idleKillMs: opts.idleKillMs,
         lastEventAt: opts.lastEventAt,
+        ...(opts.onDeadline ? { onDeadline: opts.onDeadline } : {}),
       });
 
       const send = (msg: object) => {

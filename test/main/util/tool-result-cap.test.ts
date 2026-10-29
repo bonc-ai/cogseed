@@ -32,6 +32,19 @@ const makeTmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-tool-cap
 const cleanup = (dir: string) => fs.rmSync(dir, { recursive: true, force: true });
 
 describe('tool-result-cap configuration', () => {
+  it('keeps governed current-source reads out of generic spills, including shared-ledger overflow', () => {
+    const dir = makeTmpDir();
+    try {
+      for (const name of ['cognition_ontology_query', 'read_ability_asset']) {
+        const oversized = capToolResult(name, { content: 'private'.repeat(2_000) }, { state: {} }, { maxInlineTokens: 100, toolResultsDir: dir });
+        expect(oversized.isError).toBe(true); expect(JSON.parse(oversized.content)).toMatchObject({ contentDelivered: false, retrySameCursor: true });
+        const ledger = capToolResult(name, { content: 'short private body' }, { state: { [TOOL_RESULT_INLINE_LEDGER_STATE_KEY]: { initialTokens: 20, remainingTokens: 0 } } }, { maxInlineTokens: 100, toolResultsDir: dir });
+        expect(ledger.content).toContain('E_SOURCE_READ_OUTPUT_BUDGET'); expect(ledger.persistedOutput).toBeUndefined();
+      }
+      expect(fs.readdirSync(dir)).toEqual([]);
+      expect(capToolResult('read_ability_asset', { content: 'safe current chunk' }, { state: {} }, { maxInlineTokens: 100, toolResultsDir: dir }).content).toBe('safe current chunk');
+    } finally { cleanup(dir); }
+  });
   it('uses one 8K token-aware inline budget', () => {
     expect(DEFAULT_INLINE_RESULT_TOKENS).toBe(8_000);
     expect(PERSIST_THRESHOLD).toBe(32_000);

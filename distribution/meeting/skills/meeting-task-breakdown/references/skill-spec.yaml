@@ -1,0 +1,14 @@
+identity:
+  skill_id: meeting-task-breakdown
+  display_name: 拆分任务
+  category: office
+  artifact_state: draft
+capability:
+  level: L5
+  rationale: 处理用户私有会议材料并形成供人工决策的候选内容
+  execution: interpreted
+route:
+  invoked_by: agent_layer
+  side_effects: none
+promotion_ceiling: staged
+production_release_allowed: false

@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../helpers/nightly-formation-fixture';
 /**
  * 红队探针 r2：committed 投影版本刷新的乱序回退竞态（并发与时序面）。
  *
@@ -64,7 +65,7 @@ describe('regression r2（F-r2-3 已修）: committed 投影版本刷新的乱�
     const { candidates, assets, projection } = await modules();
 
     // 造资产（沿用正式晋升链路）并抬到可注入档位。
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Preserve source evidence in reviews.',
       summary: 'Evidence preservation rule',
       suggestedType: 'rule',

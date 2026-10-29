@@ -279,6 +279,21 @@ describe('util/proxy-dispatcher child fetch bridge', () => {
 });
 
 describe('util/proxy-dispatcher per-request system routing', () => {
+  it('wires both proxy phases into desktop boot before diagnostics and boot network work', () => {
+    const main = fs.readFileSync(path.resolve('src/main/index.ts'), 'utf8');
+    const envInstall = main.indexOf('void installEnvProxyDispatcher();');
+    const diagnostics = main.indexOf('installFetchDiag();');
+    const ready = main.indexOf('void app.whenReady().then(async () => {');
+    const systemInstall = main.indexOf('await installSystemProxyDispatcher();', ready);
+    const boot = main.indexOf('await runBootSelfCheck();', ready);
+
+    expect(envInstall).toBeGreaterThanOrEqual(0);
+    expect(envInstall).toBeLessThan(diagnostics);
+    expect(diagnostics).toBeLessThan(ready);
+    expect(systemInstall).toBeGreaterThan(ready);
+    expect(systemInstall).toBeLessThan(boot);
+  });
+
   it('keeps DIRECT on Node, sends proxy/error routes to Electron, and caches per origin', async () => {
     const fallback = vi.fn(async () => new Response('fallback')) as unknown as typeof fetch;
     const system = vi.fn(async () => new Response('system')) as unknown as typeof fetch;

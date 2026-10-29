@@ -32,6 +32,8 @@
  * maxTokens <= contextWindow **within the same overlay** (an overlay may omit
  * one field, in which case the preset supplies the other and the ceiling check
  * is deferred to the resolver, which knows both halves).
+ * Known model output ceilings also constrain new writes and effective legacy
+ * values. Unknown models retain manual overrides; no global model cap is guessed.
  */
 
 import * as fs from 'node:fs';
@@ -41,6 +43,8 @@ import { userModelOverridesFile } from '../paths';
 import { createLogger } from '../logger';
 import { setModelAbilityOverrideResolver } from '../model/model_ability_overrides';
 import { getActiveUserId } from './users';
+import { publicModelAbilitiesFor } from '../model/public_model_catalog';
+import { t } from '../i18n';
 
 const log = createLogger('model-overrides');
 
@@ -106,7 +110,11 @@ function readFile(uid: string): ModelOverridesFile {
           for (const [modelId, entry] of Object.entries(models as Record<string, unknown>)) {
             const model = normalizeId(modelId);
             const override = sanitizeOverride(entry);
-            if (model && override) bucket[model] = override;
+            if (model && override) {
+              const limit = publicModelAbilitiesFor(model).maxTokens;
+              if (limit !== undefined && override.maxTokens !== undefined) override.maxTokens = Math.min(override.maxTokens, limit);
+              bucket[model] = override;
+            }
           }
           if (Object.keys(bucket).length) file.providers[provider] = bucket;
         }
@@ -199,6 +207,10 @@ export function setModelOverride(
   // for output — the stored pair must never exceed the effective window.
   const effectiveWindow = next.contextWindow ?? preset.contextWindow;
   const effectiveMax = next.maxTokens ?? preset.maxTokens;
+  const knownOutputLimit = publicModelAbilitiesFor(modelId).maxTokens;
+  if (knownOutputLimit !== undefined && effectiveMax !== undefined && effectiveMax > knownOutputLimit) {
+    return { ok: false, error: t('custom_providers.model_output_limit', { model: modelId, limit: knownOutputLimit }) };
+  }
   if (typeof effectiveWindow === 'number' && typeof effectiveMax === 'number' && effectiveMax > effectiveWindow) {
     return { ok: false, error: 'maxTokens must not exceed contextWindow' };
   }

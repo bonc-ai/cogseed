@@ -179,12 +179,17 @@ describe('features/config › UI language', () => {
     expect(i18n.getCurrentUiLang()).toBe('zh');
   });
 
-  it('persists only zh or en', async () => {
+  it('persists all four supported UI languages', async () => {
     const { appConfig, i18n } = await load();
     expect(appConfig.setUiLanguage('en')).toBe('en');
     expect(appConfig.readConfig().ui_language).toBe('en');
     expect(i18n.getCurrentUiLang()).toBe('en');
-    expect(() => appConfig.setUiLanguage('ja' as unknown as 'en')).toThrow();
+    for (const lang of ['ja', 'pt'] as const) {
+      expect(appConfig.setUiLanguage(lang)).toBe(lang);
+      expect(appConfig.readConfig().ui_language).toBe(lang);
+      expect(i18n.getCurrentUiLang()).toBe(lang);
+    }
+    expect(() => appConfig.setUiLanguage('xx' as unknown as 'en')).toThrow();
   });
 
   it('keeps UI and Commander/Agent languages independent', async () => {
@@ -204,7 +209,7 @@ describe('features/config › UI language', () => {
 
   it('repairs an unsupported persisted UI language to Chinese on boot', async () => {
     const { appConfig } = await load();
-    appConfig.writeConfig({ ui_language: 'pt' as unknown as 'en' });
+    appConfig.writeConfig({ ui_language: 'xx' as unknown as 'en' });
     expect(appConfig.initUiLanguage()).toBe('zh');
     expect(appConfig.readConfig().ui_language).toBe('zh');
   });
@@ -284,5 +289,80 @@ describe('features/config › close to tray preference', () => {
     const second = await load();
     expect(second.appConfig.readPreferences().close_to_tray_enabled).toBe(true);
     expect(second.appConfig.getCloseToTrayEnabled()).toBe(true);
+  });
+});
+
+describe('features/config › per-model thinking strength (Option C)', () => {
+  it('persists an explicit tier for one model and reads it back', async () => {
+    const { appConfig } = await load();
+    expect(appConfig.getModelThinkingLevel('cp:a', 'm1')).toBe('auto');
+    expect(appConfig.setModelThinkingLevel('cp:a', 'm1', 'high')).toBe('high');
+    expect(appConfig.getModelThinkingLevel('cp:a', 'm1')).toBe('high');
+    // Raw read: absence would mean the write never landed (the getter's
+    // 'auto' fallback would otherwise mask it).
+    expect(Object.values(appConfig.readPreferences().model_thinking_levels)).toEqual(['high']);
+  });
+
+  it('⭐ 切到另一个模型回落 Auto：档位属于它被选中的那个模型', async () => {
+    const { appConfig } = await load();
+    appConfig.setModelThinkingLevel('cp:a', 'm1', 'high');
+    expect(appConfig.getModelThinkingLevel('cp:a', 'm1')).toBe('high');
+    // Same provider, different model → no record → Auto.
+    expect(appConfig.getModelThinkingLevel('cp:a', 'm2')).toBe('auto');
+    // Same model id under a different provider is also a different model.
+    expect(appConfig.getModelThinkingLevel('cp:b', 'm1')).toBe('auto');
+  });
+
+  it('model ids containing "/" do not collide across provider/model boundaries', async () => {
+    const { appConfig } = await load();
+    appConfig.setModelThinkingLevel('openai', 'org/gpt-5', 'low');
+    expect(appConfig.getModelThinkingLevel('openai', 'org/gpt-5')).toBe('low');
+    expect(appConfig.getModelThinkingLevel('openai/org', 'gpt-5')).toBe('auto');
+  });
+
+  it('⚠️ auto / 畸形取值清除记录（缺席即"让模型自己决定"），不写一个假档位', async () => {
+    const { appConfig } = await load();
+    appConfig.setModelThinkingLevel('cp:a', 'm1', 'high');
+    expect(appConfig.setModelThinkingLevel('cp:a', 'm1', 'auto')).toBe('auto');
+    expect(appConfig.getModelThinkingLevel('cp:a', 'm1')).toBe('auto');
+    expect(appConfig.readPreferences().model_thinking_levels).toEqual({});
+    appConfig.setModelThinkingLevel('cp:a', 'm1', 'medium' as unknown);
+    expect(appConfig.getModelThinkingLevel('cp:a', 'm1')).toBe('auto');
+  });
+
+  it('provider/model 缺席时不落任何键（键必须有模型身份）', async () => {
+    const { appConfig } = await load();
+    expect(appConfig.setModelThinkingLevel('', 'm1', 'high')).toBe('auto');
+    expect(appConfig.setModelThinkingLevel('cp:a', '', 'high')).toBe('auto');
+    expect(appConfig.readPreferences().model_thinking_levels).toBeUndefined();
+  });
+
+  it('survives a module reload (cloud config on disk, not memory)', async () => {
+    const first = await load();
+    first.appConfig.setModelThinkingLevel('cp:a', 'm1', 'low');
+    vi.resetModules();
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(TEST_UID);
+    const second = await load();
+    expect(second.appConfig.getModelThinkingLevel('cp:a', 'm1')).toBe('low');
+  });
+});
+
+describe('config › A2A switches default closed (FR-33 / 设计 §2.1)', () => {
+  it('treats a missing preference as "off", not as "not turned off"', async () => {
+    const { appConfig } = await load();
+    // 默认开等于默认允许被手机号搜到、默认允许联系人叫起助理——越过 PRD 的隐私边界。
+    expect(appConfig.getContactsDiscoverable()).toBe(false);
+    expect(appConfig.getContactsAssistantQuestions()).toBe(false);
+  });
+
+  it('round-trips an explicit choice', async () => {
+    const { appConfig } = await load();
+    expect(appConfig.setContactsDiscoverable(true)).toBe(true);
+    expect(appConfig.setContactsAssistantQuestions(true)).toBe(true);
+    expect(appConfig.getContactsDiscoverable()).toBe(true);
+    expect(appConfig.getContactsAssistantQuestions()).toBe(true);
+    appConfig.setContactsAssistantQuestions(false);
+    expect(appConfig.getContactsAssistantQuestions()).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 认知资产 · 并发压力测试（2026-09-28 全量 debug 任务）。
  *
@@ -44,7 +45,7 @@ async function modules() {
 
 async function seedAsset(userId: string, statement = '并发种子。') {
   const { candidates, assets } = await modules();
-  const candidate = await candidates.saveRecallCandidate(userId, {
+  const candidate = await createNightlyCandidateFixture(userId, {
     judgment: statement,
     // 标题闸门（设计 3.2）：无 summary 兜底＝正文首句，过不了闸门。
     summary: '压测种子样本',

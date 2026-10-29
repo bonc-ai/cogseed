@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -32,7 +33,7 @@ const RULE_BOUNDARY = { applicableWhen: ['reviewing governed work'], forbiddenWh
 async function confirmedTurnProjection(userId: string, turnId: string) {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   const projection = await import('../../../../src/main/features/recall/context-projection');
-  const candidate = await candidates.saveRecallCandidate(userId, {
+  const candidate = await createNightlyCandidateFixture(userId, {
     judgment: 'Use confirmed evidence in task reviews.',
     summary: 'Confirmed evidence habit',
     suggestedType: 'rule',
@@ -95,6 +96,72 @@ describe('group-chat recall terminal proof entry', () => {
         expect(list.some((proof) => proof.status === 'succeeded' && proof.receiptId)).toBe(true);
         expect((await assets.readAbilityAsset(userId, asset.id)).maturity).toBe('transfer_validated');
         expect((await receipts.readReceipt(userId, `turn-${turnId}`)).status).toBe('completed');
+      }, { timeout: 5_000 });
+    } finally {
+      stop();
+    }
+  });
+
+  it('still discovers the target turn projection when confirmed projections exceed the default list clamp (F-r1-24)', async () => {
+    const userId = 'user-gtp-clamp';
+    const turnId = 'tx-group-clamp';
+    // 目标 turn 投影最先创建（createdAt 最早）；projectionNowIso 单调递增，
+    // 之后的 filler 在降序排序里全部排在它前面。
+    const { asset } = await confirmedTurnProjection(userId, turnId);
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    // 20 条更新的 confirmed 投影把目标挤到 listContextProjections 默认
+    // clamp（limit=20）之外：修复前终局反查用该默认列表，注入过资产的
+    // 这轮进不了证明链（实机零证明回归）。
+    for (let i = 0; i < 20; i += 1) {
+      await projection.previewContextProjection(userId, {
+        taskRunId: `tx-filler-${i}`, workspaceId: 'workspace-a', purpose: 'review',
+        authorization: 'user_confirmed', explicitAssetIds: [asset.id], confirm: true,
+      });
+    }
+    // 夹具自检：目标投影确实落在默认 clamp 的输入池之外。
+    const clamped = await projection.listContextProjections(userId);
+    expect(clamped).toHaveLength(20);
+    expect(clamped.some((item) => item.taskRunId === turnId)).toBe(false);
+
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    await receipts.prepareReceipt(userId, {
+      executionId: `turn-${turnId}`,
+      targetSessionId: 'gconv-cid-clamp',
+      reusedRefs: [asset.id],
+      omittedRefs: [],
+      permissionMode: 'read-only',
+      allowedScopes: ['cognition:projection'],
+      boundary: 'real',
+    }, { sessionId: 'gconv-cid-clamp' });
+
+    const entry = await import('../../../../src/main/features/group_chat/recall-terminal-proof');
+    let deliver: ((event: unknown) => void) | undefined;
+    const stop = entry.startGroupChatRecallTerminalProofs(
+      (listener) => {
+        deliver = (event) => listener(event as never);
+        return () => { deliver = undefined; };
+      },
+      async () => [],
+    );
+    try {
+      expect(deliver).toBeTypeOf('function');
+      deliver!({
+        run_id: 'run-gtp-clamp',
+        user_id: userId,
+        conversation_id: 'cid-clamp',
+        status: 'completed',
+        started_at_ms: 1,
+        finished_at_ms: 2,
+        logical_run_id: 'run-gtp-clamp',
+        reuse_turn_ids: [turnId],
+      });
+
+      const proofs = await import('../../../../src/main/features/recall/proof-service');
+      const assets = await import('../../../../src/main/features/recall/asset-service');
+      await vi.waitFor(async () => {
+        const list = await proofs.listTransferProofs(userId);
+        expect(list.some((proof) => proof.status === 'succeeded' && proof.receiptId)).toBe(true);
+        expect((await assets.readAbilityAsset(userId, asset.id)).maturity).toBe('transfer_validated');
       }, { timeout: 5_000 });
     } finally {
       stop();

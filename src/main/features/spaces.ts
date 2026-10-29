@@ -18,10 +18,12 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { userSpacesDir, spaceMetaFile, spaceContentDir, SPACE_DIR_MARKER, invalidateSpaceDirCache, sanitizeSpaceDirName, userAgentsDir, userSkillsDir } from '../paths';
-import { nowIso, readJson, writeJson } from '../storage';
+import { userSpacesDir, spaceMetaFile, spaceContentDir, SPACE_DIR_MARKER, invalidateSpaceDirCache, sanitizeSpaceDirName, userAgentsDir, userSkillsDir, WS_ROOT } from '../paths';
+import { isSystemTmpDir } from '../util/path-sandbox';
+import { nowIso, readJson, writeJson, safeId } from '../storage';
 import { createLogger } from '../logger';
 import { getRendererTable } from '../i18n';
 import { limitNameDisplayText } from '../util/name-limit';
@@ -63,6 +65,17 @@ export interface Space {
   sustained_outcome?: string;
   /** 空间「目标+规则」说明书（承接原项目 COGSEED.md；commander 写、空间内 agent 读）。 */
   instructions?: string;
+  /**
+   * 绑定的本地项目目录（绝对路径，已 realpath 规范化）。
+   *
+   * 有值时空间内会话**直接在该目录原地工作**（Codex 式工作区）：文件工具、
+   * bash、CLI Agent 的 cwd 都指向用户自己的项目，不复制任何文件。缺省 =
+   * 沿用空间内容目录下的工作区（`spaces/<空间>/workspace/<slug>`）。
+   *
+   * 写入前必须过 `normaliseSpaceProjectDir`（存在性 + 目录 + 危险根校验）；
+   * 解析端（conv_workspace）仍需容错：目录被删/被移走时回退空间工作区。
+   */
+  project_dir?: string;
   /** 基础 Agent（承接空间内任务的默认执行体；扩展点：后续接入其他 coding agent）。
    *  兼容保留：多选场景下为 base_agents 首项。 */
   base_agent?: string;
@@ -122,7 +135,7 @@ export interface SpaceResources {
   invalid_refs: { skills: string[]; agents: string[] };
 }
 
-export type SpaceError = 'name_empty' | 'name_dup' | 'not_found' | 'too_long' | 'invalid_space_type' | 'invalid_join_mode' | 'invalid_member_permission';
+export type SpaceError = 'name_empty' | 'name_dup' | 'not_found' | 'too_long' | 'invalid_space_type' | 'invalid_join_mode' | 'invalid_member_permission' | SpaceProjectDirError;
 
 // ── 空间扩展─────────────────────
 
@@ -311,6 +324,11 @@ function _normaliseSpace(raw: any): Space | null {
     space_type: isSpaceType(raw.space_type) ? raw.space_type : 'complex_project',
     sustained_outcome: typeof raw.sustained_outcome === 'string' && raw.sustained_outcome ? raw.sustained_outcome : undefined,
     instructions: typeof raw.instructions === 'string' && raw.instructions ? raw.instructions : undefined,
+    // 内联校验（不调 normaliseSpaceProjectDir）：读取路径不能因为"目录此刻不在"
+    // 就丢掉绑定——外接盘未挂载、目录临时改名都会误伤；存在性由解析端容错。
+    project_dir: typeof raw.project_dir === 'string' && raw.project_dir && path.isAbsolute(raw.project_dir)
+      ? raw.project_dir
+      : undefined,
     gate_status: isGateStatus(raw.gate_status) ? raw.gate_status : 'not_checked',
     base_agent: typeof raw.base_agent === 'string' && raw.base_agent ? raw.base_agent : undefined,
     base_agents: (() => {
@@ -456,6 +474,78 @@ function normName(raw: unknown): string | null {
   return s;
 }
 
+// ── 绑定的本地项目目录（Codex 式工作区）──────────────────────────────────
+
+export type SpaceProjectDirError =
+  | 'invalid_project_dir'
+  | 'project_dir_not_found'
+  | 'project_dir_not_directory'
+  | 'project_dir_unsafe';
+
+export type SpaceProjectDirResult =
+  | { ok: true; path: string }
+  | { ok: false; error: SpaceProjectDirError };
+
+/**
+ * 校验并规范化"空间绑定的本地项目目录"。规则与 Codex / DSH 的工作区口径一致：
+ *
+ *   - 必须是绝对路径（相对路径在不同 cwd 下含义不同，不能作为稳定身份）；
+ *   - 必须存在且是目录（创建时即失败，而不是等到第一轮对话才发现）；
+ *   - 存 realpath 规范化后的路径：`/var` 与 `/private/var`、软链与真实路径
+ *     必须是同一个身份，否则后续的沙箱包含判断会出现"看着在里面其实不在"；
+ *   - 拒绝三类危险根：系统临时根（工作区指向 $TMPDIR 等于把系统临时文件当项目）、
+ *     整个用户主目录（产物扫描与沙箱边界都会失去意义）、CogSeed 自有数据目录
+ *     （工作区指回自家数据目录会让产物归属与沙箱语义自相矛盾）。
+ *
+ * 主目录**下**的正常项目目录（如 `~/code/foo`）不在拒绝范围——这才是目标用例。
+ */
+export function normaliseSpaceProjectDir(raw: unknown): SpaceProjectDirResult {
+  if (typeof raw !== 'string' || !raw.trim()) return { ok: false, error: 'invalid_project_dir' };
+  const candidate = raw.trim();
+  if (!path.isAbsolute(candidate)) return { ok: false, error: 'invalid_project_dir' };
+
+  let real: string;
+  try {
+    real = fs.realpathSync(candidate);
+  } catch {
+    return { ok: false, error: 'project_dir_not_found' };
+  }
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(real);
+  } catch {
+    return { ok: false, error: 'project_dir_not_found' };
+  }
+  if (!st.isDirectory()) return { ok: false, error: 'project_dir_not_directory' };
+  if (isSystemTmpDir(real)) return { ok: false, error: 'project_dir_unsafe' };
+
+  try {
+    if (real === fs.realpathSync(os.homedir())) return { ok: false, error: 'project_dir_unsafe' };
+  } catch { /* homedir 不可解析 → 跳过该项检查 */ }
+
+  let dataRoot: string;
+  try {
+    dataRoot = fs.realpathSync(WS_ROOT);
+  } catch {
+    dataRoot = path.resolve(WS_ROOT);
+  }
+  if (real === dataRoot || real.startsWith(dataRoot + path.sep)) {
+    return { ok: false, error: 'project_dir_unsafe' };
+  }
+  return { ok: true, path: real };
+}
+
+/** 解析端容错：绑定目录是否仍然是可用的工作区（不存在 / 已变成文件 = 不可用）。
+ *  只做存在性判断，不做危险根复检——存量数据里可能已有历史路径，回退由调用方决定。 */
+export function isUsableSpaceProjectDir(dir: string | undefined): dir is string {
+  if (typeof dir !== 'string' || !dir || !path.isAbsolute(dir)) return false;
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function _isDuplicateName(uid: string, name: string, excludeSid?: string, systemNameKey?: string): Promise<boolean> {
   const ids = await _listSpaceIds(uid);
   const lower = name.toLocaleLowerCase();
@@ -514,8 +604,30 @@ function baseAgentToAgentId(agents: ReadonlyArray<{ agent_id?: string; runtime?:
   return hitLower?.agent_id;
 }
 
+/** Reception setup needs identities only. Do not provision the spaces root,
+ * enrich resources/conversations, or populate the ordinary listing cache. */
+export async function listReceptionSpacesReadOnly(uid: string): Promise<Pick<Space, 'space_id' | 'name'>[]> {
+  if (!safeId(uid)) return [];
+  let entries: fs.Dirent[];
+  try { entries = await fsp.readdir(userSpacesDir(uid), { withFileTypes: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const rows: Pick<Space, 'space_id' | 'name'>[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.startsWith('sp_') || !entry.name.endsWith('.json')) continue;
+    const sid = entry.name.slice(0, -5);
+    if (!safeId(sid)) continue;
+    const space = await _readSpace(uid, sid);
+    if (space && space.space_id === sid) rows.push({ space_id: space.space_id, name: space.name });
+  }
+  const collator = new Intl.Collator('zh', { sensitivity: 'base', numeric: true });
+  return rows.sort((a, b) => collator.compare(a.name, b.name) || a.space_id.localeCompare(b.space_id));
+}
+
 /** 空间列表 + 派生展示元数据（模板名/资源数/失效数）。坏文件跳过。
- *  失效数用真实有效集合（listSkillCatalog/listAgents，均有磁盘缓存）：一次构造、
+ *  失效数用真实有效集合（listSkillCatalogForUser/listAgentsForUser，均有磁盘缓存）：一次构造、
  *  全部空间复用，避免空集合导致「所有引用全失效」的假阳性。 */
 export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   const startedAt = Date.now();
@@ -531,8 +643,8 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   }
   const ids = await _listSpaceIds(uid);
   const [agents, skills] = await Promise.all([
-    import('./agents').then((m) => m.listAgents()).catch(() => []),
-    import('./skills').then((m) => m.listSkillCatalog()).catch(() => []),
+    import('./agents').then((m) => m.listAgentsForUser(uid)).catch(() => []),
+    import('./skills').then((m) => m.listSkillCatalogForUser(uid)).catch(() => []),
   ]);
   const valid = {
     skills: new Set(skills.map((s) => s.id)),
@@ -640,6 +752,8 @@ export async function createSpace(
     description?: string;
     cover?: string;
     recommended_questions?: string[];
+    /** 绑定的本地项目目录（可选）。给出时空间内会话在该目录原地工作，见 Space.project_dir。 */
+    projectDir?: string;
   },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const name = normName(opts.name);
@@ -653,6 +767,16 @@ export async function createSpace(
   }
   if (opts.sustained_outcome !== undefined && opts.sustained_outcome.length > 200) {
     return { ok: false, error: 'too_long' };
+  }
+  // 绑定的本地项目目录：创建时即校验（不存在/非目录/危险根 → 明确报错，
+  // 不落一个"看起来绑了、其实用不了"的空壳）。
+  let projectDir: string | undefined;
+  if (opts.projectDir !== undefined && opts.projectDir !== '') {
+    const checked = normaliseSpaceProjectDir(opts.projectDir);
+    // 仓库 tsconfig 关掉了 strictNullChecks，布尔字面量判别式不会收窄联合类型
+    // （与 ipc/index.ts 的 `(result as { error: string }).error` 同一惯例）。
+    if (checked.ok) projectDir = checked.path;
+    else return { ok: false, error: (checked as { error: SpaceProjectDirError }).error };
   }
   // 归一化：template_id 兼容，primary 优先
   const primary = opts.primary_template_id || opts.template_id || undefined;
@@ -672,6 +796,7 @@ export async function createSpace(
     space_type: opts.space_type ?? 'complex_project',
     sustained_outcome: opts.sustained_outcome || undefined,
     instructions: opts.instructions || undefined,
+    project_dir: projectDir,
     base_agent: baseAgents[0] || undefined,
     base_agents: baseAgents,
     gate_status: 'not_checked',
@@ -690,7 +815,7 @@ export async function createSpace(
   await _writeSpace(uid, space);
   // 目录名跟随空间名（best-effort；失败保持旧命名，不影响读写）
   syncSpaceDirName(uid, space.space_id, name);
-  log.info(`created space user=${uid} sid=${space.space_id} name=${name} type=${space.space_type}`);
+  log.info(`created space user=${uid} sid=${space.space_id} name=${name} type=${space.space_type} boundProject=${projectDir ? 'yes' : 'no'}`);
   return { ok: true, space };
 }
 
@@ -787,7 +912,7 @@ export async function createSpaceFromDraft(
   }
   // 3. 主技能（id 精确 → 名字模糊；找不到/禁用 → 忽略 + correction）
   let mainSkillRef: SpaceAssetRef | undefined;
-  const skillsList = await import('./skills').then((m) => m.listSkillCatalog()).catch(() => []);
+  const skillsList = await import('./skills').then((m) => m.listSkillCatalogForUser(uid)).catch(() => []);
   if (draft.main_skill_ref && draft.main_skill_ref.asset_id) {
     const rawId = draft.main_skill_ref.asset_id;
     const resolvedId = resolveDraftResourceId(skillsList, rawId);
@@ -815,7 +940,7 @@ export async function createSpaceFromDraft(
     extraSkills.push(resolvedId);
   }
   // 5. extra 智能体：存在 + 去重（内部 + 模板内置——模板内置属冗余，自动剔除不算错误）
-  const agentsList = await import('./agents').then((m) => m.listAgents()).catch(() => []);
+  const agentsList = await import('./agents').then((m) => m.listAgentsForUser(uid)).catch(() => []);
   const extraAgents: string[] = [];
   const seenAgents = new Set<string>();
   for (const id of draft.extra_agent_ids || []) {
@@ -1132,12 +1257,12 @@ export async function pruneInvalidSpaceResources(
   return { ok: true, removed };
 }
 
-/** 用户级派生：内部用 listAgents/listSkillCatalog 构造有效集合（均有磁盘缓存），
+/** 用户级派生：内部用 listAgentsForUser/listSkillCatalogForUser 构造有效集合（均有磁盘缓存），
  *  再走纯函数。仅绑空间的项目在 runTurn 热路径上调用；未绑空间零开销。 */
 export async function resolveSpaceResourcesForUser(uid: string, space: Space): Promise<SpaceResources> {
   const [agents, skills] = await Promise.all([
-    import('./agents').then((m) => m.listAgents()).catch(() => []),
-    import('./skills').then((m) => m.listSkillCatalog()).catch(() => []),
+    import('./agents').then((m) => m.listAgentsForUser(uid)).catch(() => []),
+    import('./skills').then((m) => m.listSkillCatalogForUser(uid)).catch(() => []),
   ]);
   return resolveSpaceResources(space, {
     skills: new Set(skills.map((s) => s.id)),
@@ -1194,4 +1319,16 @@ export async function formatRoleProfileForSystemPrompt(
   }
   const { getRoleProfileForRuntime } = await import('./personal_ontology_contract');
   return getRoleProfileForRuntime(uid, templateIds, readContext);
+}
+
+/** Stable role identity used by recall scopePolicy.roleIds. A space without a
+ *  primary template has no role, so role-restricted assets stay fail-closed. */
+export async function readSpacePrimaryTemplateId(
+  uid: string,
+  spaceId: string | null | undefined,
+): Promise<string | undefined> {
+  if (!spaceId) return undefined;
+  const space = await _readSpace(uid, spaceId).catch(() => null);
+  const primary = space?.primary_template_id || space?.template_id;
+  return typeof primary === 'string' && primary ? primary : undefined;
 }

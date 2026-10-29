@@ -1,0 +1,9 @@
+name: ui-color
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Build and review UI color systems across OKLCH/OKLAB, palettes, semantic
+  color, contrast, chart color, dark mode, and accessible color rules.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

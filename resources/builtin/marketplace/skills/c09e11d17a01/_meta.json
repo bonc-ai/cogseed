@@ -1,0 +1,7 @@
+{
+  "version": "1.1.0",
+  "updated_at": "2026-10-15T00:00:00+08:00",
+  "category": "data",
+  "description_zh": "按用户明确指令创建或修改认知与本体，核对完整内容、条件、来源和关联后保存；适合“记住这个偏好”“创建项目事实”“修改这条规则”；触发：创建认知、记住这个、认知编辑、本体更正、修改偏好。",
+  "description_en": "Create or edit durable cognition and ontology through governed tools; For: 'remember this as a preference', 'create this project fact', 'change this rule'; Triggers: create cognition, remember this, edit cognition, correct ontology, change preference."
+}

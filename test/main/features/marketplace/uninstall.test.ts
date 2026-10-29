@@ -220,13 +220,15 @@ describe('卸载 / 墓碑（C6 / FR-046–FR-048）', () => {
   describe('⭐ authority boundary：不扩散到用户自定义内容', () => {
     it('卸载只碰 marketplace 安装树，不碰 cloud/skills/', () => {
       const code = readSrc('main/features/marketplace.ts');
-      const fn = code.slice(
-        code.indexOf('export async function uninstallMarketplaceSkill'),
-        code.indexOf('export async function uninstallMarketplaceSkill') + 1200,
-      );
-      expect(fn).toContain('userMarketplaceSkillDir(uid, skillId)');
-      expect(fn).toContain('marketplaceCacheSkillDir(uid, skillId)');
+      // 显式用户线把函数体放进 `...ForUser`（作用域参数名 userId），全局入口只做
+      // 活跃用户委托；断言的不变量不变——卸载只碰 marketplace 安装树。
+      const start = code.indexOf('export async function uninstallMarketplaceSkillForUser');
+      expect(start).toBeGreaterThan(-1);
+      const fn = code.slice(start, start + 1200);
+      expect(fn).toContain('userMarketplaceSkillDir(userId, skillId)');
+      expect(fn).toContain('marketplaceCacheSkillDir(userId, skillId)');
       expect(fn).not.toContain('userSkillsDir');
+      expect(code).toContain('uninstallMarketplaceSkillForUser(getActiveUserId(), skillId)');
     });
 
     it('两棵树的路径根不同，自定义 Skill 结构上不可能被删到', () => {

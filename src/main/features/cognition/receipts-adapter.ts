@@ -65,14 +65,6 @@ function matches(item: CognitionReuseReceiptView, receipt: ContextReuseReceipt, 
   return true;
 }
 
-export async function readCognitionReuseReceipt(userId: string, executionId: string): Promise<CognitionReuseReceiptView> {
-  const [receipt, execution] = await Promise.all([
-    p3394.readReceipt(userId, executionId),
-    executionRecords.read(userId, executionId).catch(() => undefined),
-  ]);
-  return mapReceipt(receipt, execution);
-}
-
 /**
  * 回执列表**以回执本身为准**，不再从 ExecutionRecord 的 `receiptId` 反查。
  *
@@ -100,25 +92,35 @@ export async function listCognitionReuseReceipts(
     log.warn('list cognition reuse receipts failed', { error: (error as Error).message });
     return [];
   }
-  // 先按时间倒序截一个工作窗口再补执行记录：补充信息要按 executionId 逐条读盘，
-  // 全量补一遍在回执攒多之后会很贵，而调用方只要最新的 limit 条。窗口留出
-  // 冗余，给随后按 agentId / conversationId / skillId 的过滤留余量。
+  // 先滤后截（2026-10-01 质检 P-r1-77）：过滤必须在全集上做，截断只发生在
+  // 攒够 limit 条之后。此前先截 3 倍窗口再过滤，窗口外的命中被静默丢弃——
+  // 按 skillId / agentId / conversationId 过滤时「最近没用」伪装成「从未用过」。
+  // 补执行记录仍按新到旧逐条读盘（贵在读 IO，不在比对）：回执本体就能判的
+  // 谓词（status / skillId）先零 IO 收紧候选池，只有按 agentId /
+  // conversationId 过滤时才需要边读边判；无论哪种，攒够 limit 条即停——
+  // 无过滤的常见路径补读数反而从 3×limit 降到 limit。
   const ordered = receipts.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  const window = ordered.slice(0, Math.max(limit * 3, limit));
-  const settled = await Promise.allSettled(window.map(async (receipt) => {
-    const execution = await executionRecords.read(userId, receipt.executionId).catch(() => undefined);
-    const view = mapReceipt(receipt, execution);
-    return matches(view, receipt, filter) ? view : null;
-  }));
+  const pool = ordered.filter((receipt) => {
+    if (filter.status && mapStatus(receipt.status) !== filter.status) return false;
+    if (filter.skillId && !receiptReferencesSkill(receipt, filter.skillId)) return false;
+    return true;
+  });
   const out: CognitionReuseReceiptView[] = [];
   let skipped = 0;
-  for (const item of settled) {
-    if (item.status === 'fulfilled') {
-      if (item.value) out.push(item.value);
-    } else {
+  for (const receipt of pool) {
+    if (out.length >= limit) break;
+    try {
+      const execution = await executionRecords.read(userId, receipt.executionId).catch(() => undefined);
+      const view = mapReceipt(receipt, execution);
+      // 最终裁决仍走 matches 单一口径（池子预筛只是省 IO 的优化，不是第二套判据）。
+      if (matches(view, receipt, filter)) out.push(view);
+    } catch (error) {
       skipped += 1;
+      log.warn('unreadable cognition reuse receipt skipped', {
+        receiptId: receipt.receiptId, error: (error as Error).message,
+      });
     }
   }
   if (skipped) log.warn('skipped unreadable cognition reuse receipts', { skipped });
-  return out.slice(0, limit);
+  return out;
 }

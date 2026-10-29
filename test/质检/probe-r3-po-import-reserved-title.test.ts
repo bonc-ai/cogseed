@@ -1,21 +1,6 @@
 /**
- * 红队探针 r3：导出→导入 round-trip 丢组——组标题恰为方言保留标题
- * 「字段区」/「流水区」时，该组在导入解析中整体消失或内容并入别组。
- *
- * 推演链：poExportMarkdown（po/api.ts:462-473）按组输出 `## ${group.title}`，
- * 对标题无保留词检查；poImportPreview（po/api.ts:503-517）扫到
- * `## 字段区` / `## 流水区` 时按「组内保留标题」豁免——不切组、该行并入
- * 上一个 current 的正文。于是：
- * - 保留词组是**第一个组**：current=null，标题行被丢弃，该组及全部内容
- *   从导入结果中消失（数据丢失）；
- * - 保留词组在**其他组之后**：它的标题行与全部字段/值并入前一个组的
- *   正文，被前一组吃掉（数据串组）。
- * createGroup/createEntry 对标题无保留词校验，用户随手就能建出这种组。
- *
- * 2026-09-30 r3 收尾（记账员）：对应待议 P-r3-4（入口校验拒保留词 /
- * 导入端豁免状态机 / 导出端格式隔离，推荐 1+2 组合待拍板）→ it.skip。
- * 断言锁定的是「现状 round-trip 丢组」，拍板修复后反转。复核另发现的
- * 模板组 `## 分节` 同族碎裂疑点在拍板时一并排查。见 round-3-甄别.md。
+ * 保留标题分组的导出、再导入与相邻分组隔离：叫
+ * 「字段区」/「流水区」的组在导出再导入时整组保留，不被吞并、不消失。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -24,7 +9,7 @@ import * as path from 'node:path';
 
 vi.mock('../../src/main/features/kb_indexer', () => ({
   enqueue: () => {},
-  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+  kbEvents: { on: () => {}, emit: () => {}, off: () => {} },
 }));
 vi.mock('../../src/main/features/search', () => ({
   upsertContext: () => {},
@@ -55,11 +40,11 @@ async function loadApi() {
   return import('../../src/main/features/po/api');
 }
 
-describe('probe r3 › 导入 round-trip 保留词丢组（待议 P-r3-4，拍板前 skip）', () => {
-  it.skip('唯一组叫「字段区」时，导出再导入整组消失；跟在别组后则被前组吞并', async () => {
+describe('导入 round-trip 保留词组保全', () => {
+  it('唯一组叫「字段区」：导出再导入整组保留且可回灌；「流水区」组跟在别组后不吞并', async () => {
     const api = await loadApi();
 
-    // 场景 1：保留词组是唯一组
+    // 场景 1：保留词组是唯一组。
     const g1 = await api.poCreateGroup(UID, '字段区');
     expect(g1.ok).toBe(true);
     const gid1 = g1.group!.group_id;
@@ -69,13 +54,21 @@ describe('probe r3 › 导入 round-trip 保留词丢组（待议 P-r3-4，拍�
     const exported1 = api.poExportMarkdown(UID);
     expect(exported1).toContain('## 字段区');
 
-    // 模拟换机：清掉文档再预览导入
+    // 模拟换机：清掉文档再预览导入。
     fs.rmSync(poDocFile(), { force: true });
     const preview1 = api.poImportPreview(UID, exported1);
-    // 唯一组整体消失（数据丢失实锤）
-    expect(preview1.items.length).toBe(0);
+    expect(preview1.items.length).toBe(1);
+    expect(preview1.items[0].title).toBe('字段区');
+    expect(preview1.items[0].fields.map((f) => f.name)).toContain('工具');
+    expect(JSON.stringify(preview1.items[0])).toContain('ZCode');
 
-    // 场景 2：保留词组跟在正常组后
+    // 回灌可用：apply 后快照里组与值都在。
+    const applied1 = await api.poImportApply(UID, preview1.items);
+    expect(applied1.ok).toBe(true);
+    const snap1 = api.getPoSnapshot(UID);
+    expect(snap1.groups.some((g: any) => g.title === '字段区' && g.values.some((v: any) => v.text === 'ZCode'))).toBe(true);
+
+    // 场景 2：保留词组跟在正常组后。
     fs.rmSync(poDocFile(), { force: true });
     const normal = await api.poCreateGroup(UID, '正常组');
     const gidN = normal.group!.group_id;
@@ -89,12 +82,12 @@ describe('probe r3 › 导入 round-trip 保留词丢组（待议 P-r3-4，拍�
     const exported2 = api.poExportMarkdown(UID);
     fs.rmSync(poDocFile(), { force: true });
     const preview2 = api.poImportPreview(UID, exported2);
-    // 「流水区」组不再作为独立组出现
-    expect(preview2.items.map((i) => i.title)).toEqual(['正常组']);
-    // 它的内容被并入「正常组」的解析（串组实锤——preview 第一组的字段里
-    // 出现本属于「流水区」的字段F/值F，或进了流水条目）
-    const normalItem = preview2.items[0];
-    const flattened = JSON.stringify(normalItem);
-    expect(flattened).toContain('值F');
+    // 「流水区」作为独立组出现，不再被前组吞并。
+    expect(preview2.items.map((i) => i.title)).toEqual(['正常组', '流水区']);
+    const flowItem = preview2.items.find((i) => i.title === '流水区')!;
+    expect(flowItem.fields.map((f) => f.name)).toContain('字段F');
+    expect(JSON.stringify(flowItem)).toContain('值F');
+    // 正常组里不出现流水区组的内容。
+    expect(JSON.stringify(preview2.items[0])).not.toContain('值F');
   });
 });

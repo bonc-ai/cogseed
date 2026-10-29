@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../helpers/stored-ability-asset';
 /**
  * 回归 r1（原探针「purged 资产借本体回流候选复活」断言反转）：
  * purge 级联必须清掉本体回流候选池里的 `asset-backflow-<assetId>` 候选。
@@ -51,7 +52,7 @@ const ACT = { actor: 'user' as const, reason: 'probe' };
 async function mkRuleAsset(id: string) {
   const { createAbilityAsset } = await import('../../src/main/features/recall/asset-service');
   const now = new Date().toISOString();
-  return createAbilityAsset(UID, {
+  return seedStoredAbilityAsset(UID, {
     schemaVersion: 2, ownerId: UID, id, candidateId: `cand-${id}`,
     sourceCandidateIds: [`cand-${id}`], reviewDecisionId: `rd_probe${id.slice(-6)}`.padEnd(16, 'x'),
     type: 'rule', title: '演示纪律', statement: SECRET,
@@ -70,12 +71,15 @@ async function findBackflowCandidate(candidateId: string) {
 describe('回归 r1 › purge 级联清本体回流候选（复活通道堵死）', () => {
   it('purge 级联移除回流候选：正文副本不再留在池里（对照组：主记录正文已清空）', async () => {
     const assets = await import('../../src/main/features/recall/asset-service');
-    const { backflowAssetToOntologyPool } = await import('../../src/main/features/recall/ontology-backflow');
+    const po = await import('../../src/main/features/personal_ontology_candidates');
 
     const asset = await mkRuleAsset('aa-bf-revive');
-    // 晋升链同款回流（candidate-service.ts 调用的就是这个函数）
-    const offered = await backflowAssetToOntologyPool(UID, asset);
-    expect(offered.offered).toBe(true);
+    // 仅种入已有历史回流副本；生产writer已删除。
+    const legacyFile = po.candidatesMdPath(UID);
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+    fs.writeFileSync(legacyFile, po.serializeCandidatesMarkdown([{ candidate_id: `asset-backflow-${asset.id}`,
+      kind: 'rule', confidence: 'low', summary: asset.title, memory_scope: 'shared', memory_text: asset.statement,
+      source_memory_refs: [] }]));
 
     const before = await findBackflowCandidate('asset-backflow-aa-bf-revive');
     expect(before).not.toBeNull();
@@ -94,15 +98,19 @@ describe('回归 r1 › purge 级联清本体回流候选（复活通道堵死�
     expect(after).toBeNull();
   });
 
-  it('复活终点被堵死：purge 后 confirmCandidate 找不到候选，正文进不了普通组流水区', async () => {
+  it('复活终点被堵死：purge 后旧确认writer不存在，正文进不了普通组流水区', async () => {
     const assets = await import('../../src/main/features/recall/asset-service');
-    const { backflowAssetToOntologyPool } = await import('../../src/main/features/recall/ontology-backflow');
-    const { confirmCandidate } = await import('../../src/main/features/personal_ontology_candidates');
+    const po = await import('../../src/main/features/personal_ontology_candidates');
+    const legacyCandidates = await import('../../src/main/features/personal_ontology_candidates');
     const { createGroup } = await import('../../src/main/features/personal_ontology_groups');
     const { loadPoDocSync } = await import('../../src/main/features/po/store');
 
     const asset = await mkRuleAsset('aa-bf-revive2');
-    await backflowAssetToOntologyPool(UID, asset);
+    const legacyFile = po.candidatesMdPath(UID);
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+    fs.writeFileSync(legacyFile, po.serializeCandidatesMarkdown([{ candidate_id: `asset-backflow-${asset.id}`,
+      kind: 'rule', confidence: 'low', summary: asset.title, memory_scope: 'shared', memory_text: asset.statement,
+      source_memory_refs: [] }]));
     await assets.deleteAbilityAsset(UID, 'aa-bf-revive2', ACT);
     await assets.purgeAbilityAsset(UID, 'aa-bf-revive2', ACT);
 
@@ -110,12 +118,8 @@ describe('回归 r1 › purge 级联清本体回流候选（复活通道堵死�
     expect(created.ok).toBe(true);
     expect(created.group?.group_id).toBeTruthy();
 
-    // 用户在候选池点确认：候选已被 purge 级联移除，确认失败、无处可写
-    const result = await confirmCandidate(UID, 'asset-backflow-aa-bf-revive2', {
-      toGlobalMemory: false,
-      toGroupIds: [created.group!.group_id],
-    });
-    expect(result.ok).toBe(false);
+    // 用户在候选池点确认：候选已被 purge 级联移除，旧确认writer已移除、无处可写
+    expect(legacyCandidates).not.toHaveProperty('confirmCandidate');
 
     // 回归主体：purge 掉的正文没有落进普通组流水区
     const doc = loadPoDocSync(UID);
@@ -123,5 +127,12 @@ describe('回归 r1 › purge 级联清本体回流候选（复活通道堵死�
     expect(group).toBeDefined();
     const entries = (group?.entries || []) as Array<{ text?: unknown }>;
     expect(entries.some((entry) => String(entry?.text ?? entry).includes('PURGED_SECRET'))).toBe(false);
+    const stillPurged = await assets.readAbilityAsset(UID, asset.id);
+    expect(stillPurged.status).toBe('purged');
+    expect(stillPurged.statement).toBe('');
+    const paths = await import('../../src/main/paths');
+    for (const file of [paths.userProfileFile(UID), paths.userMemoryFile(UID)]) {
+      if (fs.existsSync(file)) expect(fs.readFileSync(file, 'utf8')).not.toContain('PURGED_SECRET');
+    }
   });
 });

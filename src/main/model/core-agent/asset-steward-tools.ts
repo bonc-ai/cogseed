@@ -1,5 +1,5 @@
 /**
- * 资产管家工具（specs/008 US-401 读 / US-402 写 / US-404 安全网）。
+ * 资产管家工具。
  *
  * 与 `recall-tools.ts` 的分工：那里是**任务执行期**的只读取用（目录 + 语义检索 +
  * agent_read 留痕），这里面向**管理**——全量浏览、按需读全文、按用户指令改动。
@@ -9,15 +9,13 @@
  * 写通道不新开：全部落到既有 `asset-service.ts` 写函数（不新建第二套写路径）。
  */
 
-import type { AgentTool } from '#core-agent';
+import type { AgentTool, ToolContext } from '#core-agent';
 import { createLogger } from '../../logger';
 import { t } from '../../i18n';
 import {
   abilityAssetActiveVersion,
   archiveAbilityAsset,
   classifyAbilityAssetWriteFailure,
-  diffAbilityAssetsForAudit,
-  summarizeAuditChange,
   deleteAbilityAsset,
   listAbilityAssets,
   mergeAbilityAssets,
@@ -25,7 +23,6 @@ import {
   recordAbilityAssetAudit,
   restoreAbilityAsset,
   rollbackAbilityAsset,
-  updateAbilityAsset,
   type AbilityAssetFailureCategory,
   type UpdateAbilityAssetInput,
 } from '../../features/recall/asset-service';
@@ -36,7 +33,6 @@ import { assertCompliantAbilityAssetTitle } from '../../features/recall/title-po
 import { evaluateRecallAssetRuntimeEligibility } from '../../features/recall/prompt-injection';
 import { requestInteraction } from '../../features/chat_events/interaction-hub';
 import {
-  createAssetChangeProposal,
   listAssetChangeProposals,
   type AssetChangeProposal,
 } from '../../features/recall/asset-approval-service';
@@ -44,6 +40,10 @@ import { busAssetApprovalCardPort, postAssetChangeApprovalCard } from '../../fea
 import { safeId } from '../../storage';
 import { logErrorRef, maskId } from '../../util/log-redact';
 import { classifyMemoryReplaceIntent } from '../../features/recall/memory-save-intent';
+import { editCognition, assertCognitionManagementTarget, assertAssetManagementSources, cognitionManagementAssetMatches,
+  prepareCognitionAssetEdit, withPreparedCognitionAssetEdit, commitPreparedCognitionAssetEdit, proposePreparedCognitionAssetEdit } from '../../features/cognition/edit-service';
+import { assertCognitionManagementReadTarget, managementContentChunk, managementReadVersion, MANAGEMENT_PAGE_TOKENS } from '../../features/cognition/management-read';
+import { esticogseedToolResultTokens } from '../../util/tool-result-cap';
 
 const log = createLogger('asset-steward-tools');
 
@@ -51,7 +51,7 @@ export interface AssetStewardToolsOpts {
   userId: string;
   agentId?: string;
   projectId?: string;
-  /** 当前回合 id：Phase 5 的危险操作确认与台账定位用。 */
+  /** 当前回合 id：危险操作确认与台账定位用。 */
   turnId?: string;
   /** Conversation id：危险操作的单次确认要送回这条会话。 */
   cid?: string;
@@ -61,7 +61,9 @@ export interface AssetStewardToolsOpts {
   taskText?: string;
   /** 只有当前可见来源行确实由用户发出时，才能把原话当作直写授权。 */
   sourceMessageFromUser?: boolean;
+  sourceMessageId?: string;
 }
+
 
 /** 列表分页默认与上限，对齐既有目录工具量级（一页 30、最多 50）。 */
 const LIST_PAGE_DEFAULT = 30;
@@ -110,9 +112,9 @@ function metaLine(asset: RecallAbilityAssetRecord): string {
     `在用版=v${version}`,
     ...(asset.activeVersion && asset.activeVersion !== asset.version ? [`最新版=v${asset.version}`] : []),
     ...(asset.spaceId ? [`空间=${asset.spaceId}`] : []),
-    // 标签 = 主题分类（specs/012）；缺失不显示（缺省就是「未分类」，不伪造空值）。
+    // 标签 = 主题分类；缺失不显示（缺省就是「未分类」，不伪造空值）。
     ...(asset.tags && asset.tags.length ? [`标签=${asset.tags.join('/')}`] : []),
-    // 族名是用户手写的**同源血缘**分组名，不是主题标签（标签字段尚未落地）：
+    // 族名是用户手写的同源分组名，不是主题标签：
     // 显示它才能让归并判断有依据，但必须标清是什么，免得和"标签"混为一谈。
     ...(asset.familyName ? [`族名(同源血缘)=${asset.familyName}`] : []),
   ].join(' | ');
@@ -125,10 +127,8 @@ function listLine(asset: RecallAbilityAssetRecord): string {
 /** 一条资产是否是"能交给模型看的"——与注入/派单同一道运行时准入门，
  *  同源判定，避免两处标准分叉。
  *
- *  软条件 `not_applicable_context` 不计入拦截（与既有正文读取同口径）：
- *  applicableWhen 是给模型自己判断的软提示，按用户消息做词面匹配来否掉模型的
- *  明确选择，会把这个功能废掉。硬闸照旧：状态 / 来源 / scopePolicy / 禁用场景 /
- *  敏感度 / targetAgents。
+ *  inspect 将任务相关性单独返回；此处不得删除或改写阻断理由。
+ *  硬边界与自动消费同源，查阅许可不意味着默认使用许可。
  */
 async function runtimeBlockReasons(
   opts: AssetStewardToolsOpts,
@@ -140,17 +140,14 @@ async function runtimeBlockReasons(
     ...(opts.spaceId ? { workspaceId: opts.spaceId } : {}),
     ...(opts.taskText ? { taskText: opts.taskText } : {}),
     ...(opts.taskText ? { purpose: opts.taskText } : {}),
-    silentDefaultInjection: true,
+    operation: 'inspect',
   });
-  return eligibility.reasons.filter((reason) => reason !== 'not_applicable_context');
+  return eligibility.reasons;
 }
 
-// ── 待审批提议（US-406）：管理视角的可见性 ────────────────────────────────
+// ── 待审批提议：管理视角的可见性 ────────────────────────────────
 //
-// 模型此前**看不到**自己提过什么（2026-09-25 子安："在对话中让他管理整个资产库，
-// 他拿不到待审批的内容"）。看不见的代价不只是答不上"有哪些待办"：某条资产挂着
-// 一张没定的卡片时，它会一遍遍重提同一个变更，然后被去重挡住、却不知道为什么。
-// 这一段只做**读**——处置权在用户手里，模型不许代拍（也没有代拍的通道）。
+// 显示待审批提议，避免模型反复提出同一变更。这里只读，处置权属于用户。
 const PROPOSAL_STATE_LABELS: Record<string, string> = {
   pending: '等用户定夺',
   deferred: '用户已「稍后处理」（还在待确认清单）',
@@ -257,7 +254,7 @@ function createListAbilityAssetsTool(opts: AssetStewardToolsOpts): AgentTool {
       const assetType = typeof filter.assetType === 'string' && filter.assetType.trim() ? filter.assetType.trim() : undefined;
       const status = typeof filter.status === 'string' && filter.status.trim() ? filter.status.trim() : undefined;
       const spaceId = typeof filter.spaceId === 'string' && filter.spaceId.trim() ? filter.spaceId.trim() : undefined;
-      // 标签过滤（specs/012 T023）：与类型/状态/空间叠加（AND）；匹配与标签
+      // 标签过滤：与类型/状态/空间叠加（AND）；匹配与标签
       // 规范化同一口径（大小写不敏感），不给渲染层之外的第二套判断。
       const rawTagsFilter = parseStructuredInput(filter.tags);
       const tagsFilter = Array.isArray(rawTagsFilter)
@@ -327,8 +324,7 @@ function createListAbilityAssetsTool(opts: AssetStewardToolsOpts): AgentTool {
         };
       }
       const more = pool.length - (offset + page.length);
-      // 挂着待审批提议的条目要标出来：不标，模型会重提同一个变更、然后被去重挡住，
-      // 却不知道自己提过（2026-09-25 子安："他拿不到待审批的内容"）。
+      // 标记待审批提议，避免模型重复提出同一个变更。
       const openProposals = await listOpenProposals(userId);
       const openByAsset = new Map<string, number>();
       for (const proposal of openProposals) {
@@ -364,6 +360,7 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
     description: [
       '读出一条认知资产的**完整正文**：单批最多 2000 字，长正文用 chunk 逐批读完（返回里会写明第几批/共几批与下一批的 chunk）。',
       '这是管理视角的全文读取，不受"一次 6 条、每条 2000 字"的目录取用限制；适合改动前先看清内容、核对某条到底写了什么。',
+      '读取本身不算采用；若确实按它形成产出，且本轮有 report_ability_asset_usage，最终回复前调用该工具报告具体版本和产出原文片段。只写采用说明不会留下正式回执。',
       '资产**不可用时不会返回正文**，而是如实说明原因（已删除/已暂停/来源被撤权/范围不符/命中禁用场景/敏感级过高/未分级等）——这不是"找不到"，别当成资产不存在，也别试图绕过。',
       '已删除的资产在保留期内仍然存在，但正文已不可用；要恢复它用 restore_ability_asset。',
       '这条资产若挂着**待审批提议**（AI 提过改动、用户还没定），返回里会点明：那类改动**不重复提交**，先把卡片的事告诉用户。',
@@ -372,7 +369,9 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
       type: 'object',
       properties: {
         assetId: { type: 'string', description: '目录里的资产 id（aa- 开头）。' },
+        mode: { type: 'string', enum: ['task', 'manage'], description: 'manage：当前本人点名，或明确要求全部资产内容盘点时按目录ID管理读；可读暂停/归档内容，不恢复任务使用，不登记采用，已删除/撤权正文仍不可读。缺省task门禁不变。' },
         chunk: { type: 'number', description: `第几批（从 0 开始），默认 0。一批 ${READ_CHUNK_CHARS} 字；返回会写明总批数与下一批编号。` },
+        contentCursor: { anyOf: [{ type: 'integer', const: 0 }, { type: 'string' }], description: '超大完整合同使用（task每批仍须原runtime准入，manage每批核本人指令）：0开始，再传nextContentCursor。逐批回源核来源和版本，含全部正文/条件/范围/关联，按contentRange拼接完整JSON；与chunk二选一。' },
       },
       required: ['assetId'],
       additionalProperties: false,
@@ -390,7 +389,20 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
         return { content: `[asset:${assetId}] 读取失败：这条资产不存在，或不属于当前用户。`, isError: true };
       }
 
-      const reasons = await runtimeBlockReasons(opts, asset);
+      if (input.mode !== undefined && !['task', 'manage'].includes(String(input.mode))) return { content: '无效读取模式', isError: true };
+      let management = false;
+      if (input.mode === 'manage') {
+        try {
+          const intent = await assertCognitionManagementReadTarget(userId, { ...opts, userId }, 'asset', asset);
+          if (intent === 'named') {
+            const matches = await cognitionManagementAssetMatches(userId, opts, asset);
+            if (matches.length) return { content: JSON.stringify({ status: 'ambiguous', matches }) };
+          }
+          await assertAssetManagementSources(userId, asset);
+          management = true;
+        } catch (error) { return { content: error instanceof Error ? error.message : '管理读取未获授权', isError: true }; }
+      }
+      const reasons = management ? [] : await runtimeBlockReasons(opts, asset);
       if (reasons.length) {
         // 「被拦截不得计为成功」：isError 是平台自身的成功/失败信号，回执同时写明
         // 具体命中哪条规则——不静默当不存在，也不把正文交出去。
@@ -407,6 +419,21 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
         };
       }
 
+      if (input.contentCursor !== undefined) {
+        if (input.chunk !== undefined) return { content: t('cognition.read.invalid_cursor'), isError: true };
+        const fields = ['id', 'title', 'statement', 'value', 'type', 'contentCategory', 'status', 'maturity', 'lifecycleStatus', 'scope', 'scopePolicy',
+          'version', 'activeVersion', 'applicableWhen', 'forbiddenWhen', 'sensitivity', 'tags', 'familyName', 'targetAgents', 'evidenceRefs', 'ontologyRefs', 'relations', 'derivedFrom', 'createdAt', 'updatedAt'];
+        const contract = { mode: management ? 'manage' : 'task', asset: Object.fromEntries(fields.filter(key => Object.hasOwn(asset, key)).map(key => [key, (asset as unknown as Record<string, unknown>)[key]])),
+          expectedVersion: asset.version, expectedActiveVersion: abilityAssetActiveVersion(asset), useBoundary: t('cognition.read.use_boundary') };
+        try {
+          const part = managementContentChunk(userId, 'asset', assetId, contract, input.contentCursor);
+          const current = await readAbilityAsset(userId, assetId);
+          if (management) await assertAssetManagementSources(userId, current);
+          else if ((await runtimeBlockReasons(opts, current)).length) return { content: t('cognition.read.source_unavailable'), isError: true };
+          if (managementReadVersion(current) !== managementReadVersion(asset)) return { content: t('cognition.read.snapshot_changed'), isError: true };
+          return { content: JSON.stringify(part) };
+        } catch (error) { return { content: error instanceof Error ? error.message : t('cognition.read.invalid_cursor'), isError: true }; }
+      }
       const statement = String(asset.statement || '');
       const totalChunks = Math.max(1, Math.ceil(statement.length / READ_CHUNK_CHARS));
       if (chunk >= totalChunks) {
@@ -424,12 +451,14 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
       // 「这条有没有没定的卡片」是管理这条资产的第一手信息：不点明，模型会重提
       // 同一个变更（被去重挡住）、或者把"改不动"当成工具坏了。
       const openProposals = (await listOpenProposals(userId)).filter((proposal) => proposal.assetId === assetId);
-      return {
-        content: [
+      const content = [
           `[asset:${assetId}] ${asset.title || '(无标题)'}`,
           metaLine(asset),
+          `编辑基线：expectedVersion=${asset.version}；expectedActiveVersion=${asset.activeVersion || asset.version}`,
+          ...(management ? [`管理读取不代表任务采用；关联本体=${JSON.stringify(asset.ontologyRefs || [])}`] : []),
           // 条件行不能靠"过滤空串"来拼：正文与下一批提示之间那个空行是**故意**的，
           // 一起滤掉会让提示黏在正文末尾，模型分不清哪句是内容、哪句是工具话。
+          ...(asset.value ? [`${t('cognition.edit.value')}: ${asset.value}`] : []),
           ...(applies ? [`适用于: ${applies}`] : []),
           ...(forbids ? [`禁用: ${forbids}`] : []),
           `正文（第 ${chunk + 1}/${totalChunks} 批，共 ${statement.length} 字）:`,
@@ -447,16 +476,17 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
               '不要重复提交同一个变更（会被去重挡住）；把卡片的事告诉用户，内容看 list_asset_change_proposals。',
             ]
             : []),
-        ].join('\n'),
-      };
+        ].join('\n');
+      if (esticogseedToolResultTokens(content) > MANAGEMENT_PAGE_TOKENS) return { content: JSON.stringify({ mode: management ? 'manage' : 'task', id: assetId,
+        contentState: 'requires_chunk_read', managementRead: { assetId, mode: management ? 'manage' : 'task', contentCursor: 0 }, useBoundary: t('cognition.read.use_boundary') }) };
+      return { content };
     },
   };
 }
 
-// ── 待审批提议清单（US-406 读侧） ─────────────────────────────────────────
+// ── 待审批提议清单 ─────────────────────────────────────────
 //
-// 只读：处置权在用户手里，这里不提供任何"代拍"的形状。做这个工具的直接原因见
-// 上面 `listOpenProposals` 的注释（子安真机反馈"拿不到待审批的内容"）。
+// 只读清单不提供批准入口，处置权属于用户。
 const PROPOSAL_PAGE_DEFAULT = 20;
 const PROPOSAL_PAGE_MAX = 50;
 const PROPOSAL_STATES = ['pending', 'deferred', 'rejected', 'confirmed', 'all'] as const;
@@ -469,6 +499,7 @@ function createListAssetChangeProposalsTool(opts: AssetStewardToolsOpts): AgentT
     description: [
       '列出**AI 提过、等用户点头**的资产改动（对话里那张审批卡片），含拟生效内容、当前值、依据与状态。',
       '什么时候用：① 用户问"有哪些待审批/待确认"；② 盘点整个资产库、要交代"哪些需要你点头"；③ 改某条资产前先看它有没有挂着卡片（清单与 read_ability_asset 也会标）。',
+      '向用户展示提议时，保留每条结果中的 [proposal:id] 原始入口标记；界面会把它变成打开该提议的按钮。不要只列标题而省略入口，也不要另造提议 ID。',
       '**处置权在用户**：你只能看、只能把内容转达给用户；没有让你替用户确认/拒绝的通道，也不要重复提交同一个变更（会被去重挡住并说明）。',
       '默认只看等用户定夺的（pending）；"稍后处理"的用 state=deferred，看全部用 state=all。',
     ].join(''),
@@ -559,15 +590,13 @@ function createListAssetChangeProposalsTool(opts: AssetStewardToolsOpts): AgentT
   };
 }
 
-// ── 危险操作的安全网（US-404 / T027–T028） ────────────────────────────────
+// ── 危险操作的安全网 ────────────────────────────────
 //
-// 危险操作 = **批量删除 / 清空 / 跨作用域扩大**（2026-09-23 定稿，与 Backlog
-// v2.6 US-404 一致）。不新增工具：由既有工具在批量或跨作用域形态下**自动升级**。
+// 危险操作 = **批量删除 / 清空 / 跨作用域扩大**；既有工具在这些形态下升级确认。
 // 执行链：执行前快照 → 经 InteractionHub 单次确认（approval 类，**超时 deny**）
 // → 确认结果与快照一并记账。未获确认 → 不执行 + 如实回执（不得计为成功）。
 //
-// A3 权限位：这是「AI 自主实质变化」之外唯一设具名人类确认点的地方；A4（无人工
-// 介入的破坏性动作）禁用。
+// 危险动作必须经人类确认，不能无人值守执行破坏性操作。
 
 export type DangerKind = 'batch_delete' | 'clear_all' | 'cross_scope_widen';
 
@@ -752,10 +781,10 @@ async function runDangerGuard(
   };
 }
 
-// ── 写工具（US-402） ──────────────────────────────────────────────────────
+// ── 写工具 ──────────────────────────────────────────────────────
 //
 // 全部落到既有 `asset-service.ts` 写函数，不新建第二套写通道；`actor` 一律 `'ai'`，
-// 依据写进台账的 `reason`（FR-004）。**被拦截的操作不得计为成功**：失败回执带
+// 依据写进台账的 `reason`。**被拦截的操作不得计为成功**：失败回执带
 // `isError`、写明拦截规则与归因分类。
 
 /** 归因分类 → 人话（回执给模型看，模型再向用户解释）。 */
@@ -773,15 +802,15 @@ const FAILURE_CATEGORY_LABELS: Record<AbilityAssetFailureCategory, string> = {
   unknown: '未归类',
 };
 
-/** 「AI 自主提出的实质变化」不得直接生效（specs/008 分级②）。
+/** 「AI 自主提出的实质变化」不得直接生效。
  *
  *  实质变化 = 方法正文 / 事实判断 / 适用范围 / 主题标签：
  *    - `statement`：正文即"这条资产主张什么"；
  *    - `scope` 与 `applicableWhen`/`forbiddenWhen`：它从此会进出哪一批任务；
- *    - `tags`（specs/012）：打什么标签是含义判断，"这条该归哪类"必须由
- *      用户拍板（spec AC5：从"劝说"升级为"闸门"）；用户明确指令则直接执行。
- *  命名/标题不在此列（分级③允许自动处理）。 */
-export const SUBSTANTIAL_FIELDS = ['statement', 'scope', 'applicableWhen', 'forbiddenWhen', 'tags'] as const;
+ *    - `tags`：打什么标签是含义判断，"这条该归哪类"必须由
+ *      用户确认；用户明确指令则直接执行。
+ *  命名/标题不在此列。 */
+export const SUBSTANTIAL_FIELDS = ['statement', 'value', 'scope', 'applicableWhen', 'forbiddenWhen', 'tags'] as const;
 
 function writeReceipt(action: string, asset: RecallAbilityAssetRecord, extra: string[] = []): string {
   return [
@@ -792,7 +821,7 @@ function writeReceipt(action: string, asset: RecallAbilityAssetRecord, extra: st
 }
 
 /**
- * 失败回执 + 台账留痕（T032）：**被拦下的尝试也要留一条 `attempt_blocked`**。
+ * 失败回执 + 台账留痕：**被拦下的尝试也要留一条 `attempt_blocked`**。
  * 否则「零静默放行」只在成功路径上成立——拦下的那些事事后无从审计，也就无法
  * 回答"AI 到底试过什么、被什么规则挡住了"。
  *
@@ -834,7 +863,7 @@ async function blockedWriteReceipt(
 }
 
 /**
- * 分级②的落地：AI 自主的实质变化 → 建提议 + 发审批卡片，**内容不生效**。
+ * AI 自主的实质变化 → 建提议 + 发审批卡片，**内容不生效**。
  *
  * 卡片发不出去（没有会话上下文、或下发失败）时**退回拒绝兜底**：提议照留（用户
  * 仍能在待确认清单里看到），但回执必须说清"没有生效"——这条兜底与建卡路径各有
@@ -853,22 +882,7 @@ async function proposeSubstantialChange(
   },
 ): Promise<{ content: string; isError?: boolean }> {
   const { asset, assetId, payload, fields, reason } = params;
-  const summary = summarizeAuditChange(
-    diffAbilityAssetsForAudit(asset, { ...asset, ...payload }),
-  );
-  // 带上这几个字段**当前**的值：卡片要能显示"当前 → 拟生效"，用户才判断得了。
-  const beforeValues: Record<string, unknown> = {};
-  for (const key of fields) beforeValues[key] = (asset as unknown as Record<string, unknown>)[key];
-  const { proposal, created } = await createAssetChangeProposal(opts.userId, {
-    assetId,
-    baselineVersion: abilityAssetActiveVersion(asset),
-    fields: [...fields],
-    payload,
-    beforeValues,
-    before: summary?.before || '',
-    after: summary?.after || '',
-    reason,
-  });
+  const { proposal, created } = await proposePreparedCognitionAssetEdit(opts.userId, asset, { payload, fields, reason });
   // approval_proposed 的台账由 createAssetChangeProposal 自己写（实体创建即留痕，
   // 不依赖调用方记得写）；这里只在**下发失败**时补一句"卡片没发出去"。
 
@@ -927,10 +941,8 @@ async function dispatchApprovalCard(
 }
 
 /**
- * 模型常把嵌套对象/数组当 **JSON 字符串**传。真机实测（2026-09-25，deepseek）：
- * 模型把 `fields` 发成 `"{\"body\":\"…\"}"`，连续 6 次编辑全部落在"fields 至少要给
- * 一个要改的字段"上，旗舰编辑路径整轮不可用。字符串能解析成对象/数组就解析，
- * 否则原样返回交给下游校验（不静默当成空）。
+ * 接受模型用 JSON 字符串编码的对象/数组；解析失败时原样交给下游校验，
+ * 不静默转换为空值。
  */
 function parseStructuredInput(value: unknown): unknown {
   if (typeof value !== 'string') return value;
@@ -939,15 +951,13 @@ function parseStructuredInput(value: unknown): unknown {
   try { return JSON.parse(text); } catch { return value; }
 }
 
-/** `fields` 的字段名别名：契约（`contracts/model-tools.md`）写的是 `body`，
- *  底层字段叫 `statement`；模型按契约说 `body` 是对的，两个都收。 */
+/** `body` 是工具输入别名，映射到底层 `statement` 字段。 */
 const EDIT_FIELD_ALIASES: Record<string, string> = { body: 'statement' };
 
 /** 编辑允许的字段名（含别名）。**认不出的键要显式拒绝**——静默丢弃会让回执说
- *  "已改动"而实际一字未动（比报错更糟）。`tags`/`category` 已解禁（specs/012
- *  T022）：category 不落字段，收编为一条标签并入 tags。 */
+ *  "已改动"而实际一字未动（比报错更糟）。`tags`/`category` 均支持：category 不落字段，收编为一条标签并入 tags。 */
 const EDIT_ACCEPTED_FIELDS = new Set([
-  'title', 'statement', 'body', 'scope', 'applicableWhen', 'forbiddenWhen', 'scopePolicy', 'tags', 'category',
+  'title', 'statement', 'value', 'body', 'scope', 'applicableWhen', 'forbiddenWhen', 'scopePolicy', 'tags', 'category',
 ]);
 
 function requireReason(value: unknown): string | { error: string } {
@@ -957,7 +967,7 @@ function requireReason(value: unknown): string | { error: string } {
   return reason;
 }
 
-/** 标签形状不合法的回执（specs/012 T022）：归因固定为 **schema**（入参形状问题，
+/** 标签形状不合法的回执：归因固定为 **schema**（入参形状问题，
  *  不是数据缺失）；拒绝而不是截断/丢弃——静默截断会让模型以为打标成功。 */
 function tagShapeReceipt(assetId: string, problem: string): { content: string; isError: true } {
   return {
@@ -987,6 +997,7 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
     description: [
       '改一条认知资产的内容：标题、正文、适用范围、适用/禁用场景、主题标签。**必须**说明依据（reason）。',
       '**分级（很重要）**：只有用户在当前消息里明确给出并逐字写出要改成的正文或单组标签值，主进程才允许直接改这项；含义由你补写、值来自旧上下文或用户指令不够具体时，不得把 origin 标成 user_instruction，必须走用户审批。你自己提出的正文/适用范围/标签实质变化也必须审批。',
+      '用户要求生成或提交待确认改进候选时，现在就调用本工具，mode=propose：只创建真实待审批提议，资产原文与版本不变，不需要再次请求创建候选的许可。查询工具不能提交；只有本工具返回提议编号才能说已提交。',
       '读到的版本号（metaLine 里的「在用版」）请通过 expectedVersion 带回来：如果这条资产在你读取之后被改过（用户正在手动编辑），工具会拒绝而不是覆盖——重新读一次再决定。',
       '改动会写进台账（谁改的/时间/前后值/依据），并且随时可回滚（rollback_ability_asset）。',
       '主题标签：fields.tags 传字符串数组（整体替换；每条 trim 后非空且 ≤20 字、去重后 ≤12 条，超限拒绝不截断）；category 是旧入参，会**收编为一条标签**与 tags 合并去重（不再单独存在）。标签改动不 bump 内容版本，台账记「标签：旧 → 新」。',
@@ -999,8 +1010,9 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
           type: 'object',
           description: '要改的字段对象，至少给一个；没给的字段不动。必须传**对象**（例如 {"statement":"新正文"}），不要传 JSON 字符串。正文的键名是 statement（别名 body）。',
           properties: {
-            title: { type: 'string', description: '标题（命名规范化）：非空；含汉字时 ≤16 个字，其他语言 ≤60 字符；不得与正文开头重复（第一个字都不能与正文相同）；不以标点结尾。不合规会被拒绝。' },
+            title: { type: 'string', description: '标题（命名规范化）：非空；含汉字时 ≤16 个字，其他语言 ≤60 字符；不要整句照抄正文或截断成标题，可以保留相同的项目名、人名和术语；不以标点结尾。不合规会被拒绝。' },
             statement: { type: 'string', description: '正文（上限 4000 字）。' },
+            value: { type: 'string', description: '用途：帮助完成什么任务、判断或行动（上限 4000 字；空串清除；不改变使用权限）。' },
             scope: { type: 'string', description: '适用范围。' },
             applicableWhen: { type: 'array', items: { type: 'string' }, description: '适用场景（整体替换；传空数组=清空）。' },
             forbiddenWhen: { type: 'array', items: { type: 'string' }, description: '禁用场景（整体替换；传空数组=清空）。' },
@@ -1016,6 +1028,7 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
         },
         reason: { type: 'string', description: '改动依据：用户的原话或具体证据（必填，写进台账）。' },
         expectedVersion: { type: 'string', description: '你读到这条时的版本号；给了就要求与当前一致，不一致则拒绝（不静默覆盖）。' },
+        mode: { type: 'string', enum: ['propose', 'apply_if_authorized'], description: 'propose：仅提交待审批提议，不直接修改；apply_if_authorized（默认）：由主进程核验直写授权，否则仍走待审批。用户要求候选或暂不生效时必须用propose。' },
         origin: {
           type: 'string',
           description: '这只是你对来源的声明，不是授权凭据。主进程会核对当前用户消息；只有用户原话明确要求、且单项正文或标签改动值逐字匹配时，才允许直接改动。其他实质变化会进入用户审批。你自己提出的改动用 ai_initiated（缺省）。',
@@ -1024,7 +1037,10 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
       required: ['assetId', 'fields', 'reason'],
       additionalProperties: false,
     },
-    async execute(input: Record<string, unknown>): Promise<{ content: string; isError?: boolean }> {
+    async execute(input: Record<string, unknown>, context?: ToolContext): Promise<{ content: string; isError?: boolean }> {
+      if (input.mode !== undefined && input.mode !== 'propose' && input.mode !== 'apply_if_authorized') {
+        return { content: 'mode 必须是 propose 或 apply_if_authorized；没有提交或修改。', isError: true };
+      }
       const assetId = typeof input.assetId === 'string' ? input.assetId.trim() : '';
       if (!safeId(assetId)) return { content: `不是合法的资产 id：${assetId || '(空)'}`, isError: true };
       const reasonOrError = requireReason(input.reason);
@@ -1046,14 +1062,14 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
             `未能改动：[asset:${assetId}]`,
             `拦截规则：不认识的字段名：${unknownFields.join(' / ')}`,
             '归因：schema（入参或记录形状不合法）',
-            '可用的字段：title / statement（别名 body）/ scope / applicableWhen / forbiddenWhen / tags / category / scopePolicy。',
+            '可用的字段：title / statement（别名 body）/ value / scope / applicableWhen / forbiddenWhen / tags / category / scopePolicy。',
             '注意：fields 要传**对象**（不要传 JSON 字符串），例如 {"statement":"新正文"}。',
           ].join('\n'),
           isError: true,
         };
       }
       if (!Object.keys(fields).length) return { content: 'fields 里至少要给一个要改的字段。', isError: true };
-      // 标签解禁（specs/012 T022，本 Epic 的核心一步）：tags / category 统一并入
+      // 标签解禁：tags / category 统一并入
       // 标签字段——category 不落任何字段，**收编为一条标签**与 tags 合并去重后
       // 从 tags 写入（写路径唯一走 updateAbilityAsset 的元数据路径：不 bump 版本、
       // 台账记「标签：旧 → 新」）。禁映射到 `assetType`（资产数据形态）或
@@ -1112,7 +1128,7 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
         : touched.length === 1 && touched[0] === 'tags' && Array.isArray(fields.tags)
           ? fields.tags.join('、')
           : undefined;
-      const directUserEdit = input.origin === 'user_instruction'
+      const directUserEdit = input.mode !== 'propose' && input.origin === 'user_instruction'
         && opts.sourceMessageFromUser === true
         && typeof directFieldText === 'string'
         && classifyMemoryReplaceIntent(opts.taskText, directFieldText, true) === 'direct';
@@ -1124,11 +1140,34 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
       } catch {
         return { content: `[asset:${assetId}] 这条资产不存在，或不属于当前用户。`, isError: true };
       }
+      if (fields.value !== undefined && (typeof fields.value !== 'string' || fields.value.length > 4000)) {
+        return { content: '用途必须是 4000 字以内的文本；没有提交或修改。', isError: true };
+      }
+      // The legacy proposal/metadata branches share the same live source
+      // boundary as direct editing. No restricted beforeValues reach a card.
+      try { asset = await prepareCognitionAssetEdit(userId, assetId); }
+      catch (error) { return blockedWriteReceipt(opts, '改动', assetId, error); }
 
-      // 分级②：AI 自主提出的实质变化不直接生效。Phase 6 会在这一步之前建提议并
-      // 发审批卡片；这里保留"绝不静默生效"这道底线——提议建不出来时也宁可拒绝。
+      // Real conversations have a persisted source-message identity. Reuse
+      // the host editor to bind the target and preserve reviewed intent; legacy
+      // non-conversation callers retain their original contract below.
+      if (directUserEdit && opts.sourceMessageId && opts.cid) {
+        try {
+          const result = await editCognition(userId, { ...opts, allowDeicticTarget: true,
+            signal: context?.signal, onCommitStarted: context?.beginAtomicCommit }, {
+            target: { assetId }, fields, reason, mode: 'apply_if_authorized',
+            ...(typeof input.expectedVersion === 'string' ? { expectedVersion: input.expectedVersion } : {}),
+          });
+          return { content: JSON.stringify(result), ...(result.status === 'blocked' ? { isError: true } : {}) };
+        } catch (error) { return blockedWriteReceipt(opts, '改动', assetId, error); }
+      }
+
+      // AI 自主提出的实质变化必须先建提议并审批；提议建不出来时拒绝，不能静默生效。
       const substantial = touched.filter((key) => (SUBSTANTIAL_FIELDS as readonly string[]).includes(key));
       const fieldsOutsideProposal = touched.filter((key) => !(SUBSTANTIAL_FIELDS as readonly string[]).includes(key));
+      if (input.mode === 'propose' && !substantial.length) {
+        return { content: '待审批提议需要正文、适用范围或标签等实质变化；没有提交或修改。', isError: true };
+      }
       if (origin !== 'user_instruction' && substantial.length) {
         if (fieldsOutsideProposal.length) {
           return blockedWriteReceipt(
@@ -1142,19 +1181,21 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
         // 只把**这次真正要改的**字段带进提议：提议的 payload 就是"确认后要写什么"。
         const proposalPayload: Record<string, unknown> = {};
         for (const key of substantial) proposalPayload[key] = fields[key];
-        return proposeSubstantialChange(opts, {
-          asset,
-          assetId,
-          payload: proposalPayload,
-          fields: substantial,
-          reason,
-          claimedUserInstruction: input.origin === 'user_instruction',
-          userInstructionVerified: directUserEdit,
-        });
+        if (typeof input.expectedVersion === 'string' && input.expectedVersion.trim()
+          && input.expectedVersion.trim() !== abilityAssetActiveVersion(asset)) {
+          return { content: 'version conflict：资产版本已变化，请重新读取后再提交；没有创建提议或修改正文。', isError: true };
+        }
+        try {
+          return await withPreparedCognitionAssetEdit(userId, asset, async current => {
+            return proposeSubstantialChange(opts, {
+              asset: current, assetId, payload: proposalPayload, fields: substantial, reason,
+              claimedUserInstruction: input.origin === 'user_instruction', userInstructionVerified: directUserEdit,
+            });
+          });
+        } catch (error) { return blockedWriteReceipt(opts, '改动', assetId, error); }
       }
 
-      // 标题一等化（设计 3.2 / 深探 F2）：title 不在 SUBSTANTIAL_FIELDS（分级③
-      // 允许 AI 直接处理命名），但不合规标题一个字都不能落库——工具层先过 3.1
+      // title 不在 SUBSTANTIAL_FIELDS，允许直接处理命名；不合规标题不能落库。工具层先过标题
       // 判定，不合规即拒绝并在回执里说明规范；asset-service 收口闸门是第二道
       // 保险。判定用的正文是在用正文：能走到这里的 title 改动从不与 statement
       // 同单（混合提交已在上面被拦下），写后正文＝在用正文。
@@ -1173,7 +1214,7 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
       }
 
       // 危险操作：改 scopePolicy = 改写"这条资产能进出哪些空间"（跨作用域扩大）。
-      // 与分级②（实质变化）是两条独立的闸：那是"要不要用户拍板内容"，这是
+      // 与实质变化审批是两条独立的闸：那是"要不要用户确认内容"，这是
       // "要不要用户确认一次危险动作"。
       const scopeDanger = assessScopeWidenDanger(fields, asset.scopePolicy);
       if (scopeDanger.dangerous && scopeDanger.kind) {
@@ -1186,11 +1227,11 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
       const update: UpdateAbilityAssetInput = {
         reason,
         actor: 'ai',
-        ...(typeof input.expectedVersion === 'string' && input.expectedVersion.trim()
-          ? { expectedVersion: input.expectedVersion.trim() }
-          : {}),
+        expectedVersion: typeof input.expectedVersion === 'string' && input.expectedVersion.trim() ? input.expectedVersion.trim() : asset.version,
+        expectedActiveVersion: abilityAssetActiveVersion(asset),
         ...(typeof fields.title === 'string' ? { title: fields.title } : {}),
         ...(typeof fields.statement === 'string' ? { statement: fields.statement } : {}),
+        ...(typeof fields.value === 'string' ? { value: fields.value } : {}),
         ...(typeof fields.scope === 'string' ? { scope: fields.scope } : {}),
         ...(Array.isArray(fields.applicableWhen) ? { applicableWhen: fields.applicableWhen.map(String) } : {}),
         ...(Array.isArray(fields.forbiddenWhen) ? { forbiddenWhen: fields.forbiddenWhen.map(String) } : {}),
@@ -1200,7 +1241,7 @@ function createEditAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
           : {}),
       };
       try {
-        const updated = await updateAbilityAsset(userId, assetId, update);
+        const updated = await commitPreparedCognitionAssetEdit(userId, asset, update);
         return {
           content: writeReceipt('改动', updated, [
             `改了什么：${touched.join(' / ')}`,
@@ -1425,7 +1466,7 @@ function createRollbackAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool 
   };
 }
 
-/** 资产管家工具面（US-401 的两个读工具；US-402 的 6 个写工具在本文件后续扩展）。
+/** 资产管家工具面。
  *  只读会话不变量：这些工具**都不进** `runner.ts` 的闭合只读白名单——该白名单是
  *  「无副作用 actor 的最小工具集」，而资产库是用户私有全量数据，开给从属 actor
  *  属权限扩张。由 `test/main/model/core-agent/asset-steward-tools.test.ts` 钉住。 */

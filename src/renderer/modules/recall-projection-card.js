@@ -1,16 +1,14 @@
-// 「本次使用的记忆」卡（2026-09-28 四病整改拍板项 #8 / 设计 7.4）。
+// 「本轮资产检索与带入状态」卡。
 //
-// 这张卡由两张卡合并而来——它们原本抢同一个语义位置（盘点 B5 互斥抑制）：
-//   - 引用卡（conversation.js 旧 _renderRecallCitationsHtml）：事后回执——这条
-//     回答**实际用了**哪些记忆（citations），带 有帮助/需改进 反馈；
-//   - 投影卡（本文件旧 _renderModelSelectedReceipt）：事前面板——任务**带入了**
-//     哪些、**省略了**哪些（projection 生命周期），带 撤销 操作。
+// 这张卡合并了两种视图：
+//   - 引用回执：本轮实际进入模型上下文的资产（历史字段名仍为 citations），带 有帮助/需改进 反馈；
+//   - 投影面板：任务**带入了**哪些、**省略了**哪些（projection 生命周期），带 撤销 操作。
 //
-// 合并后一张卡按「带入 → 使用 → 反馈」一条线讲完：
-//   头部＝投影状态摘要（带入 N 条 · 省略 M 条）；列表＝资产行（带入 + 被实际
-//   引用标记；省略灰显 + 原因）；尾部＝反馈（有帮助/需改进）＋投影操作（随
+// 合并后一张卡按「检索 → 选择 → 带入 → 反馈」一条线讲完：
+//   头部区分投影选择数与实际进入上下文数；列表区分已带入与仅被选中的资产；
+//   关系扩展来源由运行回执保留；省略灰显 + 原因；尾部＝反馈＋投影操作（随
 //   投影状态显隐）。数据源（citations 与 projection）与投影数据结构**不动**，
-//   纯渲染层合并；壳沿用引用卡收敛后的单一样式（6dff92a5 契约）。
+//   纯渲染层合并；壳沿用引用卡收敛后的单一样式。
 //
 // 这张卡渲染的是**正式 Ability Asset**（context-projection 全程只有 assetId /
 // maturity），不是候选池对象。文案一律用「资产」：叫成「候选」会把 Candidate
@@ -114,7 +112,8 @@
    *  同词，不另造第三种叫法。 */
   function _citationTypeLabel(type) {
     const normalized = String(type || '').trim().toLowerCase();
-    const key = normalized === 'personal' ? 'chat.recall.type_personal'
+    const key = normalized === 'cognition' ? 'chat.recall.type_cognition'
+      : normalized === 'personal' ? 'chat.recall.type_personal'
       : normalized === 'rule' ? 'chat.recall.type_rule'
       : normalized === 'template' ? 'chat.recall.type_template'
       : normalized === 'skill_method' ? 'chat.recall.type_skill_method'
@@ -122,7 +121,7 @@
       : '';
     if (!key) return String(type || '').trim();
     const value = typeof t === 'function' ? t(key) : key;
-    return value && value !== key ? value : String(type || '').trim();
+    return value && value !== key ? value : normalized === 'cognition' ? '认知' : String(type || '').trim();
   }
 
   /** 范围有两套取值：现行契约五枚（prompts/recall_candidate_contract.md：
@@ -160,25 +159,41 @@
     });
   }
 
-  /** 被实际引用的资产行（citations）：链接 + 类型·范围 + 「已引用」标记。 */
-  function _citedRowHtml(citation) {
+  /** 逐行反馈：反馈对象是用户看得见、评得出的具体资产，
+   *  不再在卡尾对整条消息的全部引用一并记账。按钮钉在自己行的 assetId 上；
+   *  已反馈的行只留感谢态。 */
+  function _rowFeedbackHtml(assetId, sent) {
+    const statusHtml = `<span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite">${sent ? _escape(_label('chat.recall.feedback_thanks', 'Thanks for the feedback')) : ''}</span>`;
+    if (sent) return statusHtml;
+    const helpful = _label('chat.recall.feedback_helpful', 'Helpful');
+    const improve = _label('chat.recall.feedback_improve', 'Needs improvement');
+    const button = (label, icon, value) => (typeof window.uiButton === 'function'
+      ? window.uiButton({
+          label, role: 'ghost', size: 'sm', icon, className: 'chat-recall-feedback-btn',
+          attrs: { 'data-recall-feedback': value, 'data-recall-asset-id': _escape(assetId), title: label },
+        })
+      : '');
+    return `<span class="chat-recall-feedback-row">${button(helpful, 'thumbs-up', 'positive')}${button(improve, 'thumbs-down', 'negative')}${statusHtml}</span>`;
+  }
+
+  /** 被实际引用的资产行（citations）：链接 + 类型·范围 + 「已引用」标记 + 行内反馈。 */
+  function _injectedRowHtml(citation, feedbackAssetIds) {
     const assetId = String(citation?.asset_id || '');
     const title = String(citation?.title || '').trim();
     if (!assetId || !title) return '';
     const meta = [
       _citationTypeLabel(citation.type),
       _citationScopeLabel(citation.scope),
-      _label('chat.recall.memory_card_cited', '已引用'),
+      _label('chat.recall.memory_card_injected', '已进入模型上下文'),
     ].filter(Boolean).join(' · ');
-    return `<div class="chat-recall-citation is-cited" data-recall-asset-id="${_escape(assetId)}">${_assetLinkButton(title, assetId, 'chat-recall-citation-open')}${meta ? `<span>${_escape(meta)}</span>` : ''}</div>`;
+    return `<div class="chat-recall-citation is-injected" data-recall-asset-id="${_escape(assetId)}">${_assetLinkButton(title, assetId, 'chat-recall-citation-open')}${meta ? `<span>${_escape(meta)}</span>` : ''}${_rowFeedbackHtml(assetId, feedbackAssetIds?.has(assetId))}</div>`;
   }
 
-  /** 带入但未被引用的资产行（projection.assetSummaries）：同一行样式，无已引用
-   *  标记。已确认投影注入的是确认时那一版，所以显示确认版本而不是 live 版本，
-   *  否则用户会以为运行中用的是他刚改出来的新版。 */
-  function _broughtRowHtml(asset, citedAssetIds) {
+  /** 投影选中的资产行（projection.assetSummaries）。若没有对应注入回执，
+   *  只标记为「已选中、带入状态未确认」，不能冒充已注入或已采用。 */
+  function _selectedRowHtml(asset, injectedAssetIds) {
     const id = String(asset?.assetId || asset?.id || '');
-    if (!id || citedAssetIds.has(id)) return '';
+    if (!id || injectedAssetIds.has(id)) return '';
     // 资产 id 是定位键，不是名字：解析不出标题时给语义占位。
     const title = String(asset?.title || '').trim() || _label('recall.projection.asset_untitled', 'Untitled asset');
     const shownVersion = asset?.confirmedVersion || asset?.version;
@@ -186,8 +201,7 @@
       asset?.status && asset.status !== 'active' ? _assetStatusLabel(asset.status) : '',
       asset?.recommendedAction ? _assetRecommendationLabel(asset.recommendedAction) : '',
     ].filter(Boolean).join(' · ');
-    // 带入行与已引用行同一套白话（此前这里 type/scope 原文上屏，同一张卡
-    // 两行两种语言）。词表门禁见 test/renderer/recall-citation-labels.test.ts。
+    // 投影行与已带入行使用同一套本地化资产信息词表。
     const meta = [_citationTypeLabel(asset?.type), _citationScopeLabel(asset?.scope), shownVersion ? `v${shownVersion}` : ''].filter(Boolean).join(' · ');
     // 版本钉住是有意的（不在用户背后换掉他确认过的内容），所以这里只告知，
     // 不提供"就地升到新版"——已确认投影不可再改，新版本要靠下次重新选择。
@@ -198,7 +212,8 @@
           { confirmed: asset?.confirmedVersion || '', current: asset?.version || '' },
         ))}</span>`
       : '';
-    return `<div class="chat-recall-citation" data-recall-projection-asset="${_escape(id)}">${_assetLinkButton(title, id, 'chat-recall-citation-open')}${meta ? `<span>${_escape(meta)}${governance ? ` · ${_escape(governance)}` : ''}</span>` : ''}${stale}</div>`;
+    const selectionStatus = _label('chat.recall.memory_card_selected_unverified', '已选中 · 带入状态未确认');
+    return `<div class="chat-recall-citation" data-recall-projection-asset="${_escape(id)}">${_assetLinkButton(title, id, 'chat-recall-citation-open')}${meta ? `<span>${_escape(meta)}${governance ? ` · ${_escape(governance)}` : ''}</span>` : ''}<small>${_escape(selectionStatus)}</small>${stale}</div>`;
   }
 
   /** 「本轮未带入」行（US-604 AC4/AC7）：发送前重检被拦不再静默——灰显并说明
@@ -224,7 +239,7 @@
   }
 
   /**
-   * 「本次使用的记忆」卡内容（不含外壳）：
+   * 「本轮资产检索与带入状态」卡内容（不含外壳）：
    *  - card 为空 → 引用卡形态（标题+引用行+反馈尾部，投影槽位不渲染）；
    *  - card 到位 → 合并形态（头部投影摘要、带入行、省略行、投影操作并入同卡）。
    * 投影数据是异步拉取的，补全靠整体替换 host.innerHTML——反馈与投影操作的
@@ -233,9 +248,10 @@
    * 布局（2026-09-29 二轮）：计数内联在标题右侧；状态说明句挪到尾行、撤销左侧；
    * 头部即折叠热区（role=button），默认收起。
    */
-  function _memoryCardInnerHtml(card, userPinned, omissions, citations, feedbackSent, collapsed = true) {
-    const citedList = _validCitations(citations);
-    const citedAssetIds = new Set(citedList.map((citation) => String(citation.asset_id)));
+  function _memoryCardInnerHtml(card, userPinned, omissions, citations, feedbackAssetIds, collapsed = true) {
+    const sentAssets = feedbackAssetIds instanceof Set ? feedbackAssetIds : new Set();
+    const injectedList = _validCitations(citations);
+    const injectedAssetIds = new Set(injectedList.map((citation) => String(citation.asset_id)));
     const assets = card && Array.isArray(card.assetSummaries) ? card.assetSummaries : [];
     const modelIds = card && Array.isArray(card.modelSelectedAssetIds) ? card.modelSelectedAssetIds : null;
     const hasModelLedger = Boolean(modelIds);
@@ -244,11 +260,12 @@
     // 模型挑了几条（旧 model_selected_summary_precise 的信息量并进同一行）。
     const broughtCount = card
       ? Number(card.totalAssetCount ?? assets.length)
-      : citedList.length;
+      : injectedList.length;
     const omittedCount = Array.isArray(omissions) ? omissions.length : 0;
     const summaryLine = card
       ? [
-          _label('chat.recall.memory_card_brought', '带入 {n} 条', { n: String(broughtCount) }),
+          _label('chat.recall.memory_card_selected', '投影已选中 {n} 条', { n: String(broughtCount) }),
+          _label('chat.recall.memory_card_brought', '已进入模型上下文 {n} 条', { n: String(injectedList.length) }),
           omittedCount > 0 ? _label('chat.recall.memory_card_omitted', '省略 {n} 条', { n: String(omittedCount) }) : '',
           hasModelLedger
             ? _label('chat.recall.memory_card_model_picked', '其中模型挑 {n} 条', { n: String(card.modelSelectedCount ?? modelIds.length) })
@@ -273,43 +290,33 @@
       : '';
     const statusLabel = card ? _statusLabel(card.status) : '';
     const rows = [
-      ...citedList.map(_citedRowHtml),
-      ...(card ? assets.map((asset) => _broughtRowHtml(asset, citedAssetIds)) : []),
+      ...injectedList.map((citation) => _injectedRowHtml(citation, sentAssets)),
+      ...(card ? assets.map((asset) => _selectedRowHtml(asset, injectedAssetIds)) : []),
     ].filter(Boolean);
     const omittedRows = (Array.isArray(omissions) ? omissions : []).map(_omittedRowHtml).join('');
     // 尾部投影操作随状态显隐：撤销只在未撤销时提供（幂等语义由主进程保证，
-    // 界面不重复提供入口）。
+    // 界面不重复提供入口）。反馈已移到每个已引用行内（待办#2），卡尾不再有
+    // 整条消息级的有帮助/需改进。
     const projectionActions = card && !revoked
       ? `<span class="chat-recall-projection-summary-actions">${_sharedButton(_label('recall.projection.revoke', 'Revoke'), { 'data-recall-projection-revoke': '1' })}</span>`
       : '';
-    const helpful = _label('chat.recall.feedback_helpful', 'Helpful');
-    const improve = _label('chat.recall.feedback_improve', 'Needs improvement');
-    const feedbackStatus = feedbackSent
-      ? `<span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite">${_escape(_label('chat.recall.feedback_thanks', 'Thanks for the feedback'))}</span>`
-      : '<span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite"></span>';
-    // 反馈按钮沿用原引用卡形态（共享 uiButton + 图标 + 专用类名——
-    // .is-feedback-sent 的让位规则锚定 .chat-recall-feedback-btn）。
-    const feedbackButton = (label, icon, value) => (typeof window.uiButton === 'function'
-      ? window.uiButton({ label, role: 'ghost', size: 'sm', icon, className: 'chat-recall-feedback-btn', attrs: { 'data-recall-feedback': value, title: label } })
-      : '');
-    const feedbackButtons = feedbackButton(helpful, 'thumbs-up', 'positive')
-      + feedbackButton(improve, 'thumbs-down', 'negative');
     const noteHtml = note
       ? `<small class="chat-recall-citations-note">${_escape(note)}</small>`
       : '';
     return `<div class="chat-recall-citations-head" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}">
         ${_headIconHtml('brain-circuit', 'chat-recall-citations-icon')}
         <div class="chat-recall-citations-title">
-          <strong>${_escape(_label('chat.recall.memory_card_title', '本次使用的记忆'))}${summaryLine ? `<span class="chat-recall-citations-count">${_escape(summaryLine)}</span>` : ''}</strong>
+          <strong>${_escape(_label('chat.recall.memory_card_title', card ? '本轮资产检索与带入状态' : '本轮带入上下文的资产'))}${summaryLine ? `<span class="chat-recall-citations-count">${_escape(summaryLine)}</span>` : ''}</strong>
+          <small>${_escape(_label('chat.recall.memory_card_adoption_note', '进入模型上下文不代表最终回答实际采用'))}</small>
         </div>
         ${badge ? `<span class="chat-recall-projection-badge">${_escape(badge)}</span>` : ''}
         ${statusLabel ? `<span class="chat-recall-projection-status">${_escape(statusLabel)}</span>` : ''}
-        ${feedbackStatus}
         ${_toggleIconHtml()}
       </div>
       ${rows.length ? `<div class="chat-recall-citation-list">${rows.join('')}</div>` : ''}
       ${omittedRows ? `<div class="chat-recall-projection-omitted">${omittedRows}</div>` : ''}
-      <div class="chat-recall-feedback-actions">${feedbackButtons}${noteHtml}${projectionActions}</div>`;
+      <small class="chat-recall-citations-note">${_escape(_label('chat.recall.memory_card_evidence_hint', '带入、读取和引用记录不代表已核实采用或效果；可打开详情分别查看来源、采用证据与反馈。'))}</small>
+      <div class="chat-recall-feedback-actions">${noteHtml}${projectionActions}</div>`;
   }
 
   /**
@@ -319,7 +326,7 @@
    */
   function recallMemoryCardHtml(citations) {
     if (!_validCitations(citations).length) return '';
-    return `<section class="chat-recall-citations">${_memoryCardInnerHtml(null, false, [], citations, false, true)}</section>`;
+    return `<section class="chat-recall-citations is-collapsed">${_memoryCardInnerHtml(null, false, [], citations, new Set(), true)}</section>`;
   }
 
   // ── 旧预载草稿渲染分支（2026-08-17 起生产不可达：对话侧只挂模型自选与
@@ -418,8 +425,8 @@
       return;
     }
     if (modelSelected || userPinned) {
-      // 合并卡（拍板项 #8）：citations（本次实际引用）与投影数据合成一张
-      // 「本次使用的记忆」，整卡替换 host 内容。反馈已发状态挂在
+      // 合并卡（拍板项 #8）：citations（本轮带入记录）与投影数据合成一张
+      // 「本轮资产检索与带入状态」卡，整卡替换 host 内容。反馈已发状态挂在
       // host.dataset 上（conversation.js 写入），整卡重画后照旧呈现。
       // 旧传输 sidecar 才隐藏 fallback 正文；挂在最终回复上的卡不隐藏正文。
       if (host.dataset.recallProjectionTransport === 'sidecar') {
@@ -428,11 +435,13 @@
         if (prose) prose.hidden = true;
       }
       // 折叠态记在 host dataset（不随 innerHTML 重画丢）：缺省=收起（2026-09-29
-      // 二轮拍板），只有显式 '0' 才是展开；重建 className 时回读。
+      // 二轮拍板），只有显式 '0' 才是展开；重建 className 时回读。已反馈的资产
+      // 同样记在 host dataset.feedbackAssets（逗号分隔），整卡重画后照旧呈现。
       const collapsed = host.dataset.recallCollapsed !== '0';
-      host.className = `chat-recall-citations${card?.status === 'revoked' ? ' is-projection-revoked' : ''}${host.dataset.feedbackSent === '1' ? ' is-feedback-sent' : ''}${collapsed ? ' is-collapsed' : ''}`;
+      const sentAssets = new Set(String(host.dataset.feedbackAssets || '').split(',').filter(Boolean));
+      host.className = `chat-recall-citations${card?.status === 'revoked' ? ' is-projection-revoked' : ''}${collapsed ? ' is-collapsed' : ''}`;
       host.dataset.projectionId = String(card?.projectionId || opts?.projectionId || '');
-      host.innerHTML = _memoryCardInnerHtml(card, userPinned, omissions, opts?.citations, host.dataset.feedbackSent === '1', collapsed);
+      host.innerHTML = _memoryCardInnerHtml(card, userPinned, omissions, opts?.citations, sentAssets, collapsed);
       return;
     }
     _renderLegacyDraft(host, card, available, opts, forecastFailure);

@@ -1,0 +1,266 @@
+{
+  "origin": "Recorded f04 candidate, accepted per-row verdict, and ontology context from the fixed synthetic corpus (2026-10-15), using protocol v2.",
+  "item": {
+    "index": 2,
+    "sources": [
+      {
+        "label": "m8",
+        "text": "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。这样才知道整改有没有真正完成。",
+        "approvedQuotes": [
+          "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。"
+        ]
+      }
+    ],
+    "candidate": {
+      "judgment": "今后事故复盘要记录：影响、关键时间线、直接原因、根因和改进项；每项改进须有负责人和期限；不能只责怪个人。目的：以此判断整改是否真正完成。适用条件：事故复盘。",
+      "value": "今后撰写或评审事故复盘时按此结构检查，确保改进可跟踪。",
+      "suggestedScope": "report",
+      "suggestedAction": "create",
+      "scopePolicy": {
+        "projectIds": [
+          "benchmark-project"
+        ]
+      },
+      "applicableWhen": [
+        "撰写或评审事故复盘"
+      ],
+      "forbiddenWhen": [
+        "不能只责怪个人"
+      ],
+      "ontologyChanges": {
+        "actions": [
+          {
+            "intent": "create",
+            "recordId": "pref-incident-review",
+            "record": {
+              "kind": "assertion",
+              "moduleId": "benchmark-module",
+              "subjectId": "benchmark-self",
+              "definitionId": "benchmark-preference",
+              "object": {
+                "kind": "literal",
+                "valueType": "text",
+                "value": "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。"
+              },
+              "validity": {
+                "from": null,
+                "until": null,
+                "precision": "day",
+                "timezone": "Asia/Shanghai"
+              },
+              "certainty": "confirmed",
+              "access": "task"
+            },
+            "sourceLabel": "用户要求今后事故复盘按固定要素记录"
+          },
+          {
+            "intent": "create",
+            "recordId": "rule-incident-review",
+            "record": {
+              "kind": "rule",
+              "moduleId": "benchmark-module",
+              "name": "事故复盘五类记录及改进责任",
+              "strength": "default",
+              "condition": null,
+              "effect": {
+                "kind": "note"
+              },
+              "exception": "",
+              "requirement": "今后事故复盘要记录：影响、关键时间线、直接原因、根因和改进项；每项改进须有负责人和期限；不能只责怪个人。目的：以此判断整改是否真正完成。适用条件：事故复盘。"
+            },
+            "sourceLabel": "用户长期要求：事故复盘记录结构"
+          }
+        ],
+        "refs": [
+          {
+            "groupId": "benchmark-module",
+            "moduleId": "benchmark-module",
+            "recordId": "pref-incident-review",
+            "versionPolicy": "current"
+          },
+          {
+            "groupId": "benchmark-module",
+            "moduleId": "benchmark-module",
+            "recordId": "rule-incident-review",
+            "versionPolicy": "current",
+            "sharedBody": true
+          }
+        ],
+        "reason": "记录事故复盘的长期记录要求并建立规则",
+        "evidence": [
+          "m8"
+        ]
+      }
+    },
+    "ruleContracts": [
+      {
+        "recordId": "rule-incident-review",
+        "strength": "default",
+        "condition": null,
+        "effect": {
+          "kind": "note"
+        },
+        "exception": ""
+      }
+    ]
+  },
+  "assessment": {
+    "index": 2,
+    "checks": {
+      "supported": true,
+      "noUnsupportedClaims": true,
+      "scopePreserved": true,
+      "finalDecisionPreserved": true,
+      "priorContentPreserved": true,
+      "evidence": [
+        {
+          "label": "m8",
+          "quote": "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。"
+        }
+      ]
+    },
+    "uncertaintyDisposition": "none",
+    "comparison": {
+      "relation": "new",
+      "reason": "事故复盘记录要求为新的用户长期要求"
+    },
+    "ruleChecks": [
+      {
+        "recordId": "rule-incident-review",
+        "strength": "default",
+        "condition": null,
+        "effect": {
+          "kind": "note"
+        },
+        "exception": "",
+        "checks": {
+          "strengthPreserved": true,
+          "conditionPreserved": true,
+          "effectPreserved": true,
+          "exceptionPreserved": true
+        },
+        "evidence": [
+          {
+            "label": "m8",
+            "quote": "事故复盘今后要记影响、关键时间线、直接原因、根因和改进项。每项改进有负责人和期限，不能只责怪个人。"
+          }
+        ]
+      }
+    ]
+  },
+  "ontology": {
+    "revision": 1,
+    "records": [
+      {
+        "id": "benchmark-self",
+        "version": 1,
+        "status": "active",
+        "access": "task",
+        "createdAt": "2026-10-14T19:00:00.000Z",
+        "updatedAt": "2026-10-14T19:00:00.000Z",
+        "source": {
+          "kind": "user",
+          "label": "Synthetic pre-existing test ontology"
+        },
+        "kind": "entity",
+        "moduleId": "benchmark-module",
+        "typeId": "benchmark-person-type",
+        "name": "本合成测试账号",
+        "description": "本次对话的已知用户；仅为隔离测试账号",
+        "aliases": [
+          "用户",
+          "自己"
+        ],
+        "identityStatus": "confirmed"
+      },
+      {
+        "id": "benchmark-module",
+        "version": 1,
+        "status": "active",
+        "access": "task",
+        "createdAt": "2026-10-14T19:00:00.000Z",
+        "updatedAt": "2026-10-14T19:00:00.000Z",
+        "source": {
+          "kind": "user",
+          "label": "Synthetic pre-existing test ontology"
+        },
+        "kind": "module",
+        "name": "合成项目工作知识",
+        "description": "隔离评估既有结构",
+        "scope": {
+          "kind": "project",
+          "id": "benchmark-project"
+        }
+      },
+      {
+        "id": "benchmark-person-type",
+        "version": 1,
+        "status": "active",
+        "access": "task",
+        "createdAt": "2026-10-14T19:00:00.000Z",
+        "updatedAt": "2026-10-14T19:00:00.000Z",
+        "source": {
+          "kind": "user",
+          "label": "Synthetic pre-existing test ontology"
+        },
+        "kind": "definition",
+        "moduleId": "benchmark-module",
+        "name": "人物",
+        "description": "",
+        "definitionKind": "type",
+        "subjectTypes": [],
+        "objectTypes": [],
+        "valueType": "entity",
+        "cardinality": "many",
+        "cardinalityAnchor": "subject"
+      },
+      {
+        "id": "benchmark-preference",
+        "version": 1,
+        "status": "active",
+        "access": "task",
+        "createdAt": "2026-10-14T19:00:00.000Z",
+        "updatedAt": "2026-10-14T19:00:00.000Z",
+        "source": {
+          "kind": "user",
+          "label": "Synthetic pre-existing test ontology"
+        },
+        "kind": "definition",
+        "moduleId": "benchmark-module",
+        "name": "已表达偏好与要求",
+        "description": "保留每条完整适用条件，允许多条独立表达",
+        "definitionKind": "attribute",
+        "subjectTypes": [
+          "benchmark-person-type"
+        ],
+        "objectTypes": [],
+        "valueType": "text",
+        "cardinality": "many",
+        "cardinalityAnchor": "subject"
+      },
+      {
+        "id": "benchmark-project-type",
+        "version": 1,
+        "status": "active",
+        "access": "task",
+        "createdAt": "2026-10-14T19:00:00.000Z",
+        "updatedAt": "2026-10-14T19:00:00.000Z",
+        "source": {
+          "kind": "user",
+          "label": "Synthetic pre-existing test ontology"
+        },
+        "kind": "definition",
+        "moduleId": "benchmark-module",
+        "name": "项目",
+        "description": "",
+        "definitionKind": "type",
+        "subjectTypes": [],
+        "objectTypes": [],
+        "valueType": "entity",
+        "cardinality": "many",
+        "cardinalityAnchor": "subject"
+      }
+    ],
+    "truncated": false
+  }
+}

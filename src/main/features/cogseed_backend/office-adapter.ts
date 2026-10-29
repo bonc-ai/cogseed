@@ -1,3 +1,4 @@
+import type { TranscriptCorrectionEvidence } from '../transcript-tool-contract';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -22,7 +23,7 @@ export interface CogSeedHostToolScope {
   workingDir?: string;
 }
 
-export interface CogSeedHostToolResult { content: string; isError?: boolean }
+export interface CogSeedHostToolResult { content: string; isError?: boolean; correction?: TranscriptCorrectionEvidence }
 
 export interface CogSeedOfficeAdapterDeps {
   officeCliAvailable?: () => boolean;
@@ -32,10 +33,10 @@ export interface CogSeedOfficeAdapterDeps {
 }
 
 export interface CogSeedOfficeAdapter {
-  run(name: Extract<RuntimeHostToolName, `office_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
-  createDocx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
-  createXlsx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
-  createPptx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
+  run(name: Extract<RuntimeHostToolName, `office_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null; beforeAction?: () => Promise<void> }): Promise<CogSeedHostToolResult>;
+  createDocx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null; beforeAction?: () => Promise<void> }): Promise<CogSeedHostToolResult>;
+  createXlsx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null; beforeAction?: () => Promise<void> }): Promise<CogSeedHostToolResult>;
+  createPptx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null; beforeAction?: () => Promise<void> }): Promise<CogSeedHostToolResult>;
 }
 
 const OFFICE_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx']);
@@ -135,21 +136,24 @@ export function createCogSeedOfficeAdapter(deps: CogSeedOfficeAdapterDeps = {}):
     return artifact?.artifactId;
   }
 
-  async function render(file: string, scope: CogSeedHostToolScope, page: number, signal?: AbortSignal | null): Promise<CogSeedHostToolResult> {
+  async function render(file: string, scope: CogSeedHostToolScope, page: number, signal?: AbortSignal | null, beforeAction?: () => Promise<void>): Promise<CogSeedHostToolResult> {
     const outputDir = cogseedRuntimeSessionToolResultsDir(scope.userId, scope.runtimeSessionId);
     fs.mkdirSync(outputDir, { recursive: true });
     const output = path.join(outputDir, `office-preview-${Date.now().toString(36)}.png`);
+    await beforeAction?.();
     const result = await runOfficeCli(['view', file, 'screenshot', '-o', output, '--page', String(page)], { cwd: path.dirname(file), ...(signal ? { signal } : {}) });
     if (result.code !== 0 || !fs.existsSync(output)) return error('E_OFFICE_RENDER_FAILED', bounded(result.stderr || result.stdout || `exit ${result.code}`));
     const previewArtifactId = await registerOutput(scope, output, 'office-preview', true);
     return { content: JSON.stringify({ sourcePath: file, path: output, page, bytes: fs.statSync(output).size, previewArtifactId }) };
   }
 
-  async function executeCreate(file: string, scope: CogSeedHostToolScope, operations: Array<Record<string, unknown>>, preview: boolean, signal?: AbortSignal | null): Promise<CogSeedHostToolResult> {
+  async function executeCreate(file: string, scope: CogSeedHostToolScope, operations: Array<Record<string, unknown>>, preview: boolean, signal?: AbortSignal | null, beforeAction?: () => Promise<void>): Promise<CogSeedHostToolResult> {
     const cwd = path.dirname(file);
     fs.mkdirSync(cwd, { recursive: true });
+    await beforeAction?.();
     const created = await runOfficeCli(['create', file, '--force'], { cwd, ...(signal ? { signal } : {}) });
     if (created.code !== 0) return error('E_OFFICE_CREATE_FAILED', bounded(created.stderr || created.stdout || `exit ${created.code}`));
+    await beforeAction?.();
     const batch = await runOfficeCli(['batch', file], { cwd, stdin: JSON.stringify(operations), ...(signal ? { signal } : {}) });
     if (batch.code !== 0) return error('E_OFFICE_BATCH_FAILED', bounded(batch.stderr || batch.stdout || `exit ${batch.code}`));
     const artifactId = await registerOutput(scope, file, 'office-output', false);
@@ -161,8 +165,9 @@ export function createCogSeedOfficeAdapter(deps: CogSeedOfficeAdapterDeps = {}):
     return { content: JSON.stringify({ path: file, operations: operations.length, ...(artifactId ? { artifactId } : {}) }) };
   }
 
-  async function executeEdit(name: 'office_edit', file: string, scope: CogSeedHostToolScope, operations: Array<Record<string, unknown>>, preview: boolean, signal?: AbortSignal | null): Promise<CogSeedHostToolResult> {
+  async function executeEdit(name: 'office_edit', file: string, scope: CogSeedHostToolScope, operations: Array<Record<string, unknown>>, preview: boolean, signal?: AbortSignal | null, beforeAction?: () => Promise<void>): Promise<CogSeedHostToolResult> {
     const cwd = path.dirname(file);
+    await beforeAction?.();
     const batch = await runOfficeCli(['batch', file, '--stop-on-error'], { cwd, stdin: JSON.stringify(operations), ...(signal ? { signal } : {}) });
     if (batch.code !== 0) return error('E_OFFICE_EDIT_FAILED', bounded(batch.stderr || batch.stdout || `exit ${batch.code}`));
     const artifactId = await registerOutput(scope, file, 'office-output', false);
@@ -174,7 +179,7 @@ export function createCogSeedOfficeAdapter(deps: CogSeedOfficeAdapterDeps = {}):
     return { content: JSON.stringify({ path: file, operations: operations.length, ...(artifactId ? { artifactId } : {}) }) };
   }
 
-  async function runOffice(name: Extract<RuntimeHostToolName, `office_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts: { signal?: AbortSignal | null } = {}): Promise<CogSeedHostToolResult> {
+  async function runOffice(name: Extract<RuntimeHostToolName, `office_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts: { signal?: AbortSignal | null; beforeAction?: () => Promise<void> } = {}): Promise<CogSeedHostToolResult> {
     if (!officeCliAvailable()) return error('E_OFFICE_ENGINE_MISSING', 'the built-in Office engine is unavailable');
     const file = resolvePath(input.path, scope);
     const roots = name === 'office_create' || name === 'office_edit' ? scope.writableRoots : [...scope.readOnlyRoots, ...scope.writableRoots];
@@ -195,15 +200,15 @@ export function createCogSeedOfficeAdapter(deps: CogSeedOfficeAdapterDeps = {}):
       }
       if (name === 'office_render') {
         const page = Number.isInteger(input.page) && Number(input.page) > 0 ? Number(input.page) : 1;
-        return await render(file, scope, page, opts.signal);
+        return await render(file, scope, page, opts.signal, opts.beforeAction);
       }
       let operations: Array<Record<string, unknown>>;
       try { operations = normalizeOperations(input.operations); }
       catch (cause) { return error('E_OFFICE_INPUT', cause instanceof Error ? cause.message : String(cause)); }
       if (name === 'office_create') {
-        return await executeCreate(file, scope, operations, input.preview !== false, opts.signal);
+        return await executeCreate(file, scope, operations, input.preview !== false, opts.signal, opts.beforeAction);
       }
-      return await executeEdit(name, file, scope, operations, input.preview !== false, opts.signal);
+      return await executeEdit(name, file, scope, operations, input.preview !== false, opts.signal, opts.beforeAction);
     } catch (cause) {
       return error('E_OFFICE_FAILED', cause instanceof Error ? cause.message : String(cause));
     } finally {

@@ -16,6 +16,10 @@
  *
  * Opaque hex/SHA tokens (32+ chars of [a-f0-9]) are deliberately NOT
  * masked — too many false positives (commit shas, file hashes, paths).
+ *
+ * `maskSensitiveShapes` is the secret/user-private-id half on its own, for
+ * local-only artifacts that must keep their diagnostic text (no path masking)
+ * but still must never persist a raw secret.
  */
 import * as crypto from 'node:crypto';
 
@@ -23,7 +27,7 @@ const SENSITIVE_FIELD =
   '(?:api_?key|access_?token|refresh_?token|id_?token|session_?id|client_?secret|private_?key|password|passwd|pwd|secret|token|authorization|cookie|set-cookie)';
 
 const SENSITIVE_QUERY_FIELD =
-  '(?:api_?key|access_?token|refresh_?token|id_?token|session_?id|client_?secret|private_?key|password|passwd|pwd|secret|token|authorization|cookie|set-cookie|code|state|signature|sign|q-ak|q-signature|x-cos-security-token|x-amz-signature|x-amz-security-token|x-amz-credential|ossaccesskeyid|security-token)';
+  '(?:hub_?token|code_?verifier|api_?key|access_?token|refresh_?token|id_?token|session_?id|client_?secret|private_?key|password|passwd|pwd|secret|token|authorization|cookie|set-cookie|code|state|signature|sign|q-ak|q-signature|x-cos-security-token|x-amz-signature|x-amz-security-token|x-amz-credential|ossaccesskeyid|security-token)';
 
 const JSON_SECRET_FIELD_RE = new RegExp(
   `(["'])(${SENSITIVE_FIELD})\\1(\\s*:\\s*)(["'])(.*?)\\4`,
@@ -65,15 +69,9 @@ export function maskLogId(value: unknown): string {
   return `${s.slice(0, 4)}...${s.slice(-4)}`;
 }
 
-export function sanitizeLogTextForUpload(text: string): string {
+export function maskSensitiveShapes(text: string): string {
   if (!text) return text;
   return text
-    // User content paths often carry private filenames or OS usernames. Keep a
-    // stable hash for correlation, but never the raw path.
-    .replace(CLOUD_PATH_RE, (m) => pathPlaceholder('cloud', m))
-    .replace(FILE_URL_RE, (m) => pathPlaceholder('file-url', m))
-    .replace(POSIX_ABS_PATH_RE, (_m, prefix: string, p: string) => `${prefix}${pathPlaceholder('abs', p)}`)
-    .replace(WINDOWS_ABS_PATH_RE, (m) => pathPlaceholder('abs', m))
     // Bearer in Authorization header — covers raw "Authorization: Bearer X"
     // and JSON-stringified "\"authorization\":\"Bearer X\"". Case-insensitive
     // because RFC 6750 declares the scheme name case-insensitive.
@@ -99,7 +97,20 @@ export function sanitizeLogTextForUpload(text: string): string {
     // P3394 bridge token (p3394-<slug>-<slug>) — the bridge's shared auth
     // factor. Must never appear verbatim in logs/audit/episodes even if a
     // new code path pipes it into a plain string.
-    .replace(/\bp3394-[A-Za-z0-9]{8,}-[A-Za-z0-9]{8,}\b/g, '***P3394_TOKEN***')
+    .replace(/\bp3394-[A-Za-z0-9]{8,}-[A-Za-z0-9]{8,}\b/g, '***P3394_TOKEN***');
+}
+
+export function sanitizeLogTextForUpload(text: string): string {
+  if (!text) return text;
+  return maskSensitiveShapes(
+    text
+      // User content paths often carry private filenames or OS usernames. Keep a
+      // stable hash for correlation, but never the raw path.
+      .replace(CLOUD_PATH_RE, (m) => pathPlaceholder('cloud', m))
+      .replace(FILE_URL_RE, (m) => pathPlaceholder('file-url', m))
+      .replace(POSIX_ABS_PATH_RE, (_m, prefix: string, p: string) => `${prefix}${pathPlaceholder('abs', p)}`)
+      .replace(WINDOWS_ABS_PATH_RE, (m) => pathPlaceholder('abs', m)),
+  )
     // Email — keep first local char + full domain for diagnostic value.
     .replace(/\b([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g, '$1***$2')
     // CN mobile (11 digits starting 1[3-9]) — keep first 3 + last 4.

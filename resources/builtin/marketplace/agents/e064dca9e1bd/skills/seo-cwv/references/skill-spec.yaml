@@ -1,0 +1,11 @@
+name: seo-cwv
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'Fetch Core Web Vitals via Google PageSpeed Insights: LCP/CLS/INP/FCP and
+  the performance score, separating CrUX real-user field data (Measured) from lab
+  data (Estimated); emits performance-dimension findings; free, no OAuth; For: ''check
+  this page''s load performance'', ''how are the'
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

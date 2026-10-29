@@ -25,6 +25,7 @@ import {
 import * as path from 'node:path';
 
 import { createLogger } from '../../logger';
+import { packagedBuiltinDir, userMarketplaceSkillsDir, userSkillsDir } from '../../paths';
 import { safeId, writeTextAtomicSync } from '../../storage';
 import {
   exportSecurityPayload,
@@ -52,27 +53,29 @@ export interface ResolvedSkill {
 }
 
 /**
- * Resolve a skill id to its directory across the three catalog sources.
+ * Resolve a skill id to its directory across the catalog sources.
  *
- * `safeId` is applied before any path join. The id arrives from the renderer,
- * and `path.join(base, '../../..')` is a valid string: without this check the
- * "check one skill" box is an arbitrary-directory scanner and the baseline
- * writer is an arbitrary-file writer.
+ * Both inputs are untrusted enough to validate before any join: `_resolveSync`
+ * rejects an invalid uid, refuses ids that are not a scannable shape, and keeps
+ * every candidate inside its root (`resolveIdUnderBase`). Without that the
+ * "check one skill" box would be an arbitrary-directory scanner and the
+ * baseline writer an arbitrary-file writer.
  */
 export async function resolveSkillForScan(
+  uid: string,
   skillId: string,
 ): Promise<ResolvedSkill | null> {
-  const found = _resolveSync(skillId);
+  const found = _resolveSync(uid, skillId);
   return found ? { skillId, dir: found.dir, source: found.source } : null;
 }
 
 /** Run a full-detail scan of one installed skill. Never throws. */
-export async function reportForSkill(skillId: string): Promise<{
+export async function reportForSkill(uid: string, skillId: string): Promise<{
   ok: boolean;
   reason?: string;
   evidence?: SecurityEvidence;
 }> {
-  const resolved = await resolveSkillForScan(skillId);
+  const resolved = await resolveSkillForScan(uid, skillId);
   if (!resolved) return { ok: false, reason: 'skill_not_found' };
   try {
     const evidence = await skillSecurityReport(resolved.dir, skillId);
@@ -215,7 +218,7 @@ export function acceptFinding(uid: string, input: AcceptInput): { ok: boolean; e
   if (severity === 'high' || severity === 'critical') {
     return { ok: false, error: 'severity_not_suppressible' };
   }
-  return _withSkillDir(input.skillId, (dir) => {
+  return _withSkillDir(uid, input.skillId, (dir) => {
     const data = readBaselineFile(dir);
     const now = new Date();
     const expires = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
@@ -244,7 +247,7 @@ export function revokeFinding(uid: string, skillId: string, fingerprint: string)
   if (!isValidSkillId(skillId)) {
     return { ok: false, error: isExternalSkillId(skillId) ? 'external_skill_readonly' : 'invalid skill id' };
   }
-  return _withSkillDir(skillId, (dir) => {
+  return _withSkillDir(uid, skillId, (dir) => {
     const data = readBaselineFile(dir);
     const before = data.accepted.length;
     data.accepted = data.accepted.filter((e) => e.fingerprint !== fingerprint);
@@ -255,11 +258,11 @@ export function revokeFinding(uid: string, skillId: string, fingerprint: string)
 }
 
 /** Acceptances on record for one skill, for the panel to render. */
-export function listAcceptances(skillId: string): Array<{
+export function listAcceptances(uid: string, skillId: string): Array<{
   fingerprint: string; ruleId: string; file: string; reason: string;
   expiresAt: string; expired: boolean;
 }> {
-  const resolved = _resolveSync(skillId);
+  const resolved = _resolveSync(uid, skillId);
   if (!resolved) return [];
   const now = Date.now();
   return readBaselineFile(resolved.dir).accepted.map((e) => ({
@@ -273,62 +276,34 @@ export function listAcceptances(skillId: string): Array<{
 }
 
 /**
- * Everywhere a skill id can resolve to, in priority order.
+ * Directories a skill id may resolve to, in load order.
  *
- * One list, used by both the report path and the baseline writer. There were
- * briefly two: the async resolver walked the catalog's `skillBaseDir` sources
- * (custom + marketplace) while the sync one also walked the packaged builtin
- * tree. Measured consequence — the panel's 详情 button worked for a marketplace
- * skill and returned `skill_not_found` for `skill-creator`, which is exactly the
- * skill a user is most likely to want to inspect. `skillBaseDir('builtin')`
- * maps onto the marketplace directory, so the packaged `builtin/system/skills`
- * tree must be added explicitly.
- */
-/**
- * Whether an id may be used as a path segment under a skill root.
+ * Marketplace first, then custom: that is the precedence the catalog
+ * (`listSkillsForUser`) and `getSkillForEditForUser` use, so an id defined in
+ * both places resolves to the tree the model would actually load. Writing a
+ * baseline into the losing copy would hide a finding on a file nobody runs.
  *
- * Delegates to the skills feature's own validator rather than to `storage.safeId`.
- * `safeId` allows only `[A-Za-z0-9_-]+`, which rejects real catalog ids —
- * measured: 31 of 89 installed skills are named `claude:comet`, `claude:comet-build`
- * and similar, and every one of them resolved to `skill_not_found`, so neither
- * the panel's 详情 button nor the composition pass could see them.
- *
- * The security property is not the character set: it is that the joined path
- * stays inside the base directory, which `_resolveSync` checks on every
- * candidate. An id of `../../etc` fails containment whatever characters it uses.
- *
- * Falls back to a conservative pattern when the skills module is unavailable
- * (isolated test contexts), where a false negative only means "not resolvable".
- */
-
-
-/**
- * Directories a skill id may resolve to.
+ * The roots come from `paths`, not from `features/skills`. Reading the skills
+ * module's `skillBaseDir` here was a silent bug: that helper is module-private,
+ * so `require('../skills').skillBaseDir` was always `undefined`, the optional
+ * call skipped BOTH roots, and every custom/marketplace skill's 详情 returned
+ * `skill_not_found` while packaged builtin skills kept working. `paths` also
+ * keeps this module out of the skills ↔ security import cycle.
  *
  * `prefix` marks an external root: the id form is `prefix:name`, so only the part
  * after the colon is joined — and it is validated by the same SKILL_NAME_RE shape
  * as an internal name, which is what keeps the containment check meaningful.
  */
-function skillDirCandidates(): Array<{ base: string; source: ResolvedSkill['source']; prefix?: string }> {
-  const out: Array<{ base: string; source: ResolvedSkill['source']; prefix?: string }> = [];
-  let skills: { skillBaseDir?: (s: string) => string } = {};
+function skillDirCandidates(uid: string): Array<{ base: string; source: ResolvedSkill['source']; prefix?: string }> {
+  const out: Array<{ base: string; source: ResolvedSkill['source']; prefix?: string }> = [
+    { base: userMarketplaceSkillsDir(uid), source: 'marketplace' },
+    { base: userSkillsDir(uid), source: 'custom' },
+  ];
+  // A builtin id maps onto the marketplace directory (builtin installs land
+  // there), so the packaged `builtin/system/skills` tree must be added
+  // explicitly or `skill-creator`-style ids are unresolvable in packaged builds.
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    skills = require('../skills') as typeof skills;
-  } catch { /* module unavailable in some test contexts */ }
-  // Custom first: a user's own skill overrides a platform skill with the same id.
-  try {
-    const custom = skills.skillBaseDir?.('custom');
-    if (custom) out.push({ base: custom, source: 'custom' });
-  } catch { /* no active user */ }
-  try {
-    const marketplace = skills.skillBaseDir?.('marketplace');
-    if (marketplace) out.push({ base: marketplace, source: 'marketplace' });
-  } catch { /* no active user */ }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    const paths = require('../../paths') as { packagedBuiltinDir?: () => string };
-    const root = paths.packagedBuiltinDir?.();
+    const root = packagedBuiltinDir();
     if (root) {
       out.push({ base: path.join(root, 'marketplace', 'skills'), source: 'builtin' });
       out.push({ base: path.join(root, 'system', 'skills'), source: 'builtin' });
@@ -346,12 +321,16 @@ function skillDirCandidates(): Array<{ base: string; source: ResolvedSkill['sour
  * Resolve a skill id to a directory plus its source. Synchronous because the
  * baseline helpers are called from sync contexts.
  *
- * `safeId` is applied before any join: the id arrives from the renderer, and
- * `path.join(base, '../../..')` is a perfectly valid string.
+ * `safeId` is applied before any join: the uid scopes the roots, and a crafted
+ * id cannot escape a root because `resolveIdUnderBase` refuses separators and
+ * `..` — the containment check runs on every candidate, not just the first.
+ * The id itself is validated by `isScannableSkillId`, which accepts catalog
+ * shapes (`claude:comet`) that `safeId` would reject.
  */
-function _resolveSync(skillId: string): { dir: string; source: ResolvedSkill['source'] } | null {
+function _resolveSync(uid: string, skillId: string): { dir: string; source: ResolvedSkill['source'] } | null {
+  if (!safeId(uid)) return null;
   if (!isScannableSkillId(skillId)) return null;
-  for (const { base, source, prefix } of skillDirCandidates()) {
+  for (const { base, source, prefix } of skillDirCandidates(uid)) {
     let localId = skillId;
     if (prefix) {
       // An external id may only resolve under its own prefix's root.
@@ -369,10 +348,11 @@ function _resolveSync(skillId: string): { dir: string; source: ResolvedSkill['so
 }
 
 function _withSkillDir<T extends { ok: boolean; error?: string }>(
+  uid: string,
   skillId: string,
   fn: (dir: string) => T,
 ): T | { ok: false; error: string } {
-  const resolved = _resolveSync(skillId);
+  const resolved = _resolveSync(uid, skillId);
   if (!resolved) return { ok: false, error: 'skill_not_found' };
   try {
     return fn(resolved.dir);

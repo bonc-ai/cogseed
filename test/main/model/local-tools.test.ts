@@ -123,6 +123,9 @@ describe('local-tools › identity', () => {
     const tools = lt.createLocalTools({});
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
+        'background_list',
+        'background_output',
+        'background_stop',
         'bash',
         'delete_file',
         'edit_file',
@@ -538,6 +541,53 @@ describe('local-tools › bash filesystem mutation scope', () => {
     expect(res.content).toContain('E_BASH_DYNAMIC_PATH_UNSUPPORTED');
   });
 
+  // POSIX 变量赋值语法（`DIR=…; cat "$DIR/…"`）。Windows 的主机 shell 是
+  // PowerShell，同一行根本不会执行成功；PowerShell/cmd 的路径变量形态由
+  // 「resolves documented POSIX, PowerShell, and cmd environment path forms」覆盖。
+  it.skipIf(process.platform === 'win32')('resolves variables the command pins to a literal path, so self-contained reads are allowed', async () => {
+    const { lt, perm } = await loadModules();
+    perm.grantLocalExec();
+    await setTmpWorkspace();
+    const dir = path.join(tmpDir, 'pinned');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'note.txt'), 'pinned-ok');
+    const bash = lt.createLocalTools({ userId: 'u1', cid: 'c1' }).find((t) => t.name === 'bash')!;
+    const res = await bash.execute({
+      command: `DIR=${dir}; cat "$DIR/note.txt"`,
+      timeoutMs: 5000,
+    }, makeCtx());
+    // 变量值就在同一条命令里，静态可验证 → 不该按"未解析变量"拒绝。
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('pinned-ok');
+  });
+
+  it('still refuses a variable whose value is not a literal in the same command', async () => {
+    const { lt, perm } = await loadModules();
+    perm.grantLocalExec();
+    await setTmpWorkspace();
+    const bash = lt.createLocalTools({ userId: 'u1', cid: 'c1' }).find((t) => t.name === 'bash')!;
+    for (const command of [
+      'cat "$UNKNOWN_DIR/note.txt"',
+      'DIR="$OTHER"; cat "$DIR/note.txt"',
+      'DIR=$(pwd); cat "$DIR/note.txt"',
+    ]) {
+      const res = await bash.execute({ command, timeoutMs: 5000 }, makeCtx());
+      expect(res.isError, command).toBe(true);
+      expect(res.content, command).toContain('E_BASH_DYNAMIC_PATH_UNSUPPORTED');
+    }
+  });
+
+  it('tells the model how to rewrite a dynamic read target instead of only refusing', async () => {
+    const { lt, perm } = await loadModules();
+    perm.grantLocalExec();
+    await setTmpWorkspace();
+    const bash = lt.createLocalTools({ userId: 'u1', cid: 'c1' }).find((t) => t.name === 'bash')!;
+    const res = await bash.execute({ command: 'cat "$UNKNOWN_DIR/x"', timeoutMs: 5000 }, makeCtx());
+    expect(res.content).toContain('literal path');
+    expect(res.content).toContain('glob with a literal base directory');
+    expect(res.content).toContain('pin the variable in the same command');
+  });
+
   it('blocks interpreter-internal writes outside the writable scope on macOS', async () => {
     if (process.platform !== 'darwin' || !fs.existsSync('/usr/bin/sandbox-exec')) return;
     const { lt, perm } = await loadModules();
@@ -768,6 +818,27 @@ describe('local-tools › CogSeed CLI direct execution', () => {
     const parsed = JSON.parse(String(res.content));
     expect(parsed.argv).toEqual(['calculator', 'eval', '--', '1+1']);
     expect(parsed.out).toBe(tmpDir);
+  });
+
+  it('drains an oversized direct-CLI output instead of killing the command (no spool dir)', async () => {
+    const { lt, perm } = await loadModules();
+    perm.grantLocalExec();
+    // 2 MiB stdout with no `toolResultSpoolDir`: the in-memory cap is the only
+    // budget, so this used to kill the child mid-flight and report an error.
+    const pcDir = writeFakePcScript(
+      'run-skill.cjs',
+      "process.stdout.write('x'.repeat(2 * 1024 * 1024)); process.stdout.write('\\nDONE\\n');",
+    );
+    const bash = lt.createLocalTools({}).find((t) => t.name === 'bash')!;
+
+    const res = await bash.execute({
+      command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1',
+      timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
+    }, makeCogSeedCtx(pcDir));
+
+    // Truncated, but the command finished with its own exit code and is not an error.
+    expect(res.isError).toBeFalsy();
+    expect(String(res.content)).toContain('[output truncated by sandbox]');
   });
 
   it('runs the PowerShell form of a standard CogSeed CLI command directly', async () => {
@@ -1090,7 +1161,10 @@ fs.writeFileSync('vendor/src/index.ts', 'x');
     expect(produced).not.toContain(path.join(tmpDir, 'vendor', 'src', 'index.ts'));
   });
 
-  it('does not surface explicit curl or wget downloads, but keeps generated outputs', async () => {
+  // PowerShell 把 `curl` / `wget` 解析成 Invoke-WebRequest 别名，PATH 上的同
+  // 名 shim 永远不会被执行，用例只能测到真实下载。Windows 上跳过；同一套
+  // 「不把显式下载算作产出」规则由上面的 git-clone 用例在 win32 上继续覆盖。
+  it.skipIf(process.platform === 'win32')('does not surface explicit curl or wget downloads, but keeps generated outputs', async () => {
     const { lt, perm } = await loadModules();
     perm.grantLocalExec();
     const onFileWritten = vi.fn();

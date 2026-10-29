@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -6,7 +7,8 @@ import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS, type WrapOpts } from '../.
 import { cogseedRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
 import { normalizeRuntimePath } from './permissions';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
-import { runWithRuntimeActionApproval } from './action-approval';
+import { runWithRuntimeActionApproval, runWithRuntimeActionApprovalGrant } from './action-approval';
+import { wrapBashForOsSandbox } from './os-sandbox';
 
 function formatError(code: string, message: string): RuntimeToolResult {
   return { content: `[${code}] ${message}`, isError: true };
@@ -33,20 +35,38 @@ async function capRuntimeResult(
 }
 
 function resolveCwd(input: unknown, ctx: RuntimeToolCallContext): string {
-  const fallback = ctx.allowedRoots[0] || process.cwd();
+  const fallback = ctx.workspaceRoot || ctx.allowedRoots[0] || process.cwd();
   if (typeof input !== 'string' || !input.trim()) return fallback;
+  if (ctx.toolPolicy.fileWrite === 'all') {
+    const abs = path.resolve(input);
+    if (path.isAbsolute(abs)) return abs;
+  }
   return normalizeRuntimePath(input, ctx.allowedRoots);
 }
 
-function runProcess(command: string, cwd: string, env: NodeJS.ProcessEnv, timeoutMs?: number): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
+function runProcess(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+  argv?: { file: string; args: string[] },
+): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const child = spawn(command, {
-      cwd,
-      env,
-      shell: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    const child = argv
+      ? spawn(argv.file, argv.args, {
+        cwd,
+        env,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+      : spawn(command, {
+        cwd,
+        env,
+        shell: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -98,27 +118,64 @@ export async function runRuntimeBashTool(
   }
 
   const execute = async (): Promise<RuntimeToolResult> => {
+    // Conversation workspaces are lazy. Only materialize an explicitly
+    // writable cwd, after command approval and the normal path checks.
+    if (!fs.existsSync(cwd) && ctx.toolPolicy.fileWrite === 'explicit_writable_roots') {
+      try {
+        normalizeRuntimePath(cwd, ctx.writableRoots);
+        fs.mkdirSync(cwd, { recursive: true });
+      } catch (error) {
+        return formatError('E_RUNTIME_PATH_DENIED', (error as Error).message);
+      }
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       COGSEED_NODE: process.execPath,
       COGSEED_PC_DIR: ctx.pcDir,
       COGSEED_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
+      ...(ctx.workspaceRoot ? { COGSEED_WORKSPACE_DIR: ctx.workspaceRoot } : {}),
       COGSEED_UID: ctx.userId,
       ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || '1',
     };
-    const result = await runProcess(command, cwd, env, input.timeoutMs);
-    if (result.timedOut) return formatError('E_RUNTIME_TIMEOUT', 'runtime bash timed out');
-    if (result.code !== 0) {
-      const output = result.stderr || result.stdout || `shell exited with code ${result.code}`;
-      return capRuntimeResult('bash', { content: output, isError: true }, opts);
+    const osSandboxRequested = process.env.COGSEED_OS_SANDBOX === '1' && ctx.toolPolicy.fileWrite !== 'all';
+    if (osSandboxRequested && process.platform === 'win32') {
+      return formatError('E_RUNTIME_OS_SANDBOX_UNSUPPORTED', 'OS sandbox is not available on Windows; refusing to run bash unconfined');
     }
-    return capRuntimeResult('bash', { content: result.stdout }, opts);
+    const wrapped = osSandboxRequested
+      ? wrapBashForOsSandbox(command, {
+        ...(ctx.workspaceRoot ? { workspaceRoot: ctx.workspaceRoot } : {}),
+        writableRoots: ctx.writableRoots,
+        ...(ctx.workspaceRoot ? { protectedPaths: [path.join(ctx.workspaceRoot, '.git')] } : {}),
+      })
+      : null;
+    const preflight: (RuntimeToolResult & { approvalRequestId?: string }) | undefined = ctx.beforeAction
+      ? await ctx.beforeAction('bash', { ...input, command, working_dir: cwd }, opts.signal)
+      : formatError('E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE', 'current host conditions unavailable');
+    if (preflight && !preflight.approvalRequestId) return preflight;
+    const run = async (): Promise<RuntimeToolResult> => {
+      if (opts.signal?.aborted) return formatError('E_RUNTIME_ABORTED', 'action cancelled');
+      const result = wrapped
+        ? await runProcess(command, cwd, env, input.timeoutMs, wrapped)
+        : await runProcess(command, cwd, env, input.timeoutMs);
+      if (result.timedOut) return formatError('E_RUNTIME_TIMEOUT', 'runtime bash timed out');
+      if (result.code !== 0) {
+        const output = result.stderr || result.stdout || `shell exited with code ${result.code}`;
+        return capRuntimeResult('bash', { content: output, isError: true }, opts);
+      }
+      return capRuntimeResult('bash', { content: result.stdout }, opts);
+    };
+    return preflight?.approvalRequestId
+      ? runWithRuntimeActionApprovalGrant(ctx.actionApproval, preflight.approvalRequestId, run, opts.signal)
+      : run();
   };
 
+  // Low-risk reception commands are approved in the host preflight inside
+  // execute(); ordinary low-risk commands retain their direct execution path.
   if (!risk.risky) return execute();
   return runWithRuntimeActionApproval(ctx.actionApproval, {
     action: 'bash',
     target: command,
+    verbatimTarget: true,
     scope: `仅在工作目录 ${cwd} 中执行这一条命令`,
     auditTarget: 'Sensitive shell command',
     auditScope: `risk categories: ${risk.reasons.join(', ')}`,

@@ -399,7 +399,7 @@
     },
     "coverage": {
       "type": "object",
-      "description": "本次扫描实际覆盖了什么：规则条数、规则组、外部工具可用性、扫过的文件与上下文分布、规则包是否解析成功、编译失败的规则。",
+      "description": "本次扫描实际覆盖了什么：规则条数、规则组、外部工具可用性、原生检测后端（漏洞快照 / YARA 签名包）、扫过的文件与上下文分布、规则包是否解析成功、编译失败的规则。",
       "properties": {
         "files_scanned": {
           "type": "integer"
@@ -439,6 +439,49 @@
         },
         "invalid_rules": {
           "type": "array"
+        },
+        "vulnerability_db": {
+          "type": "object",
+          "description": "内置依赖漏洞库的加载状态。status 非 OK 时本次没有做 CVE 匹配。",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "entries": {
+              "type": "integer"
+            },
+            "packages": {
+              "type": "integer"
+            },
+            "as_of": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        "dependency_inventory": {
+          "type": "object",
+          "description": "从清单/锁文件抽到的依赖规模；unreadable 非空表示有清单没解析出来。"
+        },
+        "signature_pack": {
+          "type": "object",
+          "description": "YARA 签名包加载状态；errors 非空表示有规则未编译、未参与匹配。",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "rules": {
+              "type": "integer"
+            },
+            "files": {
+              "type": "integer"
+            },
+            "errors": {
+              "type": "array"
+            }
+          }
         }
       }
     },

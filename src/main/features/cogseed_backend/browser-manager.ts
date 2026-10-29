@@ -44,9 +44,9 @@ interface BrowserSession {
 export interface CogSeedBrowserManager {
   open(scope: CogSeedHostToolScope, url: string, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
   snapshot(scope: CogSeedHostToolScope, maxChars?: number): Promise<CogSeedHostToolResult>;
-  click(scope: CogSeedHostToolScope, ref: number): Promise<CogSeedHostToolResult>;
-  type(scope: CogSeedHostToolScope, ref: number, text: string, submit?: boolean): Promise<CogSeedHostToolResult>;
-  screenshot(scope: CogSeedHostToolScope, outputPath?: string): Promise<CogSeedHostToolResult>;
+  click(scope: CogSeedHostToolScope, ref: number, beforeAction?: () => Promise<void>): Promise<CogSeedHostToolResult>;
+  type(scope: CogSeedHostToolScope, ref: number, text: string, submit?: boolean, beforeAction?: () => Promise<void>): Promise<CogSeedHostToolResult>;
+  screenshot(scope: CogSeedHostToolScope, outputPath?: string, beforeAction?: () => Promise<void>): Promise<CogSeedHostToolResult>;
   dispose(userId: string, runtimeSessionId: string): Promise<void>;
   disposeAll(): Promise<void>;
 }
@@ -161,10 +161,11 @@ export function createCogSeedBrowserManager(deps: CogSeedBrowserManagerDeps = {}
         return { content: JSON.stringify({ url: String(value?.url || state.window.webContents.getURL()), title, text, elements }) };
       } catch (cause) { return fail('E_BROWSER_SNAPSHOT', cause instanceof Error ? cause.message : String(cause)); }
     },
-    async click(scope, ref) {
+    async click(scope, ref, beforeAction) {
       const state = current(scope); if (!state) return fail('E_BROWSER_SESSION', 'open a page before clicking');
       if (!Number.isInteger(ref) || !state.refs.has(ref)) return fail('E_BROWSER_REF', 'ref is not present in the latest snapshot');
       try {
+        await beforeAction?.();
         const result = await state.window.webContents.executeJavaScript(`(() => { const el = document.querySelector('[data-cogseed-ref="${ref}"]'); if (!el) return {ok:false}; el.click(); return {ok:true,url:location.href,title:document.title}; })()`, true);
         state.refs.clear();
         const finalUrl = String(result?.url || state.window.webContents.getURL());
@@ -175,13 +176,14 @@ export function createCogSeedBrowserManager(deps: CogSeedBrowserManagerDeps = {}
         return result?.ok ? { content: JSON.stringify({ ...result, url: finalUrl }) } : fail('E_BROWSER_REF', 'element is no longer available');
       } catch (cause) { return fail('E_BROWSER_CLICK', cause instanceof Error ? cause.message : String(cause)); }
     },
-    async type(scope, ref, text, submit = false) {
+    async type(scope, ref, text, submit = false, beforeAction) {
       const state = current(scope); if (!state) return fail('E_BROWSER_SESSION', 'open a page before typing');
       const meta = state.refs.get(ref);
       if (!Number.isInteger(ref) || !meta || !['input', 'textarea'].includes(meta.tag) && meta.role !== 'textbox') return fail('E_BROWSER_REF', 'ref is not a text input from the latest snapshot');
       if (typeof text !== 'string' || text.length > MAX_TYPE_CHARS) return fail('E_BROWSER_INPUT', `text must be at most ${MAX_TYPE_CHARS} characters`);
       try {
         const encoded = JSON.stringify(text); const submitFlag = submit ? 'true' : 'false';
+        await beforeAction?.();
         const result = await state.window.webContents.executeJavaScript(`(() => { const el = document.querySelector('[data-cogseed-ref="${ref}"]'); if (!el) return {ok:false}; const value=${encoded}; el.focus(); if ('value' in el) el.value=value; else el.textContent=value; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); if (${submitFlag}) { el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true})); if (el.form?.requestSubmit) el.form.requestSubmit(); } return {ok:true,url:location.href,title:document.title}; })()`, true);
         if (!result?.ok) return fail('E_BROWSER_REF', 'element is no longer available');
         const finalUrl = String(result?.url || state.window.webContents.getURL());
@@ -193,13 +195,16 @@ export function createCogSeedBrowserManager(deps: CogSeedBrowserManagerDeps = {}
         return { content: JSON.stringify({ ...result, url: finalUrl }) };
       } catch (cause) { return fail('E_BROWSER_TYPE', cause instanceof Error ? cause.message : String(cause)); }
     },
-    async screenshot(scope, rawOutput) {
+    async screenshot(scope, rawOutput, beforeAction) {
       const state = current(scope); if (!state) return fail('E_BROWSER_SESSION', 'open a page before taking a screenshot');
       const output = rawOutput ? path.resolve(scope.workingDir ?? '.', rawOutput) : path.join(cogseedRuntimeSessionToolResultsDir(scope.userId, scope.runtimeSessionId), `browser-${Date.now().toString(36)}.png`);
       if (rawOutput && (!scope.writableRoots.length || !isPathAllowed(output, scope.writableRoots))) return fail('E_PATH_OUT_OF_SCOPE', 'browser screenshot path is outside writable Runtime roots');
       if (path.extname(output).toLowerCase() !== '.png') return fail('E_BROWSER_INPUT', 'browser screenshot output must be .png');
       try {
-        const image = await state.window.webContents.capturePage(); fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, image.toPNG());
+        await beforeAction?.();
+        const image = await state.window.webContents.capturePage();
+        await beforeAction?.();
+        fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, image.toPNG());
         const artifactId = await registerScreenshot(scope, output, !rawOutput);
         if (!rawOutput) state.ownedArtifacts.add(output);
         return { content: JSON.stringify({ path: output, bytes: fs.statSync(output).size, artifactId }) };

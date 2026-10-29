@@ -32,31 +32,27 @@ type VerifiedParagraph = import('../src/main/features/transcript_rewrite').Verif
 const CHUNK_MAX_UTTERANCES = 26;
 
 /**
- * 除种子词表外，本次跑通**额外入册**的形态。
+ * 种子词表之外的实验候选形态。
  *
- * 来源：2026-09-16 metrics 脚本产出的「建议入册清单」（`stats.residual` + 未召回归类），
- * 每一条都在真实上下文里核对过。**入册属人工决策**，故在此显式列名、并在产物的
- * 「未决项」里如实声明它们尚未经人工确认——不藏在代码里。
+ * 这些条目只供显式运行本驱动时使用，不修改应用词表。
+ * 入册需要人工确认，产物的「未决项」会逐条列出候选及其说明。
  */
 const EXTRA_ENTRIES: Array<{ wrong: string; correct: string; kind: string; note: string }> = [
-  { wrong: '示例人', correct: 'ExamplePerson', kind: 'people', note: 'metrics 样例；人工清理版也做了此归一（人名已脱敏）' },
-  { wrong: 'mesh seed', correct: 'CogSeed', kind: 'product', note: '未召回 3 处' },
-  { wrong: 'mesh c', correct: 'CogSeed', kind: 'product', note: '未召回 1 处' },
-  { wrong: '多维表', correct: '多维表格', kind: 'term', note: '未召回 2 处' },
-  { wrong: '联盟德', correct: 'Raymond', kind: 'product', note: '未召回 1 处（中文音近，本层无拼音表）' },
-  // ⚠️ 刻意**不**入册 `k42` / `k32`（2026-09-16 两次判断后的结论）：
-  //   这两处出现在**引例语境**里——U0363「他不知道 k32 啥意思……包括我们这个 k32 记录」，
-  //   说话人正是在抱怨"转写把 KSTAR 写成了 k32"。也就是说 k32/k42 是**要被展示的错误样例**，
-  //   入册会让管线自动把它们抹平，反而破坏语义（正是失败模式 6）。
-  //   我曾先把它们入册当成"补覆盖"，读了上下文后撤回——**"残留"既可能是漏改，也可能是正确保留**。
-  { wrong: 'personality', correct: 'Personal Ontology', kind: 'term', note: '未召回 4 处；riskLevel=high 待确认' },
-  { wrong: 'coseat', correct: 'Cogseed', kind: 'product', note: 'metrics 核对为真实变体' },
-  { wrong: 'codeset', correct: 'Cogseed', kind: 'product', note: 'metrics 核对为真实变体' },
-  { wrong: 'cock seed', correct: 'Cogseed', kind: 'product', note: 'metrics 核对为真实变体' },
-  { wrong: 'cocet', correct: 'Cogseed', kind: 'product', note: 'metrics 核对为真实变体' },
-  { wrong: 'cocket', correct: 'Cogseed', kind: 'product', note: 'metrics 核对为真实变体' },
-  { wrong: 'car seat', correct: 'Cogseed', kind: 'product', note: 'metrics 核对为真实变体（上下文主语是 Cogseed）' },
-  { wrong: 'personal oncology', correct: 'Personal Ontology', kind: 'term', note: 'metrics 核对为真实变体' },
+  { wrong: '示例人', correct: 'ExamplePerson', kind: 'people', note: '合成人名形态；归一前需核对上下文' },
+  { wrong: 'mesh seed', correct: 'CogSeed', kind: 'product', note: '产品名分词候选；需人工确认' },
+  { wrong: 'mesh c', correct: 'CogSeed', kind: 'product', note: '产品名缩写候选；需人工确认' },
+  { wrong: '多维表', correct: '多维表格', kind: 'term', note: '术语简称候选；需人工确认' },
+  { wrong: '联盟德', correct: 'Raymond', kind: 'product', note: '中文音近候选；本层无拼音表，需人工确认' },
+  // `k42` / `k32` 也可能是在展示错误拼写，而非待归一的正文实体。
+  // 不把这些形态自动入册，以免破坏引例语义；残留计数仍需结合上下文判断。
+  { wrong: 'personality', correct: 'Personal Ontology', kind: 'term', note: '高风险术语候选；需人工确认' },
+  { wrong: 'coseat', correct: 'Cogseed', kind: 'product', note: '上下文变体候选；需人工确认' },
+  { wrong: 'codeset', correct: 'Cogseed', kind: 'product', note: '上下文变体候选；需人工确认' },
+  { wrong: 'cock seed', correct: 'Cogseed', kind: 'product', note: '上下文变体候选；需人工确认' },
+  { wrong: 'cocet', correct: 'Cogseed', kind: 'product', note: '上下文变体候选；需人工确认' },
+  { wrong: 'cocket', correct: 'Cogseed', kind: 'product', note: '上下文变体候选；需人工确认' },
+  { wrong: 'car seat', correct: 'Cogseed', kind: 'product', note: '产品名分词候选；需核对主语' },
+  { wrong: 'personal oncology', correct: 'Personal Ontology', kind: 'term', note: '上下文变体候选；需人工确认' },
 ];
 
 main().catch((err) => {
@@ -141,11 +137,8 @@ async function prepare(args: string[]): Promise<void> {
 
   // ③ 实体归一（确定性通道自动替换；模糊通道只出候选）
   //
-  // **设计要点（2026-09-16 修正）**：这一步的结果必须**真的应用**到后续输入上。
-  // 原实现只把它写进 `03-normalized.json` 就丢掉了，交给 LLM 的仍是未归一文本——
-  // 于是 k42/k32 的归一只靠模型自觉，结果它归了 k42 却漏了 k32（实测残留 2 处）。
-  // 原则：**能机器确定的，在交给模型之前就做掉**，模型只处理真正有歧义的部分。
-  // 锚点不受影响：归一不增删发言，id 与时间戳保持一一对应。
+  // 确定性归一的结果必须同时写入记录并传给后续模型，不能只保存统计。
+  // 模糊候选保留待审；归一不增删发言，id 与时间戳保持一一对应。
   const domTerms = [...new Set(entries.map((e) => e.correct))];
   const glossaryForModel = summarizeGlossary(entries);
   const appliedTally = new Map<string, { wrong: string; correct: string; channel: string; count: number }>();
@@ -180,8 +173,8 @@ async function prepare(args: string[]): Promise<void> {
   for (let i = 0; i < structured.length; i += CHUNK_MAX_UTTERANCES) {
     chunks.push(structured.slice(i, i + CHUNK_MAX_UTTERANCES));
   }
-  const scenario = `这是《教育智能体演示汇报》的会议转写。参会人：${speakerList(structured)}。`
-    + '讨论的是 Cogseed（个人 AI 伙伴客户端）、KSTAR、EduSeed、Forge 等产品的演示与落地。';
+  const scenario = `这是待清理的会议转写。参会人：${speakerList(structured)}。`
+    + '主题、对象和术语含义均以本次输入为准，不补充输入之外的业务背景。';
   chunks.forEach((chunk, i) => {
     const req = buildRewriteRequest(chunk, { scenario, glossary: glossaryForModel });
     const name = String(i + 1).padStart(2, '0');
@@ -257,8 +250,7 @@ async function assemble(args: string[]): Promise<void> {
 
   // 章节标题：模型产出 → 06-headings.response.json。缺它时先写请求、本轮不插标题。
   // 章节标题键必须**稳定**：用"该块首段的第一个源发言 id"而不是块序号。
-  // 实测教训：按块序号做键时，归属修正让块数从 94 变成 81，直接丢掉 4 个标题（15→12）。
-  // 用 srcId 做键则重排/合并/拆分都不会失配。
+  // 块序号会随重排、合并或拆分而变化；源发言锚点可维持标题与内容的对应。
   const headingsFile = path.join(outDir, '06-headings.response.json');
   const blockAnchor = new Map<string, number>();
   blocks.forEach((b, i) => { if (b.srcIds[0]) blockAnchor.set(b.srcIds[0], i); });
@@ -290,7 +282,7 @@ async function assemble(args: string[]): Promise<void> {
       '输入是会议清理稿的发言块清单（编号 = blockIndex）。请判断哪些**连续块**在讲同一个主题，',
       '为每个新主题的第一个块给一个短标题。要求：',
       '- 标题 ≤ 12 个汉字；写"主题词"，不要写"第一部分/讨论"这类空话；',
-      '- 只输出 JSON 数组，元素形如 {"srcId": "U0100", "heading": "挑战材料与作业归属"}；',
+      '- 只输出 JSON 数组，元素形如 {"srcId": "U0100", "heading": "示例主题"}；',
       '- `srcId` 取该块行首方括号里的锚点 id（**不要用块序号**，序号会随重跑变化）；',
       '- 第一个主题必须从清单第一行开始；srcId 必须来自下面的清单；',
       '- 目标 10–18 个章节；不要每个块都给标题。',
@@ -320,18 +312,18 @@ async function assemble(args: string[]): Promise<void> {
   }
 
   const md = renderMarkdown(blocks, {
-    title: '教育智能体演示汇报｜受约束重建版',
-    date: '2026-09-05',
+    title: '转写清理稿｜受约束重建版',
+    date: '以源转写为准',
     speakers,
     headings,
     glossaryTable: summarizeGlossary(entries).map((g) => ({
-      correct: g.correct, forms: g.forms.join('、'), basis: '项目既有文档 + 本次实测入册清单',
+      correct: g.correct, forms: g.forms.join('、'), basis: '词表种子 + 本次显式候选清单',
     })),
     openItems,
     materials: [
       `原始转写：${readJson(path.join(outDir, '01-source.json')).source}（sha1 ${readJson(path.join(outDir, '01-source.json')).sha1.slice(0, 12)}）`,
-      '本项目既有文档：Cogseed 学生版产品故事、Cogseed-Hermes 飞书 MVP 实施计划',
-      '词表：transcript_glossary_seed（26 条）+ 本次实测入册 13 条',
+      '处理范围：本次输入转写及显式配置的词表；不引用外部业务文档',
+      '词表：transcript_glossary_seed + 驱动中的显式候选清单',
     ],
     stats: {
       '源发言条数': verified.stats.sourceCount,
@@ -368,15 +360,13 @@ async function assemble(args: string[]): Promise<void> {
     + `相似度过低 ${(verified.stats.lowSimilarityRatio * 100).toFixed(0)}%）`);
 }
 
-// ── chunkcheck：分块压缩比闸门（多 worker 的方差必须被机械发现）─────────
+// ── chunkcheck：分块压缩比闸门 ────────────────────────────────────
 
 /**
  * 逐块算压缩比，列出需要重跑的块。
  *
- * 为什么需要这一步（实测教训 2026-09-16）：19 个块分给 5 个 worker 并行处理，
- * 结果 12 个块的压缩比在 75%–99%（等于没做书面化），另外 7 个在 69%–71%。
- * **这是并行 LLM 的固有方差**，靠"写更严的提示词"解决不了——必须靠机械闸门
- * 把越界的块挑出来重跑。本命令就是那个闸门。
+ * 分块结果可能有不同的压缩程度，整体比例不能定位局部越界。
+ * 本命令按调用者给定的上下界逐块检查，只列出缺失或越界的块。
  */
 async function chunkcheck(args: string[]): Promise<void> {
   const outDir = args[0];
@@ -428,8 +418,8 @@ async function compare(args: string[]): Promise<void> {
    * 两个必须做对的口径（否则会得出相反的结论）：
    *  ① 附记里的「术语对照表」本来就该列出原始错形（`coxy`、`K star`…），
    *     把它算进来会误判成"没清理干净"；
-   *  ② 必须用**词边界**计数：`海运` 是 `示例人名甲` 的子串、`多维表` 是 `多维表格` 的子串，
-   *     朴素子串计数会把正确写法误报成残留（实测因此踩过两次）。
+   *  ② 必须用**词边界**计数：`多维表` 是 `多维表格` 的子串，
+   *     朴素子串计数会把正确写法误报成残留。
    */
   const bodyOf = (t: string) => t.split('## 整理附记')[0];
   const RESIDUAL_FORMS = [
@@ -441,7 +431,7 @@ async function compare(args: string[]): Promise<void> {
   ];
   /**
    * 少数形态必须**区分大小写**计数：`kstar` 与规范形 `KSTAR` 在不区分大小写时是同一个串，
-   * 会把**正确**的 22 处 KSTAR 全部误报成残留（实测踩到）。
+   * 会把正确的规范形也误报成残留。
    * 其余形态仍不区分大小写（`Coxy`/`COXY` 都算错形）。
    */
   const CASE_SENSITIVE_RESIDUALS = new Set(['kstar']);
@@ -490,10 +480,8 @@ async function compare(args: string[]): Promise<void> {
 // ── 小工具 ──────────────────────────────────────────────────────────────
 
 /**
- * 同一个概念的**中文等价写法**。词表里 `correct` 是英文规范形，但会上人也说中文名
- * （"个人本体""任务智能体"），不过归一化检测若不知道这些等价写法，就会把它们全误报成
- * "过度归一"（实测首轮 26 条告警里有 15 条是这个原因）。这份小表只为**检测**服务，
- * 不参与替换。
+ * 同一个概念的中文等价写法。词表的 `correct` 可以是英文规范形，源文也可能使用中文名。
+ * 检测时接受这些等价写法，避免误报为过度归一；本表不参与替换。
  */
 const CANONICAL_ALIASES: Record<string, string[]> = {
   'Personal Ontology': ['个人本体', '个人的本体', 'ontology'],

@@ -31,6 +31,7 @@ Skill 交给模型审计，模型答"这是配置说明，不是攻击"；而路
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -244,6 +245,17 @@ _PAIR_RES = [(rid, re.compile(a, re.IGNORECASE), re.compile(b, re.IGNORECASE), s
              for rid, a, b, sev, cat, desc in _PAIRS]
 
 
+# JSON serializes a multi-paragraph workflow onto one physical line. Pair rules
+# operate on decoded logical lines, but findings retain the source JSON line.
+# Keep all keys/values and raw structural/imperative scans; malformed JSON falls
+# back to raw input. Decoding also exposes unicode-escaped egress instructions.
+_JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _json_pair_lines(line: str) -> list[str]:
+    return _JSON_STRING.sub(lambda m: json.loads(m.group(0)), line).splitlines()
+
+
 def scan_agentic(docs: list[tuple[str, str]],
                  contexts: dict[str, FileContext] | None = None) -> list[dict[str, Any]]:
     """扫描针对代理运行时的指令、配置篡改与危险开关。"""
@@ -255,6 +267,13 @@ def scan_agentic(docs: list[tuple[str, str]],
             continue
         fctx = ctx_of.get(rel) or FileContext(rel, text)
 
+        json_document = False
+        if rel.lower().endswith('.json'):
+            try:
+                json.loads(text)
+                json_document = True
+            except (ValueError, RecursionError):
+                pass
         lines = text.splitlines()
         for lineno, line in enumerate(lines, 1):
             if not line.strip():
@@ -308,10 +327,11 @@ def scan_agentic(docs: list[tuple[str, str]],
             # 组合层原先只做「两个模式都出现」，于是把一句**禁止**判成
             # 「读取浏览器凭据库」。祈使层早有守卫，组合层漏了同一个判断。
             for rule_id, rx_a, rx_b, sev, cat, desc in _PAIR_RES:
-                if not rx_a.search(line):
-                    continue
-                action = next((m for m in rx_b.finditer(line) if not _negated(line, m.start())), None)
-                if action is None:
+                pair_lines = _json_pair_lines(line) if json_document else [line]
+                paired = any(rx_a.search(part) and any(
+                    not _negated(part, match.start()) for match in rx_b.finditer(part)
+                ) for part in pair_lines)
+                if not paired:
                     continue
                 if example_block is None:
                     example_block = in_example_block(lines, lineno)

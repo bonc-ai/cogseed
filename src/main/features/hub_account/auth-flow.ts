@@ -20,7 +20,9 @@ import { shell } from 'electron';
 import { getActiveUserId } from '../users';
 import { createLogger } from '../../logger';
 import { HubApiError, hubClient, type HubClient } from './client';
-import { saveHubSession, loadHubSession, clearHubSession } from './tokens';
+import { ensureServiceOriginsResolved } from '../service_origins';
+import { saveHubSession, loadHubSession, clearHubSession, hubSessionGeneration, invalidateHubSessionGeneration } from './tokens';
+import { resolveBuildIdentity } from '../../util/build-identity';
 import { readHubAccountState, writeHubAccountState } from './state';
 import type { HubSession, HubBindResult } from './types';
 
@@ -66,11 +68,50 @@ function _isExpiringSoon(session: HubSession, withinMs: number): boolean {
  * remember the returned state so the deep-link callback can be completed.
  * The caller (IPC layer) opens the browser.
  */
-export async function startLogin(userId: string, client: HubClient = hubClient()): Promise<{ authorize_url: string; state: string }> {
-  const { authorize_url, state } = await client.login('web', ACCOUNT_CALLBACK_URL);
+export async function startLogin(
+  userId: string,
+  client?: HubClient,
+): Promise<{ authorize_url: string; state: string }> {
+  // 🔴 登录前先确定 Hub 地址（生产优先 / 本地兜底）。默认参数会在函数体执行前
+  //    求值，拿不到 await 的机会，所以改成可选参数、在体内解析。
+  await ensureServiceOriginsResolved();
+  const hub = client ?? hubClient();
+  const { authorize_url, state } = await hub.login('web', ACCOUNT_CALLBACK_URL);
   _pendingState = state;
   writeHubAccountState(userId, { pending_login: { state, started_at: new Date().toISOString() } });
   return { authorize_url, state };
+}
+
+/**
+ * 本机联调用的 mock 登录（dev-only）。
+ *
+ * Hub 的 `provider=mock` 只在 `NODE_ENV=development` 下签发，返回真实会话的
+ * 一次性 code——它不是静态 Token，也不是绕过鉴权，而是「没有官网源码时也能
+ * 走正常会话签发」的本机路径。用于本机双客户端冒烟，**不能**作为正常登录的
+ * 验收证据。
+ *
+ * 双保险：显式环境开关 + 非 release 通道。任一不满足都直接拒绝，绝不静默降级。
+ */
+export function isMockLoginAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (String(env.COGSEED_HUB_MOCK_LOGIN || '').trim() !== '1') return false;
+  const channel = resolveBuildIdentity().channel;
+  return channel !== 'release';
+}
+
+export async function startMockLogin(
+  userId: string,
+  client: HubClient = hubClient(),
+): Promise<{ account_id: string; is_new_account: boolean }> {
+  if (!isMockLoginAllowed()) {
+    throw new HubApiError('AUTH_MOCK_DISABLED', '本地 mock 登录未开启', 400);
+  }
+  const { state, mock_code: mockCode } = await client.login('mock', ACCOUNT_CALLBACK_URL);
+  if (!mockCode) {
+    throw new HubApiError('AUTH_MOCK_UNAVAILABLE', 'Hub 未返回 mock code', 400);
+  }
+  _pendingState = state;
+  writeHubAccountState(userId, { pending_login: { state, started_at: new Date().toISOString() } });
+  return completeLogin(userId, mockCode, state, client);
 }
 
 /** Open the system browser at the authorize URL (user-facing step). */
@@ -110,12 +151,16 @@ export async function completeLogin(
     throw new HubApiError('AUTH_INVALID_STATE', 'OAuth state 不匹配，请重新登录', 400);
   }
 
+  const generation = hubSessionGeneration(userId);
   const result = await client.callback(code, state, {
     installation_id: getOrCreateInstallationId(userId),
     device_name: _deviceName(),
     device_os: _deviceOs(),
   });
-  saveHubSession(userId, result.session);
+  if (generation !== hubSessionGeneration(userId) || currentLoginState(userId) !== state) {
+    throw new HubApiError('AUTH_REQUIRED', 'Login lifecycle changed', 401);
+  }
+  _persistSession(userId, result.session);
   writeHubAccountState(userId, {
     account_id: result.account.account_id,
     auth_provider: result.account.auth_provider,
@@ -127,6 +172,7 @@ export async function completeLogin(
   // past this point would report a failed login while the user is in fact
   // signed in, and would leave the consumed state pending.
   _pendingState = null;
+  const loginIsCurrent = sessionFence(userId);
 
   let bind: HubBindResult | null = null;
   if (result.is_new_account) {
@@ -138,6 +184,7 @@ export async function completeLogin(
       log.warn('hub local identity bind failed after login', { error: (err as Error).message });
     }
   }
+  loginIsCurrent();
   log.info('hub login completed', { accountId: mask(result.account.account_id), isNew: result.is_new_account, bound: !!bind });
   return { account_id: result.account.account_id, is_new_account: result.is_new_account };
 }
@@ -153,12 +200,14 @@ export async function bindLocalIdentity(
   accessToken: string,
   client: HubClient = hubClient(),
 ): Promise<HubBindResult> {
+  const isCurrent = sessionFence(userId);
   const result = await client.bind(accessToken, {
     local_identity_id: getActiveUserId(),
     installation_id: getOrCreateInstallationId(userId),
     device_name: _deviceName(),
     device_os: _deviceOs(),
   });
+  isCurrent();
   writeHubAccountState(userId, {
     device_id: result.device.device_id,
     device_name: result.device.device_name,
@@ -171,20 +220,127 @@ export async function bindLocalIdentity(
 
 // ── Session refresh + authorized calls ───────────────────────────────────
 
-/** Refresh the Hub session now; throws `HubApiError` when the refresh token is gone/revoked. */
-export async function refreshSession(userId: string, client: HubClient = hubClient()): Promise<HubSession> {
-  const session = loadHubSession(userId);
-  if (!session) throw new HubApiError('AUTH_REQUIRED', '未登录', 401);
-  const refreshed = await client.refresh(session.refresh_token);
-  const next: HubSession = {
-    session_id: session.session_id, // server keeps the same session family across rotation
-    access_token: refreshed.access_token,
-    refresh_token: refreshed.refresh_token,
-    access_expires_at: refreshed.access_expires_at,
-    refresh_expires_at: refreshed.refresh_expires_at,
+/**
+ * Refresh failures the server will not recover from on its own.
+ *
+ * Only codes that explicitly name the refresh token count as terminal. Anything
+ * else (network failure, 5xx, unknown code) stays retryable, because a transient
+ * blip must not lock the user out of silent refresh for the rest of the process.
+ */
+const TERMINAL_HUB_AUTH_CODES = new Set([
+  'AUTH_REFRESH_TOKEN_REVOKED',
+  'AUTH_REFRESH_TOKEN_EXPIRED',
+  'AUTH_INVALID_TOKEN',
+]);
+
+/**
+ * Does this Hub error code mean the stored refresh token is dead?
+ *
+ * Also used by the IPC layer, which folds the resulting log burst into one line.
+ */
+export function isTerminalHubAuthCode(code: string): boolean {
+  return TERMINAL_HUB_AUTH_CODES.has(code);
+}
+
+/** In-flight refresh per user — concurrent callers share a single request. */
+const _refreshInFlight = new Map<string, { generation: number; task: Promise<HubSession> }>();
+/** Terminal auth failure per user — suppresses further silent refreshes. */
+const _refreshTerminal = new Map<string, { generation: number; error: HubApiError }>();
+
+function sessionFence(userId: string): () => void {
+  const generation = hubSessionGeneration(userId);
+  const sessionId = loadHubSession(userId)?.session_id;
+  return () => {
+    if (!sessionId || generation !== hubSessionGeneration(userId)
+      || loadHubSession(userId)?.session_id !== sessionId) {
+      throw new HubApiError('AUTH_REQUIRED', 'Session lifecycle changed', 401);
+    }
   };
-  saveHubSession(userId, next);
-  return next;
+}
+
+/**
+ * Drop cached refresh coordination for one user. Called whenever the stored
+ * session changes, because the marker describes a specific credential pair.
+ */
+function _resetRefreshCoordination(userId: string): void {
+  _refreshInFlight.delete(userId);
+  _refreshTerminal.delete(userId);
+}
+
+/** Test-only: module state would otherwise leak across test cases. */
+export function _resetHubAuthStateForTest(): void {
+  _refreshInFlight.clear();
+  _refreshTerminal.clear();
+}
+
+/** Persist a session and re-arm silent refresh (sign-in, or a rotation). */
+function _persistSession(userId: string, session: HubSession): void {
+  invalidateHubSessionGeneration(userId);
+  saveHubSession(userId, session);
+  _resetRefreshCoordination(userId);
+}
+
+/** Drop the session and any terminal marker (sign-out, account deletion). */
+function _discardSession(userId: string): void {
+  clearHubSession(userId);
+  _resetRefreshCoordination(userId);
+}
+
+/**
+ * Refresh the Hub session now; throws `HubApiError` when the refresh token is gone/revoked.
+ *
+ * Concurrent callers share one request, and a terminal failure is remembered so
+ * the burst of parallel calls the settings page fires collapses into a single
+ * round trip instead of one doomed request each.
+ */
+export async function refreshSession(userId: string, client: HubClient = hubClient()): Promise<HubSession> {
+  const generation = hubSessionGeneration(userId);
+  const terminal = _refreshTerminal.get(userId);
+  if (terminal?.generation === generation) throw new HubApiError(terminal.error.code, terminal.error.message, terminal.error.status, terminal.error.details);
+
+  const inFlight = _refreshInFlight.get(userId);
+  if (inFlight?.generation === generation) return inFlight.task;
+  const isCurrent = sessionFence(userId);
+
+  const task = (async (): Promise<HubSession> => {
+    const session = loadHubSession(userId);
+    if (!session) throw new HubApiError('AUTH_REQUIRED', '未登录', 401);
+
+    let refreshed;
+    try {
+      refreshed = await client.refresh(session.refresh_token);
+    } catch (err) {
+      isCurrent();
+      if (err instanceof HubApiError && isTerminalHubAuthCode(err.code)) {
+        _refreshTerminal.set(userId, { generation, error: err });
+        log.warn('hub session can no longer be refreshed; re-login required', {
+          code: err.code,
+          status: err.status,
+        });
+      }
+      throw err;
+    }
+
+    isCurrent();
+    const next: HubSession = {
+      session_id: session.session_id, // server keeps the same session family across rotation
+      access_token: refreshed.access_token,
+      refresh_token: refreshed.refresh_token,
+      access_expires_at: refreshed.access_expires_at,
+      refresh_expires_at: refreshed.refresh_expires_at,
+    };
+    // Persist directly: clearing coordination here would drop the shared
+    // in-flight promise that concurrent callers are still awaiting.
+    saveHubSession(userId, next);
+    return next;
+  })();
+
+  _refreshInFlight.set(userId, { generation, task });
+  try {
+    return await task;
+  } finally {
+    if (_refreshInFlight.get(userId)?.task === task) _refreshInFlight.delete(userId);
+  }
 }
 
 /** Ensure a non-expired session exists (silent refresh when needed). */
@@ -204,13 +360,21 @@ async function withAuthRetry<T>(
   fn: (accessToken: string, client: HubClient) => Promise<T>,
   client: HubClient = hubClient(),
 ): Promise<T> {
+  const isCurrent = sessionFence(userId);
   const session = await ensureFreshSession(userId, client);
+  isCurrent();
   try {
-    return await fn(session.access_token, client);
+    const result = await fn(session.access_token, client);
+    isCurrent();
+    return result;
   } catch (err) {
+    isCurrent();
     if (err instanceof HubApiError && err.code === 'AUTH_INVALID_TOKEN') {
       const fresh = await refreshSession(userId, client);
-      return fn(fresh.access_token, client);
+      isCurrent();
+      const result = await fn(fresh.access_token, client);
+      isCurrent();
+      return result;
     }
     throw err;
   }
@@ -220,6 +384,14 @@ async function withAuthRetry<T>(
 
 export async function getAccountMe(userId: string): Promise<import('./types').HubAccountMe> {
   return withAuthRetry(userId, (token, client) => client.me(token));
+}
+
+/** T6: withAuthRetry checks the originating session generation after every
+ * await, including late PATCH completion, before IPC can publish success. */
+export async function updateProfile(
+  userId: string, body: import('./types').HubUpdateProfileRequest,
+): Promise<import('./types').HubAccountMe> {
+  return withAuthRetry(userId, (token, client) => client.updateProfile(token, body));
 }
 
 export async function listDevices(userId: string): Promise<import('./types').HubDevice[]> {
@@ -255,7 +427,7 @@ export async function deleteHubAccount(
   payload: import('./types').HubDeleteAccountRequest,
 ): Promise<import('./types').HubDeletionResult> {
   const result = await withAuthRetry(userId, (token, client) => client.deleteAccount(token, payload));
-  clearHubSession(userId);
+  _discardSession(userId);
   writeHubAccountState(userId, {
     bound: false,
     account_id: undefined,
@@ -289,14 +461,8 @@ export async function sendDeletionCode(userId: string): Promise<import('./types'
  */
 export async function logout(userId: string, client: HubClient = hubClient()): Promise<void> {
   const session = loadHubSession(userId);
-  if (session) {
-    try {
-      await client.logout(session.access_token);
-    } catch (err) {
-      log.warn('hub logout request failed; clearing local session anyway', { error: (err as Error).message });
-    }
-  }
-  clearHubSession(userId);
+  _discardSession(userId);
+  _pendingState = null;
   writeHubAccountState(userId, {
     bound: false,
     account_id: undefined,
@@ -307,6 +473,13 @@ export async function logout(userId: string, client: HubClient = hubClient()): P
     bound_at: undefined,
     pending_login: undefined,
   });
+  if (session) {
+    try {
+      await client.logout(session.access_token);
+    } catch (err) {
+      log.warn('hub logout request failed; local session already cleared', { error: (err as Error).message });
+    }
+  }
   log.info('hub account signed out locally');
 }
 

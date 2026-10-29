@@ -24,6 +24,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createNightlyCandidateFixture } from '../../helpers/nightly-formation-fixture';
 import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
 import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
 
@@ -145,10 +146,77 @@ const findById = (candidates: CandidateDto[], id: string): CandidateDto => {
   return found;
 };
 
+describe('夜间设置的真实 IPC 契约', () => {
+  it('旧手工候选服务入口拒绝无夜间形成凭据的新建', async () => {
+    const service = await candidateService();
+    await expect(service.saveRecallCandidate(UID, { ...DURABLE_PREFERENCE, manual: true, sourceRefs: [], evidenceRefs: [] } as never))
+      .rejects.toThrow(/nightly|capture|provenance/i);
+    expect(await service.listRecallCandidates(UID)).toEqual([]);
+  });
+  it('明确开启新自动确认政策后可独立回读，默认保持关闭', async () => {
+    expect((await call('recall.captures.settings.get')).capabilities).toEqual({ autoApproval: true });
+    expect((await call('recall.captures.settings.get')).settings).toMatchObject({ autoApproval: false });
+    expect((await call('recall.captures.settings.update', { autoApproval: true })).ok).toBe(true);
+    expect((await call('recall.captures.settings.get')).settings).toMatchObject({ autoApproval: true, autoApprovalPolicyVersion: 2, executionPolicy: 'nightly' });
+    expect((await call('recall.captures.settings.update', { enabled: false })).ok).toBe(true);
+    expect((await call('recall.captures.settings.get')).settings).toMatchObject({ enabled: false });
+  });
+});
+
+describe('已有认知的对象范围经真实 IPC 保留', () => {
+  it('保存候选、确认和正式资产回读保留对象限制，不将语义范围或来源归属混同', async () => {
+    const scopePolicy = { agentIds: ['agent-manual-scope'], workspaceIds: ['space-manual-scope'] };
+    const saved = { ok: true, candidate: await createNightlyCandidateFixture(UID, {
+      judgment: '项目汇报结构包含目标、进展、三个风险和下一步负责人，供后续项目周报复用。',
+      summary: '周报组织骨架', value: '后续周报复用同一结构，确保行动和风险可以核对。',
+      suggestedType: 'template', suggestedScope: 'report', suggestedAction: 'create', sourceRefs: [], scopePolicy,
+    } as never) };
+    expect(saved.ok).toBe(true);
+    const candidate = saved.candidate as { id: string; spaceId?: string };
+    expect(candidate).toMatchObject({ origin: 'capture', suggestedScope: 'report', scopePolicy });
+    expect(saved.candidate.sourceRefs).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'conversation', subtype: 'message' })]));
+    expect(candidate.spaceId).toBeUndefined();
+    const promoted = await call('recall.candidates.promote', { candidateId: candidate.id });
+    expect(promoted.ok, JSON.stringify(promoted)).toBe(true);
+    const asset = promoted.asset as { id: string };
+    const reread = await call('recall.assets.read', { assetId: asset.id });
+    expect(reread.ok).toBe(true);
+    expect(reread.asset).toMatchObject({ scope: 'report', scopePolicy, candidateId: candidate.id,
+      evidenceRefs: expect.arrayContaining([expect.objectContaining({ kind: 'conversation', subtype: 'message' })]) });
+    expect((reread.asset as { spaceId?: string }).spaceId).toBeUndefined();
+  });
+});
+
+describe('正式资产编辑 IPC 基准版本', () => {
+  it('透传内容和在用版本 CAS，拒绝并发编辑与切换旧版本后的过期草稿', async () => {
+    const saved = await createNightlyCandidateFixture(UID, { ...DURABLE_PREFERENCE, sourceRefs: REFS, evidenceRefs: REFS } as never);
+    const promoted = await call('recall.candidates.promote', { candidateId: saved.id });
+    expect(promoted.ok, JSON.stringify(promoted)).toBe(true);
+    const assetId = (promoted.asset as { id: string }).id;
+    const listed = await call('recall.assets.list');
+    expect(listed.ok).toBe(true);
+    expect(listed.capabilities).toEqual({ versionedUpdate: true });
+    expect((listed.assets as Array<{ id: string }>).some(asset => asset.id === assetId)).toBe(true);
+    const edited = await call('recall.assets.update', { assetId, reason: '用户编辑认知', title: '整体结构偏好', expectedVersion: '1', expectedActiveVersion: '1' });
+    expect(edited.error).toBeUndefined();
+    expect(edited.ok).toBe(true);
+    expect(edited.asset).toMatchObject({ version: '2', title: '整体结构偏好' });
+    const stale = await call('recall.assets.update', { assetId, reason: '用户编辑认知', title: '过期编辑', expectedVersion: '1', expectedActiveVersion: '1' });
+    expect(stale.ok).toBe(false);
+    expect(stale.error).toContain('version conflict');
+    expect((await call('recall.assets.read', { assetId })).asset).toMatchObject({ version: '2', title: '整体结构偏好' });
+    expect((await call('recall.assets.versions.select', { assetId, version: '1' })).ok).toBe(true);
+    const switched = await call('recall.assets.update', { assetId, reason: '用户编辑认知', title: '错误覆盖历史版', expectedVersion: '2', expectedActiveVersion: '2' });
+    expect(switched.ok).toBe(false);
+    expect(switched.error).toContain('active version conflict');
+    expect((await call('recall.assets.read', { assetId })).asset).toMatchObject({ version: '2', activeVersion: '1' });
+    expect((await call('recall.assets.update', { assetId, reason: '用户编辑认知', title: '错误格式', expectedVersion: 2 })).ok).toBe(false);
+  });
+});
+
 describe('候选可确认性在真实 IPC 读口上闭环', () => {
   it('Case A 合格候选：list 说能确认 → inbox 不再镜像候选（唯一确认入口=候选详情）→ promote 真的落出正式资产', async () => {
-    const candidates = await candidateService();
-    const saved = await candidates.saveRecallCandidate(UID, {
+    const saved = await createNightlyCandidateFixture(UID, {
       ...DURABLE_PREFERENCE, sourceRefs: REFS, evidenceRefs: REFS,
     } as never);
     expect(saved.status).toBe('pending_review');
@@ -165,7 +233,7 @@ describe('候选可确认性在真实 IPC 读口上闭环', () => {
     expect(inboxItem).toBeUndefined();
 
     const promoted = await call('recall.candidates.promote', { candidateId: saved.id });
-    expect(promoted.ok).toBe(true);
+    expect(promoted.ok, JSON.stringify(promoted)).toBe(true);
     const candidate = promoted.candidate as { status: string; promotedAssetId?: string };
     const asset = promoted.asset as { id: string; type: string };
     expect(candidate.status).toBe('confirmed');
@@ -176,8 +244,7 @@ describe('候选可确认性在真实 IPC 读口上闭环', () => {
   });
 
   it('Case B 不合格候选：list 标 ineligible → inbox 出 candidate_ineligible → 绕过 UI 的 promote 仍被拒', async () => {
-    const candidates = await candidateService();
-    const saved = await candidates.saveRecallCandidate(UID, {
+    const saved = await createNightlyCandidateFixture(UID, {
       ...PROJECT_FACT, sourceRefs: REFS, evidenceRefs: REFS, forceWeakObservation: true,
     } as never);
     expect(saved.status).toBe('weak_observation');
@@ -205,11 +272,10 @@ describe('候选可确认性在真实 IPC 读口上闭环', () => {
   });
 
   it('review-queue 视图：view 参数透传到服务端投影（2026-09-29 第 3 批）', async () => {
-    const candidates = await candidateService();
-    const pending = await candidates.saveRecallCandidate(UID, {
+    const pending = await createNightlyCandidateFixture(UID, {
       ...DURABLE_PREFERENCE, sourceRefs: REFS, evidenceRefs: REFS,
     } as never);
-    const toConfirm = await candidates.saveRecallCandidate(UID, {
+    const toConfirm = await createNightlyCandidateFixture(UID, {
       ...DURABLE_PREFERENCE,
       judgment: '我长期偏好先写测试再写实现',
       summary: '测试先行',
@@ -235,15 +301,28 @@ describe('候选可确认性在真实 IPC 读口上闭环', () => {
     expect('contentFormatVersion' in fullPending).toBe(true);
   });
 
+  it('编辑保存的 IPC 返回真实全池冲突校验，不能短暂伪装成可确认', async () => {
+    const personal = await createNightlyCandidateFixture(UID, { ...DURABLE_PREFERENCE, sourceRefs: REFS, evidenceRefs: REFS } as never);
+    await createNightlyCandidateFixture(UID, {
+      ...DURABLE_PREFERENCE, suggestedType: 'rule', suggestedScope: 'product',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-conflict-edit' }], evidenceRefs: [{ kind: 'conversation', id: 'conv-conflict-edit' }],
+    } as never);
+    const result = await call('recall.candidates.update', { ...DURABLE_PREFERENCE, candidateId: personal.id, sourceRefs: personal.sourceRefs, evidenceRefs: personal.evidenceRefs });
+    expect(result.ok).toBe(true);
+    const candidate = result.candidate as CandidateDto;
+    expect(candidate.capabilities.canPromote).toBe(false);
+    expect(candidate.capabilities.ineligibleReasons).toContain('type_conflicts_with_existing');
+    expect((await call('recall.candidates.promote', { candidateId: personal.id })).ok).toBe(false);
+  });
+
   it('Case C 跨候选冲突：list 真的跑了 recallCandidateConflictingTypes，不是只做单条投影', async () => {
     // 冲突是**跨候选**判断，单条候选算不出来——只有持有全量列表的读口能算。
     // handler 里少传 conflicts 的话，列表会说"能确认"，而晋升闸门按同一批
     // 数据判冲突并拒绝，又是一次假审批。同一句话被分成两类即构成冲突。
-    const candidates = await candidateService();
-    const asPersonal = await candidates.saveRecallCandidate(UID, {
+    const asPersonal = await createNightlyCandidateFixture(UID, {
       ...DURABLE_PREFERENCE, sourceRefs: REFS, evidenceRefs: REFS,
     } as never);
-    const asRule = await candidates.saveRecallCandidate(UID, {
+    const asRule = await createNightlyCandidateFixture(UID, {
       ...DURABLE_PREFERENCE,
       suggestedType: 'rule',
       suggestedScope: 'product',
@@ -263,5 +342,49 @@ describe('候选可确认性在真实 IPC 读口上闭环', () => {
     const promoted = await call('recall.candidates.promote', { candidateId: asPersonal.id });
     expect(promoted.ok).toBe(false);
     expect(promoted.code).toBe('promotion_blocked');
+  });
+});
+
+describe('系统活动逐条处理记录 IPC', () => {
+  it('读取当前用户的真实候选审查账本，返回状态而不泄露修改正文', async () => {
+    const saved = await createNightlyCandidateFixture(UID, { ...DURABLE_PREFERENCE, sourceRefs: [], evidenceRefs: [] } as never);
+    const { writeReviewDecision } = await import('../../../src/main/features/cognition/review-decision');
+    await writeReviewDecision(UID, { targetRef: `recall_candidate:${saved.id}`, decisionType: 'modify', decision: '修改后保存', actor: 'user', reason: '已核对来源', modifiedContent: '不应通过历史接口返回的正文' });
+    const result = await call('recall.candidates.history', { candidateId: saved.id });
+    expect(result.ok).toBe(true);
+    expect(result.items).toEqual([expect.objectContaining({ decision_type: 'modify', actor: 'user', reason: '已核对来源', outcome: 'recorded' })]);
+    expect(JSON.stringify(result)).not.toContain('不应通过历史接口返回的正文');
+    expect((await call('recall.candidates.history', { candidateId: '../../other' })).ok).toBe(false);
+    const other = await createNightlyCandidateFixture('otherHistoryUser', { ...DURABLE_PREFERENCE, sourceRefs: [], evidenceRefs: [] } as never);
+    expect((await call('recall.candidates.history', { candidateId: other.id })).ok).toBe(false);
+  });
+});
+
+describe('既有长标题与正式资产的持久化一致性', () => {
+  it('夜间候选经人工编辑确认的长标题与正文同字开头仍原样保存；自定义任务范围不变成通用', async () => {
+    const title = '项目周报交付模板与跨部门风险核对方式';
+    const scope = '项目甲每周交付与风险核对';
+    const saved = { ok: true, candidate: await createNightlyCandidateFixture(UID, {
+      rawStatement: true, summary: title, suggestedType: 'template', suggestedScope: scope,
+      judgment: '项目周报按以下结构组织：\n项目：{{项目名称}}\n本周进展：{{进展}}\n风险与阻塞：{{风险}}\n下周计划：{{计划}}',
+      sourceRefs: [], evidenceRefs: [],
+    } as never) };
+    expect(saved.ok).toBe(true);
+    const id = (saved.candidate as { id: string }).id;
+    // Long overlapping titles are preserved only after an explicit review edit,
+    // through the same real IPC edit contract used by the candidate detail form.
+    const reviewed = await call('recall.candidates.update', {
+      candidateId: id, summary: title, suggestedType: 'template', suggestedScope: scope,
+      judgment: saved.candidate.judgment, value: saved.candidate.value,
+      sourceRefs: saved.candidate.sourceRefs, evidenceRefs: saved.candidate.evidenceRefs,
+    });
+    expect(reviewed.ok, JSON.stringify(reviewed)).toBe(true);
+    const promoted = await call('recall.candidates.promote', { candidateId: id });
+    expect(promoted.ok, JSON.stringify(promoted)).toBe(true);
+    const assetId = (promoted.asset as { id: string }).id;
+    const read = await call('recall.assets.read', { assetId });
+    expect(read.asset).toMatchObject({ title, scope, candidateId: id });
+    expect((await call('recall.reviewEvidence.read', { assetId })).items).toEqual(expect.arrayContaining([expect.objectContaining({ ref: expect.objectContaining({ kind: 'conversation', subtype: 'session' }), state: 'available' })]));
+    expect((await call('recall.reviewEvidence.read', { candidateId: id, assetId })).ok).toBe(false);
   });
 });

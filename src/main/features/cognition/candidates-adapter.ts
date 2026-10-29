@@ -1,14 +1,15 @@
 import * as personalOntologyCandidates from '../personal_ontology_candidates';
 import type { CandidateUpdate } from '../personal_ontology_candidates';
 import { cognitionSourceRefKeys } from '../recall/source-service';
-import { actionsForCandidate, titleFromText } from './normalize';
-import type { CognitionCandidateSource, CognitionCandidateType, CognitionCandidateView } from './types';
+import { personalOntologyCandidateActions, titleFromText } from './normalize';
+import type { CognitionCandidateType, CognitionCandidateView } from './types';
 
+// P-r1-1：status/conversationId/skillId 三个归因过滤维度已删——唯一候选源
+// （个人本体候选 md）不携带这三个归因（status 恒 'pending'、conversationId/
+// skillId 恒缺失），过滤分支对任何输入恒空或恒真，是死路径；按 skill/会话
+// 归因候选若将来有产品需求，需先补数据链路再恢复过滤位。
 export interface ListCognitionCandidatesFilter {
-  status?: 'pending' | 'accepted' | 'rejected';
   type?: CognitionCandidateType;
-  conversationId?: string;
-  skillId?: string;
   limit?: number;
 }
 
@@ -35,17 +36,15 @@ function mapPersonal(row: CandidateUpdate): CognitionCandidateView {
     evidenceRefs: sourceRefs,
     targetAssetId: undefined,
     diffAvailable: false,
-    actions: actionsForCandidate('personal_ontology', 'pending'),
+    actions: [...personalOntologyCandidateActions],
+    createdAt: row.recorded_time || undefined,
     raw: row,
   };
 }
 
 function applyFilter(items: CognitionCandidateView[], filter: ListCognitionCandidatesFilter = {}): CognitionCandidateView[] {
   let out = items;
-  if (filter.status) out = out.filter((item) => item.status === filter.status);
   if (filter.type) out = out.filter((item) => item.type === filter.type);
-  if (filter.conversationId) out = out.filter((item) => item.conversationId === filter.conversationId);
-  if (filter.skillId) out = out.filter((item) => item.skillId === filter.skillId || item.targetAssetId === `skill:${filter.skillId}`);
   out = out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   const limit = Number(filter.limit || 0);
   return limit > 0 ? out.slice(0, Math.min(limit, 200)) : out;
@@ -57,28 +56,4 @@ export async function listCognitionCandidates(
 ): Promise<CognitionCandidateView[]> {
   const personal = await personalOntologyCandidates.listCandidates(userId);
   return applyFilter((personal.candidate_updates || []).map(mapPersonal), filter);
-}
-
-export async function decideCognitionCandidate(
-  userId: string,
-  input: {
-    source: CognitionCandidateSource;
-    candidateId: string;
-    decision: 'accept' | 'reject';
-    reason?: string;
-    notes?: string;
-    toGlobalMemory?: boolean;
-    toGroupIds?: string[];
-  },
-): Promise<unknown> {
-  if (input.source === 'personal_ontology') {
-    if (input.decision === 'accept') {
-      return personalOntologyCandidates.confirmCandidate(userId, input.candidateId, {
-        toGlobalMemory: input.toGlobalMemory,
-        toGroupIds: input.toGroupIds,
-      });
-    }
-    return personalOntologyCandidates.rejectCandidate(userId, input.candidateId, input.reason);
-  }
-  throw new Error('unsupported cognition candidate source');
 }

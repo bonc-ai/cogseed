@@ -96,6 +96,10 @@ async function main(): Promise<void> {
   let reverseTaskId = '';
   let reverseSent = false;
 
+  // R-05：终态证据由 host 事件通道累积（executor 已无 episode 汇点）。
+  let lastDelta = '';
+  const actions: Array<{ kind: string; text?: string }> = [];
+
   // R-08 跨进程恢复注入：前 N 次 onEvent 抛错（模拟对端断线），随后
   // 由恢复控制器 sweep → resumeForward 续读完成。
   const failDelivery = Math.max(0, Number(process.env.P3394_CHILD_FAIL_DELIVERY || 0));
@@ -115,26 +119,29 @@ async function main(): Promise<void> {
       }
       const prev = cursors.get(event.task_id) ?? 0;
       if (event.sequence > prev) cursors.set(event.task_id, event.sequence);
-      void sessionId;
+      if (event.kind === 'delta' && event.data && typeof event.data.text === 'string') {
+        lastDelta = event.data.text;
+      }
+      actions.push({ kind: event.kind, text: lastDelta });
+      if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
+        fs.writeFileSync(resultFile, JSON.stringify({
+          status: event.kind,
+          session_id: sessionId,
+          task_id: event.task_id,
+          agent_id: 'child-node',
+          // R-05：跨进程事件流证据——终态携带完整动作序列。
+          actions,
+        }));
+        // 首任务终态后，主动向父进程发起 reverse task（C-09 双向）。
+        if (!reverseSent && parentEndpoint && reverseResult) {
+          reverseSent = true;
+          void sendReverseTask();
+        }
+      }
     },
     sessionFileFor: (sessionId) => {
       const safe = String(sessionId || '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
       return safe ? path.join(agentHome, 'sessions', safe + '.json') : null;
-    },
-    recordEpisode: (episode) => {
-      fs.writeFileSync(resultFile, JSON.stringify({
-        status: episode.status,
-        session_id: episode.session_id,
-        task_id: episode.task_id,
-        agent_id: episode.agent_id,
-        // R-05：跨进程事件流证据——终态 episode 携带完整动作序列。
-        actions: (episode.actions ?? []).map((action) => ({ kind: action.kind, text: action.text })),
-      }));
-      // 首任务终态 + 自动回发排空后，主动向父进程发起 reverse task（C-09 双向）。
-      if (!reverseSent && parentEndpoint && reverseResult) {
-        reverseSent = true;
-        void sendReverseTask();
-      }
     },
     autoReply: {
       enabled: true,

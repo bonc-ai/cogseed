@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -45,7 +46,7 @@ async function seedScopedPersonalAsset(
 ) {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   const assets = await import('../../../../src/main/features/recall/asset-service');
-  const saved = await candidates.saveRecallCandidate(USER_ID, {
+  const saved = await createNightlyCandidateFixture(USER_ID, {
     judgment: statement,
     // 标题闸门（设计 3.2）：summary＝正文首句过不了闸门，改为合规样本标题。
     summary: `跨会话样本${statement.length}`,
@@ -270,13 +271,14 @@ describe('标题一等化（设计 3.2 / 深探 F1）：记忆修正线禁止 ma
     expect(titleSuggest.calls).toHaveLength(0);
   });
 
-  it('旧标题缺失或不合规（与正文开头重复）：走起标题共享函数，拿模型起的标题', async () => {
+  it('旧标题缺失或整句复制新正文首句：走起标题共享函数，拿模型起的标题', async () => {
     const statement = 'Old memory about release notes.';
     const asset = await seedScopedPersonalAsset(statement);
     const store = await import('../../../../src/main/features/recall/store');
-    // 制造两条不合规旧标题：①与将写入的新正文首字相同（prefix_overlap）；
+    // 制造两条不合规旧标题：①完整照抄将写入的新正文首句（prefix_overlap）；
     // ②空标题（存量缺失形态，raw 直改不走闸门）。
-    const overlapText = '跨团队的发布说明规范，取代旧表述。';
+    const overlapText = '发布先核对证据。新规则取代旧表述。';
+    await store.updateRecallJsonRecord(USER_ID, 'ability-assets', asset.id, current => ({ ...current!, title: '发布先核对证据' }));
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const cloneId = `aa-empty-title-${asset.id.slice(-6)}`;
     await store.writeRecallJsonRecord(USER_ID, 'ability-assets', cloneId, {

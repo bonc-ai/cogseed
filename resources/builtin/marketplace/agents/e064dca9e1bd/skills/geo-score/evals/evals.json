@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "id": "smoke-geo-score",
+      "kind": "smoke",
+      "input": "A synthetic task that exercises geo-score.",
+      "expected": "Follows SKILL.md; deterministic output; no network or filesystem side effects."
+    }
+  ]
+}

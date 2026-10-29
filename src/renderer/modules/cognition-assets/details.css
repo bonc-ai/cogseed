@@ -1,0 +1,286 @@
+/* Cognition detail content contract: see docs/cognition-detail-styles.md.
+ * All detail variants opt into these semantic roles. Keep typography here,
+ * not in list/prototype CSS or per-kind inline styles. Existing shared controls
+ * and card/drawer lifecycles retain ownership of interactions. */
+#ca-root #ca-scroll .ca-detail-card {
+  --detail-title: var(--font-size-dialog-title);
+  --detail-heading: var(--font-size-4);
+  --detail-body: var(--font-size-body);
+  --detail-label: var(--font-size-3);
+  --detail-meta: var(--font-size-2);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--text-body);
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-head {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--line-subtle);
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-head h2 {
+  margin: 0;
+  font-size: var(--detail-title);
+  line-height: var(--line-height-title);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-heading);
+  overflow-wrap: anywhere;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-head :is(p,.note) {
+  margin: 0;
+  font-size: var(--detail-meta);
+  line-height: var(--line-height-body);
+  color: var(--text-secondary);
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-4);
+  gap: var(--space-4);
+  overflow: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  font-size: var(--detail-body);
+  line-height: var(--line-height-body);
+  color: var(--text-body);
+}
+/* Content has intrinsic height. Tall cards must not distribute spare height
+ * between paragraphs, and short windows must scroll instead of shrinking text. */
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(section,article,details,dl,.card,.sect-block,.ca-review-content,.ca-review-formation,.ca-review-result,.ca-activity-processing) {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: 0;
+  max-width: 100%;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body > * { flex-shrink: 0; min-width: 0; max-width: 100%; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(section,article,.ca-review-content,.ca-review-formation,.ca-review-result,.ca-prototype-boundaries,.ca-detail-after,.ca-detail-before) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: 0;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(h3,h4,.tt) {
+  margin: 0;
+  color: var(--text-heading);
+  font-size: var(--detail-heading);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-body);
+  letter-spacing: normal;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body h4 { font-size: var(--detail-label); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(p,dd,.content-text,.ca-asset-body) {
+  margin: 0;
+  color: var(--text-body);
+  font-size: var(--detail-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-regular);
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.content-text,.ca-asset-body) { white-space: pre-wrap; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(dl,.ca-approval-fact) { display: block; padding: 0; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(dt,.field > span,.ui-field__label,.ui-field__label-row > label,.ontology-ws-detail-row > b,.ontology-ws-provenance > b) {
+  margin: 0;
+  font-size: var(--detail-label);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-body);
+  color: var(--text-secondary);
+  text-align: start;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body dt:not(:first-child) { margin-top: var(--space-3); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body dd { margin-top: var(--space-1); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.note,.small,.sub,.ca-review-footnote,.ui-field__hint) {
+  margin: 0;
+  font-size: var(--detail-label);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-regular);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(time,.ca-review-excerpt-label) { font-size: var(--detail-meta); color: var(--text-secondary); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.ca-prototype-boundaries,.ca-review-evidence,.ca-library-related,.ca-review-impact,.ontology-ws-provenance) {
+  border: 0;
+  border-top: 1px solid var(--line-subtle);
+  padding-top: var(--space-4);
+  background: transparent;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.ca-library-scope,.ca-review-target,.ca-activity-processing) {
+  margin: 0;
+  padding: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-field);
+  background: var(--surface-subtle);
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.ca-review-ontology,.ca-review-ontology-change) { gap: var(--space-3); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body .ca-review-ontology-change + .ca-review-ontology-change { border-top: 1px solid var(--line-subtle); padding-top: var(--space-4); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.ca-detail-after,.ca-detail-before) {
+  padding: var(--space-3);
+  border-radius: var(--radius-field);
+  background: var(--surface-subtle);
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body .ca-detail-after { background: var(--color-brand-soft); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body .ca-detail-before h3 { color: var(--text-secondary); }
+/* Native disclosure is a single, quiet row. Text remains body-sized inside. */
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body details {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid var(--line-subtle);
+  border-radius: 0;
+  background: transparent;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body summary {
+  display: list-item;
+  list-style: disclosure-closed inside;
+  margin: 0;
+  padding: var(--space-2) 0;
+  font-size: var(--detail-label);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-heading);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body summary::before { content: none; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body details[open] > summary { list-style-type: disclosure-open; margin-bottom: var(--space-2); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body details > :is(dl,section,p,div,h4) + :is(dl,section,p,div,h4) { margin-top: var(--space-3); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.dbody,.ca-review-history-body) { padding: 0; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.ca-review-source,.ontology-ws-provenance) { display: grid; gap: var(--space-2); margin: 0; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body .ca-review-source + .ca-review-source { margin-top: var(--space-3); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body .ca-review-source-head { font-size: var(--detail-label); color: var(--text-heading); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body blockquote {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-left: 2px solid var(--line-subtle);
+  border-radius: 0;
+  background: var(--surface-subtle);
+  color: var(--text-body);
+  font-size: var(--detail-body);
+  line-height: var(--line-height-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(ul,ol) { margin: 0; padding-left: var(--space-5); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body li { margin: 0; font-size: var(--detail-body); line-height: var(--line-height-body); overflow-wrap: anywhere; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body li + li { margin-top: var(--space-2); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(code,pre) { font-family: var(--font-mono); font-size: var(--detail-label); white-space: pre-wrap; overflow-wrap: anywhere; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body pre { margin: 0; padding: var(--space-3); background: var(--surface-subtle); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body table { display: block; max-width: 100%; overflow-x: auto; font-size: var(--detail-label); border-collapse: collapse; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(th,td) { padding: var(--space-2); text-align: start; border-bottom: 1px solid var(--line-subtle); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.field,.ui-field,.ontology-ws-detail-row) { display: grid; grid-template-columns: minmax(0,1fr); gap: var(--space-1); margin: 0; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(.field > span,.ui-field__label-row) { margin: 0; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body :is(input,textarea,select) { font-size: var(--detail-body); line-height: var(--line-height-body); max-width: 100%; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line-subtle);
+  background: var(--surface-card);
+}
+#ca-root #ca-scroll .ca-detail-card .ca-detail-footer :is(.ca-library-footer-left,.ca-library-footer-right) { display: flex; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-footer button { height: auto; min-height: var(--space-6); font-size: var(--detail-label); }
+/* Ontology has an inline inspector, not a second drawer or document layout. */
+#ca-root #ca-scroll .ont-inspector.ca-detail-card { padding: 0; background: var(--surface-card); }
+#ca-root #ca-scroll .ont-inspector.ca-detail-card .ca-detail-head { display: flex; flex-direction: column; gap: var(--space-2); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-title-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+#ca-root #ca-scroll .ont-inspector.ca-detail-card .ca-detail-body { overflow: visible; flex: none; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body .ca-detail-group {
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line-subtle);
+}
+#ca-root #ca-scroll .ca-detail-record-page { box-sizing: border-box; max-width: 860px; padding: var(--space-5); }
+#ca-root #ca-scroll .ca-detail-record-page .ontology-ws-detail-actions { margin: 0; }
+#ca-root #ca-scroll .ca-detail-record-page .ca-detail-body { padding: 0; overflow: visible; }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body .ontology-ws-detail-section,
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body .ontology-ws-history { padding: var(--space-4); }
+#ca-root #ca-scroll .ca-detail-card .ca-detail-body h2 { margin: 0; font-size: var(--detail-heading); line-height: var(--line-height-body); font-weight: var(--font-weight-semibold); }
+
+/* Compact reading spacing belongs to the two list-side inspectors, not the
+ * ontology inspector or standalone version pages. Keep text and controls sized. */
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-head { padding: var(--space-3) var(--space-4); }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-library-detail-title { margin-bottom: var(--space-2); }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-library-facts { margin-top: 0; }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-body { padding-top: var(--space-3); gap: var(--space-3); }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-body details[open] > summary { margin-bottom: 0; }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-body .ca-review-evidence { padding-top: var(--space-2); }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-body .ca-review-source { gap: var(--space-1); }
+
+/* Native disclosure presentation in the two list-side inspectors. State and
+ * lazy history loading remain owned by the existing summary and controllers. */
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure {
+  --detail-disclosure-icon: 14px;
+  --detail-disclosure-indent: calc(var(--detail-disclosure-icon) + var(--space-2));
+}
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure:is(.ca-review-evidence,.ca-library-related) { padding-top: 0; }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-source-alerts { display: flex; flex-direction: column; gap: var(--space-2); }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  min-height: calc(var(--control-height) + var(--space-2));
+  list-style: none;
+  padding: var(--space-2) 0;
+  margin: 0;
+}
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure > summary::-webkit-details-marker { display: none; }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure > summary::marker { content: ''; }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure > summary:hover { background: var(--surface-subtle); }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure > summary:focus-visible {
+  outline: var(--focus-width) solid var(--color-accent);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure-icon {
+  width: var(--detail-disclosure-icon);
+  height: var(--detail-disclosure-icon);
+  flex: 0 0 var(--detail-disclosure-icon);
+  color: var(--text-secondary);
+}
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure[open] > summary > .ca-detail-disclosure-icon { transform: rotate(90deg); }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure-title { min-width: 0; }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure > .ca-detail-disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0 0 var(--space-2) var(--detail-disclosure-indent);
+  min-width: 0;
+}
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure-body > * { flex-shrink: 0; min-width: 0; }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure:is(.ca-library-related,.ca-review-evidence) > .ca-detail-disclosure-body { gap: var(--space-2); }
+/* Preserve the existing related-link sizing after adding the disclosure body. */
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-library-related > .ca-detail-disclosure-body > .btn { font-size: var(--detail-meta); padding: var(--space-1) 0; }
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-detail-disclosure-body .ca-library-deep-links { border-top: 0; padding-top: 0; }
+/* These reading stacks have a 12px gap. Adjacent disclosure rows share their
+ * existing top border; cancel only that stack gap, not gaps around prose. */
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) :is(.ca-detail-body,.ca-candidate-detail,.ca-activity-content-stack,.ca-detail-disclosure-body) > .ca-detail-disclosure + .ca-detail-disclosure,
+#ca-root #ca-scroll .ca-detail-card:is(.ca-activity-detail,.ca-library-detail) .ca-review-changes:has(> .ca-detail-group:last-child > .ca-detail-disclosure:last-child) + .ca-detail-disclosure { margin-top: calc(-1 * var(--space-3)); }
+
+/* System activity adopts the existing library card. These rules do not change
+ * asset or ontology pages. Reading/editing are states of this same card. */
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-detail-head { display: block; }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-library-detail-title { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-library-facts { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-library-facts .note { font-size: var(--detail-meta); }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card :is(.ca-candidate-detail,.ca-activity-content-stack) { display: flex; flex-direction: column; gap: var(--space-3); padding: 0; margin: 0; border: 0; background: transparent; }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-candidate-detail > * { flex-shrink: 0; }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-detail-body :is(.ca-detail-after,.ca-detail-before) { padding: 0; border: 0; border-radius: 0; background: transparent; }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-detail-body :is(.ca-review-changes,.ca-review-formation) { gap: var(--space-2); }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-detail-body .ca-detail-group:first-of-type { padding-top: 0; border-top: 0; }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-detail-body .ca-library-related { padding: 0; border: 0; }
+#ca-root #ca-scroll .ca-activity-detail.ca-detail-card .ca-detail-footer [data-act="activity-defer"] { margin-left: auto; }

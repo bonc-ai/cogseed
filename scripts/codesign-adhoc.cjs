@@ -11,7 +11,7 @@
  */
 'use strict';
 
-const { execSync } = require('node:child_process');
+const { execFileSync, execSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { verifyNativePackagePayload } = require('../bin/native-package-gate.cjs');
@@ -644,15 +644,92 @@ async function afterPack(context) {
     return;
   }
 
-  console.log(`[codesign-adhoc] signing ${appPath}`);
-  execSync(`codesign --force --deep --sign - "${appPath}"`, { stdio: 'inherit' });
+  console.log(`[codesign-adhoc] signing ${appPath} (inside-out)`);
+  // 不用 `--deep` 一把梭：Electron Framework 的 `Libraries/*.dylib` 是 linker-signed
+  // （flags `adhoc,linker-signed`），`--deep` 不会替换它们；dyld 随后会以
+  // 「mapping process and mapped file have different Team IDs」拒绝加载 libffmpeg.dylib，
+  // 表现为启动即崩（SIGABRT）或静默退出。必须由内向外逐个签。
+  signMacAppAdhoc(appPath);
   // Fail the build if the fallback signature is invalid.
-  execSync(`codesign --verify --deep "${appPath}"`, { stdio: 'inherit' });
+  execSync(`codesign --verify --deep --strict "${appPath}"`, { stdio: 'inherit' });
 }
 
 module.exports = afterPack;
+
+// ── ad-hoc 签名：由内向外 ────────────────────────────────────────────────
+// `codesign --force --deep` 不会替换 Electron Framework `Libraries/` 下 **linker-signed**
+// 的 dylib（`libffmpeg.dylib`、`libGLESv2.dylib` 等）。这类签名与主进程的 ad-hoc 签名
+// 不是同一份，dyld 会拒绝加载（crash report 的 termination reason 为
+// 「mapping process and mapped file ... different Team IDs」）。所以先逐个签 dylib/so/node，
+// 再签 framework、helper，最后签 .app。
+const MACHO_LIBRARY_EXTENSIONS = new Set(['.dylib', '.so', '.node']);
+
+function listMachOLibraries(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      listMachOLibraries(full, out);
+      continue;
+    }
+    if (MACHO_LIBRARY_EXTENSIONS.has(path.extname(entry.name))) out.push(full);
+  }
+  return out;
+}
+
+function signAdhoc(target) {
+  execFileSync('codesign', ['--force', '--sign', '-', target], { stdio: 'inherit' });
+}
+
+function signMacAppAdhoc(appPath) {
+  const frameworksDir = path.join(appPath, 'Contents', 'Frameworks');
+  for (const library of listMachOLibraries(path.join(appPath, 'Contents'))) signAdhoc(library);
+
+  const electronFramework = path.join(frameworksDir, 'Electron Framework.framework');
+  if (fs.existsSync(electronFramework)) {
+    const versionsDir = path.join(electronFramework, 'Versions');
+    if (fs.existsSync(versionsDir)) {
+      for (const entry of fs.readdirSync(versionsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === 'Current') continue;
+        signAdhoc(path.join(versionsDir, entry.name));
+      }
+    }
+    signAdhoc(electronFramework);
+  }
+
+  if (fs.existsSync(frameworksDir)) {
+    for (const entry of fs.readdirSync(frameworksDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.endsWith('.framework')) continue;
+      const target = path.join(frameworksDir, entry.name);
+      if (target === electronFramework) continue;
+      signAdhoc(target);
+    }
+    for (const entry of fs.readdirSync(frameworksDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.endsWith('.app')) {
+        signAdhoc(path.join(frameworksDir, entry.name));
+      }
+    }
+  }
+
+  signAdhoc(appPath);
+}
+
+if (require.main === module) {
+  const at = process.argv.indexOf('--sign-app');
+  const target = at >= 0 ? process.argv[at + 1] : '';
+  if (!target) {
+    console.error('usage: node scripts/codesign-adhoc.cjs --sign-app <CogSeed.app>');
+    process.exit(2);
+  }
+  const resolved = path.resolve(target);
+  signMacAppAdhoc(resolved);
+  execFileSync('codesign', ['--verify', '--deep', '--strict', resolved], { stdio: 'inherit' });
+}
+
 module.exports.__test = {
   pruneBetterSqlite3BuildArtifacts,
   pruneEsbuildPackage,
   pruneOnnxRuntimePackage,
+  listMachOLibraries,
+  signMacAppAdhoc,
 };

@@ -41,6 +41,7 @@ import {
 } from './auth';
 import { publicContextWindowFor, publicModelAbilitiesFor } from '../model/public_model_catalog';
 import { createLogger } from '../logger';
+import { t } from '../i18n';
 
 const log = createLogger('custom-providers');
 
@@ -156,16 +157,20 @@ function normalizeModel(
     : (typeof rawVision === 'boolean'
       ? rawVision
       : (typeof fallback?.vision === 'boolean' ? fallback.vision : publicModelAbilitiesFor(id).vision));
+  const knownOutputLimit = publicModelAbilitiesFor(id).maxTokens;
   const maxTokens = normalizePositiveSafeInteger(
     candidate.maxTokens,
     'maxTokens',
     // 兜底链与 contextWindow 对称：显式 → 既有值(fallback) → 目录预设 →
     // 保守默认。目录预设（2026-09-13 起登记 V4/V4.1 的 384K 输出）让
     // 已知模型不再被兜到 8192。
-    fallback?.maxTokens ?? publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+    Math.min(fallback?.maxTokens ?? knownOutputLimit ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS, knownOutputLimit ?? Infinity),
     MAX_CUSTOM_PROVIDER_MAX_TOKENS,
   );
   if (maxTokens > contextWindow) throw new Error('maxTokens must not exceed contextWindow');
+  if (knownOutputLimit !== undefined && maxTokens > knownOutputLimit) {
+    throw new Error(t('custom_providers.model_output_limit', { model: id, limit: knownOutputLimit }));
+  }
   const capabilities = normalizeModelCapabilities(candidate.capabilities);
   const reasoningLevels = normalizeReasoningLevels(candidate.reasoningLevels);
   const reasoningParamsMap = normalizeReasoningParamsMap(candidate.reasoningParamsMap);

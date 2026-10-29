@@ -58,12 +58,12 @@
       {
         collapsed: false,
         label: '侧栏展开',
-        note: '原生窗口控件在左·搜索与收起在右',
+        note: '侧栏顶部行：搜索与收起',
       },
       {
         collapsed: true,
         label: '侧栏收起',
-        note: '只保留可聚焦、可恢复的展开入口',
+        note: '页面 header 外壳位：展开与搜索',
       },
     ];
     byId('sidebar-tools-specimens').innerHTML = cases.map((item) => specimen(
@@ -71,7 +71,7 @@
       item.note,
       `<div class="gallery-window-chrome${item.collapsed ? ' is-collapsed' : ''}">
         <span class="gallery-window-chrome__native">原生窗口控件区</span>
-        <div class="sidebar-tools">${uiSidebarTools({ collapsed: item.collapsed })}</div>
+        <div class="sidebar-tools">${item.collapsed ? uiShellHeaderTools() : uiSidebarTools()}</div>
       </div>`,
     )).join('');
   }
@@ -83,14 +83,17 @@
     const task = (title, time, active = false) => `<div class="conv-item${active ? ' active' : ''}">
       <div class="conv-item-row"><div class="conv-item-title">${title}</div><span class="conv-item-time">${time}</span></div>
     </div>`;
-    const sidebar = (selected) => `<div class="gallery-sidebar-frame"><aside class="sidebar">
-      <div class="sidebar-logo"><img class="logo-icon" src="../resources/icons/logo.png" alt="" /><span class="logo-text">CogSeed</span></div>
+    // Production rail (uiAppRail) + the task module's sidebar (specs/008-shell-rail-layout).
+    const rail = (active) => `<nav class="app-rail" aria-label="主导航">
+      <div class="app-rail-titlebar" aria-hidden="true"></div>
+      <div class="app-rail-items">${window.uiAppRail({ activeModule: active })}</div>
+      <div class="app-rail-footer"><div class="sidebar-footer-account app-rail-account">${window.uiUserMenuTrigger({ name: '陈昱', description: '个人工作空间', avatar: { text: '陈', variant: 'gradient' } })}</div></div>
+    </nav>`;
+    const sidebar = (selected) => `<div class="gallery-sidebar-frame">${rail('task')}<aside class="sidebar">
+      <div class="sidebar-titlebar" aria-hidden="true"></div>
+      <div class="sidebar-module" data-sidebar-for="task">
       <div class="sidebar-actions">
         ${navItem('plus', '新建任务', !selected)}
-        ${navItem('folder', '工作空间')}
-        ${navItem('git-branch', '认知资产')}
-        ${navItem('clock', '自动化')}
-        ${navItem('plug', '智能体 / 技能 / 连接')}
       </div>
       <div class="sidebar-conversation-nav"><div class="sidebar-section sidebar-conversations-section"><div class="conversation-list">
         <div class="conv-list-section-header conv-list-space-title"><button type="button" class="conv-list-section-fold"><span data-ui-icon="chevron-down" data-ui-icon-class="conv-list-section-caret-icon"></span><span class="conv-list-section-label">最近任务</span></button></div>
@@ -98,12 +101,10 @@
         ${task('资料来源与引用复核', '昨天')}
         <div class="conv-list-section-header conv-list-space-title"><button type="button" class="conv-list-section-fold"><span data-ui-icon="chevron-down" data-ui-icon-class="conv-list-section-caret-icon"></span><span class="conv-list-section-label">空间</span></button></div>
       </div></div></div>
-      <div class="sidebar-footer-actions"><div class="sidebar-footer-account"><button type="button" class="hub-chip">
-        <span class="hub-chip-avatar is-gradient" aria-hidden="true">陈</span><span class="hub-chip-meta"><span class="hub-chip-name">陈昱</span><span class="hub-chip-sub">个人工作空间</span></span><span class="hub-chip-chev" data-ui-icon="chevron-down"></span>
-      </button></div></div>
+      </div>
     </aside></div>`;
     byId('sidebar-appearance-specimens').innerHTML = [
-      specimen('默认侧栏', 'F4F8F5 主面 · 400 导航字重 · 500 用户名', sidebar(false)),
+      specimen('Rail + 任务侧栏', '图标 rail（悬停提示）· F4F8F5 侧栏 · 400 导航字重', sidebar(false)),
       specimen('任务选中', '绿色 wash 只表达当前位置，不额外加粗', sidebar(true)),
     ].join('');
   }
@@ -189,7 +190,6 @@
       { title: '项目分析师', description: '核对材料并整理风险线索，适用于通用分析任务。', icon: 'users', status: '可使用', action: '使用智能体' },
       { title: '需求证据整理', description: '把多来源反馈整理成可追溯的问题主题与证据账本。', icon: 'database', status: '已启用', action: '使用技能' },
       { title: 'GitHub', description: '查找和管理代码仓库、Issue、PR、文件与代码。', icon: 'globe', status: '未连接', action: '连接账户' },
-      { title: '每天整理工作日报', description: '每天 18:30 · 这台 Mac · 汇总当日任务与交付。', icon: 'clock', status: '已启用 · 最近运行 18:30', action: '查看记录', layout: 'row' },
       {
         title: '社区贡献',
         description: '展示审核状态，并在共享底部操作区承载同一对象的多个操作。',
@@ -210,7 +210,7 @@
 
   function renderStatusDisplay() {
     byId('status-display-specimens').innerHTML = [
-      specimen('标签与筛选', 'Tag 不交互 · Chip 使用原生按钮', `<div class="gallery-inline-row">${uiTag({ label: '知识库', variant: 'solid' })}${uiTag({ label: 'v1.0.2', variant: 'version' })}${uiTag({ label: '已合规', variant: 'success' })}${uiChip({ label: '只看已引用', selected: true, icon: 'check' })}${uiChip({ label: '包含归档' })}</div>`),
+      specimen('标签与筛选', 'Tag 不交互 · Chip 使用原生按钮 · 计数走尾部槽', `<div class="gallery-inline-row">${uiTag({ label: '知识库', variant: 'solid' })}${uiTag({ label: 'v1.0.2', variant: 'version' })}${uiTag({ label: '已合规', variant: 'success' })}${uiChip({ label: '只看已引用', selected: true, icon: 'check' })}${uiChip({ label: '包含归档' })}${uiChip({ label: '全部', count: 12, selected: true })}${uiChip({ label: '办公', count: 3 })}</div>`),
       specimen('状态语义', '列表用状态点 · 标题或摘要用胶囊', `<div class="gallery-inline-row">${uiStatusDot({ label: '运行中', tone: 'attention' })}${uiStatusPill({ label: '已完成', tone: 'success', check: true })}${uiStatusPill({ label: '需要处理', tone: 'critical' })}${uiBadge({ label: '待开发', tone: 'neutral' })}</div>`),
       specimen('加载反馈', '能估算用进度条 · 未知耗时用骨架', `<div class="gallery-loading-stack">${uiProgressBar({ ariaLabel: '索引进度', value: 64 })}${uiSkeleton({ ariaLabel: '正在载入资料卡片', lines: [48, 92], withMedia: true })}</div>`),
     ].join('');
@@ -332,6 +332,13 @@
       { label: '关闭弹窗', icon: 'x', variant: 'plain' },
       { label: '删除记忆', icon: 'bookmark', variant: 'plain' },
       { label: '删除任务', icon: 'trash-2', variant: 'danger' },
+      ...[
+        ['网易邮箱', 'connector-email-163'], ['QQ 邮箱', 'connector-email-qq'],
+        ['企业邮箱', 'mail'], ['腾讯会议', 'connector-tencent-meeting'],
+        ['腾讯问卷', 'connector-tencent-survey'], ['腾讯文档', 'connector-tencent-docs'],
+        ['飞书', 'connector-feishu'], ['钉钉', 'connector-dingtalk'],
+        ['企业微信', 'connector-wecom'], ['WPS 云文档', 'connector-wps'],
+      ].map(([label, icon]) => ({ label, icon, variant: 'plain' })),
     ];
     const rows = cases.map((item) => `<tr><td>${item.label}</td>${states.map((state) => `<td><div class="gallery-matrix__control">${uiIconButton({
       ...item,
@@ -678,14 +685,30 @@
   }
 
   function openModalDemo(kind) {
+    if (kind === 'form' || kind === 'form-error' || kind === 'form-busy') {
+      let pending;
+      const modal = uiFormModal({
+        title: '新建自动化任务', closeLabel: '关闭弹窗', bodyHtml: modalBody('form'),
+        submitLabel: '创建', busyLabel: '正在创建…', cancelLabel: '取消', initialFocus: '#gallery-task-content',
+        onSubmit: () => {
+          modal.setFeedback('');
+          modal.setBusy(true);
+          pending = setTimeout(() => {
+            modal.setBusy(false);
+            modal.setFeedback('创建失败，请调整内容后重试。');
+          }, 1200);
+        },
+      });
+      hydrateUiFormSelects(modal.overlay);
+      if (kind === 'form-error') modal.setFeedback('创建失败，请调整内容后重试。');
+      if (kind === 'form-busy') modal.setBusy(true);
+      modal.then(() => clearTimeout(pending));
+      return;
+    }
     const configs = {
       default: {
         title: '确认自动化设置', description: '保存后将按当前计划执行。', bodyHtml: modalBody('default'), size: 'sm',
         actions: [{ id: 'cancel', label: '取消', role: 'secondary' }, { id: 'save', label: '保存', role: 'primary' }],
-      },
-      form: {
-        title: '新建自动化任务', description: '填写任务内容与运行频率。', bodyHtml: modalBody('form'), size: 'lg', initialFocus: '#gallery-task-content',
-        actions: [{ id: 'cancel', label: '取消', role: 'secondary' }, { id: 'create', label: '创建', role: 'primary' }],
       },
       danger: {
         title: '删除自动化任务？', bodyHtml: modalBody('danger'), size: 'sm', tone: 'danger',
@@ -708,7 +731,9 @@
   function renderModalLaunchers() {
     const cases = [
       ['default', 'MOD-01', '默认确认', '确认信息与两项操作'],
-      ['form', 'MOD-02', '表单弹窗', '初始焦点进入任务内容'],
+      ['form', 'MOD-02', '异步表单弹窗', '原生校验与独立底部操作栏'],
+      ['form-busy', 'MOD-06', '表单提交中', '锁定字段并显示提交进度'],
+      ['form-error', 'MOD-07', '表单失败与重试', '错误就地显示，表单保持打开'],
       ['danger', 'MOD-03', '危险确认', '危险语义与安全默认'],
       ['long', 'MOD-04', '长内容', '正文独立滚动'],
       ['popover', 'MOD-05', '内嵌选择器', '浮层位于 Modal 之上'],
@@ -732,12 +757,22 @@
   ];
 
   function renderAutomationState(state) {
+    byId('automation-preview').querySelectorAll('[data-gallery-auto-menu]').forEach(trigger => trigger._galleryMenu?.destroy());
     byId('automation-state-tabs').querySelectorAll('[data-auto-state]').forEach((button) => {
       button.classList.toggle('is-selected', button.dataset.autoState === state);
     });
     let content = '';
     if (state === 'list') {
-      content = '<div class="gallery-auto-list"><article class="gallery-auto-row"><div><strong>每天整理工作日报</strong><p>每天 18:30 · 这台 Mac · 未绑定项目</p></div><span class="gallery-auto-status">已启用</span></article><article class="gallery-auto-row"><div><strong>检查 CogSeed 发布状态</strong><p>每周一 09:00 · 办公室 Windows · CogSeed 项目</p></div><span class="gallery-auto-status">已启用</span></article></div>';
+      content = '<div class="gallery-auto-list">' + [
+        { title: '每天整理工作日报', description: '每天 18:30 · 尚未运行' },
+        { title: '科技早报', description: '已暂停 · 每天 09:10 · 今天 09:10', state: 'paused' },
+        { title: '检查发布状态', description: '在办公室 Windows 执行 · 每周一 09:00 · 尚未运行', state: 'remote' },
+        { title: '汇总最近一天的邮件并整理需要回复的问题和下一步行动，长标题保持一行', description: '正在启动… · 每天 09:10 · 尚未运行', state: 'loading' },
+        { title: '项目健康检查', description: '启动失败 · 每天 10:00 · 尚未运行', state: 'error' },
+      ].map((item) => uiResourceCard({
+        ...item, layout: 'compact-row', attrs: { 'data-state': item.state || 'idle' },
+        menu: { label: '更多操作', attrs: { 'data-gallery-auto-menu': item.state || 'idle' } },
+      })).join('') + '</div>';
     } else if (state === 'loading') {
       content = '<div class="gallery-loading"><div><i aria-hidden="true"></i><p>正在读取自动化任务…</p></div></div>';
     } else if (state === 'empty') {
@@ -747,9 +782,17 @@
     }
     byId('automation-preview').innerHTML = uiPageHeader({
       title: '自动化',
-      meta: state === 'list' ? '2 项任务' : '',
+      meta: state === 'list' ? '5 项任务' : '',
       actions: [{ label: '新建自动化任务', icon: 'plus', attrs: { 'data-modal-demo': 'form' } }],
     }) + `<div class="gallery-auto-content">${content}</div>`;
+    byId('automation-preview').querySelectorAll('[data-gallery-auto-menu]').forEach((trigger) => {
+      trigger._galleryMenu = uiDropdownMenu({ trigger, items: () => [
+        { label: trigger.dataset.galleryAutoMenu === 'loading' ? '正在启动…' : '立即运行', loading: trigger.dataset.galleryAutoMenu === 'loading', disabled: trigger.dataset.galleryAutoMenu === 'remote', onClick() {} },
+        { label: '编辑', onClick() {} },
+        { label: trigger.dataset.galleryAutoMenu === 'paused' ? '启用' : '停用', onClick() {} },
+        { label: '删除', danger: true, separatorBefore: true, onClick() {} },
+      ] });
+    });
     hydrateUiIcons(byId('automation-preview'));
   }
 

@@ -73,9 +73,24 @@ export interface UserPreferences {
    * only an explicit false closes the window for real. Stored per-uid in the
    * same preferences file as every other settings toggle. */
   close_to_tray_enabled?: boolean;
+  /** A2A：允许别人通过手机号添加我（默认开）。服务端权威在 consent_records（H-11）。 */
+  contacts_discoverable?: boolean;
+  /** A2A：接收联系人向我的助理提问（默认开）。服务端权威在 consent_records（H-12）。 */
+  contacts_assistant_questions?: boolean;
+  /** Creator Mode control-plane UI and draft generation. Default false. */
+  creator_mode_enabled?: boolean;
+  /** Publishing/materializing Creator presets. Requires Creator Mode. Default false. */
+  creator_mode_publish_enabled?: boolean;
   /** Thinking strength for chat model calls: 'auto' (model default),
    *  'off' | 'low' | 'high' forwarded to the runner's thinkingLevel. */
   thinking_level?: 'auto' | 'off' | 'low' | 'high';
+  /** Per-model thinking strength (Option C): the user's explicit tier for one
+   *  provider+model pair, remembered so the composer can restore it. Key is
+   *  `${provider}/${model}`; a missing entry means 'auto' — that is what makes
+   *  switching to a different model fall back to Auto instead of carrying the
+   *  previous model's choice over. Only models that declare the tier ever get
+   *  an entry (enforced at the call site). */
+  model_thinking_levels?: Record<string, 'off' | 'low' | 'high'>;
   /** Whether machine-global skill roots such as ~/.codex/skills are visible
    * to commander open-tier skill search. Missing means enabled, preserving
    * the historical open-source behavior. */
@@ -103,6 +118,11 @@ function systemLanguage(): Lang {
 
 export function readPreferences(): UserPreferences {
   return readJsonSync<UserPreferences>(preferencesFile());
+}
+
+/** Read one user's preferences without consulting the mutable active-user singleton. */
+export function readPreferencesForUser(userId: string): UserPreferences {
+  return readJsonSync<UserPreferences>(userPreferencesFile(userId));
 }
 
 /** Merge `partial` into the on-disk preferences and atomically rewrite. */
@@ -279,8 +299,8 @@ export function setCommanderAvatar(avatar: CommanderAvatar): CommanderAvatar {
 
 export type ThinkingLevelPreference = 'auto' | 'off' | 'low' | 'high';
 
-export function getThinkingLevel(): ThinkingLevelPreference {
-  const v = readPreferences().thinking_level;
+export function getThinkingLevel(userId?: string): ThinkingLevelPreference {
+  const v = (userId ? readJsonSync<UserPreferences>(userPreferencesFile(userId)) : readPreferences()).thinking_level;
   return v === 'off' || v === 'low' || v === 'high' ? v : 'auto';
 }
 
@@ -288,6 +308,50 @@ export function setThinkingLevel(level: unknown): ThinkingLevelPreference {
   const next: ThinkingLevelPreference =
     level === 'off' || level === 'low' || level === 'high' ? level : 'auto';
   writePreferences({ thinking_level: next });
+  return next;
+}
+
+// ── Per-model thinking strength (Option C) ───────────────────────────────
+// The explicit tier belongs to the model it was chosen for. Keying by
+// provider+model is what makes 「切模型回落 Auto」 true by construction rather
+// than by a renderer cleanup step.
+
+export type ModelThinkingLevel = 'off' | 'low' | 'high';
+
+/** Collision-safe map key: model ids may themselves contain `/` (e.g. `openai/gpt-5`),
+ *  so the provider/model boundary cannot be a bare slash. NUL is impossible in both. */
+function modelThinkingLevelKey(provider: unknown, model: unknown): string {
+  const p = String(provider || '').trim();
+  const m = String(model || '').trim();
+  if (!p || !m) return '';
+  return `${p}\u0000${m}`;
+}
+
+export function getModelThinkingLevel(provider: unknown, model: unknown): ModelThinkingLevel | 'auto' {
+  const key = modelThinkingLevelKey(provider, model);
+  if (!key) return 'auto';
+  const stored = readPreferences().model_thinking_levels;
+  const level = stored && typeof stored === 'object' ? stored[key] : undefined;
+  return level === 'off' || level === 'low' || level === 'high' ? level : 'auto';
+}
+
+export function setModelThinkingLevel(
+  provider: unknown,
+  model: unknown,
+  level: unknown,
+): ModelThinkingLevel | 'auto' {
+  const key = modelThinkingLevelKey(provider, model);
+  if (!key) return 'auto';
+  // `auto`/anything unrecognized clears the entry instead of inventing a tier:
+  // absence is the stored form of "let the model decide".
+  const next: ModelThinkingLevel | 'auto' =
+    level === 'off' || level === 'low' || level === 'high' ? level : 'auto';
+  const current = readPreferences().model_thinking_levels;
+  const map: Record<string, ModelThinkingLevel> = (current && typeof current === 'object')
+    ? { ...current } : {};
+  if (next === 'auto') delete map[key];
+  else map[key] = next;
+  writePreferences({ model_thinking_levels: map });
   return next;
 }
 
@@ -310,6 +374,27 @@ export function setMetacognitionEnabled(enabled: boolean): boolean {
 // ── Close-to-tray (background run) ───────────────────────────────────────
 // Defaults to ON: never-written = undefined → treated as true. Reads and
 // writes go through the per-uid preferences file, same as metacognition.
+
+// A2A 两个开关（FR-33）**默认关**：没有这条偏好就是没开过，不是「没关过」。
+// 这与设计 §2.1、Hub 的 consent 口径一致；默认开等于默认允许被手机号搜到、
+// 默认允许联系人叫起助理，越过了 PRD 的隐私边界。
+export function getContactsDiscoverable(): boolean {
+  return readPreferences().contacts_discoverable === true;
+}
+
+export function setContactsDiscoverable(enabled: boolean): boolean {
+  writePreferences({ contacts_discoverable: !!enabled });
+  return !!enabled;
+}
+
+export function getContactsAssistantQuestions(): boolean {
+  return readPreferences().contacts_assistant_questions === true;
+}
+
+export function setContactsAssistantQuestions(enabled: boolean): boolean {
+  writePreferences({ contacts_assistant_questions: !!enabled });
+  return !!enabled;
+}
 
 export function getCloseToTrayEnabled(): boolean {
   const v = readPreferences().close_to_tray_enabled;

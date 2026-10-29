@@ -67,17 +67,17 @@ function fnBlock(marker: string): string {
 }
 
 describe('cognition-assets snapshot and routing', () => {
-  it('loads the five snapshot channels in parallel with soft fallbacks', () => {
-    // 五个读口并行拉取——四个走 api.soft 容错；候选清单例外（2026-09-29 A5）：
-    // 读失败进显式错误态（api.call+catch 置 store.candidatesError），不再把
-    // 「没读到」软降级成空数组伪装成「没有要你决定的」。
+  it('loads snapshot channels in parallel and keeps a failed read visible', () => {
+    // 资产、整理、设置和候选读失败都进显式错误态，不再把「没读到」软降级成空列表。
     for (const channel of [
       'recall.assets.list', 'recall.captures.list',
-      'recall.captures.settings.get', 'recall.sources.list',
-    ]) expect(core).toContain(`api.soft('${channel}'`);
-    expect(core).toContain("api.call('recall.candidates.list'");
+      'recall.captures.settings.get', 'recall.candidates.list',
+    ]) expect(core).toContain(`api.call('${channel}'`);
+    expect(core).toContain("api.soft('recall.sources.list'");
+    expect(core).toContain('store.assetsError');
     expect(core).toContain('store.candidatesError');
-    expect(core).toContain('Promise.all([');
+    expect(core).toContain('store.capturesError');
+    expect(core).toContain('await Promise.all(reads)');
     expect(core).toContain('async soft(channel, payload, fallback)');
     expect(core).toContain('return fallback;');
   });
@@ -86,17 +86,17 @@ describe('cognition-assets snapshot and routing', () => {
     // specs/018 后端驱动重构:五页签=待我处理/我的认知/个人本体/系统活动/设置,
     // 默认落地待我处理;认知树是 overview 的视图投影(assetView='tree')。
     // 旧路由名(tree/organize/organize-settings/experiences)在 router.go 归一。
-    expect(core).toContain("route: { name: 'tree'");
-    expect(core).toContain("router.go({ name: 'review' })");
+    expect(core).toContain("route: { name: 'overview'");
+    expect(core).toContain("legacyName === 'review'");
     expect(core).toContain("{ id: 'tree', titleKey: 'cognition.tab_tree'");
-    expect(core).toContain("{ id: 'review', titleKey: 'cognition.tab_review'");
+    expect(core).toContain("{ id: 'overview', titleKey: 'cognition.tab_overview'");
     expect(core).toContain("{ id: 'activity', titleKey: 'cognition.tab_activity'");
     expect(core).toContain("{ id: 'settings', titleKey: 'cognition.tab_settings'");
     // 旧名归一在入栈前完成(store 里恒为新名,onChange 钩子不做双名判断)。
     expect(core).toContain("legacyName === 'organize'");
-    // activity / 树由 views.js 的分派驱动。
+    // activity / 我的认知由 views.js 的分派驱动。
     expect(views).toContain("route.name === 'activity'");
-    expect(views).toContain("route.name === 'tree'");
+    expect(views).toContain("route.name === 'overview'");
     expect(core).toContain('store.backStack.push');
     expect(core).toContain('back()');
   });
@@ -112,14 +112,15 @@ describe('cognition-assets snapshot and routing', () => {
   });
 
   it('lands on the cognition tree without auto-redirecting when the inbox is empty', () => {
-    expect(core).toContain("Object.assign({ name: 'tree'");
+    expect(core).toContain("Object.assign({ name: 'overview'");
     expect(core).not.toContain('switchSkillsCognitionPage');
   });
 
-  it('reloads in place after decisions and keeps partial-failure data', () => {
+  it('updates a decided candidate in place and reloads only when the response omits it', () => {
     const decide = fnBlock('async decideCandidate');
+    expect(decide).toContain('store.candidates[index] = updated');
     expect(decide).toContain('await NS.reload()');
-    // soft 容错：单通道失败记 errors 并回退，其他数据保留。
+    // 单通道失败记 errors，其他已读到的数据保留。
     expect(core).toContain('store.errors.push');
   });
 });
@@ -143,7 +144,7 @@ describe('candidate decisions', () => {
 
   it('keeps evidence refs and boundaries untouched by form edits', () => {
     const adopt = fnBlock('async adoptCandidate');
-    expect(adopt).toContain('sourceRefs: candidate.evidenceRefs || candidate.sourceRefs || []');
+    expect(adopt).toContain('sourceRefs: candidate.sourceRefs || candidate.evidenceRefs || []');
     expect(adopt).toContain('evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || []');
     expect(adopt).toContain('applicableWhen: candidate.applicableWhen || []');
     expect(adopt).toContain('forbiddenWhen: candidate.forbiddenWhen || []');
@@ -186,15 +187,15 @@ describe('candidate pool rendering', () => {
     expect(views).toContain('evidenceMostlyUnavailable');
     expect(views).toContain('is-broken');
     expect(views).toContain("T('cognition.candidate_evidence_all_unavailable'");
-    expect(views).toContain("T('cognition.candidate_evidence_ok'");
+    expect(views).toContain("T('cognition.candidate_evidence_weak'");
   });
 
   it('keeps confirmed/rejected/ignored candidates in the processed fold only', () => {
-    expect(views).toContain("['confirmed', 'rejected', 'ignored']");
-    expect(views).toContain('fold-processed');
-    expect(views).toContain("T('cognition.candidate_status_promoted'");
-    expect(views).toContain("T('cognition.candidate_status_rejected'");
-    expect(views).toContain("T('cognition.candidate_status_ignored'");
+    expect(views).toContain("['confirmed', 'integrated', 'rejected', 'ignored', 'expired', 'superseded']");
+    expect(views).toContain("activityDone === '1'");
+    expect(views).toContain("'cognition.candidate_status_promoted'");
+    expect(views).toContain("'cognition.candidate_status_rejected'");
+    expect(views).toContain("'cognition.candidate_status_ignored'");
   });
 
   it('reads capabilities from the main-process mapping before rendering actions', () => {
@@ -205,38 +206,35 @@ describe('candidate pool rendering', () => {
     expect(caps.canDefer).toBe(true);
     // 2026-09-20：晋升/编辑/决策入口统一读 views.js 里归一化的一组 canX 常量，
     // **capabilities 缺失即只读**（终态候选的 canDefer/canReject 正是 false）。
-    expect(views).toContain('const caps = candidate.capabilities || {}');
-    expect(views).toContain('const canPromote = !!caps.canPromote');
-    expect(views).toContain('const canDefer = !!caps.canDefer');
+    expect(views).toContain('candidate.capabilities || {}');
+    expect(views).toContain('!!caps.canPromote');
     expect(views).toContain('const canReject = !!caps.canReject');
     expect(views).toContain('const canEdit = !!caps.canEdit');
+    expect(views).toContain("T('cognition.activity_defer'");
   });
 });
 
 describe('source issues', () => {
   it('only surfaces sources that need attention', () => {
     // 用户主动暂停的来源不算异常；failed 与异常 paused 才算。
-    expect(views).toContain("item.statusReason || ''") !== undefined ? true : false;
-    expect(views).toContain('sourceItemNeedsAttention');
-    expect(views).toContain("item.status === 'failed'");
-    expect(views).toContain("String(item.statusReason || '') !== 'source_paused'");
+    expect(core).toContain("item.status === 'failed'");
+    expect(core).toContain("String(item.statusReason || '') !== 'source_paused'");
+    expect(core).toContain("String(item.kind || '') !== 'execution_evaluation'");
   });
 
   it('renders source issues with localized reasons and typed actions', () => {
-    expect(views).toContain('sourceReasonText');
-    expect(views).toContain("'source-action'");
-    expect(views).toContain("action: 'retry'");
-    expect(views).toContain("action: 'resume'");
-    expect(views).toContain("T('cognition.source_issues_more'");
+    expect(vocab).toContain('sourceReasonText');
+    expect(app).toContain("'source-action'");
+    expect(core).toContain("retry: 'recall.sources.retry'");
+    expect(core).toContain("resume: 'recall.sources.resume'");
   });
 });
 
 describe('capture tasks', () => {
   it('maps capture actions to typed channels', () => {
-    expect(core).toContain("retry: 'recall.captures.retry'");
-    expect(core).toContain('recall.captures.batchRetry');
-    // 批量「立即整理」前端不暴露(2026-09-21 原型 v7 定调):后端能力保留,
-    // 渲染层不再触达 batchRunNow。
+    expect(core).toContain("'recall.captures.sweep.run'");
+    expect(core).toContain("'recall.captures.sweep.stop'");
+    // 批量「立即整理」前端不暴露：渲染层不再触达 batchRunNow。
     expect(core).not.toContain("'recall.captures.batchRunNow'");
   });
 

@@ -1,0 +1,3 @@
+cases:
+- id: smoke-ui-design-system
+  kind: manual-smoke

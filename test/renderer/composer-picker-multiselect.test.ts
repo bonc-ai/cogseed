@@ -41,7 +41,7 @@ describe('composer member picker multiselect (MA-07)', () => {
     const result = spawnSync(require('electron'), [path.join(__dirname, 'fixtures/composer-multiselect-dom.cjs')], {
       env,
       encoding: 'utf8',
-      timeout: 60000,
+      timeout: 60000, killSignal: 'SIGKILL',
     });
     expect(result.status, `Chromium exited without a result: ${result.error || result.signal || ''}\n${result.stderr || ''}`).toBe(0);
     const output = String(result.stdout || '').trim().split('\n').filter(Boolean).pop() || '{}';

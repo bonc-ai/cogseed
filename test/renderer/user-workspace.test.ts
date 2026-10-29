@@ -104,6 +104,8 @@ function loadUserWorkspace() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (globalThis as any).document = {
     createElement: (tagName: string) => new FakeElement(tagName),
+    querySelector: () => null,
+    querySelectorAll: () => [],
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (globalThis as any).window = {
@@ -120,8 +122,55 @@ function loadUserWorkspace() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   return require('../../src/renderer/modules/user-workspace.js') as {
     _mountWorkspaceChipInBar: (bar: FakeElement, target: string) => FakeElement | null;
+    getNewChatSpaceId: () => string;
+    clearNewChatSpaceId: () => void;
   };
 }
+
+describe('new chat space selection', () => {
+  const KEY = 'chat.newChatSpaceId.v1';
+
+  beforeEach(() => {
+    delete require.cache[require.resolve('../../src/renderer/modules/user-workspace.js')];
+  });
+
+  it('consumes the remembered space after it was used by one new conversation', () => {
+    const store = new Map<string, string>([[KEY, 'sp_demo']]);
+    (globalThis as any).localStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+      removeItem: (key: string) => { store.delete(key); },
+    };
+    try {
+      const mod = loadUserWorkspace();
+      expect(mod.getNewChatSpaceId()).toBe('sp_demo');
+
+      mod.clearNewChatSpaceId();
+
+      expect(mod.getNewChatSpaceId()).toBe('');
+      expect(store.get(KEY)).toBe('');
+    } finally {
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  it('does not write storage when there is nothing to consume', () => {
+    const writes: Array<[string, string]> = [];
+    (globalThis as any).localStorage = {
+      getItem: () => null,
+      setItem: (key: string, value: string) => { writes.push([key, value]); },
+      removeItem: () => {},
+    };
+    try {
+      const mod = loadUserWorkspace();
+      expect(mod.getNewChatSpaceId()).toBe('');
+      mod.clearNewChatSpaceId();
+      expect(writes).toHaveLength(0);
+    } finally {
+      delete (globalThis as any).localStorage;
+    }
+  });
+});
 
 describe('user workspace chip mount', () => {
   beforeEach(() => {

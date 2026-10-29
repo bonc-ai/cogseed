@@ -531,6 +531,7 @@ describe('group_chat facade › runtimeStatus orphan recovery', () => {
       in_flight: [],
       active_turns: [],
       backend_active: false,
+      waiting_approval: false,
     });
 
     const healed = await s.readState(TEST_UID, TEST_CID);
@@ -560,7 +561,9 @@ describe('group_chat facade › runtimeStatus orphan recovery', () => {
       conversationId: TEST_CID,
       agentId: 'agent-backend-a',
       executionKind: 'cogseed-native',
-      createdAt: nowIso,
+      createdAt: '2026-01-01T00:00:00Z',
+      executionStartedAt: nowIso,
+      lastResumeRequestId: 'req-resume',
       updatedAt: nowIso,
     };
     const taskFile = cogseedTaskFile(TEST_UID, taskId);
@@ -572,13 +575,141 @@ describe('group_chat facade › runtimeStatus orphan recovery', () => {
     expect(runtime.backend_active).toBe(true);
     expect(runtime.processing).toBe(true);
     expect(runtime.in_flight).toContain('agent-backend-a');
-    expect(runtime.active_turns.some((t) => t.turn_id === taskId && t.actor === 'agent-backend-a')).toBe(true);
+    expect(runtime.active_turns).toContainEqual(expect.objectContaining({ turn_id: 'cogseed-exec-runtime-status-req-resume', actor: 'agent-backend-a', started_at_ms: Date.parse(nowIso) }));
 
     // Once the task reaches a terminal status, the conversation is idle again.
     fs.writeFileSync(taskFile, JSON.stringify({ ...task, status: 'completed', terminalAt: nowIso }));
     const idle = await facade.runtimeStatus(TEST_UID, TEST_CID);
     expect(idle.backend_active).toBe(false);
     expect(idle.processing).toBe(false);
+  });
+
+  it('reports waiting_approval even when nothing is executing（本机实况：陈旧互等）', async () => {
+    // 本机实测：两条 09-21/09-22 的 pending 唤醒，绑定的 run 至今 running、actor
+    // pending，但**没有任何 created/queued/running 任务**——如果只在"有执行中任务"
+    // 时才算等批准，这种彻底安静的会话就什么都不会显示。
+    const { wakeStateFile, _resetPendingApprovalCacheForTest } = await import('../../../../src/main/features/p3394/wake-store');
+    _resetPendingApprovalCacheForTest();
+    const nowIso = new Date().toISOString();
+    const wakeFile = wakeStateFile(TEST_UID);
+    fs.mkdirSync(path.dirname(wakeFile), { recursive: true });
+    fs.writeFileSync(wakeFile, JSON.stringify({
+      version: 1,
+      updated_at: nowIso,
+      approvals: [],
+      requests: [{
+        id: 'wake-stale-pending',
+        conversation_id: TEST_CID,
+        agent_id: 'agent-stale',
+        source: 'commander',
+        source_actor_id: 'commander',
+        objective: 'stale dispatch awaiting a decision',
+        context_scope: [],
+        behavior_scope: [],
+        dispatch_payload: { run_id: 'run-stale-pending' },
+        status: 'pending',
+        created_at: nowIso,
+        updated_at: nowIso,
+      }],
+    }));
+
+    const facade = await import('../../../../src/main/features/group_chat');
+    const runtime = await facade.runtimeStatus(TEST_UID, TEST_CID);
+    expect(runtime.waiting_approval).toBe(true);
+    expect(runtime.processing).toBe(false);
+    expect(runtime.backend_active).toBe(false);
+    expect(runtime.in_flight).toEqual([]);
+  });
+
+  it('treats "the run is only waiting for a wake approval" as waiting, not processing（真机：侧栏一直转圈）', async () => {
+    // 真机症状：用户以为会话已经结束，侧栏「最近任务」却一直转圈，重启也不消。
+    // 代码里的互相等待：bus 的收口门槛在"本 run 还有 pending/approved 唤醒"时
+    // **直接 return**（bus.ts:1944），而 wake-service 只在 run 已终态时才判死
+    // （wake-service.ts:272）——run 永远 running、actor 永远 pending。此时 backend
+    // task 仍是 running → backendActive → processing 恒 true，且孤儿自愈被
+    // backendActive 挡住（index.ts:227）→ 永远转圈。
+    // 口径：等待用户决定 ≠ 执行中（与既有的 waiting_user 修复同一条原则）。
+    const { cogseedTaskFile } = await import('../../../../src/main/features/cogseed_backend/paths');
+    const { COGSEED_AGENT_BACKEND_SCHEMA_VERSION } = await import('../../../../src/main/features/cogseed_backend/types');
+    const { wakeStateFile } = await import('../../../../src/main/features/p3394/wake-store');
+    const nowIso = new Date().toISOString();
+    const taskId = 'cogseed-task-waiting-approval';
+    const runId = 'run-waiting-approval';
+    const task: CogSeedTaskRecord = {
+      schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
+      taskId,
+      sessionId: 'cogseed-session-waiting-approval',
+      runtimeSessionId: 'mruntime-session-waiting-approval',
+      executionId: 'cogseed-exec-waiting-approval',
+      requestId: 'req-waiting-approval',
+      ownerId: TEST_UID,
+      status: 'running',
+      task: 'dispatch to the external agent',
+      conversationId: TEST_CID,
+      agentId: 'agent-backend-approval',
+      executionKind: 'cogseed-native',
+      groupChatRunId: runId,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    const taskFile = cogseedTaskFile(TEST_UID, taskId);
+    fs.mkdirSync(path.dirname(taskFile), { recursive: true });
+    fs.writeFileSync(taskFile, JSON.stringify(task));
+
+    const wakeFile = wakeStateFile(TEST_UID);
+    fs.mkdirSync(path.dirname(wakeFile), { recursive: true });
+    fs.writeFileSync(wakeFile, JSON.stringify({
+      version: 1,
+      updated_at: nowIso,
+      approvals: [],
+      requests: [{
+        id: 'wake-waiting-approval',
+        conversation_id: TEST_CID,
+        agent_id: 'agent-backend-approval',
+        source: 'commander',
+        source_actor_id: 'commander',
+        objective: 'wake the external agent',
+        context_scope: [],
+        behavior_scope: [],
+        dispatch_payload: { run_id: runId },
+        status: 'pending',
+        created_at: nowIso,
+        updated_at: nowIso,
+      }],
+    }));
+
+    const facade = await import('../../../../src/main/features/group_chat');
+    const runtime = await facade.runtimeStatus(TEST_UID, TEST_CID);
+    // 状态要透明：UI 据此显示"等待你批准"，而不是无限转圈。
+    expect(runtime.waiting_approval).toBe(true);
+    expect(runtime.processing).toBe(false);
+    expect(runtime.backend_active).toBe(false);
+    expect(runtime.in_flight).toEqual([]);
+    expect(runtime.active_turns).toEqual([]);
+
+    // 决定之后（拒绝/过期）任务不再豁免：仍按真实执行状态回报。
+    fs.writeFileSync(wakeFile, JSON.stringify({
+      version: 1,
+      updated_at: nowIso,
+      approvals: [],
+      requests: [{
+        id: 'wake-waiting-approval',
+        conversation_id: TEST_CID,
+        agent_id: 'agent-backend-approval',
+        source: 'commander',
+        source_actor_id: 'commander',
+        objective: 'wake the external agent',
+        context_scope: [],
+        behavior_scope: [],
+        dispatch_payload: { run_id: runId },
+        status: 'rejected',
+        created_at: nowIso,
+        updated_at: nowIso,
+      }],
+    }));
+    const afterDecision = await facade.runtimeStatus(TEST_UID, TEST_CID);
+    expect(afterDecision.waiting_approval).toBe(false);
+    expect(afterDecision.backend_active).toBe(true);
   });
 });
 

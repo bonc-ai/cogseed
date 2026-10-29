@@ -1,0 +1,11 @@
+name: seo-monitor
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'SEO/GEO drift monitoring: op=snapshot distills a crawl (+ health/GEO scores)
+  into a comparable baseline (with content hash); op=compare diffs the current snapshot
+  against the baseline via a rule engine and emits ranked drift findings (schema removed,
+  noindex added, canonical chan'
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

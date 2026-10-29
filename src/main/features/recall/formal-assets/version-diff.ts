@@ -22,6 +22,8 @@ import type { AbilityAssetVersionRecord } from '../asset-service';
 
 /** 一次变更影响的是哪一面。用户按这个分类决定要不要管。 */
 export type AssetChangeKind =
+  /** 资产类别变了：换类意味着进入哪条投影、参与哪类任务全变。 */
+  | 'type'
   /** 适用/禁止范围变了：它会进入或退出一批任务。 */
   | 'boundary'
   /** 正文主张变了。 */
@@ -35,7 +37,10 @@ export type AssetChangeKind =
   /** 成熟度变了。 */
   | 'maturity'
   /** 治理状态变了。 */
-  | 'status';
+  | 'status'
+  /** 其余快照键变了（P-r1-22 兜底）：不显式归类，但保证任何真实变化
+   *  都不再让版本被整体跳过（跳版=待办漏报+版本页缺行）。 */
+  | 'other';
 
 export interface AssetFieldChange {
   kind: AssetChangeKind;
@@ -61,6 +66,7 @@ type Snapshot = AbilityAssetVersionRecord['snapshot'];
 
 /** 影响面从大到小：先说"它会不会进入别的任务"，再说"它说了什么"。 */
 const CHANGE_ORDER: AssetChangeKind[] = [
+  'type',
   'boundary',
   'scope',
   'statement',
@@ -68,9 +74,34 @@ const CHANGE_ORDER: AssetChangeKind[] = [
   'maturity',
   'status',
   'title',
+  'other',
 ];
 
+/** 已显式比对的快照键（P-r1-22）：其余键走「其他变更」兜底。
+ *  version 不在其中——它是版本号本身，每版必变，比它等于谎称每版都有变更。 */
+const EXPLICIT_SNAPSHOT_KEYS = new Set([
+  'title',
+  'statement',
+  'type',
+  'scope',
+  'scopePolicy',
+  'applicableWhen',
+  'forbiddenWhen',
+  'evidenceRefs',
+  'maturity',
+  'status',
+  'version',
+]);
+
 const EMPTY = '—';
+
+/** 兜底键的可读摘要：对象/数组稳定序列化后截断，undefined/null 归为空。 */
+function briefOf(value: unknown): string {
+  if (value === undefined || value === null) return EMPTY;
+  if (typeof value === 'string') return value || EMPTY;
+  const text = JSON.stringify(value, Object.keys(value as object).sort());
+  return text || EMPTY;
+}
 
 function textOf(value: unknown): string {
   if (value === undefined || value === null || value === '') return EMPTY;
@@ -107,14 +138,27 @@ export function diffAssetSnapshots(previous: Snapshot | undefined, next: Snapsho
   if (!previous) return [];
   const changes: AssetFieldChange[] = [];
 
+  push(changes, 'type', 'type', textOf(previous.type), textOf(next.type));
   push(changes, 'title', 'title', textOf(previous.title), textOf(next.title));
   push(changes, 'statement', 'statement', textOf(previous.statement), textOf(next.statement));
   push(changes, 'scope', 'scope', textOf(previous.scope), textOf(next.scope));
+  push(changes, 'scope', 'scopePolicy', briefOf(previous.scopePolicy), briefOf(next.scopePolicy));
   push(changes, 'boundary', 'applicableWhen', listOf(previous.applicableWhen), listOf(next.applicableWhen));
   push(changes, 'boundary', 'forbiddenWhen', listOf(previous.forbiddenWhen), listOf(next.forbiddenWhen));
   push(changes, 'evidence', 'evidenceRefs', evidenceOf(previous.evidenceRefs), evidenceOf(next.evidenceRefs));
   push(changes, 'maturity', 'maturity', textOf(previous.maturity), textOf(next.maturity));
   push(changes, 'status', 'status', textOf(previous.status), textOf(next.status));
+
+  // P-r1-22 兜底：快照实存 17 键，显式比对只覆盖行为字段。此前仅改
+  // scopePolicy/type 等字段的版本 diff 为空、被整体跳过——待办漏报、
+  // 版本页跳版。其余键逐个稳定序列化比较，有变化就归「其他变更」，
+  // 不再让任何真实变化静默。
+  const seen = new Set<string>();
+  for (const key of [...Object.keys(previous), ...Object.keys(next)]) {
+    if (seen.has(key) || EXPLICIT_SNAPSHOT_KEYS.has(key)) continue;
+    seen.add(key);
+    push(changes, 'other', key, briefOf((previous as Record<string, unknown>)[key]), briefOf((next as Record<string, unknown>)[key]));
+  }
 
   return changes;
 }

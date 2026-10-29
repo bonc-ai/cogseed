@@ -8,6 +8,9 @@ import { loadOntologyTaxonomy, type OntologyTaxonomy } from './ontology-taxonomy
  * used without asking a model to interpret the task.
  */
 export interface RecallTaskContract {
+  /** Complete host request; bounded retrieval hints never grant authority. */
+  currentRequest?: { taskText: string; purpose: string };
+  constraintHintCoverage?: { total: number; selected: number; truncated: boolean };
   goal: string;
   tokens: string[];
   objects: string[];
@@ -76,6 +79,15 @@ function boundedText(value: unknown, max = MAX_INPUT_LENGTH): string {
     .slice(0, max);
 }
 
+function completeText(value: unknown): string {
+  return typeof value === 'string' ? value.normalize('NFKC').replace(/\0/g, '').replace(/\s+/g, ' ').trim() : '';
+}
+function retrievalHint(value: string): string {
+  if (value.length <= MAX_GOAL_LENGTH) return value;
+  const half = Math.floor((MAX_GOAL_LENGTH - 3) / 2);
+  return `${value.slice(0, half)} … ${value.slice(-half)}`;
+}
+
 function compact(value: string): string {
   return value
     .normalize('NFKC')
@@ -113,7 +125,7 @@ function lexicalTokens(value: string, max = MAX_TOKENS): string[] {
 }
 
 function phraseScore(query: string, term: string): number {
-  const queryText = boundedText(query).toLocaleLowerCase();
+  const queryText = completeText(query).toLocaleLowerCase();
   const termText = boundedText(term, MAX_TERM_LENGTH).toLocaleLowerCase();
   if (!queryText || !termText) return 0;
   const queryCompact = compact(queryText);
@@ -154,7 +166,7 @@ function extractConstraints(goal: string): string[] {
   for (const pattern of patterns) {
     for (const match of goal.matchAll(pattern)) constraints.push(boundedText(match[0], 160));
   }
-  return unique(constraints, MAX_CONSTRAINTS);
+  return [...new Set(constraints.filter(Boolean))];
 }
 
 function extractObjects(tokens: string[], actionType: RecallTaskContract['actionType']): string[] {
@@ -228,19 +240,24 @@ function buildContract(
   taxonomy: OntologyTaxonomy,
   rules: OntologyRule[],
 ): RecallTaskContract {
-  const taskText = boundedText(input.taskText);
-  const purpose = boundedText(input.purpose, 500);
-  const goal = [taskText, purpose].filter(Boolean).join('\n').slice(0, MAX_GOAL_LENGTH);
-  const tokens = lexicalTokens(goal);
-  const actionType = actionTypeFor(goal);
+  const taskText = completeText(input.taskText);
+  const purpose = completeText(input.purpose);
+  const full = [taskText, purpose].filter(Boolean).join('\n');
+  const goal = retrievalHint(full);
+  const allConstraints = extractConstraints(full);
+  const constraints = allConstraints.slice(-MAX_CONSTRAINTS);
+  const tokens = lexicalTokens([purpose, ...constraints, goal].filter(Boolean).join('\n'));
+  const actionType = actionTypeFor(full);
   return {
+    currentRequest: { taskText: typeof input.taskText === 'string' ? input.taskText : '', purpose: typeof input.purpose === 'string' ? input.purpose : '' },
+    constraintHintCoverage: { total: allConstraints.length, selected: constraints.length, truncated: allConstraints.length > constraints.length },
     goal,
     tokens,
     objects: extractObjects(tokens, actionType),
     actionType,
-    constraints: extractConstraints(goal),
+    constraints,
     requiredCapabilities: extractCapabilities(tokens, actionType),
-    ontologyAnchors: ontologyAnchorsFor(goal, taxonomy, rules),
+    ontologyAnchors: ontologyAnchorsFor(full, taxonomy, rules),
   };
 }
 

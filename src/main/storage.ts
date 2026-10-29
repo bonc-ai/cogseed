@@ -47,12 +47,13 @@ export function safeId(value: unknown): boolean {
 
 // ── JSON / JSONL IO ──────────────────────────────────────────────────────
 
-/** Read a JSON file. Returns {} on any error (missing, invalid, etc.). */
-export async function readJson<T = Record<string, any>>(filePath: string): Promise<T> {
+/** Read JSON, defaulting to {}. Strict callers tolerate only a missing file. */
+export async function readJson<T = Record<string, any>>(filePath: string, options: { strict?: boolean } = {}): Promise<T> {
   try {
     const text = await fsp.readFile(filePath, 'utf8');
     return JSON.parse(text) as T;
-  } catch {
+  } catch (error) {
+    if (options.strict && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     return {} as T;
   }
 }
@@ -104,8 +105,11 @@ async function renameWithRetryUsing(
   }
 }
 
-function renameWithRetry(tmp: string, filePath: string): Promise<void> {
-  return renameWithRetryUsing(tmp, filePath, fsp.rename);
+function renameWithRetry(tmp: string, filePath: string, isCurrent?: () => boolean): Promise<void> {
+  return renameWithRetryUsing(tmp, filePath, async (source, target) => {
+    assertWriteCurrent(isCurrent);
+    await fsp.rename(source, target);
+  });
 }
 
 function renameWithRetrySyncUsing(
@@ -138,12 +142,14 @@ export const __storageTestHooks = {
  * Writes to a same-directory temp file then renames over the target to
  * prevent torn reads.
  */
-export async function writeJson(filePath: string, data: unknown): Promise<void> {
+export async function writeJson(filePath: string, data: unknown, isCurrent?: () => boolean): Promise<void> {
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  assertWriteCurrent(isCurrent);
   const tmp = atomicTmpPath(filePath);
   await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
   try {
-    await renameWithRetry(tmp, filePath);
+    assertWriteCurrent(isCurrent);
+    await renameWithRetry(tmp, filePath, isCurrent);
   } catch (err) {
     await fsp.rm(tmp, { force: true }).catch(() => {});
     throw err;
@@ -182,8 +188,9 @@ export function writeTextAtomicSync(filePath: string, text: string | Buffer, enc
 }
 
 /** Append one JSON record as a single line. */
-export async function appendJsonl(filePath: string, record: unknown): Promise<void> {
+export async function appendJsonl(filePath: string, record: unknown, isCurrent?: () => boolean): Promise<void> {
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  assertWriteCurrent(isCurrent);
   await fsp.appendFile(filePath, JSON.stringify(record) + '\n', 'utf8');
 }
 
@@ -201,6 +208,12 @@ function _getLineLock(filePath: string): MutexInterface {
   return m;
 }
 
+/** Run a JSONL read/rewrite under the same per-file lock as appendJsonlAtomic.
+ *  Use for destructive redaction that must not race a concurrent append. */
+export async function withJsonlLineLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  return _getLineLock(filePath).runExclusive(fn);
+}
+
 async function _loadLineCount(filePath: string): Promise<number> {
   try {
     const text = await fsp.readFile(filePath, 'utf8');
@@ -215,6 +228,20 @@ export interface AtomicAppendResult<T = unknown> {
   msgIndex: number;
 }
 
+/** Options for {@link appendJsonlAtomic}. */
+export interface AtomicAppendOptions {
+  isCurrent?: () => boolean;
+  /**
+   * 防拼接（recall 版本流等只追加 JSONL 启用）：文件存在、非空且
+   * 末字节不是换行（云同步冲突/崩溃截断出的撕裂半行）时，先补一个换行把
+   * 撕裂行隔离成独立坏行再正常追加。不修复的话 appendFile 会把新记录直接
+   * 拼进坏行——坏行吞掉下一条合法记录（撕裂前的字节全部保留，读侧逐行
+   * 降级跳过）。默认关闭：行锁内多一次 stat+末字节读，只有需要该保证的
+   * 调用方付费。
+   */
+  repairTornTail?: boolean;
+}
+
 /**
  * Append one JSON record and return its zero-based line index atomically.
  *
@@ -222,19 +249,86 @@ export interface AtomicAppendResult<T = unknown> {
  * no "count after append" race. Used by chat/skill/agent message writers so
  * the search indexer can be told the exact position without re-scanning.
  */
-export async function appendJsonlAtomic<T>(filePath: string, record: T): Promise<AtomicAppendResult<T>> {
+export async function appendJsonlAtomic<T>(
+  filePath: string,
+  record: T,
+  options: AtomicAppendOptions = {},
+): Promise<AtomicAppendResult<T>> {
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
   const lock = _getLineLock(filePath);
   return lock.runExclusive(async () => {
+    assertWriteCurrent(options.isCurrent);
+    if (options.repairTornTail) {
+      let size = 0;
+      let lastByte = 0x0a;
+      try {
+        const stat = await fsp.stat(filePath);
+        size = stat.size;
+        if (size > 0) {
+          const handle = await fsp.open(filePath, 'r');
+          try {
+            const tail = Buffer.alloc(1);
+            await handle.read(tail, 0, 1, size - 1);
+            lastByte = tail[0];
+          } finally {
+            await handle.close();
+          }
+        }
+      } catch {
+        // stat/open 失败按「无既有文件」处理：下面的 appendFile 自会建目录建文件。
+      }
+      if (size > 0 && lastByte !== 0x0a) {
+        assertWriteCurrent(options.isCurrent);
+        await fsp.appendFile(filePath, '\n', 'utf8');
+        // 补的是换行不是内容行，行数缓存语义（非空行计数）不变。
+      }
+    }
     let count = _lineCounts.get(filePath);
     if (count === undefined) {
       count = await _loadLineCount(filePath);
       _lineCounts.set(filePath, count);
     }
+    assertWriteCurrent(options.isCurrent);
     await fsp.appendFile(filePath, JSON.stringify(record) + '\n', 'utf8');
     _lineCounts.set(filePath, count + 1);
     return { record, msgIndex: count };
   });
+}
+
+/** Append a stable-id JSONL record once under the canonical line lock. */
+export async function appendJsonlByIdIdempotent<T extends { id: string }>(
+  filePath: string,
+  record: T,
+  matches?: (current: T, incoming: T) => boolean,
+  isCurrent?: () => boolean,
+): Promise<{ inserted: boolean; record: T; msgIndex: number }> {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  return _getLineLock(filePath).runExclusive(async () => {
+    assertWriteCurrent(isCurrent);
+    let text = '';
+    try { text = await fsp.readFile(filePath, 'utf8'); } catch { /* new stream */ }
+    let count = 0;
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let current: T | undefined;
+      try { current = JSON.parse(line) as T; }
+      catch { /* malformed historical line does not hide a valid append */ }
+      if (current?.id === record.id) {
+        if (matches && !matches(current, record)) throw new Error('stable message id conflict');
+        return { inserted: false, record: current, msgIndex: count };
+      }
+      count += 1;
+    }
+    assertWriteCurrent(isCurrent);
+    await fsp.appendFile(filePath, JSON.stringify(record) + '\n', 'utf8');
+    _lineCounts.set(filePath, count + 1);
+    return { inserted: true, record, msgIndex: count };
+  });
+}
+
+/** Host-provided lifecycle ceiling, evaluated after storage waits. */
+function assertWriteCurrent(isCurrent?: () => boolean): void {
+  if (isCurrent && !isCurrent()) throw new Error('write lifecycle changed');
 }
 
 /**
@@ -244,6 +338,41 @@ export async function appendJsonlAtomic<T>(filePath: string, record: T): Promise
 export function invalidateLineCount(filePath: string): void {
   _lineCounts.delete(filePath);
   _lineLocks.delete(filePath);
+}
+
+/** Result of a locked whole-stream removal: whether the file existed. */
+export interface RemoveJsonlStreamResult {
+  existed: boolean;
+}
+
+/**
+ * Remove a whole JSONL stream under the same file lock as appendJsonlAtomic
+ * purge 删整流必须与在途 append 互斥——裸 fs.rm 会在
+ * 行锁排队中的 append 落地前把文件删掉，让那条 append 用 appendFile 重建流
+ * 文件（purged 资产的版本快照复活）。锁内删除后同步清掉行数缓存，下一次
+ * append 重新计数而不是复用已删文件的 stale 计数。文件不存在视为已达成
+ * 目标（清除要可重入），返回 existed=false 供调用方区分是否真的删过。
+ */
+export async function removeJsonlStream(
+  filePath: string,
+): Promise<RemoveJsonlStreamResult> {
+  const lock = _getLineLock(filePath);
+  let existed = true;
+  await lock.runExclusive(async () => {
+    try {
+      await fsp.rm(filePath);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        existed = false;
+        return;
+      }
+      throw error;
+    }
+    // 只清行数缓存、保留锁登记：锁表条目常驻与本仓其他文件锁同口径，
+    // 删锁反而会让排队中的等待者与新调用者分持两把锁失去互斥。
+    _lineCounts.delete(filePath);
+  });
+  return { existed };
 }
 
 /**
@@ -364,6 +493,8 @@ export async function rewriteJsonlRecords<T extends object>(
 export interface RemoveJsonlRecordsResult {
   kept: number;
   removed: number;
+  /** dropMalformedLines 模式下被丢弃的坏行数（无法解析、按"随清除移除"处理）。 */
+  droppedMalformed?: number;
 }
 
 /**
@@ -372,11 +503,17 @@ export interface RemoveJsonlRecordsResult {
  * stream: it is the physical-deletion primitive (e.g. removing an ability
  * asset version for real), so line-based locators are NOT preserved. Kept
  * records are re-serialized in order; removing everything deletes the file.
+ *
+ * 坏行默认仍抛错（破坏性重写不能静默丢弃无法解析的未知字节）。仅当调用方
+ * 显式传 dropMalformedLines（purge 级联清理：目标是移除，坏档不许把清除
+ * 永久卡死）时，无法解析的行按"随清除移除"处理并计入 droppedMalformed。
  */
 export async function removeJsonlRecords<T extends object>(
   filePath: string,
   keep: (record: T) => boolean,
+  options?: { dropMalformedLines?: boolean },
 ): Promise<RemoveJsonlRecordsResult> {
+  const dropMalformed = options?.dropMalformedLines === true;
   const lock = _getLineLock(filePath);
   return lock.runExclusive<RemoveJsonlRecordsResult>(async () => {
     let text: string;
@@ -387,14 +524,22 @@ export async function removeJsonlRecords<T extends object>(
     const hasTrailing = lines.length > 0 && lines[lines.length - 1] === '';
     const body = hasTrailing ? lines.slice(0, -1) : lines;
     const kept: T[] = [];
+    let droppedMalformed = 0;
     for (let index = 0; index < body.length; index += 1) {
-      if (!body[index].trim()) throw new Error(`line ${index} is empty`);
+      if (!body[index].trim()) {
+        if (dropMalformed) { droppedMalformed += 1; continue; }
+        throw new Error(`line ${index} is empty`);
+      }
       let record: T;
       try { record = JSON.parse(body[index]) as T; }
-      catch (err) { throw new Error(`line ${index} not JSON: ${(err as Error).message}`); }
+      catch (err) {
+        if (dropMalformed) { droppedMalformed += 1; continue; }
+        throw new Error(`line ${index} not JSON: ${(err as Error).message}`);
+      }
       if (keep(record)) kept.push(record);
     }
     const removed = body.length - kept.length;
+    const malformed = droppedMalformed;
     if (kept.length === 0) {
       try {
         await fsp.rm(filePath);
@@ -402,7 +547,7 @@ export async function removeJsonlRecords<T extends object>(
         if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
       }
       _lineCounts.set(filePath, 0);
-      return { kept: 0, removed };
+      return { kept: 0, removed, ...(malformed ? { droppedMalformed: malformed } : {}) };
     }
     const out = kept.map((record) => JSON.stringify(record)).join('\n') + '\n';
     const tmp = atomicTmpPath(filePath);
@@ -414,7 +559,7 @@ export async function removeJsonlRecords<T extends object>(
       throw err;
     }
     _lineCounts.set(filePath, kept.length);
-    return { kept: kept.length, removed };
+    return { kept: kept.length, removed, ...(malformed ? { droppedMalformed: malformed } : {}) };
   });
 }
 
@@ -454,12 +599,14 @@ export async function readJsonlPage<T = Record<string, any>>(
   filePath: string,
   limit = 200,
   before?: number | null,
+  options?: { strict?: boolean },
 ): Promise<JsonlPage<T>> {
   const wanted = Math.max(1, Math.floor(Number(limit) || 1));
   let handle: fs.promises.FileHandle;
   try {
     handle = await fsp.open(filePath, 'r');
-  } catch {
+  } catch (error) {
+    if (options?.strict) throw error;
     return { records: [], nextCursor: null };
   }
 
@@ -485,7 +632,9 @@ export async function readJsonlPage<T = Record<string, any>>(
       let end = joined.length;
       for (let i = joined.length - 1; i >= 0 && newestFirst.length < wanted; i -= 1) {
         if (joined[i] !== 0x0a) continue; // '\n'
-        const record = _parseJsonlRecord<T>(joined.subarray(i + 1, end).toString('utf8'));
+        const line = joined.subarray(i + 1, end).toString('utf8');
+        const record = _parseJsonlRecord<T>(line);
+        if (options?.strict && record === undefined && line.trim()) throw new Error('invalid JSONL record');
         if (record !== undefined) {
           newestFirst.push(record);
           oldestRecordStart = position + i + 1;
@@ -496,7 +645,9 @@ export async function readJsonlPage<T = Record<string, any>>(
     }
 
     if (newestFirst.length < wanted && carry.length) {
-      const record = _parseJsonlRecord<T>(carry.toString('utf8'));
+      const line = carry.toString('utf8');
+      const record = _parseJsonlRecord<T>(line);
+      if (options?.strict && record === undefined && line.trim()) throw new Error('invalid JSONL record');
       if (record !== undefined) {
         newestFirst.push(record);
         oldestRecordStart = 0;

@@ -4,7 +4,7 @@
  *  这里是「本地 Agent 同进程」这一侧——模型没法自己去读文件，所以带正文；
  *  跨 Agent 交付那一侧带的是引用，由目标端自己读。
  *
- *  **confirm 档不注入。** 规范 10.2 里 confirm 的含义是「跨作用域，必须先确认」。
+ *  **confirm 档不注入。** confirm 的含义是「跨作用域，必须先确认」。
  *  把它直接摆进提示词，模型就看得到、也就可能用——确认这一步等于没发生。
  *  所以这一档在本地运行时被留出来（deferred），交给界面去问用户，而不是
  *  在提示词里写一句「用之前请先确认」然后指望模型自觉。
@@ -16,9 +16,7 @@
 import type { SelectedCognition, WithheldCognition } from './cognition-selection';
 
 const MAX_ITEMS = 12;
-const MAX_STATEMENT_LENGTH = 2_000;
 const MAX_BLOCK_LENGTH = 14_000;
-const MAX_CONDITIONS = 8;
 
 export interface InheritedCognitionPrompt {
   /** 拼进 system prompt 的块。没有可注入的认知时为空串。 */
@@ -43,9 +41,9 @@ function escapePromptData(value: unknown): string {
     .replace(/[<>&]/g, (char) => ({ '<': '\\u003c', '>': '\\u003e', '&': '\\u0026' })[char] || char);
 }
 
-function conditions(values: string[] | undefined, max: number): string[] | undefined {
+function conditions(values: string[] | undefined): string[] | undefined {
   if (!values?.length) return undefined;
-  return values.slice(0, MAX_CONDITIONS).map((value) => safePromptText(value, max));
+  return [...values];
 }
 
 function recordFor(item: SelectedCognition): Record<string, unknown> {
@@ -55,10 +53,10 @@ function recordFor(item: SelectedCognition): Record<string, unknown> {
     type: item.content.type,
     title: safePromptText(item.content.title, 160),
     scope: safePromptText(item.content.scope, 500),
-    statement: safePromptText(item.content.statement, MAX_STATEMENT_LENGTH),
+    statement: item.content.statement,
     // 条件原样带上，由模型自己判断这次适不适用——系统不替它判定。
-    ...(conditions(item.applicableWhen, 500) ? { applicable_when: conditions(item.applicableWhen, 500) } : {}),
-    ...(conditions(item.forbiddenWhen, 500) ? { forbidden_when: conditions(item.forbiddenWhen, 500) } : {}),
+    ...(conditions(item.applicableWhen) ? { applicable_when: conditions(item.applicableWhen) } : {}),
+    ...(conditions(item.forbiddenWhen) ? { forbidden_when: conditions(item.forbiddenWhen) } : {}),
   };
 }
 
@@ -68,7 +66,7 @@ const MAX_GLOSSARY_TERMS = 24;
 const MAX_GLOSSARY_BLOCK_LENGTH = 2_000;
 
 /**
- * 渲染出生继承的术语块（N-3）。空表返回空串——不要产出一个空的
+ * 渲染出生继承的术语块。空表返回空串——不要产出一个空的
  * `<inherited-glossary>` 壳，那会让模型以为"这个 Agent 没有任何术语约定"，
  * 而事实可能只是采集侧没跑过。
  */
@@ -135,7 +133,7 @@ export function buildInheritedCognitionPrompt(
 
   if (!included.length) return { promptBlock: '', injected: [], deferred };
 
-  // N-3：出生时冻结的术语表。它决定的是**词怎么理解**，不是**该做什么**，
+  // 出生时冻结的术语表。它决定的是**词怎么理解**，不是**该做什么**，
   // 所以单独成段并明确说明"只用于消歧、不构成指令"——混进资产列表会让模型
   // 把一条释义当成一条可执行判断。
   //

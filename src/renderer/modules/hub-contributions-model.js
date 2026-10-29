@@ -95,6 +95,13 @@
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
+  const CONTENT_TYPES = new Set(['agent', 'skill']);
+
+  function contentTypeOf(item, latest) {
+    const raw = text(item.content_type || latest.content_type).toLowerCase();
+    return CONTENT_TYPES.has(raw) ? raw : 'skill';
+  }
+
   // Normalizes one cached `contribution.mine` item. Every field is optional on
   // the wire, so each one falls back to an empty value instead of throwing.
   function normalizeItem(item, index) {
@@ -107,6 +114,8 @@
       raw: item,
       title: text(item.name || item.title || contentId || submissionId || item.entry_id || `#${index + 1}`),
       contentId,
+      // Hub 未带 content_type（Skill 时代的数据）一律按 skill 处理；只认 agent / skill 两个值
+      contentType: contentTypeOf(item, latest),
       submissionId,
       status: text(latest.status || item.status || item.review_status || item.submission_status
         || item.content_status).toUpperCase(),
@@ -153,9 +162,10 @@
   }
 
   function filterHistory(list, options) {
-    const { filter = 'all', query = '' } = options || {};
+    const { filter = 'all', query = '', type = 'all' } = options || {};
     const needle = text(query).trim().toLocaleLowerCase();
     return (Array.isArray(list) ? list : []).filter((entry) => {
+      if (CONTENT_TYPES.has(type) && entry.contentType !== type) return false;
       if (needle && !`${entry.title} ${entry.contentId} ${entry.key}`.toLocaleLowerCase().includes(needle)) return false;
       return matchesFilter(entry, filter);
     });
@@ -220,7 +230,82 @@
     return lines.length ? `${message}\n${lines.join('\n')}` : message;
   }
 
+  // ── Agent contribution (agent-contribution.ts → contribution.agent.start) ──
+
+  // Agent admission is `{ outcome, blocking[], skills[] }`. `pass` is the only outcome that lets
+  // the preview appear; anything unexpected reads as unavailable, never as passed.
+  function classifyAgentAdmission(admission) {
+    if (!isRecord(admission)) return 'unavailable';
+    if (admission.outcome === 'pass') return 'passed';
+    if (admission.outcome === 'incomplete') return 'incomplete';
+    if (admission.outcome === 'blocked') return 'blocked';
+    return 'unavailable';
+  }
+
+  // One row for the Agent itself, then one per bundled Skill so a failing private Skill is named.
+  function agentCheckRows(admission) {
+    const blocking = isRecord(admission) && Array.isArray(admission.blocking) ? admission.blocking : [];
+    const agentIssues = blocking.filter((issue) => isRecord(issue) && !text(issue.skill));
+    const rows = [{ id: 'agent', state: agentIssues.length ? 'blocked' : 'ok', count: agentIssues.length }];
+    const skills = isRecord(admission) && Array.isArray(admission.skills) ? admission.skills : [];
+    for (const skill of skills) {
+      if (!isRecord(skill)) continue;
+      rows.push({
+        id: 'skill',
+        name: text(skill.name),
+        state: skill.outcome === 'pass' ? 'ok' : skill.outcome === 'incomplete' ? 'attention' : 'blocked',
+        reason: text(skill.reason),
+      });
+    }
+    return rows;
+  }
+
+  // Declarations still needed before submit; mirrors the Skill flow's C-FR-005 gate, plus the
+  // version the contributor must enter (agent.json carries none).
+  function agentMissing(draft) {
+    const d = isRecord(draft) ? draft : {};
+    const missing = [];
+    const origin = isRecord(d.origin) ? d.origin : {};
+    if (!text(origin.type)) missing.push('origin');
+    else if (origin.type === 'third_party' && !text(origin.note).trim()) missing.push('origin_note');
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(text(d.version).trim())) missing.push('version');
+    if (!(isRecord(d.accepted) && d.accepted.terms === true)) missing.push('terms');
+    if (!(isRecord(d.accepted) && d.accepted.maintenance === true)) missing.push('maintenance');
+    if (d.hasBundled === true && !(isRecord(d.accepted) && d.accepted.skills === true)) missing.push('skills');
+    // Spots that may hold local paths or credential-like text: the user must say they looked.
+    if (Number(d.hintCount) > 0 && !(isRecord(d.accepted) && d.accepted.hints === true)) missing.push('hints');
+    return missing;
+  }
+
+  // Group the main process's hint list by file, with the set of 1-based lines per file, so the
+  // preview can mark those lines in the file view and list them in the hints panel.
+  function hintsByFile(hints) {
+    const out = new Map();
+    for (const hint of Array.isArray(hints) ? hints : []) {
+      if (!isRecord(hint) || !text(hint.file)) continue;
+      const entry = out.get(hint.file) || { file: hint.file, lines: new Set(), items: [] };
+      const line = Number(hint.line);
+      if (Number.isInteger(line) && line > 0) entry.lines.add(line);
+      entry.items.push({ kind: text(hint.kind), line, excerpt: text(hint.excerpt) });
+      out.set(hint.file, entry);
+    }
+    return out;
+  }
+
+  // Split file content into lines and say which are flagged. The page decides how to render them (the
+  // model stays markup-free). Joining the `text` fields with "\n" gives back the content unchanged:
+  // nothing is rewritten, only marked.
+  function flagLines(content, lines) {
+    const flagged = lines instanceof Set ? lines : new Set(Array.isArray(lines) ? lines : []);
+    return text(content).split('\n').map((line, index) => ({ text: line, flagged: flagged.has(index + 1) }));
+  }
+
   const api = {
+    hintsByFile,
+    flagLines,
+    classifyAgentAdmission,
+    agentCheckRows,
+    agentMissing,
     classifyAdmission,
     checkRows,
     normalizeItems,

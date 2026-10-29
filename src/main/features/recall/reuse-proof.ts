@@ -180,7 +180,11 @@ export function reuseProofProvesTransfer(
   if (!receiptId || proof.receiptId !== receiptId) return false;
   if (proof.boundary !== 'real') return false;
   if (proof.status === 'rejected') return false;
+  // version 不留可选分支：ReuseProvenAsset 落盘与读取（isProvenAsset）都要求
+  // 非空字符串，`!proven.version` 永不可达——留着只会掩盖「必须精确同版」的
+  // 判据（proof-service 侧 reusedRefs 原文的可选版本宽松匹配不适用于这里，
+  // cloud proof 在落盘时已把版本定型为必填）。
   return proof.provenAssets.some((proven) => assetVersions.some((asset) => (
-    proven.assetId === asset.assetId && (!proven.version || proven.version === asset.version)
+    proven.assetId === asset.assetId && proven.version === asset.version
   )));
 }

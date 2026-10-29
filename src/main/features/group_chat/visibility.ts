@@ -35,13 +35,13 @@ export interface ChatUseSelection {
 export interface RecallMessageCitation {
   asset_id: string;
   title: string;
-  type: 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
+  type: 'cognition' | 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
   version: string;
   scope: string;
   projection_id: string;
   forecast_id?: string;
   match_score?: number;
-  match_method: 'semantic' | 'ontology' | 'semantic_ontology' | 'recency_fallback' | 'manual';
+  match_method: 'semantic' | 'ontology' | 'semantic_ontology' | 'recency_fallback' | 'manual' | 'standing_preference';
 }
 
 /** Immutable snapshot of one visible message referenced from another task.
@@ -116,6 +116,7 @@ export interface GroupMessageMetrics {
 }
 
 export interface GroupMessage {
+  terminal_status?: 'completed' | 'failed' | 'waiting_input';
   /** Stable per-message id (not jsonl line index). Used by visibility +
    * dedupe. */
   id: string;
@@ -125,6 +126,18 @@ export interface GroupMessage {
   from: string;
   /** Recipient actor ids (resolved by router). */
   to: string[];
+  /** Per-message A2A routing fact (T1.3). `to` cannot carry this: an A2A peer is
+   *  an account, not a local actor, and `to: ['user']` is written for every
+   *  message either way. Legacy rows have no field — consumers must show an
+   *  unknown/coarse state instead of fabricating a recipient from the session
+   *  marker, which only describes the exchange, not this message. */
+  a2a?: {
+    visibility: 'local' | 'cross';
+    /** Stable peer account id this message was addressed to (cross only). */
+    recipient_user?: string;
+    /** Display name captured at send time; presentation only, never authority. */
+    recipient_name?: string;
+  };
   /** Tokens that didn't resolve to any actor — passed through for UI. */
   unknown_mentions?: string[];
   /** P3394 approval gates created instead of immediately waking an Agent. */
@@ -302,10 +315,12 @@ export interface GroupMessage {
    * CognitionSaveReceipt 同步扩枚举。上面的 teaching_receipts 字段仅作历史
    * 数据容忍保留（新消息不再写入，渲染层也不再消费）。 */
   cognition_save_receipts?: Array<{
-    target: 'asset' | 'candidate';
+    target: 'asset' | 'candidate' | 'ontology';
+    moduleId?: string;
+    version?: number;
     id: string;
     summary: string;
-    outcome: 'created' | 'already-confirmed' | 'pending-review' | 'merged' | 'fused-update-pending' | 'taught-pending-review';
+    outcome: 'created' | 'already-confirmed' | 'pending-review' | 'merged' | 'fused-update-pending' | 'taught-pending-review' | 'ontology-saved' | 'ontology-pending';
   }>;
   /** Commander-requested marketplace installs. The model can search the
    * official marketplace and request a user decision, but the install only
@@ -460,16 +475,19 @@ export async function appendVisible(
   projectIdHint?: string | null,
   externalActorIds: Iterable<string> = [],
   authoritativeExecutionConfigs?: ActorExecutionConfigs,
+  isCurrent?: () => boolean,
 ): Promise<void> {
   const layout = conversationLayout(uid, cid, projectIdHint);
   fs.mkdirSync(layout.visibilityDir, { recursive: true });
   for (const actorId of actorIds) {
+    if (isCurrent && !isCurrent()) return;
     if (actorId === USER_ID) continue;
     if (!isVisibleTo(actorId, msg)) continue;
     try {
       await appendJsonlAtomic<GroupMessage>(
         layout.visibilityFile(actorId),
         projectMessageForActorSlice(actorId, msg, externalActorIds, authoritativeExecutionConfigs),
+        { isCurrent },
       );
     } catch (err) {
       log.warn(

@@ -30,6 +30,8 @@ import {
   genId12, nowIso, readJson, writeJson, safeId,
 } from '../../storage';
 import { createLogger } from '../../logger';
+import { t } from '../../i18n';
+import { a2aPeerAssistantActorId } from '../a2a/extensions';
 import { logErrorRef, maskId } from '../../util/log-redact';
 import { isCogSeedConversationDeletingOrDeleted } from '../cogseed_backend/conversation-operation-guard';
 
@@ -447,6 +449,7 @@ async function writeMembers(
   cid: string,
   m: MembersFile,
   projectIdHint?: string | null,
+  isCurrent?: () => boolean,
 ): Promise<boolean> {
   // members.json races conversation deletion exactly like state.json: a roster
   // growth that lands while an actor unwinds after a stop can arrive after
@@ -464,7 +467,7 @@ async function writeMembers(
   }
   ensureGroupDir(uid, cid, projectIdHint);
   try {
-    await writeJson(file, m);
+    await writeJson(file, m, isCurrent);
   } catch (err) {
     // Deletion can purge the directory between the mkdir above and the atomic
     // tmp-file open. The destination is gone, so this is the owner leaving, not
@@ -517,13 +520,15 @@ export async function addMember(
   cid: string,
   actor: Omit<Actor, 'joined_at'>,
   projectIdHint?: string | null,
+  isCurrent?: () => boolean,
 ): Promise<boolean> {
   return _stateLock(uid, cid).runExclusive(async () => {
     const members = await readMembers(uid, cid, projectIdHint);
+    if (isCurrent && !isCurrent()) return false;
     if (members.actors.find((a) => a.id === actor.id)) return false;
     const next: Actor = { ...actor, joined_at: nowIso() };
     members.actors.push(next);
-    const persisted = await writeMembers(uid, cid, members, projectIdHint);
+    const persisted = await writeMembers(uid, cid, members, projectIdHint, isCurrent);
     if (!persisted) return false;
     log.info('member joined', {
       user_id: maskId(uid),
@@ -540,9 +545,10 @@ export async function seedReservedActors(
   uid: string,
   cid: string,
   projectIdHint?: string | null,
+  isCurrent?: () => boolean,
 ): Promise<void> {
-  await addMember(uid, cid, { kind: 'commander', id: COMMANDER_ID, name: 'Commander' }, projectIdHint);
-  await addMember(uid, cid, { kind: 'user', id: USER_ID, name: 'User' }, projectIdHint);
+  await addMember(uid, cid, { kind: 'commander', id: COMMANDER_ID, name: 'Commander' }, projectIdHint, isCurrent);
+  await addMember(uid, cid, { kind: 'user', id: USER_ID, name: 'User' }, projectIdHint, isCurrent);
 }
 
 export async function findActor(uid: string, cid: string, actorId: string): Promise<Actor | null> {
@@ -561,6 +567,61 @@ export async function ensureAgentMember(
 ): Promise<boolean> {
   if (!safeId(agentId) || RESERVED_IDS.has(agentId)) return false;
   return addMember(uid, cid, { kind: 'agent', id: agentId, ...(name ? { name } : {}) });
+}
+
+/** T6 authoritative contact-name refresh. Match the existing visitor and outbound
+ * assistant identities, never display names. Shares the member/state mutex with joins
+ * and commander markers, preserves every other field and never edits messages.
+ * The T3 session fence also reaches the atomic storage commit. */
+export async function refreshContactNamesInMembers(
+  userId: string,
+  contacts: ReadonlyArray<{ accountId: string; name: string }>,
+  isCurrent: () => boolean,
+): Promise<number> {
+  if (!safeId(userId) || !isCurrent()) return 0;
+  const names = new Map<string, string>();
+  for (const row of contacts) {
+    if (!safeId(row.accountId) || !row.name) continue;
+    names.set(`a2a_${row.accountId}`, row.name);
+    names.set(a2aPeerAssistantActorId(row.accountId), t('a2a.source_assistant', { name: row.name }));
+  }
+  if (!names.size) return 0;
+  const indexFiles = [path.join(userChatsDir(userId), '_index.json'),
+    ...listProjectIds(userId).map(pid => projectChatIndexFile(userId, pid))];
+  const cids = new Set<string>();
+  for (const file of indexFiles) {
+    const data = await readJson<unknown>(file);
+    if (!isCurrent()) return 0;
+    const items = Array.isArray(data) ? data : (data as { items?: unknown[] })?.items;
+    for (const item of items || []) {
+      const cid = (item as { conversation_id?: string })?.conversation_id;
+      if (cid && safeId(cid)) cids.add(cid);
+    }
+  }
+  let touched = 0;
+  for (const cid of cids) {
+    if (!isCurrent()) break;
+    const changed = await _stateLock(userId, cid).runExclusive(async () => {
+      const file = conversationLayout(userId, cid).membersFile;
+      if (!isCurrent() || !fs.existsSync(file)) return false;
+      // Read the persisted object to retain unknown member/file metadata too.
+      const members = await readJson<MembersFile>(file);
+      if (!isCurrent() || !Array.isArray(members?.actors)) return false;
+      let changed = false;
+      members.actors = members.actors.map(actor => {
+        const name = names.get(actor.id);
+        if (!name || actor.name === name) return actor;
+        changed = true;
+        return { ...actor, name };
+      });
+      if (!changed) return false;
+      const canCommit = () => isCurrent() && fs.existsSync(file);
+      if (!canCommit()) return false;
+      return writeMembers(userId, cid, members, undefined, canCommit);
+    });
+    if (changed) touched += 1;
+  }
+  return touched;
 }
 
 /** Sync an agent's display name into every conversation roster that already

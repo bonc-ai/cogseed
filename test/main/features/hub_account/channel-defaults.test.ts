@@ -33,7 +33,7 @@ describe('hub channel-aware defaults', () => {
     expect(resolveHubApiBase('', 'release')).toBe(RELEASE_HUB_API_BASE);
   });
 
-  // 打包产物拿到真实 Hub 地址的唯一通道（见 docs/release-scan-remediation-20260923.md #5）。
+  // 打包产物拿到真实 Hub 地址的唯一通道。
   it('uses the origin baked in at package time for release builds', () => {
     expect(resolveHubApiBase(undefined, 'release', 'https://hub.example.test/'))
       .toBe('https://hub.example.test');

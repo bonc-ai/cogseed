@@ -1,0 +1,29 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.seo.tech.audit
+  name: seo-tech-audit
+  version: 1.0.0
+  description: 'Diagnose technical SEO from seo-crawl page data, emitting bucketed
+    findings (indexability/canonical/title+description/heading hierarchy/structured
+    data/image alt/mobile/HTTPS/robots) and a health score, each with evidence, a
+    leading indicator and a failure criterion; For: ''audit '
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: python
+    scripts:
+    - scripts/audit.py
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

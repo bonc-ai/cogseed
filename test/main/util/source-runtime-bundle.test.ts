@@ -22,7 +22,7 @@ const sourceRuntime = require('../../../scripts/prepare-source-runtime.cjs') as 
   ): boolean;
   copyRuntimeBundle(source: string, destination: string): void;
   parseVariant(argv: readonly string[]): string;
-  parseCogSeedWorktreeVariant(argv: readonly string[]): string;
+  parseCogSeedWorktreeVariant(argv: readonly string[], packageMeta?: { cogseedSourceRuntimeVariant: string }): string;
 };
 
 const temporaryRoots: string[] = [];
@@ -201,10 +201,10 @@ describe('macOS source runtime bundle contract', () => {
   });
 
   it('locks the executable bundle-preparation entry to cogseed', () => {
-    expect(sourceRuntime.parseCogSeedWorktreeVariant(['--variant=cogseed']))
+    expect(sourceRuntime.parseCogSeedWorktreeVariant(['--variant=cogseed'], { cogseedSourceRuntimeVariant: 'cogseed' }))
       .toBe('cogseed');
-    expect(() => sourceRuntime.parseCogSeedWorktreeVariant(['--variant=cognition']))
-      .toThrow('locked to the cogseed runtime');
+    expect(() => sourceRuntime.parseCogSeedWorktreeVariant(['--variant=cognition'], { cogseedSourceRuntimeVariant: 'cogseed' }))
+      .toThrow('locked to cogseed');
   });
 
   it('rejects a missing path file rather than guessing outside Electron dist', () => {

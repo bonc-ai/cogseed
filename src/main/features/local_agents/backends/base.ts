@@ -100,6 +100,11 @@ export interface BackendRunOptions {
    *  non-idle backend event). Read by the idle-kill watchdog; unset
    *  means no activity tracking and idle-kill stays off. */
   lastEventAt?: () => number;
+  /** Consulted by this backend's kill watchdog when a deadline fires; return
+   *  true to accept the deadline as a promotion and leave the child running.
+   *  The runner supplies it only when it can take ownership of the surviving run
+   *  (record + drain + finalize); with no callback every deadline still kills. */
+  onDeadline?: (kind: 'wall' | 'idle', idleMs: number, child: ChildProcessWithoutNullStreams) => boolean;
   /** Per-backend idle threshold override (ms). Read by `runner.ts`'s
    *  idle-heartbeat to decide when to emit `{type:'idle'}` events. When
    *  unset the runner uses its own default (90 s; configurable via
@@ -114,6 +119,10 @@ export interface BackendRunOptions {
     sessionId: string; contextId?: string; readOnlyRoots: string[]; writableRoots: string[];
     permissionMode: string; receiptId: string;
   };
+  /** `none` means the run must expose no tools at all (no shell/files/skills/
+   *  MCP). Used for analyses whose prompt contains user source text. Backends
+   *  that cannot guarantee a zero-tool surface must refuse the run. */
+  toolPolicy?: CliToolPolicy;
   /** cogseed-bridge injection (plan §D — set by runner.ts when a bridge
    *  host is live for this run). Backends that support adding an MCP
    *  server pass the config through (claude: `--mcp-config`; codex:
@@ -157,6 +166,47 @@ export class StderrTail {
   toString(): string {
     return this.chunks.join('');
   }
+}
+
+/** Sandbox posture a backend must apply for a host-validated run.
+ *
+ *  The permission-mode vocabulary belongs to the host (`LocalExecMode` plus the
+ *  internal `read-only` markers), so a backend must never interpret the raw
+ *  string on its own. Two rules keep this honest:
+ *
+ *  1. **Only `read-only` narrows.** Review / scan / import runs set it because
+ *     the workspace must not change, and it is the one mode a spawned CLI can be
+ *     held to without an approval channel.
+ *  2. **Approval-bearing modes keep the granted scope, but must disclose.**
+ *     `workspace_approval` / `all_files_approval` / `ask` mean "ask me first",
+ *     yet a spawned CLI has no channel back to the chat UI: dropping its bypass
+ *     flags makes it block on an unanswerable prompt and the run hangs (see
+ *     `HERMES_YOLO_MODE` in `hermes.ts` and the `permission-request` rail event
+ *     in `claude.ts`). Until that bridge exists, `postureIsApprovalFallback()`
+ *     tells callers to surface the grant instead of leaving it silent. */
+export type CliSandboxPosture = 'read-only' | 'full-access';
+
+export type CliToolPolicy = 'default' | 'none';
+
+export function resolveCliToolPolicy(
+  value: string | undefined | null,
+): CliToolPolicy {
+  return String(value ?? '').trim() === 'none' ? 'none' : 'default';
+}
+
+export function resolveCliSandboxPosture(
+  permissionMode: string | undefined | null,
+): CliSandboxPosture {
+  return String(permissionMode ?? '').trim() === 'read-only' ? 'read-only' : 'full-access';
+}
+
+/** True when full access is an artifact of the missing approval bridge rather
+ *  than something the user granted (`all_files_auto` / `full`). */
+export function postureIsApprovalFallback(
+  permissionMode: string | undefined | null,
+): boolean {
+  const mode = String(permissionMode ?? '').trim();
+  return mode === 'workspace_approval' || mode === 'all_files_approval' || mode === 'ask';
 }
 
 export function executionContextEnv(context: BackendRunOptions['executionContext']): Record<string, string> | undefined {
@@ -463,21 +513,41 @@ export function levelOrInfo(raw: unknown): 'debug' | 'info' | 'warn' | 'error' {
  *     Long quiet tool calls are real (observed ~10 min for a model
  *     download), so callers keep this comfortably above them.
  *
- * On fire: SIGTERM, then SIGKILL after 10 s. The backend's close handler
- * reads `fired()` to map the exit to `done({status:'timeout'})`, and
- * `reason()` for the error text — worded inside the `isTransientError`
- * timeout family so plan-step retry can resume the session.
+ * On fire: SIGTERM, then SIGKILL after 10 s — UNLESS `onDeadline` accepts the
+ * deadline as a promotion (returns true), in which case the child is left
+ * running and `promoted()` reports it. The backend's close handler reads
+ * `fired()` to map the exit to `done({status:'timeout'})`, `promoted()` to map
+ * it to the background-run outcome instead, and `reason()` for the error text —
+ * worded inside the `isTransientError` timeout family so plan-step retry can
+ * resume the session.
  */
 export function armKillWatchdog(
   child: ChildProcessWithoutNullStreams,
-  opts: { timeoutMs: number; idleKillMs?: number; lastEventAt?: () => number },
-): { fired: () => 'wall' | 'idle' | null; reason: () => string; disarm: () => void } {
+  opts: {
+    timeoutMs: number;
+    idleKillMs?: number;
+    lastEventAt?: () => number;
+    /** Consulted once, when a deadline fires. Return true to accept the
+     *  deadline as a promotion and leave the child alive; anything else keeps
+     *  the kill path. Receives the child so the caller can record its pid and
+     *  keep a way to stop it later — a promoted run outlives this turn, so
+     *  nothing else can reach it. Must be synchronous — it runs inside the poll
+     *  tick. */
+    onDeadline?: (kind: 'wall' | 'idle', idleMs: number, child: ChildProcessWithoutNullStreams) => boolean;
+  },
+): {
+  fired: () => 'wall' | 'idle' | null;
+  promoted: () => boolean;
+  reason: () => string;
+  disarm: () => void;
+} {
   const startedAt = Date.now();
   const idleKillMs = opts.idleKillMs && opts.idleKillMs > 0 && opts.lastEventAt
     ? opts.idleKillMs
     : 0;
   let firedKind: 'wall' | 'idle' | null = null;
   let firedIdleMs = 0;
+  let promotedAt: number | null = null;
   let hardKill: NodeJS.Timeout | null = null;
 
   const onClose = () => {
@@ -515,7 +585,14 @@ export function armKillWatchdog(
     }
     if (firedKind) {
       clearInterval(ticker);
-      kill();
+      // A deadline is a decision point, not automatically a kill: the caller may
+      // accept it as a promotion (the child keeps running as a background run).
+      // Anything else — no callback, or an explicit false — keeps the kill path.
+      if (opts.onDeadline && opts.onDeadline(firedKind, firedIdleMs, child) === true) {
+        promotedAt = Date.now();
+      } else {
+        kill();
+      }
     }
   }, tickMs);
   if (typeof ticker.unref === 'function') ticker.unref();
@@ -523,6 +600,7 @@ export function armKillWatchdog(
 
   return {
     fired: () => firedKind,
+    promoted: () => promotedAt !== null,
     reason: () => (
       firedKind === 'idle'
         ? `timed out: no activity for ${firedIdleMs}ms (idle cap ${idleKillMs}ms)`

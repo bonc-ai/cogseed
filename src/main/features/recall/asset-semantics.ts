@@ -132,7 +132,7 @@ export function resolveDefaultUsePolicy(
   if (asset.status !== 'active') return 'never';
   switch (asset.maturity) {
     case 'seed':
-      // Candidate 档：同作用域都不默认使用，跨作用域禁止。
+      // 尚未验证：不自动使用；查阅和明确选择由 runtime 单独判定。
       return 'never';
     case 'bud':
       // User Confirmed / Unverified：用户确认了内容，不代表效果已验证。

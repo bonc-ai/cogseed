@@ -12,6 +12,7 @@ import { cogseedKbManager } from './cogseed-kb-store';
 import { rewriteQuery } from '../transcript_query_rewrite';
 import { isQueryRewriteEnabled } from '../transcript_glossary';
 import { createLogger } from '../../logger';
+import { getWorkspacePath } from '../user_workspace';
 import { createCogSeedTask, listCogSeedSessions, listCogSeedTasks, purgeCogSeedArchivedTasks, readCogSeedSession, readCogSeedTask, readCogSeedTaskByRequestId } from './task-store';
 import { readCogSeedCoordination } from './coordinator';
 import { cogseedCollaborationStore } from './collaboration-store-adapter';
@@ -31,6 +32,7 @@ import {
   type CogSeedWorktreeCreateInput,
   type CogSeedWorktreeRemoveInput,
 } from './worktree-manager';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import {
@@ -128,7 +130,9 @@ export type CogSeedRendererTitleKey =
   | 'run_center.task_kind_commander_turn'
   | 'run_center.task_kind_agent_turn'
   | 'run_center.task_kind_worker_turn'
-  | 'run_center.workflow_step';
+  | 'run_center.workflow_step'
+  /** C-09：空/不安全 stepId 的占位步骤标题（不可操作）。 */
+  | 'run_center.workflow_step_unavailable';
 
 export interface CogSeedRendererActionSet {
   start: boolean;
@@ -150,6 +154,8 @@ export interface CogSeedRendererSessionSummary {
   updatedAt: string;
   taskCount: number;
   activeTaskCount: number;
+  /** Tasks waiting for the human: not executing, so never counted as active. */
+  waitingTaskCount: number;
   latestStatus: CogSeedTaskStatus | 'idle';
   hasRecovery: boolean;
   executionId?: string;
@@ -259,6 +265,21 @@ export interface CogSeedRendererTimelineEvent {
   toolName?: string;
   isError?: boolean;
   errorCode?: string;
+  failureReason?: string;
+}
+
+export interface CogSeedRendererProgressSnapshot {
+  eventId: string;
+  taskId: string;
+  createdAt: string;
+  labelKey: `run_center.progress_${string}`;
+  toolName?: string;
+}
+
+export interface CogSeedRendererRecoveryAdvice {
+  kind: 'none' | 'resume' | 'retry' | 'open-task' | 'configure-model' | 'inspect';
+  reasonKey: `run_center.recovery_${string}`;
+  taskId?: string;
 }
 
 export interface CogSeedRendererWorkflowSummary {
@@ -276,6 +297,8 @@ export interface CogSeedRendererWorkflowSummary {
     status: string;
     dependsOn: string[];
     attemptCount: number;
+    /** C-09：只有安全非空 stepId 的步骤才可操作；占位步骤必须 actionable:false。 */
+    actionable: boolean;
     latestAttemptStatus?: string;
     failureCode?: string;
   }>;
@@ -328,6 +351,10 @@ export interface CogSeedRendererCollaborationSnapshot {
     lastEventAt?: string;
   };
   timeline: CogSeedRendererTimelineEvent[];
+  /** R-08：与失败原因相互独立的"最后进展"（只用事件元数据，不含原始文本/路径）。 */
+  lastProgress?: CogSeedRendererProgressSnapshot;
+  /** R-04 / R-10：与失败原因相互独立的"恢复类别"（安全 key，不含原始错误文本）。 */
+  recoveryAdvice?: CogSeedRendererRecoveryAdvice;
   actions: CogSeedRendererActionSet;
 }
 
@@ -496,8 +523,30 @@ function pathIsWithin(root: string, candidate: string): boolean {
   return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
 }
 
-function assertSpaceWorkspacePath(userId: string, spaceId: string, workingDir: string): string {
-  if (!pathIsWithin(spaceWorkspaceDir(userId, spaceId), workingDir)) {
+/**
+ * 空间任务允许的工作根：受管空间工作区（`spaces/<空间>/workspace`），以及该空间
+ * 绑定的本地项目目录（Codex 式原地工作区）。
+ *
+ * 执行隔离的语义不变——任务的 workingDir 必须是**这个空间自己声明过的根**之一，
+ * 不能是任意目录；只是"声明过的根"现在有两种形态：CogSeed 家里的受管工作树，
+ * 或用户在创建空间时亲手绑定的项目目录。
+ */
+async function spaceWorkRoots(userId: string, spaceId: string): Promise<string[]> {
+  const roots = [spaceWorkspaceDir(userId, spaceId)];
+  try {
+    const { getSpace } = await import('../spaces');
+    const space = await getSpace(userId, spaceId);
+    if (space?.project_dir) roots.push(space.project_dir);
+  } catch { /* 空间元数据读不到 → 只认受管工作区（保守回退） */ }
+  return roots;
+}
+
+function pathIsWithinAnyRoot(roots: readonly string[], candidate: string): boolean {
+  return roots.some((root) => pathIsWithin(root, candidate));
+}
+
+async function assertSpaceWorkspacePath(userId: string, spaceId: string, workingDir: string): Promise<string> {
+  if (!pathIsWithinAnyRoot(await spaceWorkRoots(userId, spaceId), workingDir)) {
     throw new Error('E_RUN_CENTER_SPACE_WORKSPACE_MISMATCH');
   }
   return workingDir;
@@ -552,8 +601,15 @@ function normalizeWorktreeRemoveInput(payload: unknown): CogSeedWorktreeRemoveIn
 
 
 
-const TERMINAL_TASK_STATUSES = new Set<CogSeedTaskStatus>(['completed', 'failed', 'cancelled']);
-const ACTIVE_TASK_STATUSES = new Set<CogSeedTaskStatus>(['created', 'queued', 'running', 'waiting_user']);
+import {
+  COGSEED_ACTIVE_TASK_STATUSES,
+  COGSEED_ATTENTION_TASK_STATUSES,
+  COGSEED_TERMINAL_TASK_STATUSES,
+} from './task-status-buckets';
+
+const TERMINAL_TASK_STATUSES = new Set<CogSeedTaskStatus>(COGSEED_TERMINAL_TASK_STATUSES);
+const ACTIVE_TASK_STATUSES = new Set<CogSeedTaskStatus>(COGSEED_ACTIVE_TASK_STATUSES);
+const ATTENTION_TASK_STATUSES = new Set<CogSeedTaskStatus>(COGSEED_ATTENTION_TASK_STATUSES);
 
 function rendererSafeIdentifier(value: unknown, max = 120): string {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -738,6 +794,7 @@ function sessionSummary(
     updatedAt: [session.updatedAt, ...tasks.map((task) => task.updatedAt)].sort().at(-1) ?? session.updatedAt,
     taskCount: tasks.length,
     activeTaskCount: tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status)).length,
+      waitingTaskCount: tasks.filter((task) => task.status === 'waiting_user').length,
     latestStatus: latest?.status ?? 'idle',
     hasRecovery: tasks.some((task) => task.status === 'recoverable'),
     ...(latestSummary?.executionId ? { executionId: latestSummary.executionId } : {}),
@@ -767,13 +824,29 @@ function rendererSafeEventSummary(event: CogSeedTaskEvent): string {
   }
 }
 
+function rendererSafeFailureReason(event: CogSeedTaskEvent): string {
+  if (!['task.failed', 'task.recoverable', 'tool.finished'].includes(event.type)) return '';
+  const raw = [event.payload.error, event.payload.reason, event.payload.message]
+    .find((value) => typeof value === 'string' && value.trim());
+  if (!raw) return '';
+  return String(raw)
+    .replace(/\s+/g, ' ')
+    .replace(/(?:\/Users|\/private\/var|\/var|\/tmp)\/[^\s'"<>)]*/g, '[path]')
+    .replace(/[A-Za-z]:\\[^\s'"<>)]*/g, '[path]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(token|secret|api[_-]?key)\s*[:=]\s*[^\s'"<>)]*/gi, '$1=[redacted]')
+    .trim()
+    .slice(0, 240);
+}
+
 function timelineSummary(event: CogSeedTaskEvent): CogSeedRendererTimelineEvent {
   const toolName = (event.type === 'tool.started' || event.type === 'tool.finished')
     ? rendererSafeIdentifier(event.payload.toolName || event.payload.name)
     : '';
   const errorCode = (event.type === 'task.failed' || event.type === 'task.recoverable' || event.type === 'tool.finished')
-    ? rendererSafeIdentifier(event.payload.errorCode)
+    ? rendererSafeIdentifier(event.payload.errorCode || event.payload.code)
     : '';
+  const failureReason = rendererSafeFailureReason(event);
   return {
     eventId: event.eventId,
     taskId: event.taskId,
@@ -785,7 +858,59 @@ function timelineSummary(event: CogSeedTaskEvent): CogSeedRendererTimelineEvent 
     ...(toolName ? { toolName } : {}),
     ...(event.type === 'tool.finished' && typeof event.payload.isError === 'boolean' ? { isError: event.payload.isError } : {}),
     ...(errorCode ? { errorCode } : {}),
+    ...(failureReason ? { failureReason } : {}),
   };
+}
+
+/** R-10：这些失败码都是"超时/空闲/运行时中断"形状，可重试或续跑，而不是未知失败。 */
+const TIMEOUT_ERROR_CODES = new Set([
+  'coordinator_agent_idle',
+  'idle_timeout',
+  'provider_timeout',
+  'provider_no_first_event',
+  'runtime_stream_ended',
+  'runtime_worker_error',
+]);
+
+/** R-08：最新一条**安全**进展（工具完成 > 工具开始 > 模型输出 > 进度 > 任务开始/排队）。 */
+function progressSnapshot(events: CogSeedRendererTimelineEvent[]): CogSeedRendererProgressSnapshot | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    const base = { eventId: event.eventId, taskId: event.taskId, createdAt: event.createdAt };
+    if (event.type === 'tool.finished' && event.isError !== true) {
+      return { ...base, labelKey: 'run_center.progress_tool_finished', ...(event.toolName ? { toolName: event.toolName } : {}) };
+    }
+    if (event.type === 'tool.started') {
+      return { ...base, labelKey: 'run_center.progress_tool_started', ...(event.toolName ? { toolName: event.toolName } : {}) };
+    }
+    if (event.type === 'model.delta') return { ...base, labelKey: 'run_center.progress_model_delta' };
+    if (event.type === 'progress') return { ...base, labelKey: 'run_center.progress_update' };
+    if (event.type === 'task.started') return { ...base, labelKey: 'run_center.progress_task_started' };
+    if (event.type === 'task.queued') return { ...base, labelKey: 'run_center.progress_task_queued' };
+  }
+  return undefined;
+}
+
+/** R-04 / R-10：恢复类别只按**任务状态 + 安全错误码**判定，不回读原始错误文本。 */
+function recoveryAdviceFor(
+  selected: CogSeedTaskRecord,
+  related: CogSeedTaskRecord[],
+): CogSeedRendererRecoveryAdvice | undefined {
+  const recoverable = related.find((task) => task.status === 'recoverable');
+  if (recoverable) return { kind: 'resume', reasonKey: 'run_center.recovery_resume_available', taskId: recoverable.taskId };
+  const degradedChild = related.find((task) => task.taskId !== selected.taskId && ['failed', 'recoverable'].includes(task.status));
+  if (degradedChild && selected.status !== 'failed') {
+    return { kind: 'inspect', reasonKey: 'run_center.recovery_child_degraded', taskId: degradedChild.taskId };
+  }
+  const failed = [selected, ...related].find((task) => task.status === 'failed' && task.errorCode);
+  if (failed?.errorCode && TIMEOUT_ERROR_CODES.has(failed.errorCode)) {
+    return { kind: 'retry', reasonKey: 'run_center.recovery_timeout_retry', taskId: failed.taskId };
+  }
+  if (failed?.errorCode === 'model_preflight') {
+    return { kind: 'configure-model', reasonKey: 'run_center.recovery_configure_model', taskId: failed.taskId };
+  }
+  if (selected.status === 'failed') return { kind: 'open-task', reasonKey: 'run_center.recovery_open_task', taskId: selected.taskId };
+  return undefined;
 }
 
 function normalizeProjectionInput(payload: unknown): { sessionId?: string; taskId?: string } {
@@ -917,7 +1042,15 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       executionKind: localCli ? 'local-cli' : 'cogseed-native',
       ...(localCli ? { localCli } : {}),
       ...(executionContext.skillList !== undefined ? { allowedSkillIds: executionContext.skillList } : {}),
-      context: [...buildCogSeedAgentRuntimeContext(executionContext), ...(input.context ?? [])],
+      context: [
+        ...buildCogSeedAgentRuntimeContext(executionContext),
+        ...(input.context ?? []),
+        // A2A 接待（D-21/FR-32）：接收方在来访会话里的私下指示进入本次运行上下文，
+        // 只对「接收方 + active」生效，发起方与普通会话不受影响。
+        ...(await (await import('../a2a/instructions'))
+          .loadInstructionContext(userId, input.conversationId)
+          .then((item) => (item ? [item] : []))),
+      ],
     };
   };
 
@@ -956,7 +1089,7 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       if (!binding.exists || binding.spaceId !== task.spaceId) {
         throw new Error('E_RUN_CENTER_SPACE_MISMATCH');
       }
-      workingDir = assertSpaceWorkspacePath(
+      workingDir = await assertSpaceWorkspacePath(
         userId,
         task.spaceId,
         await resolveConversationWorkspace(userId, task.conversationId),
@@ -1050,24 +1183,49 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
           }
           if (!binding.exists) {
             const existingDirMatches = !!existing?.workingDir
-              && pathIsWithin(spaceWorkspaceDir(userId, spaceId), existing.workingDir);
+              && pathIsWithinAnyRoot(await spaceWorkRoots(userId, spaceId), existing.workingDir);
             if (!existingDirMatches) {
               throw new Error(existing ? 'CogSeed request ID payload conflict' : 'E_RUN_CENTER_SPACE_UNAVAILABLE');
             }
             workingDir = existing.workingDir;
           } else {
-            workingDir = assertSpaceWorkspacePath(
+            workingDir = await assertSpaceWorkspacePath(
               userId,
               spaceId,
               await resolveConversationWorkspace(userId, preparedInput.conversationId),
             );
           }
         }
+        // Run Center 自动建的会话不绑定用户工作区：留给 A2 按 run 建独立目录。
+        if (!workingDir && preparedInput.conversationId && (!needsConversation || deps.resolveConversationWorkspace)) {
+          workingDir = await resolveConversationWorkspace(userId, preparedInput.conversationId);
+        }
         const input: StartCogSeedTaskInput = {
           ...preparedInput,
           ...(workingDir ? { workingDir } : {}),
         };
         const controller = await controllerPromise;
+        // A2: a native run needs a working directory, otherwise it has no writable
+        // root and document-producing skills spin until `max_tool_rounds` with nothing
+        // written (P2-1). Default to the user's own workspace — a plain writable
+        // folder, NOT a Git repo (same shape as Orkas' userWorkSpace).
+        if (!input.workingDir
+          && (!input.executionKind || input.executionKind === 'cogseed-native')) {
+            // A3: give every run its own output directory so document-producing skills
+            // always have somewhere to write and the user can find the artifacts.
+            try {
+              const runDir = path.join(getWorkspacePath(userId), 'runs', input.requestId);
+              fs.mkdirSync(runDir, { recursive: true });
+              input.workingDir = runDir;
+            } catch { /* fall through to the A4 guard below */ }
+            // A4: never start a native run with no working directory — it would offer
+            // only read tools and spin to `max_tool_rounds` (P2-1). Fail with a reason
+            // the user can act on.
+            if (!input.workingDir) {
+              throw new Error('CogSeed run has no working directory: choose a workspace folder and retry.');
+            }
+        }
+
         if (existing?.status === 'created' && !existing.runtimeWorkerId && input.conversationId
           && !(await isConversationAvailable(userId, input.conversationId))) {
           const admitted = await admitTask(userId, input);
@@ -1378,14 +1536,14 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         statusCounts[summary.status] = (statusCounts[summary.status] ?? 0) + 1;
         if (summary.errorCode) errors.set(summary.errorCode, (errors.get(summary.errorCode) ?? 0) + 1);
       }
-      const activeTaskCount = summaries.filter((task) => ['created', 'queued', 'running', 'waiting_user'].includes(task.status)).length;
+      const activeTaskCount = summaries.filter((task) => ACTIVE_TASK_STATUSES.has(task.status)).length;
       return {
         schemaVersion: 1,
         generatedAt: new Date().toISOString(),
         taskCount: summaries.length,
         sessionCount: new Set(summaries.map((task) => task.sessionId)).size,
         activeTaskCount,
-        attentionTaskCount: summaries.filter((task) => task.status === 'failed' || task.status === 'recoverable' || task.status === 'waiting_user').length,
+        attentionTaskCount: summaries.filter((task) => ATTENTION_TASK_STATUSES.has(task.status)).length,
         sourceCounts,
         statusCounts,
         errorCodes: Array.from(errors, ([code, count]) => ({ code, count })).sort((left, right) => right.count - left.count || left.code.localeCompare(right.code)),
@@ -1623,20 +1781,28 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         ...(rendererSafeIdentifier(workflowRun?.phase, 80) ? { phase: rendererSafeIdentifier(workflowRun?.phase, 80) } : {}),
         childTaskIds: coordination?.childTaskIds
           ?? related.filter((task) => task.parentTaskId).map((task) => task.taskId),
-        steps: (workflowRun?.steps ?? []).map((step) => ({
-          stepId: step.id,
-          title: 'Workflow step',
-          titleKey: 'run_center.workflow_step',
-          actorId: rendererSafeIdentifier(step.actor_id) || null,
-          type: step.type,
-          status: step.status,
-          dependsOn: step.depends_on,
-          attemptCount: step.attempts?.length ?? 0,
-          ...(step.attempts?.at(-1)?.status ? { latestAttemptStatus: step.attempts.at(-1)!.status } : {}),
-          ...(step.attempts?.at(-1)?.failure_code
-            ? { failureCode: rendererSafeIdentifier(step.attempts.at(-1)!.failure_code) }
-            : {}),
-        })),
+        steps: (workflowRun?.steps ?? []).map((step) => {
+          // C-09：空/不安全 id 不能原样投影——前端会把它当可点目标，点下去没有任何东西。
+          // 归一成确定的占位步骤并标 actionable:false，渲染层据此不渲染动作、不派发 IPC。
+          const safeStepId = rendererSafeIdentifier(step.id, 120);
+          return {
+            stepId: safeStepId || 'workflow-step-unavailable',
+            title: 'Workflow step',
+            titleKey: safeStepId ? 'run_center.workflow_step' : 'run_center.workflow_step_unavailable',
+            actorId: rendererSafeIdentifier(step.actor_id) || null,
+            type: step.type,
+            status: step.status,
+            dependsOn: (step.depends_on ?? [])
+              .map((id) => rendererSafeIdentifier(id, 120))
+              .filter((id): id is string => Boolean(id)),
+            actionable: Boolean(safeStepId),
+            attemptCount: step.attempts?.length ?? 0,
+            ...(step.attempts?.at(-1)?.status ? { latestAttemptStatus: step.attempts.at(-1)!.status } : {}),
+            ...(step.attempts?.at(-1)?.failure_code
+              ? { failureCode: rendererSafeIdentifier(step.attempts.at(-1)!.failure_code) }
+              : {}),
+          };
+        }),
       };
       const reviews: CogSeedRendererReviewSummary[] = (workflowContext?.gates ?? []).map((gate) => ({
         gateId: gate.id,
@@ -1666,6 +1832,8 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       }));
       const hasSelectedWorkflowStep = workflow.steps.some((step) => step.stepId === selected.taskId);
       const primaryActions = taskActions(selected, hasSelectedWorkflowStep);
+      const lastProgress = progressSnapshot(timeline);
+      const advice = recoveryAdviceFor(selected, related);
       return {
         schemaVersion: 1,
         sessionId: session.sessionId,
@@ -1684,6 +1852,8 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
           ...(recoveryEvents.at(-1)?.createdAt ? { lastEventAt: recoveryEvents.at(-1)!.createdAt } : {}),
         },
         timeline,
+        ...(lastProgress ? { lastProgress } : {}),
+        ...(advice ? { recoveryAdvice: advice } : {}),
         actions: primaryActions,
       };
     },

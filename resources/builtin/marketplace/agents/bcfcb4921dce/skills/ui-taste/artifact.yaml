@@ -1,0 +1,27 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.taste
+  name: ui-taste
+  version: 1.0.0
+  description: Handle explicit anti-template taste challenges, expressive restyles,
+    brand visual theses, or focused critique across density, motion, domain-specific
+    signature, and high-quality judgment; ordinary design uses the compact executor.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

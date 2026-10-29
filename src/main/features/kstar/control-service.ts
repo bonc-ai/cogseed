@@ -351,7 +351,6 @@ async function upsertState(
       currentRequirementId: requirement.id,
       requirementJustClosed: undefined,
       taskComplete: false,
-      pendingTaskStart: undefined,
       updatedAt: now,
     };
     await replaceConversationTaskState(context.userId, state);
@@ -420,7 +419,6 @@ async function upsertState(
       currentRequirementId: nextRequirement.id,
       requirementJustClosed: requirement ? requirement.id : undefined,
       taskComplete: false,
-      pendingTaskStart: undefined,
       updatedAt: now,
     };
     await replaceConversationTaskState(context.userId, state);
@@ -690,7 +688,6 @@ async function abandon(
     currentRequirementId: undefined,
     requirementJustClosed: undefined,
     taskComplete: false,
-    pendingTaskStart: undefined,
     updatedAt: now,
   };
   await replaceConversationTaskState(context.userId, state);

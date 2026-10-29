@@ -53,7 +53,7 @@ describe('ipc/connectors renderer DTO', () => {
       setConnectorEnabled: vi.fn(),
     }));
     vi.doMock('../../../src/main/features/connectors/availability', () => ({
-      catalogWithAvailability: vi.fn((catalog) => catalog),
+      catalogWithAvailability: vi.fn((_uid, catalog) => catalog),
       isConnectorRuntimeEnabled: vi.fn(() => true),
     }));
 
@@ -82,7 +82,7 @@ describe('ipc/connectors renderer DTO', () => {
       setConnectorEnabled: vi.fn(),
     }));
     vi.doMock('../../../src/main/features/connectors/availability', () => ({
-      catalogWithAvailability: vi.fn((catalog) => catalog),
+      catalogWithAvailability: vi.fn((_uid, catalog) => catalog),
       isConnectorRuntimeEnabled: vi.fn(() => true),
     }));
 
@@ -158,7 +158,7 @@ describe('ipc/connectors renderer DTO', () => {
       setConnectorEnabled: vi.fn(),
     }));
     vi.doMock('../../../src/main/features/connectors/availability', () => ({
-      catalogWithAvailability: vi.fn((catalog) => catalog),
+      catalogWithAvailability: vi.fn((_uid, catalog) => catalog),
       isConnectorRuntimeEnabled: vi.fn(() => true),
     }));
 
@@ -187,7 +187,7 @@ describe('ipc/connectors renderer DTO', () => {
       setConnectorEnabled: vi.fn(),
     }));
     vi.doMock('../../../src/main/features/connectors/availability', () => ({
-      catalogWithAvailability: vi.fn((catalog) => catalog),
+      catalogWithAvailability: vi.fn((_uid, catalog) => catalog),
       isConnectorRuntimeEnabled: vi.fn(() => true),
     }));
     vi.doMock('../../../src/main/features/recall/source-removal', () => ({ recordRemovedConnector }));
@@ -216,7 +216,7 @@ describe('ipc/connectors renderer DTO', () => {
       setConnectorEnabled: vi.fn(),
     }));
     vi.doMock('../../../src/main/features/connectors/availability', () => ({
-      catalogWithAvailability: vi.fn((catalog) => catalog),
+      catalogWithAvailability: vi.fn((_uid, catalog) => catalog),
       isConnectorRuntimeEnabled: vi.fn(() => true),
     }));
     vi.doMock('../../../src/main/features/recall/source-removal', () => ({ recordRemovedConnector }));
@@ -226,5 +226,30 @@ describe('ipc/connectors renderer DTO', () => {
 
     expect(out).toEqual({ removed: false });
     expect(recordRemovedConnector).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('email settings DTO', () => {
+  it('returns an allowlisted endpoint while withholding credentials and arbitrary env fields', async () => {
+    const { _toClientInstanceForTest } = await import('../../../src/main/ipc/connectors');
+    const dto = _toClientInstanceForTest({ ...baseInstance({ kind: 'stdio', command: 'node', env: {
+      EMAIL_ADDRESS: 'person@acme.test', EMAIL_PASSWORD: 'private-password', EMAIL_IMAP_HOST: 'imap.acme.test',
+      EMAIL_IMAP_PORT: '143', EMAIL_IMAP_SECURITY: 'starttls', EMAIL_USERNAME: 'staff', EXTRA_SECRET: 'hidden-token',
+    } }), id: 'email-enterprise' });
+    expect(dto.email_settings).toEqual({ address: 'person@acme.test', has_saved_password: true, host: 'imap.acme.test', port: 143, security: 'starttls', username: 'staff' });
+    expect(JSON.stringify(dto)).not.toContain('private-password');
+    expect(JSON.stringify(dto)).not.toContain('hidden-token');
+  });
+  it.each(['email-qq', 'email-163', 'email-enterprise'])('reports saved credential presence without a secret or its length for %s', async id => {
+    const { _toClientInstanceForTest } = await import('../../../src/main/ipc/connectors');
+    const env = { EMAIL_ADDRESS: id === 'email-163' ? 'p@163.com' : 'p@qq.com', EMAIL_IMAP_HOST: 'imap.company.test',
+      EMAIL_IMAP_PORT: '993', EMAIL_IMAP_SECURITY: 'tls', EMAIL_PASSWORD: 'fixture-secret' };
+    const instance = { ...baseInstance({ kind: 'stdio', command: 'node', env }), id };
+    expect(_toClientInstanceForTest(instance).email_settings?.has_saved_password).toBe(true);
+    env.EMAIL_PASSWORD = '';
+    expect(_toClientInstanceForTest(instance).email_settings?.has_saved_password).toBe(false);
+    delete (env as any).EMAIL_PASSWORD;
+    expect(_toClientInstanceForTest(instance).email_settings?.has_saved_password).toBe(false);
   });
 });

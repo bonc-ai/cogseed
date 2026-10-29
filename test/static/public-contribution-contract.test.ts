@@ -15,7 +15,7 @@ const publicDocs = [
 
 // These are published sources, not a dependency on the private export policy.
 const uiSources = [
-  'dialogs', 'icons', 'ui-button', 'ui-card', 'ui-drawer', 'ui-empty', 'ui-form',
+  'context-menu', 'dialogs', 'icons', 'ui-button', 'ui-card', 'ui-drawer', 'ui-empty', 'ui-form',
   'ui-modal', 'ui-page-header', 'ui-segmented-control', 'ui-sidebar-tools', 'ui-status',
   'ui-structure', 'ui-tabs', 'ui-user-menu',
 ];

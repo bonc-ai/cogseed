@@ -240,6 +240,12 @@ describe('cognition inbox read model', () => {
       assets: [generated], latestDiffs: changed,
       skillUpgradeRejectedAssetIds: new Set(['A-skill']),
     })).map((entry) => entry.kind)).not.toContain('skill_upgrade_suggested');
+    // binding 读取降级（2026-10-01 质检 P-r1-13）：追平/拒绝状态未知，不能
+    // 反推成「待升版」——否则已追平/已拒绝的升级以假待办复活。
+    expect(buildCognitionInbox(input({
+      assets: [generated], latestDiffs: changed,
+      skillUpgradeUnknownAssetIds: new Set(['A-skill']),
+    })).map((entry) => entry.kind)).not.toContain('skill_upgrade_suggested');
   });
 
   it('flags a system-side template rewrite at low disturbance', () => {
@@ -352,3 +358,4 @@ describe('cognition inbox governance grouping (specs/010)', () => {
     expect(JSON.stringify(items)).toBe(before);
   });
 });
+

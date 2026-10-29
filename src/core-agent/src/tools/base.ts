@@ -7,6 +7,10 @@ const log = createLogger("tool-definitions");
 export type ToolContext = {
   workingDir?: string;
   signal?: AbortSignal;
+  /** Host-only handshake immediately before an irreversible atomic save.
+   * Once called, cancellation waits for this tool's real result/receipt.
+   * Preparation, approval and lock waits must remain cancellable. */
+  beginAtomicCommit?: () => void;
   /** Emit user-visible progress while a long-running tool is still executing. */
   emitProgress?: (progress: ToolProgress) => void;
   /** Arbitrary context data tools can read/write. */
@@ -30,6 +34,12 @@ export type ToolResultImage = {
   data: string;
   /** e.g. 'image/jpeg', 'image/png'. */
   mediaType: string;
+  /** Display name of the produced image, when the tool knows one. */
+  name?: string;
+  /** Read-only path to the image on disk. Carried into the text handle the model
+   *  receives once the image leaves the request (see `shared/tool-result-images.ts`),
+   *  so "externalized" still leaves a way to read it back. */
+  readonlyPath?: string;
 };
 
 /** Result returned from a tool execution. */

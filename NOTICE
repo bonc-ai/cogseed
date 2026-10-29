@@ -40,6 +40,12 @@ components distributed under the Apache License, Version 2.0:
 Each has its own local LICENSE file. The root MIT License does not relicense
 those components.
 
+The JSON extraction portion of extractJudgeObject in
+src/main/features/cognition_kernel/judge.ts is adapted from Mem0 and is
+licensed under Apache-2.0, not relicensed by the root MIT License.
+See LICENSES/Apache-2.0.txt and the adapted-source entry in
+THIRD_PARTY_NOTICES.md for the source version, copyright, and modifications.
+
 This product includes third-party software.  The complete list of
 third-party components, with their copyright and license information, is
 provided in the THIRD_PARTY_NOTICES.md file accompanying this distribution.

@@ -1,0 +1,11 @@
+name: ui-design-contract
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Create durable UIDesigner design contracts for multi-screen, brand, long-lived,
+  or conflicting-reference work across DESIGN.md, source-screen rules, tokens, keep/change/do-not-copy
+  boundaries, and implementation handoff; ordinary single-screen screenshot work stays
+  on the compact
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

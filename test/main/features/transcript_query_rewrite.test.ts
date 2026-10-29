@@ -1,5 +1,6 @@
+// 身份、发言与文件名均为合成测试样例；时间仅用于解析和顺序断言。
 /**
- * transcript_query_rewrite — 检索前 query 同义改写（方案 §五 P2-3 / §8.1-9）
+ * transcript_query_rewrite — 检索前 query 同义改写
  *
  * 守的不变量：可开关、只改低中风险、口癖（删字类）不参与、高危词一个字不改。
  */
@@ -45,9 +46,9 @@ describe('改写行为', () => {
   });
 
   it('上下文黑名单仍然生效（误伤保护在检索侧一样管用）', () => {
-    upsertEntry(uid, { wrong: 'fuping', correct: '傅平', contextDeny: ['扶贫'] });
-    expect(rewriteQuery(uid, '扶贫办 fuping').changed).toBe(false);
-    expect(rewriteQuery(uid, '同事 fuping').changed).toBe(true);
+    upsertEntry(uid, { wrong: 'roleaa', correct: '例甲', contextDeny: ['演练'] });
+    expect(rewriteQuery(uid, '演练场 roleaa').changed).toBe(false);
+    expect(rewriteQuery(uid, '同事 roleaa').changed).toBe(true);
   });
 });
 

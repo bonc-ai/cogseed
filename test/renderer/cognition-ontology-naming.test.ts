@@ -7,27 +7,26 @@ import { loadCognitionAssets } from './helpers/cognition-renderer';
 const rendererRoot = path.resolve(__dirname, '../../src/renderer');
 
 describe('Ontology navigation copy', () => {
-  it.each(['zh', 'en', 'ja', 'pt'] as const)('renders localized labels and scope on the real tree page (%s)', (locale) => {
+  it.each(['zh', 'en', 'ja', 'pt'] as const)('keeps localized ontology navigation while the tree is disabled (%s)', (locale) => {
     const translations = JSON.parse(
       fs.readFileSync(path.join(rendererRoot, 'locales', `${locale}.json`), 'utf8'),
     ) as Record<string, string>;
-    const page = loadCognitionAssets({}, { name: 'tree' }, {
+    const page = loadCognitionAssets({}, { name: 'overview' }, {
       t: (key: string) => translations[key] || key,
     });
     const rendered = page.render();
 
     expect(rendered).toContain(translations['cognition.tab_ontology']);
-    expect(rendered).toContain(translations['cognition.ontology_entry_title']);
-    expect(rendered).toContain(translations['cognition.ontology_entry_hint']);
-    const treeLabel = rendered.match(/<text\b[^>]*class="trunk-name"[^>]*>([\s\S]*?)<\/text>/)?.[1]
-      .replace(/<[^>]+>/g, '') || '';
-    expect(Array.from(treeLabel)).toEqual(Array.from(translations['cognition.ontology_tree_label']));
-    expect(translations['cognition.ontology_entry_hint']).toMatch(/ontolog|本体|オントロジー/i);
+    expect(rendered).toContain('data-id="tree"');
+    expect(rendered).toContain('aria-disabled="true"');
+    expect(rendered).not.toContain('class="trunk-name"');
   });
 
   it('uses the Ontology name in the embedded workspace header', () => {
-    const html = fs.readFileSync(path.join(rendererRoot, 'index.html'), 'utf8');
-    expect(html).toContain('data-i18n="personalOntology.title">本体</span>');
+    // 2026-10-07 旧停驻页退役：工作台标题不再来自 index.html 壳，改锚
+    // cognition-ontology.js 的 pageHeader 取词点（zh 兜底=本体）。
+    const source = fs.readFileSync(path.join(rendererRoot, 'modules', 'cognition-ontology.js'), 'utf8');
+    expect(source).toContain("text('title', '本体')");
   });
 
   it('keeps the selected ontology subpage during data rerenders and resets only on a new entry', () => {

@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 复用回执闭环：注入 → 回执 → reuse turn id → 终态证明绑定 → 资产可升档。
  *
@@ -76,7 +77,7 @@ async function bindProjection(projectionId: string, messageId: string) {
  *  所以这里保留 promote 后的原始成熟度，终态用例才能真正验证「升档」发生了。 */
 async function injectableAsset(seed: string, maturity?: 'transfer_validated') {
   const { candidates, assets } = await mods();
-  const saved = await candidates.saveRecallCandidate(USER, {
+  const saved = await createNightlyCandidateFixture(USER, {
     judgment: `改运行时边界前先写决策日志（${seed}）`,
     value: '让后续评审不必重建上下文',
     summary: '架构变更前先写决策日志',
@@ -324,7 +325,7 @@ describe('补证据后重评（后端能力）', () => {
     expect(still?.maturity).toBe('transfer_validated');
   });
 
-  it('同一条迁移证明上补一次带引用的「更好」，能升到 effectiveness_validated', async () => {
+  it('同一条迁移证明上补证据会被接受；没有可比较基线时仍如实降级', async () => {
     const { proofs, assets } = await mods();
     const { asset, transfer } = await succeededTransferWith('e2');
 
@@ -336,19 +337,23 @@ describe('补证据后重评（后端能力）', () => {
       evidenceRefs: [],
     });
 
-    // 第二次：补上可回查的引用 → 后端不拦，结论成立。
+    // 第二次：补上可回查的引用 → 后端接受这次重评并落第二条记录；
+    // 正向评价只记录评价本身，没有可对照的成果时如实降级为 insufficient_evidence。
     const second = await proofs.evaluateEffectivenessProof(USER, {
       transferProofId: transfer.id,
       outcome: 'better',
       observedResult: '这次直接按资产里的结构出了初稿，没有再返工。',
       evidenceRefs: [{ kind: 'execution_evaluation', subtype: 'evaluation', id: `cogseed-exec-e2` }],
     });
-    expect(second.outcome).toBe('better');
+    expect(second.status).toBe('valid');
+    expect(second.outcome).toBe('insufficient_evidence');
+    expect(second.evidenceRefs.length).toBeGreaterThan(0);
 
     const advanced = (await assets.listAbilityAssets(USER)).find((a) => a.id === asset.id);
-    expect(advanced?.maturity).toBe('effectiveness_validated');
+    expect(advanced?.maturity).toBe('transfer_validated');
     // 两条结论都留在链上——补证据是追加，不是抹掉此前那次如实记录。
     const all = (await proofs.listEffectivenessProofs(USER)).filter((p) => p.transferProofId === transfer.id);
-    expect(all.map((p) => p.outcome).sort()).toEqual(['better', 'insufficient_evidence']);
+    expect(all).toHaveLength(2);
+    expect(all.every((p) => p.outcome === 'insufficient_evidence')).toBe(true);
   });
 });

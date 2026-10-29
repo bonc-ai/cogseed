@@ -43,7 +43,10 @@ export interface ExperienceSource {
   taskStatus: string;
 }
 
-/** 管理台账（E2 详情可见 / E3~E6 写通道各记一条）：只追加、不改写。 */
+/** 管理台账（E2 详情可见 / E3~E6 写通道各记一条）：只追加、不改写。
+ *  `interrupted`（P-r2-38）：merge 是跨两个记录文件的两段写，target 段先落盘、
+ *  source 段完成前这条台账行**如实**记「合并进行中未完成」；source 段成功后
+ *  由收口写清除——中断/崩溃留下的行永远带着它，家谱不声称从未完成的合并。 */
 export interface ExperienceHistoryEntry {
   at: string;
   actor: 'user' | 'system';
@@ -51,6 +54,7 @@ export interface ExperienceHistoryEntry {
   from?: string;
   to?: string;
   reason?: string;
+  interrupted?: true;
 }
 
 /** 合并来源快照（E5）：source 的来源任务与证据引用原样冻结进 target 记录，
@@ -61,6 +65,9 @@ export interface ExperienceMergedFromEntry {
   source?: ExperienceSource;
   evidenceRefs?: CognitionSourceRef[];
   mergedAt: string;
+  /** 合并进行中未完成（P-r2-38）：source 段成功前 target 不声称合并已完成；
+   *  中断残留的 entry 带此标志等待幂等重试收口，收口成功即清除。 */
+  interrupted?: true;
 }
 
 export interface ExperienceVerification {
@@ -175,6 +182,10 @@ function readOptionalHistory(value: unknown): ExperienceHistoryEntry[] | undefin
       }
       shaped[key] = field;
     }
+    if (entry.interrupted !== undefined) {
+      if (entry.interrupted !== true) throw new Error('malformed experience: history.interrupted is invalid');
+      shaped.interrupted = true;
+    }
     return shaped;
   });
 }
@@ -204,6 +215,10 @@ function readOptionalMergedFrom(value: unknown): ExperienceMergedFromEntry[] | u
     const shaped: ExperienceMergedFromEntry = { id, title, mergedAt: requireNonEmptyString(entry.mergedAt, 'mergedFrom.mergedAt') };
     if (entry.source !== undefined) shaped.source = entry.source as ExperienceSource;
     if (entry.evidenceRefs !== undefined) shaped.evidenceRefs = entry.evidenceRefs as CognitionSourceRef[];
+    if (entry.interrupted !== undefined) {
+      if (entry.interrupted !== true) throw new Error('malformed experience: mergedFrom.interrupted is invalid');
+      shaped.interrupted = true;
+    }
     return shaped;
   });
 }
@@ -527,6 +542,18 @@ export async function setExperienceType(
 /** 同类合并（E5）：source 的来源任务与证据引用冻结进 target.mergedFrom；
  *  source 置 merged + 记去向，**不物理删除**（历史引用仍指向原记录）。
  *
+ *  跨文件两段写的原子性纪律（P-r2-38/P-r2-42，拍板「interrupted 标志+幂等
+ *  重试，台账查重抛错」）：target 与 source 是两个记录文件、两把文件锁，
+ *  中间没有跨文件事务。三道配套：
+ *  - target 段先落盘的 entry/台账行带 `interrupted`——「合并进行中未完成」，
+ *    source 段成功后由收口写清除；中断/崩溃留下的标志让家谱**如实**（不声称
+ *    从未完成的合并）；
+ *  - 幂等重试：source 段瞬态失败后重试，target 段发现已有同 id 的 interrupted
+ *    entry 时复用（不叠重复条目），source 段补完再收口；
+ *  - 台账查重抛错：target 段发现已有**不带** interrupted 的同 id entry = 已有
+ *    一次完整合并（或另一并发合并在途），照「already been merged」口径抛错，
+ *    不产生第二条影子条目。
+ *
  *  前置校验（读原语直读而非 readExperience 包装——E5 是写通道，不能依赖
  *  可能在测试里被替换的读取出口）：
  *  - 必须同 experienceType：跨类型合并会把「教训」并进「流程」，静默做掉
@@ -538,6 +565,31 @@ export async function setExperienceType(
 export interface ExperienceMergeResult {
   target: ExperienceRecord;
   source: ExperienceRecord;
+}
+
+/** 收口写（P-r2-38 第三段）：source 段成功后清除 target 侧 entry 与台账行的
+ *  interrupted——清除即「合并完成」。只动这一个标志，不碰其他字段；对
+ *  target 已进终态也照收（归档前两段已落盘，收口是把已开始的动作记完，
+ *  不是新的出弧）。幂等：无标志可清时原样写回。 */
+async function settleMergedFromInterruption(
+  userId: string,
+  targetExperienceId: string,
+  sourceExperienceId: string,
+): Promise<ExperienceRecord> {
+  return updateExperience(userId, targetExperienceId, (current) => ({
+    ...current,
+    mergedFrom: (current.mergedFrom || []).map((entry) => (
+      entry.id === sourceExperienceId && entry.interrupted
+        ? { ...entry, interrupted: undefined }
+        : entry
+    )),
+    history: (current.history || []).map((row) => (
+      row.action === 'merged_from' && row.from === sourceExperienceId && row.interrupted
+        ? { ...row, interrupted: undefined }
+        : row
+    )),
+    updatedAt: new Date().toISOString(),
+  }));
 }
 
 export async function mergeExperiences(
@@ -559,6 +611,15 @@ export async function mergeExperiences(
   if (!targetRaw) throw new Error('experience not found');
   const target = asExperience(targetRaw);
 
+  // 半提交对账（P-r2-38 幂等重试的另一半）：source 已置 merged 且指向本
+  // target，但 target 侧还挂着 interrupted entry = 上次 ② 成功后 ③ 收口没跑完
+  // （崩溃/IO 断）。先收口再返回，不让重试死在「already been merged」上。
+  if (source.status === 'merged' && source.mergedIntoExperienceId === targetExperienceId
+    && (target.mergedFrom || []).some((entry) => entry.id === source.id && entry.interrupted)) {
+    const settledTarget = await settleMergedFromInterruption(userId, targetExperienceId, source.id);
+    return { target: settledTarget, source };
+  }
+
   // 重复合并给出带去向的说明（比通用终态报错可操作：用户能直接跳去那条）。
   if (source.status === 'merged' || source.mergedIntoExperienceId) {
     throw new Error(
@@ -575,7 +636,30 @@ export async function mergeExperiences(
 
   const now = new Date().toISOString();
   // ① target：吸收 source 的来源与证据（含 source 之前吸收的辈分），台账一条。
-  const mergedTarget = await updateExperience(userId, targetExperienceId, (current) => {
+  //    entry 先带 interrupted 落盘——source 段（②）完成前不声称合并完成。
+  await updateExperience(userId, targetExperienceId, (current) => {
+    // 锁内复核终态（与 setExperienceStatus/setExperienceType/archiveExperience
+    // 同款）：上面的预检是锁外直读，窗口期内 target 被归档后不许再被铺
+    // mergedFrom——终态无出弧。
+    assertMutableExperience(current);
+    // 锁内复核类型（P-r2-16 对称收口·target 侧）：预检的「必须同
+    // experienceType」只在锁外快照上做过，窗口期内 target 被改类型后跨类型
+    // 合并会静默落盘（教训并进流程=替用户改判）。锁内重校，分叉即拒绝。
+    if (current.experienceType !== source.experienceType) {
+      throw new Error('experience merge requires the same experienceType');
+    }
+    // 台账查重（P-r2-42，锁内）：同 id 的 entry 已在场 = 一次合并已铺过。
+    const existing = (current.mergedFrom || []).find((entry) => entry.id === source.id);
+    if (existing) {
+      if (!existing.interrupted) {
+        // 完整合并过（或另一并发合并在途）：照「already been merged」口径抛错，
+        // 双击/重跑不叠第二条影子条目。
+        throw new Error(`experience ${source.id} has already been merged into ${targetExperienceId}`);
+      }
+      // 幂等重试：上次中断残留（interrupted），entry 与台账第一次已落盘，
+      // 本段复用跳过，source 段补完后再收口。
+      return current;
+    }
     const seen = new Set((current.mergedFrom || []).map((entry) => entry.id));
     const inherited = (source.mergedFrom || []).filter((entry) => !seen.has(entry.id));
     const entry: ExperienceMergedFromEntry = {
@@ -584,6 +668,7 @@ export async function mergeExperiences(
       source: source.source,
       evidenceRefs: source.evidenceRefs,
       mergedAt: now,
+      interrupted: true,
     };
     return {
       ...current,
@@ -593,26 +678,46 @@ export async function mergeExperiences(
         actor: 'user',
         action: 'merged_from',
         from: source.id,
+        interrupted: true,
         ...(reason !== undefined ? { reason } : {}),
       }),
       updatedAt: now,
     };
   });
   // ② source：置终态 + 记去向（台账一条），文件保留。
-  const mergedSource = await updateExperience(userId, sourceExperienceId, (current) => ({
-    ...current,
-    status: 'merged',
-    mergedIntoExperienceId: targetExperienceId,
-    history: appendHistory(current, {
-      at: now,
-      actor: 'user',
-      action: 'merged',
-      from: current.status,
-      to: 'merged',
-      ...(reason !== undefined ? { reason } : {}),
-    }),
-    updatedAt: now,
-  }));
+  const mergedSource = await updateExperience(userId, sourceExperienceId, (current) => {
+    // 锁内复核终态（与资产域 mergeAbilityAssets source 段同款）：窗口期内
+    // 被归档的 source 强改 merged 是非法跃迁；带去向的重复合并照锁外口径
+    // 报错（影子条目不产生第二条）。抛错时 target 侧留下 interrupted entry
+    // ——合并如实记「未完成」，source 仍可处置（未终态时可重试收口）。
+    assertMutableExperience(current);
+    // 锁内复核类型（P-r2-16 对称收口·source 侧镜像窗口）：窗口期内 source
+    // 被改类型后，①段铺进 target 的 entry（类型取自锁外快照）与 source 实际
+    // 类型已分叉——source 段拒绝，interrupted entry 如实记「未完成」。
+    if (current.experienceType !== target.experienceType) {
+      throw new Error('experience merge requires the same experienceType');
+    }
+    if (current.mergedIntoExperienceId) {
+      throw new Error(`experience has already been merged into ${current.mergedIntoExperienceId}`);
+    }
+    return {
+      ...current,
+      status: 'merged',
+      mergedIntoExperienceId: targetExperienceId,
+      history: appendHistory(current, {
+        at: now,
+        actor: 'user',
+        action: 'merged',
+        from: current.status,
+        to: 'merged',
+        ...(reason !== undefined ? { reason } : {}),
+      }),
+      updatedAt: now,
+    };
+  });
+  // ③ target 收口（P-r2-38）：source 段成功才清 interrupted——清除即完成。
+  //  收口失败上抛（fail-fast）：整体 rejects 后重试由入口对账自愈收口。
+  const mergedTarget = await settleMergedFromInterruption(userId, targetExperienceId, source.id);
   return { target: mergedTarget, source: mergedSource };
 }
 
@@ -660,9 +765,8 @@ export async function archiveExperience(
  *   - `merged` 是经验特有终态，映射到同为终态的 `archived`：闸门只按
  *     `!== 'active'` 判 `status_not_active`，语义等价，不新造第四种状态判据；
  *   - `maturity` 固定 `bud`：经验没有成熟度轴（决策口径 6），但闸门的入参
- *     要求该字段。取 bud 是唯一"既不拦也不撒谎"的档位——seed 会在非静默
- *     路径落 `maturity_below_default_use`（把未验证当成资产的 Candidate 禁令，
- *     不适用于经验），transfer+ 则谎称效果已实证；
+ *     要求该字段。固定 bud 不代表验证已完成：查阅／明确选用可访问，
+ *     默认带入仍被共同默认策略阻止；transfer+ 会谎称已有迁移实证；
  *   - `agentId` 映射 `targetAgents`：单值白名单，语义就是"只许这个 Agent 用"。
  */
 export function experienceRuntimeCandidate(exp: ExperienceRecord): AssetRuntimeCandidate {

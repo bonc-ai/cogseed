@@ -17,7 +17,14 @@ let _searchLastError = null;
 let _searchPreviousFocus = null;
 
 function _bindGlobalSearch() {
-  document.getElementById('sidebar-search-btn')?.addEventListener('click', openGlobalSearch);
+  // Shell search entries (sidebar title row + every page header's shell slot,
+  // specs/008 D13) share one delegated handler.
+  document.addEventListener('click', (event) => {
+    const control = event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('[data-shell-action="search"]')
+      : null;
+    if (control) openGlobalSearch();
+  });
   // Library page-header search button reuses the same Cmd+K overlay
   // (Step 7 in the main-screen redesign — confirmed by user).
   document.getElementById('contexts-page-header-search')?.addEventListener('click', openGlobalSearch);

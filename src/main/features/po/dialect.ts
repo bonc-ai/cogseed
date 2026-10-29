@@ -241,11 +241,19 @@ export function parseGroupContent(text: string): GroupContent {
 /**
  * 序列化组内容。有字段 → 输出双区格式（`## 字段区` + 字段块 + `---` +
  * `## 流水区` + 条目）；无字段 → 只输出流水条目（纯文本，保持旧行为等价）。
+ *
+ * P-r3-43：空坑字段（有名字无值行）**不渲染**。parse 侧（parseFieldSections）
+ * 本就不收录无值行的小节，渲染空块会让「原文」视图显示一个原样保存即被
+ * 静默删除的字段壳（所见即所得悖论）——渲染跳过后两侧自洽。
+ * 已知局限（导出面，产品已拍板接受）：空坑字段名不进导出文本，导出/回灌
+ * 会丢这些字段名（字段壳在 JSON 里仍在，丢的只是方言文本这一投影）。模板
+ * 分节式方言（serializeSection）不受影响：模板空坑小节照旧落盘（v1 挖空
+ * 清单语义，template_file_format 测试锁定）。
  */
 export function serializeGroupContent(content: GroupContent): string {
   const fields = (content && content.fields) || {};
   const entries = (content && content.entries) || [];
-  const fieldNames = Object.keys(fields);
+  const fieldNames = Object.keys(fields).filter((name) => (fields[name] || []).length > 0);
   if (!fieldNames.length) {
     return entries.join(ENTRY_SEPARATOR);
   }

@@ -157,3 +157,20 @@ describe('native Runtime kernel import boundary', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('native runtime cancellation contract', () => {
+ it('factory cancel aborts the active execution through its normal signal', async () => {
+  const kernel = createCogSeedAgentKernel({
+   modelAdapter: { async *stream(_request, opts) {
+    if (!opts?.signal?.aborted) await new Promise<void>(resolve => opts?.signal?.addEventListener('abort', () => resolve(), { once: true }));
+    yield { type: 'done' as const };
+   } },
+   toolRunner: { catalog: [], async run() { return { content: 'unused' }; } },
+  });
+  const iterator = kernel.run({ userId: UID, requestId: 'req-cancel-test', runtimeSessionId: 'mruntime-cancel-test', task: 'test cancellation', context: [], attachments: [], readOnlyRoots: [], writableRoots: [], toolPolicy: DEFAULT_RUNTIME_TOOL_POLICY })[Symbol.asyncIterator]();
+  expect((await iterator.next()).value?.type).toBe('started');
+  const waiting = iterator.next(); await kernel.cancel('req-cancel-test');
+  expect((await waiting).value?.type).toBe('cancelled');
+  await iterator.return?.(); await kernel.cancel('req-unknown');
+ });
+});

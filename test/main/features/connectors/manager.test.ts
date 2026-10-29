@@ -1140,6 +1140,32 @@ describe('features/connectors/manager authorization recovery', () => {
     }
   });
 
+  it('refreshes an old Tencent preview-only cache once without reauthorizing', async () => {
+    const availability = await import('../../../../src/main/features/connectors/availability');
+    availability._setLocalCliProbeForTest(() => true);
+    try {
+      const manager = await import('../../../../src/main/features/connectors/manager');
+      const registry = await import('../../../../src/main/features/connectors/registry');
+      const now = new Date().toISOString();
+      await registry.upsert(TEST_UID, {
+        id: 'tencent-meeting', display_name: 'Tencent Meeting',
+        transport: { kind: 'stdio', command: 'node', args: [] }, enabled_subtools: null,
+        tools_cache: [{ name: 'preview_record_permission', description: 'preview only', input_schema: {} }],
+        tools_cached_at: 1, status: { kind: 'connected', since: 1 }, created_at: now, updated_at: now,
+      });
+      mocks.mcp.listTools = vi.fn(async () => [{ name: 'apply_record_permission', description: 'confirmed request', inputSchema: { type: 'object' } }]);
+      await manager.bootstrap(TEST_UID);
+      expect(mocks.mcp.listTools).toHaveBeenCalledTimes(1);
+      expect(manager.listInstances(TEST_UID)[0].tools_cache.some(tool => tool.name === 'apply_record_permission')).toBe(true);
+      expect(mocks.mcp.callTool).not.toHaveBeenCalled();
+      expect(mocks.oauth.startOAuth).not.toHaveBeenCalled();
+      await manager.shutdownAll();
+      mocks.mcp.connect.mockClear();
+      await manager.bootstrap(TEST_UID);
+      expect(mocks.mcp.connect).not.toHaveBeenCalled();
+    } finally { availability._setLocalCliProbeForTest(null); }
+  });
+
   it('refuses to install a local_cli connector when the CLI is not on this machine', async () => {
     const availability = await import('../../../../src/main/features/connectors/availability');
     availability._setLocalCliProbeForTest(() => false);

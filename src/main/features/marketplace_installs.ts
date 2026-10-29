@@ -108,6 +108,10 @@ export interface AgentInstall {
   seed_source?: 'builtin' | string;
   /** Minimum CogSeed app version required to materialize/run this marketplace agent. */
   min_app_version?: string;
+  /** 发布物格式。`agent-package-v1` 的 Agent 没有 `agent_json_url`，内容经 B-02 按 `{content_id, version}` 取。 */
+  package_format?: string;
+  /** 本机安装的发布物 `artifact.sha256`，用来识别"同版本重新发布"。 */
+  artifact_sha256?: string;
 }
 
 export interface SkillInstall {

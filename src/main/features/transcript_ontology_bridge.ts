@@ -1,36 +1,16 @@
 /**
- * transcript_ontology_bridge — 词表 ↔ 个人本体 / 长期记忆的最小接线（P1-a/b/c）
+ * transcript_ontology_bridge — 词表与个人本体、长期记忆的对齐。
  *
- * 设计依据：`教育插件/教育插件/1/本体×转写纠错-P1最小接线方案-2026-09-15.md`
+ * 将词条按概念归组；对已存在的本体概念挂 ontologyRef，只给出写法对齐或待补错形建议，
+ * 不从纠错记录产生认知候选。空来源返回空结果，不造占位数据。
  *
- * 三条职责，都不新增词汇资产、不新增写入通道：
- *   P1-a 归位：把词条按"概念"聚合，并在本体/记忆里能找到同名概念时挂上
- *             `ontologyRef`（**只改这一个字段**，不动 wrong/correct/风险）。
- *   P1-b 建议：本体/记忆里的规范名与词表现有写法不一致 → 给出"对齐建议"；
- *             词表里没有的规范名 → 给出"待补错形"建议（由用户补 wrong 形）。
- *   P1-c 反哺：同一 `wrong→correct` 被确认 ≥N 次 → 投递到**既有候选池**
- *             （`personal_ontology_candidates.addCandidate`），用 candidate_id
- *             作幂等键；候选未确认前不写任何记忆/别名。
- *
- * 来源范围（说清楚，别让人以为读的是"全部记忆"）：
- *   - 本体：`<uid>/cloud/contexts/.personal_ontology_groups/<groupId>.md` 的**字段值**
- *     （界面上叫「记忆分组」，可在记忆页新建；隐藏目录，不能依赖 KB 索引）；
- *   - 记忆：`<uid>/cloud/memory/{USER,MEMORY}.md`，即用户/共享两档长期记忆；
- *   - **不读** `cloud/memory/agents/<agent>/MEMORY.md`（agent 档）与角色模板画像：
- *     那两处是散文，整条折叠后永远匹配不上概念名，硬接只会造噪；等 P2 用 LLM
- *     抽术语时一并处理。
- *
- * 现实约束（2026-09-15 实测）：本机 dev profile 的 `.personal_ontology_groups/`
- * 台账为 `共 0 个分组`、`cloud/memory/MEMORY.md` 为 0 条（`USER.md` 不存在），
- * app 自己的 `personalOntology.groups.list` 也返回 `[]`。因此：
- *   - 本模块对空来源必须"什么都不做 + 如实返回 0"，不造占位数据；
- *   - 概念聚合**不依赖本体**：以 `correct` 的折叠值为概念键，今天就能把
- *     28 条散词条收成若干概念组（有本体时再补 `ontologyRef`）。
+ * 来源是正式本体、用户维护的本体分组字段值，以及 USER.md / MEMORY.md 中的长期记忆。
+ * 本体字段值可以提出待补错形；长期记忆仅用于已有概念对齐。
+ * taxonomy 的字段名与分组标题只作结构标签，不作为待补术语。
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createHash } from 'node:crypto';
 import { userOntologyGroupsDir, userMemoryFile, userProfileFile } from '../paths';
 import { createLogger } from '../logger';
 import {
@@ -43,18 +23,16 @@ import {
   type GlossaryKind,
 } from './transcript_glossary';
 import { loadEntries as loadMemoryEntries } from './memory';
+import { readOntologyDocument } from './cognition/ontology/service';
 import { loadOntologyTaxonomy } from './recall/ontology-taxonomy';
 import {
   collectTemplateFileFields,
   isTemplateFileText,
   parseGroupContent,
 } from './personal_ontology_groups';
-import { addCandidate } from './personal_ontology_candidates';
 
 const log = createLogger('transcript_ontology_bridge');
 
-/** 反哺阈值：同一纠错对被确认多少次后投递候选。 */
-export const DEFAULT_CONTRIBUTE_MIN_FREQ = 3;
 const MAX_CANONICAL_NAMES = 500;
 /** 超过此长度的文本不是"名字"，是句子（字段值/记忆条目都可能很长）。 */
 const MAX_CANONICAL_NAME_LEN = 40;
@@ -100,7 +78,7 @@ export interface SyncStats {
 }
 
 export interface SyncResult {
-  /** 归组统计（P1-a，始终可用于面板分组展示）。 */
+  /** 归组统计（可用于面板分组展示）。 */
   groups: ConceptGroup[];
   /** 实际写入 ontologyRef 的词条数（本体为空时为 0）。 */
   linked: number;
@@ -108,8 +86,6 @@ export interface SyncResult {
   alignments: SeedSuggestion[];
   /** 词表里缺失的规范名数。 */
   missing: SeedSuggestion[];
-  /** 本次投递到候选池的条数（幂等键去重后）。 */
-  contributed: number;
   /** 扫描到的规范名总数（本体 + 记忆）。 */
   canonicalNames: number;
   /** 来源细分（面板据此区分"有内容"和"只有结构"两种空）。 */
@@ -210,30 +186,6 @@ export function suggestMissing(entries: GlossaryEntry[], names: CanonicalName[])
   return out;
 }
 
-/** 候选池幂等键：同一纠错对只投一次（addCandidate 用 candidate_id 去重）。 */
-export function candidateIdFor(wrong: string, correct: string): string {
-  const digest = createHash('sha1').update(`${foldText(wrong).trim()}|${foldText(correct).trim()}`).digest('hex').slice(0, 12);
-  return `tg_${digest}`;
-}
-
-/** 组装投递到候选池的载荷（纯函数，便于断言文案与字段）。 */
-export function buildCandidateInput(
-  entry: Pick<GlossaryEntry, 'wrong' | 'correct' | 'kind' | 'freq'>,
-  meta: { runIds?: string[]; docIds?: string[] } = {},
-): { candidate_id: string; kind: 'rule'; confidence: 'medium'; summary: string; memory_scope: 'user'; memory_text: string; diff_summary: string } {
-  const where = [...new Set([...(meta.docIds ?? []), ...(meta.runIds ?? [])])].slice(0, 5);
-  const summary = `转写纠错用词：${entry.wrong} → ${entry.correct}（已确认 ${entry.freq} 次）`;
-  return {
-    candidate_id: candidateIdFor(entry.wrong, entry.correct),
-    kind: 'rule',
-    confidence: 'medium',
-    summary,
-    memory_scope: 'user',
-    memory_text: `转写里遇到「${entry.wrong}」应写作「${entry.correct}」（属 ${entry.kind}）。`,
-    diff_summary: where.length ? `来源：${where.join('、')}` : '来源：转写纠错词表',
-  };
-}
-
 // ── 来源读取（本体 + 长期记忆）────────────────────────────────────────────
 
 function readTextIfExists(file: string): string | null {
@@ -258,6 +210,15 @@ export function collectCanonicalNames(userId: string): CanonicalName[] {
     names.push({ name: trimmed, source, ...extra });
   };
 
+  // 正式本体主档优先；仅收任务可用、已确认的个人域规范实体，未确认身份不作纠错依据。
+  const ontology = readOntologyDocument(userId);
+  for (const record of Object.values(ontology.records)) {
+    if (record.kind !== 'entity' || record.status !== 'active' || record.access !== 'task'
+      || record.identityStatus !== 'confirmed' || record.certainty && record.certainty !== 'confirmed') continue;
+    const module = ontology.records[record.moduleId];
+    if (module?.kind !== 'module' || module.status !== 'active' || module.access !== 'task' || module.scope.kind !== 'personal') continue;
+    for (const name of [record.name, ...record.aliases]) push(name, 'ontology', { seedKind: 'value', ontologyRef: { groupId: module.id, fieldId: record.id } });
+  }
   // 本体分组（目录可能不存在）
   const dir = userOntologyGroupsDir(userId);
   let files: string[] = [];
@@ -314,10 +275,10 @@ export function collectCanonicalNames(userId: string): CanonicalName[] {
 }
 
 /**
- * 在文件来源之外，补上 `recall/ontology-taxonomy`（方案 §五 P1-4 点名的两个来源之一）。
+ * 在文件来源之外，补上 `recall/ontology-taxonomy`。
  *
  * **只作为"结构标签"补进来**（seedKind=field/group）：字段名 `团队成员`、分组标题
- * `P1验证` 这类是结构，不是待纠正的术语——把它们当词条提议会导致一堆永远匹配
+ * `示例分组` 这类是结构，不是待纠正的术语——把它们当词条提议会导致一堆永远匹配
  * 不上的噪声。它们的作用是：分组文件还没填值时，词条仍能通过字段名挂上
  * `ontologyRef`（本体定位照旧可查）。
  * taxonomy 读失败（契约/文件问题）时安静降级为"没读到"，不影响同步其余部分。
@@ -372,7 +333,7 @@ export async function collectAllCanonicalNames(userId: string): Promise<{
 
 // ── 组合动作 ────────────────────────────────────────────────────────────
 
-/** P1-a：把能对上本体概念的词条挂上 ontologyRef（只改这一个字段）。 */
+/** 把能对上本体概念的词条挂上 ontologyRef（只改这一个字段）。 */
 export function linkOntologyRefs(userId: string, entries: GlossaryEntry[], names: CanonicalName[]): number {
   const refByConcept = new Map<string, { groupId: string; fieldId: string }>();
   for (const canonical of names) {
@@ -395,44 +356,19 @@ export function linkOntologyRefs(userId: string, entries: GlossaryEntry[], names
   return changed;
 }
 
-/** P1-c：把达到阈值的纠错对投递到既有候选池（幂等）。 */
-export async function contributeCandidates(
-  userId: string,
-  entries: GlossaryEntry[],
-  opts: { minFreq?: number; runIds?: string[]; docIds?: string[] } = {},
-): Promise<number> {
-  const minFreq = Number.isFinite(Number(opts.minFreq)) ? Number(opts.minFreq) : DEFAULT_CONTRIBUTE_MIN_FREQ;
-  const eligible = entries.filter((e) => e.status === 'active' && e.freq >= minFreq);
-  let contributed = 0;
-  for (const entry of eligible) {
-    try {
-      await addCandidate(userId, buildCandidateInput(entry, { runIds: opts.runIds, docIds: opts.docIds }));
-      contributed += 1;
-    } catch (error) {
-      log.warn('candidate contribution failed', { wrong: entry.wrong, error: (error as Error).message });
-    }
-  }
-  return contributed;
-}
-
-/** 一次同步：归组 → 挂引用 → 出建议 → 反哺候选。 */
+/** 同步已有本体引用、概念分组与只读对齐建议，不生产认知候选。 */
 export async function syncOntology(
   userId: string,
-  opts: { contribute?: boolean; minFreq?: number; runIds?: string[]; docIds?: string[] } = {},
 ): Promise<SyncResult> {
   const entries = loadGlossary(userId).entries;
   const { names, stats } = await collectAllCanonicalNames(userId);
   const linked = linkOntologyRefs(userId, entries, names);
   const after = linked > 0 ? loadGlossary(userId).entries : entries;
-  const contributed = opts.contribute === false
-    ? 0
-    : await contributeCandidates(userId, after, { minFreq: opts.minFreq, runIds: opts.runIds, docIds: opts.docIds });
   return {
     groups: groupByConcept(after),
     linked,
     alignments: suggestAlignments(after, names),
     missing: suggestMissing(after, names),
-    contributed,
     canonicalNames: names.length,
     stats,
   };

@@ -1,3 +1,4 @@
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -38,7 +39,7 @@ async function createVersionedAsset(
 ) {
   const assets = await import('../../../../src/main/features/recall/asset-service');
   const createdAt = '2026-09-10T02:00:00.000Z';
-  const v1 = await assets.createSystemAbilityAsset(userId, {
+  const v1 = await seedStoredAbilityAsset(userId, {
     schemaVersion: 1,
     ownerId: userId,
     id: assetId,

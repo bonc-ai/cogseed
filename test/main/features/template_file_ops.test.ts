@@ -18,6 +18,67 @@ vi.mock('../../../src/main/features/search', () => ({
   dropContext: () => {},
 }));
 
+// ── F-r1-12 测试缝（默认全透传，不影响其他用例）────────────────────────────
+// ① mock fileEditLock：beforeLock 可在「被测函数的 editPoDoc 拿锁执行前」注入
+//    一次他方经锁的写值，精确复现「锁外读组 → 归档落盘 → 锁内删组」窗口内的
+//    并发提交；afterLock 可在「第一次锁释放后」注入一次他方完整操作，复现
+//    「主落盘完成后、后续步骤执行前」的合法串行序交错（F-r3-8）。
+const hookState = vi.hoisted(() => ({
+  beforeLock: null as null | (() => Promise<void>),
+  afterLock: null as null | (() => Promise<void>),
+}));
+vi.mock('../../../src/main/util/locks', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../src/main/util/locks')>();
+  return {
+    ...orig,
+    fileEditLock: (absPath: string) => {
+      const mutex = orig.fileEditLock(absPath);
+      const wrapped = Object.create(mutex) as typeof mutex;
+      (wrapped as unknown as { runExclusive: typeof mutex.runExclusive }).runExclusive = (fn, ...rest) => {
+        if (hookState.beforeLock) {
+          const hook = hookState.beforeLock;
+          hookState.beforeLock = null; // 防递归：注入写自身也走同一把锁
+          return hook().then(() => mutex.runExclusive(fn, ...rest));
+        }
+        const p = mutex.runExclusive(fn, ...rest);
+        if (hookState.afterLock) {
+          const hook = hookState.afterLock;
+          hookState.afterLock = null; // 用后即清：只在第一次锁释放后触发
+          return p.then(async (v) => { await hook(); return v; });
+        }
+        return p;
+      };
+      return wrapped;
+    },
+  };
+});
+// ② mock writeTextAtomicSync：可让 `_backup_` 归档目录的写入抛错，验证
+//    「归档写失败 → 卸载中止且组保留」。
+const archiveFail = vi.hoisted(() => ({ failArchiveWrite: false }));
+// ②b mock writeJson：可让个人本体文档落盘抛错，验证「installTemplateFile
+//     落盘失败 → 归档保留、重试仍可恢复」。故障注入走模块缝而不是 fs.chmod：
+//     Windows 的目录权限位不参与写访问判定（chmod 0o555 之后写入照常成功），
+//     只有 POSIX 才能用只读目录制造 EACCES。
+const poDocFail = vi.hoisted(() => ({ failWrite: false }));
+vi.mock('../../../src/main/storage', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../src/main/storage')>();
+  return {
+    ...orig,
+    writeJson: async (filePath: string, data: unknown, isCurrent?: () => boolean) => {
+      if (poDocFail.failWrite && path.basename(filePath) === 'personal-ontology.json') {
+        throw new Error('simulated po document write failure');
+      }
+      return orig.writeJson(filePath, data, isCurrent);
+    },
+    writeTextAtomicSync: (filePath: string, text: string | Buffer, encoding?: BufferEncoding) => {
+      if (archiveFail.failArchiveWrite && path.basename(path.dirname(filePath)).startsWith('_backup_')) {
+        throw new Error('simulated archive write failure');
+      }
+      return orig.writeTextAtomicSync(filePath, text, encoding);
+    },
+  };
+});
+
 let tmpDir: string;
 let prevWs: string | undefined;
 const UID = 'test-user-tmpl-ops';
@@ -101,6 +162,88 @@ describe('template_file_ops › installTemplateFile', () => {
     const res = await m.installTemplateFile(UID, 'no-such-template');
     expect(res.ok).toBe(false);
     expect(res.error).toContain('template not found');
+  });
+
+  // ── F-r2-5：并发安装的锁内终审 ──────────────────────────────────────────
+
+  it('F-r2-5: 并发双装同模板只落一份组（锁内终审幂等）', async () => {
+    const m = await loadMod();
+    const [a, b] = await Promise.all([
+      m.installTemplateFile(UID, 'student'),
+      m.installTemplateFile(UID, 'student'),
+    ]);
+    // 一个装成、一个 already_installed（拿锁顺序不定，但恰好各一）
+    expect([a, b].filter((r) => r.ok && !r.already_installed)).toHaveLength(1);
+    expect([a, b].filter((r) => r.already_installed)).toHaveLength(1);
+    // 同 templateId 的组只有一份——第二份是不同 id 的孤儿（迁移/卸载 find 不到）
+    const { loadPoDocSync } = await import('../../../src/main/features/po/store');
+    const groups = loadPoDocSync(UID).groups.filter((g) => g.kind === 'template' && g.templateId === 'student');
+    expect(groups).toHaveLength(1);
+  });
+
+  it('F-r2-5: 并发装满上限只落 MAX_INSTALLED_TEMPLATES 份（锁内终审超限）', async () => {
+    const m = await loadMod();
+    const results = await Promise.all([
+      m.installTemplateFile(UID, 'student'),
+      m.installTemplateFile(UID, 'scholar'),
+      m.installTemplateFile(UID, 'fde'),
+      m.installTemplateFile(UID, 'product_manager'),
+    ]);
+    expect(results.filter((r) => r.ok && !r.already_installed)).toHaveLength(3);
+    expect(results.filter((r) => !r.ok && r.error === 'template_limit_reached')).toHaveLength(1);
+    const { loadPoDocSync } = await import('../../../src/main/features/po/store');
+    expect(loadPoDocSync(UID).groups.filter((g) => g.kind === 'template')).toHaveLength(3);
+  });
+
+  it('F-r2-5: 已装分支提前返回不清归档（并发 restore 输方保住唯一归档副本）', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    await m.uninstallTemplateFile(UID, 'student');
+    expect(m.templateHasArchive(UID, 'student')).toBe(true);
+
+    // fresh 装先拿锁（不清归档）；restore 装后拿锁 → already_installed 必须在
+    // clearTemplateArchives 之前提前返回——其恢复的数据并未落盘，此刻归档仍
+    // 是唯一副本。
+    const [a, b] = await Promise.all([
+      m.installTemplateFile(UID, 'student', false),
+      m.installTemplateFile(UID, 'student', true),
+    ]);
+    expect([a, b].filter((r) => r.ok && !r.already_installed)).toHaveLength(1);
+    expect([a, b].filter((r) => r.already_installed)).toHaveLength(1);
+    expect(m.templateHasArchive(UID, 'student')).toBe(true); // 唯一归档副本未被误清
+  });
+
+  it('F-r3-8: 主落盘后他方完整卸载，清档不得删掉他方刚写的新归档', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    await m.uninstallTemplateFile(UID, 'student');
+    expect(m.templateHasArchive(UID, 'student')).toBe(true);
+
+    // 合法串行序交错：restore 重装的主落盘（第一次 editPoDoc）刚完成、清档
+    // 尚未执行的窗口里，他方完整卸载（锁内归档最新组 + 删组）。随后本调用的
+    // 清档不得把他方刚写的新归档一并删掉——组已删 + 归档也没 = 数据永久丢。
+    hookState.afterLock = async () => {
+      await m.uninstallTemplateFile(UID, 'student');
+    };
+    let res;
+    try {
+      res = await m.installTemplateFile(UID, 'student', true);
+    } finally {
+      hookState.afterLock = null;
+    }
+    expect(res.ok).toBe(true);
+    // 他方卸载生效：模板组已不在
+    expect(m.readGroups(UID).some((g) => g.template_id === 'student')).toBe(false);
+    // 他方卸载写的新归档仍在，且含恢复过的数据
+    expect(m.templateHasArchive(UID, 'student')).toBe(true);
+    const archived = m.readTemplateArchive(UID, 'student');
+    expect(archived).toContain('本科');
   });
 });
 
@@ -373,6 +516,38 @@ describe('template_file_ops › uninstall / archive / reinstall-restore', () => 
     expect(fs.existsSync(ownFile)).toBe(false);
   });
 
+  it('P-r2-9: 组归档写失败时卸载整体中止，活记忆不被先行删除（分裂态修复）', async () => {
+    const m = await loadMod();
+    const mem = await import('../../../src/main/features/memory');
+    await m.installTemplateFile(UID, 'student');
+    await mem.addRoleTemplateMemoryEntry(UID, 'user', 'student', '会主动核查工具执行过程');
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(1);
+
+    // 注入：_backup_ 归档目录的写入全部失败（组归档必失败）。
+    archiveFail.failArchiveWrite = true;
+    let res;
+    try {
+      res = await m.uninstallTemplateFile(UID, 'student', true);
+    } finally {
+      archiveFail.failArchiveWrite = false;
+    }
+    expect(res.ok).toBe(false);
+    // 组保留（既有 r2 修复的一半：归档失败即不删组）。
+    expect(m.readGroups(UID).some((g) => g.template_id === 'student')).toBe(true);
+    // 活记忆保留（P-r2-9 修复的另一半：修复前记忆分支在锁外先行删除，
+    // 组归档一失败即成分裂态——模板还在、活记忆只剩归档副本、无恢复入口）。
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(1);
+    const ownFile = path.join(tmpDir, UID, 'cloud', 'memory', 'role-templates', 'student.md');
+    expect(fs.existsSync(ownFile)).toBe(true);
+
+    // 注入解除后重试：归档 + 删除一次完成，数据不丢。
+    const retry = await m.uninstallTemplateFile(UID, 'student', true);
+    expect(retry.ok).toBe(true);
+    expect(retry.archived_memory_count).toBe(1);
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(0);
+    expect(fs.existsSync(path.join(retry.archive_dir!, 'student.memory.md'))).toBe(true);
+  });
+
   it('reinstall with restoreData restores archived global memory', async () => {
     const m = await loadMod();
     const mem = await import('../../../src/main/features/memory');
@@ -440,6 +615,38 @@ describe('template_file_ops › uninstall / archive / reinstall-restore', () => 
     // 归档已清理（数据已回活）
     expect(m.templateHasArchive(UID, 'student')).toBe(false);
     expect(m.templateHasMemoryArchive(UID, 'student')).toBe(false);
+  });
+
+  it('F-r1-10: 重装恢复时 editPoDoc 落盘失败 → 归档保留，重试仍可恢复（清理必须在落盘成功之后）', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    await m.uninstallTemplateFile(UID, 'student');
+    expect(m.templateHasArchive(UID, 'student')).toBe(true);
+
+    // 模拟 editPoDoc 落盘失败：个人本体文档写入抛错 →
+    // installTemplateFile 整体 reject。注入必须走模块缝（storage.writeJson）
+    // 而不是 fs.chmod：Windows 上目录权限位不阻止写入，只读目录仍能落盘。
+    poDocFail.failWrite = true;
+    try {
+      // 断言注入的那次失败，避免「因为别的原因 reject」也能过。
+      await expect(m.installTemplateFile(UID, 'student', true)).rejects.toThrow('simulated po document write failure');
+    } finally {
+      poDocFail.failWrite = false;
+    }
+
+    // 归档未被清理：此刻归档是唯一磁盘副本，重试重装必须仍能完整恢复。
+    expect(m.templateHasArchive(UID, 'student')).toBe(true);
+    const again = await m.installTemplateFile(UID, 'student', true);
+    expect(again.ok).toBe(true);
+    expect(again.restored_from_archive).toBe(true);
+    const row2 = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref2 = m.buildContentRef(row2.group_id, '学习背景');
+    const fields = await m.listFieldsByRef(UID, ref2);
+    const edu = fields.fields!.find((f) => f.name === '教育阶段');
+    expect(edu && edu.values).toEqual([{ value: '本科', source: '手动' }]);
   });
 });
 
@@ -585,5 +792,85 @@ describe('template_file_ops › asOf 三态透传（specs/014 T006）', () => {
     // 用户线 append 的非法同样报错。
     expect(await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士在读', '手动', undefined, undefined, { asOf: '2026-9' }))
       .toEqual({ ok: false, error: 'invalid asof' });
+  });
+});
+
+// ── 全文保存的值 id 保全（一对多）─────────────────────────────────────────
+
+describe('template_file_ops › writeTemplateFileContent 值 id 保全', () => {
+  it('F-r1-11: 同字段同文本多值经全文保存后 id 一对一保全（无重复、无漂移）', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    // 同字段两条同文本值（来源不同 → 不触发同值同源去重）
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '双学位', '手动');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '双学位', '智能');
+
+    const { loadPoDocSync } = await import('../../../src/main/features/po/store');
+    const valueIds = () => loadPoDocSync(UID).groups
+      .find((g) => g.templateId === 'student')!.values.map((v) => v.id);
+    const before = valueIds();
+    expect(before.filter((id, i) => before.indexOf(id) !== i)).toEqual([]); // 保存前本就无重复
+
+    // 编辑器原样保存（内容未变 → 值 id 必须全部原地保留）
+    const text = m.readTemplateFileText(UID, 'student');
+    const res = await m.writeTemplateFileContent(UID, row.group_id, text);
+    expect(res.ok).toBe(true);
+
+    const after = valueIds();
+    expect(after).toHaveLength(before.length);
+    expect(new Set(after)).toEqual(new Set(before)); // id 集合不变
+    // 两条同文本值各拿各的旧 id——重复 id 会让按 id 的删/改一次命中两条。
+    expect(after.filter((id, i) => after.indexOf(id) !== i)).toEqual([]);
+  });
+});
+
+// ── F-r1-12：卸载归档的锁外渲染窗口 ────────────────────────────────────────
+
+describe('template_file_ops › F-r1-12 卸载归档窗口', () => {
+  it('锁外读组与锁内删组之间的并发提交必须进归档（归档用锁内最新组渲染）', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+
+    // 在 uninstall 的 editPoDoc 拿锁执行前注入一次他方经锁的写值：
+    // 模拟「锁外读组之后、锁内删组之前」窗口内的并发提交。
+    hookState.beforeLock = async () => {
+      await m.appendFieldValueToRef(UID, ref, '教育阶段', '窗口期写入', '手动');
+    };
+    try {
+      const un = await m.uninstallTemplateFile(UID, 'student');
+      expect(un.ok).toBe(true);
+      const archivedText = fs.readFileSync(path.join(un.archive_dir!, 'student.md'), 'utf8');
+      expect(archivedText).toContain('本科 [手动]');
+      // 窗口内提交的值进了归档，而不是随组被静默删掉
+      expect(archivedText).toContain('窗口期写入');
+    } finally {
+      hookState.beforeLock = null;
+    }
+  });
+
+  it('归档写入失败 → 卸载中止且组保留（归档失败即不删，重试可完成）', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    expect(m.readGroups(UID).some((g) => g.template_id === 'student')).toBe(true);
+
+    archiveFail.failArchiveWrite = true;
+    try {
+      const res = await m.uninstallTemplateFile(UID, 'student');
+      expect(res.ok).toBe(false);
+      expect(res.error).toBeTruthy();
+    } finally {
+      archiveFail.failArchiveWrite = false;
+    }
+    // 组未被删除：卸载失败后数据仍在活文档。
+    expect(m.readGroups(UID).some((g) => g.template_id === 'student')).toBe(true);
+    // 归档失败解除后重试卸载成功。
+    const retry = await m.uninstallTemplateFile(UID, 'student');
+    expect(retry.ok).toBe(true);
+    expect(fs.existsSync(path.join(retry.archive_dir!, 'student.md'))).toBe(true);
   });
 });

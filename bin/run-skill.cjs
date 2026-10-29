@@ -84,6 +84,45 @@ function die(exitCode, message, extra) {
   process.exit(exitCode);
 }
 
+/**
+ * 凭据出口脱敏（安全审计 2026-09-21）。
+ *
+ * 🔴 为什么必须做：凭据是通过**环境变量**交给技能脚本的（`EDUSEED_API_KEY`），
+ *    而技能脚本**在本进程内执行** —— 它只要 `console.log(process.env.EDUSEED_API_KEY)`，
+ *    令牌就会原样进入本进程 stdout，再回流到调用方（插件面板 / tool result / 对话记录，
+ *    而对话记录会同步到 cloud、也可能发给模型服务）。
+ *    这里在本进程的 stdout/stderr 上装一层替换：注入值一律替换成掩码。
+ *
+ * 覆盖范围与**残留缺口**（如实说明，不要当成万能）：
+ *   · 覆盖本进程内的一切输出（技能脚本、框架、die()、结构化结果）；
+ *   · **不覆盖**技能脚本再 spawn 的子进程若用 `stdio: 'inherit'`（它直接写同一个 fd，
+ *     绕过 JS 层 write）—— 那条路径由父进程侧（plugin_ui.ts）再过滤一次。
+ */
+function installSecretRedaction(secret) {
+  if (!secret || typeof secret !== 'string' || secret.length < 8) return;
+  if (globalThis.__cogseedSecretRedacted === secret) return;
+  globalThis.__cogseedSecretRedacted = secret;
+  const mask = (chunk) => {
+    let s;
+    if (typeof chunk === 'string') s = chunk;
+    else if (Buffer.isBuffer(chunk)) s = chunk.toString('utf8');
+    else return chunk; // 交给原始 write 处理（不应出现）
+    if (!s.includes(secret)) return s;
+    return s.split(secret).join('***REDACTED***');
+  };
+  for (const stream of [process.stdout, process.stderr]) {
+    if (stream.__cogseedRedacting) continue;
+    stream.__cogseedRedacting = true;
+    const orig = stream.write.bind(stream);
+    stream.write = (chunk, encoding, callback) => {
+      const out = mask(chunk);
+      // 兼容 write(chunk, cb) 与 write(chunk, encoding, cb) 两种签名
+      if (typeof encoding === 'function') return orig(out, encoding);
+      return orig(out, encoding, callback);
+    };
+  }
+}
+
 function parseArgs(argv) {
   // argv[0]=node, argv[1]=run-skill.cjs, argv[2]=skill-id, argv[3]=script
   const args = argv.slice(2);
@@ -128,8 +167,10 @@ function workspaceRoot() {
 //   - Explicit caller env always wins (EDUSEED_MOCK smoke runs, operator
 //     overrides): injection only fills variables the caller did not set.
 //   - Keys are injected for THIS skill run only. They are never part of the
-//     shell environment a bash `env` dump would show, and never travel back
-//     into tool output.
+//     shell environment a bash `env` dump would show. Output is redacted at the
+//     stream level (installSecretRedaction below) so an in-process skill that
+//     prints the env value cannot leak it back into tool output — except for a
+//     grandchild spawned with `stdio: 'inherit'`, which the parent filters too.
 //   - Skill→package matching goes through the packages registry (same
 //     registry-driven rule as skill root discovery above), not path guessing.
 //
@@ -175,6 +216,40 @@ function readPackageSecretsFile(packagesRoot, pkgName) {
   } catch {
     return null;
   }
+}
+
+/**
+ * 读取"运行时凭据"文件 `<pkg>.runtime.json`。
+ *
+ * 🔴 这是模块 A（插件授权）与**对话路径**之间的桥：
+ *   授权拿到的令牌存在加密的 `<pkg>.oauth.json` 里，本脚本读不了（也不该读——
+ *   解密规则与刷新逻辑都归主进程）。主进程会在每次解析出可用凭据后，
+ *   把**当前有效**的令牌物化到这个明文文件（0600、机器私有）。
+ *
+ * 字段与旧配置**完全同形**（`applyPackageSecrets` 原样可用），另加 `expires_at`。
+ * 过期就当作没有——但会留下诊断，避免用户看到"没配置"这种误导性说法。
+ */
+function readRuntimeCredentialFile(packagesRoot, pkgName) {
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(packagesRoot, '.secrets', `${pkgName}.runtime.json`), 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 运行时凭据是否仍有效（无 expires_at 视为有效，兼容手写场景）。 */
+function runtimeCredentialUsable(cred) {
+  if (!cred || typeof cred.api_key !== 'string' || !cred.api_key.trim()) return false;
+  const exp = typeof cred.expires_at === 'string' ? Date.parse(cred.expires_at) : NaN;
+  if (!Number.isFinite(exp)) return true;
+  return exp > Date.now();
 }
 
 function readPackageCourseId(packagesRoot, pkgName) {
@@ -266,6 +341,26 @@ function injectPackageRuntimeSecrets(scriptPath) {
     process.env.EDUSEED_PLUGIN_AUTOUPDATE = '0';
   }
 
+  // ① 优先用**授权令牌**（模块 A）：它比手工 key 新，而且是用户"点过同意"的结果。
+  //    过期的运行时凭据**不静默丢弃** —— 否则用户会看到"没配置"这种错误解释。
+  const runtime = readRuntimeCredentialFile(packagesRoot, owner.name);
+  if (runtime && runtimeCredentialUsable(runtime)) {
+    applyPackageSecrets(runtime);
+    secretsDiag(uidMask, `injected OAuth credential for package "${owner.name}"`, {
+      reason: 'injected_oauth',
+      package: owner.name,
+      source: typeof runtime.source === 'string' ? runtime.source : 'oauth',
+    });
+    return;
+  }
+  if (runtime && typeof runtime.api_key === 'string' && runtime.api_key.trim()) {
+    secretsDiag(uidMask, `OAuth credential for package "${owner.name}" has expired — falling back to stored config; reconnect at 连接 > 插件 > "${owner.name}"`, {
+      reason: 'oauth_expired',
+      package: owner.name,
+      expires_at: typeof runtime.expires_at === 'string' ? runtime.expires_at : '',
+    });
+  }
+
   const own = readPackageSecretsFile(packagesRoot, owner.name);
   if (own) {
     applyPackageSecrets(own);
@@ -304,6 +399,9 @@ function applyPackageSecrets(secrets) {
   if (apiKey && !process.env.EDUSEED_API_KEY) {
     process.env.EDUSEED_API_KEY = apiKey;
   }
+  // 🔴 凭据一旦进环境，立刻给本进程的输出装脱敏（安全审计 2026-09-21）：
+  //    技能脚本在本进程内执行，它的 console.log 会把令牌原样写进 stdout。
+  installSecretRedaction(process.env.EDUSEED_API_KEY);
   if (serverUrl) {
     if (!process.env.EDUSEED_SERVER_URL) process.env.EDUSEED_SERVER_URL = serverUrl;
   }
@@ -880,6 +978,11 @@ async function main() {
   const { skillId, scriptBase, scriptArgs } = parseArgs(process.argv);
   const scriptPath = locateSkillScript(skillId, scriptBase);
   injectPackageRuntimeSecrets(scriptPath);
+  // 🔴 无条件再装一次脱敏（安全审计 2026-09-21）：上面的注入只有在"存在存储凭据"时
+  //    才走到 `applyPackageSecrets`；而凭据也可能来自**调用方自带的环境变量**
+  //    （显式 env 优先），或压根没有存储凭据。这里按当前环境再装一次，
+  //    保证"环境里已经有 EDUSEED_API_KEY"的情形同样被脱敏。
+  installSecretRedaction(process.env.EDUSEED_API_KEY);
 
   const ext = path.extname(scriptPath).slice(1).toLowerCase();
   if (ext === 'ts' || ext === 'mjs' || ext === 'js') {

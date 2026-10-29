@@ -42,6 +42,7 @@ import {
   type NormalizedTranscript,
   type TranscriptTurn,
 } from './transcript-normalize';
+import { deriveCurrentRequest } from './task-context';
 import { EXTRACT_SYSTEM_PROMPT } from '../../prompts/session-extract';
 
 const log = createLogger('session-import:extractor');
@@ -173,6 +174,11 @@ export interface ExtractionResult {
   ok: boolean;
   /** Seed brief for the continued conversation (may be a degraded fallback). */
   sessionSummary: string;
+  /** The user's most recent explicit request, derived deterministically from
+   *  the transcript (never by the model). This is the continuation target; the
+   *  summary is only background material. Empty when no substantive user turn
+   *  exists. */
+  currentRequest?: string;
   candidates: CognitionCandidate[];
   /** Set when we could not get usable structured output and fell back. */
   degraded?: boolean;
@@ -383,9 +389,14 @@ export async function extractSession(
   userId: string,
   transcript: NormalizedTranscript,
 ): Promise<ExtractionResult> {
+  // Deterministic task target: the last substantive user turn. Derived here
+  // (never asked from the model) so the continuation does not depend on the
+  // summary happening to mention the current request.
+  const currentRequest = deriveCurrentRequest(transcript.turns);
   const empty: ExtractionResult = {
     ok: false,
     sessionSummary: '',
+    currentRequest,
     candidates: [],
   };
 
@@ -399,12 +410,13 @@ export async function extractSession(
   if (chunks.length === 1) {
     const rendered = renderTranscript(chunks[0]);
     const out = await runPass(userId, EXTRACT_SYSTEM_PROMPT, rendered);
-    if (!out) return fallback(transcript, 'model_unavailable');
+    if (!out) return fallback(transcript, 'model_unavailable', currentRequest);
     const parsed = parseExtraction(out);
-    if (!parsed) return fallback(transcript, 'unparseable_json');
+    if (!parsed) return fallback(transcript, 'unparseable_json', currentRequest);
     return {
       ok: true,
       sessionSummary: parsed.summary || fallbackSummary(transcript),
+      currentRequest,
       candidates: parsed.candidates,
     };
   }
@@ -419,7 +431,7 @@ export async function extractSession(
   });
   const partials: RawExtraction[] = mapped.filter((p): p is RawExtraction => p != null);
 
-  if (!partials.length) return fallback(transcript, 'all_passes_failed');
+  if (!partials.length) return fallback(transcript, 'all_passes_failed', currentRequest);
 
   // No reduce pass: merging per-chunk summaries + deduping cognitions is done
   // locally. A reduce pass was one more full model call — the dominant cost
@@ -429,17 +441,24 @@ export async function extractSession(
     sessionSummary:
       partials.map((p) => p.summary).filter(Boolean).join('\n\n') ||
       fallbackSummary(transcript),
+    currentRequest,
     candidates: dedupeCandidates(partials.flatMap((p) => p.candidates)),
   };
 }
 
 /** Minimal, honest fallback when the model can't be used or its output is
  *  unusable: keep the session importable (seed = first user turn) but claim no
- *  cognitions, and flag degraded so the UI can be honest about it. */
-function fallback(transcript: NormalizedTranscript, reason: string): ExtractionResult {
+ *  cognitions, and flag degraded so the UI can be honest about it. The current
+ *  request stays real transcript text, so it survives the fallback. */
+function fallback(
+  transcript: NormalizedTranscript,
+  reason: string,
+  currentRequest = deriveCurrentRequest(transcript.turns),
+): ExtractionResult {
   return {
     ok: false,
     sessionSummary: fallbackSummary(transcript),
+    currentRequest,
     candidates: [],
     degraded: true,
     reason,

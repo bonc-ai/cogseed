@@ -1,0 +1,18 @@
+interface:
+  display_name: Cognition editor
+  short_description: Create or edit durable cognition with complete preview, source and human-decision checks.
+policy:
+  allow_implicit_invocation: true
+runtime:
+  executor: skill_interpreter
+  skill_entrypoint: ../SKILL.md
+  schema_ref: ../schemas.json
+  permissions:
+    direct_resource_access: false
+    governed_host_tools: [list_ability_assets, read_ability_asset, cognition_ontology_query, create_cognition, edit_cognition]
+  governance:
+    level: L5
+    risk_route: Full
+    promotion_ceiling: staged
+    production_release_allowed: false
+    independent_review: pending

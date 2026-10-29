@@ -1,0 +1,10 @@
+name: ui-taste
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Handle explicit anti-template taste challenges, expressive restyles, brand
+  visual theses, or focused critique across density, motion, domain-specific signature,
+  and high-quality judgment; ordinary design uses the compact executor.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

@@ -252,6 +252,14 @@
     }
 
     function closeTopPopover() {
+      const openSelects = Array.from(dialog.querySelectorAll('.ai-select.open'));
+      const openSelect = openSelects[openSelects.length - 1];
+      if (openSelect) {
+        const trigger = openSelect.querySelector('.ai-select-trigger');
+        if (trigger && typeof trigger.click === 'function') trigger.click();
+        if (trigger && typeof trigger.focus === 'function') trigger.focus();
+        return true;
+      }
       const open = Array.from(dialog.querySelectorAll('[data-ui-modal-popover][data-open="true"]'));
       const popover = open[open.length - 1];
       if (!popover) return false;
@@ -268,11 +276,12 @@
       if (event.key === 'Escape') {
         if (closeTopPopover()) {
           event.preventDefault();
-          event.stopPropagation();
+          event.stopImmediatePropagation();
           return;
         }
         if (dismissible) {
           event.preventDefault();
+          event.stopImmediatePropagation();
           close(null, 'escape');
         }
         return;
@@ -326,7 +335,137 @@
     return Object.assign(result, { close, overlay, dialog });
   }
 
+  // Shared async form dialog: bodyHtml contains one uiForm without actions. The
+  // caller owns fields, validation, localized copy, requests and successful close.
+  // Submit stays open; setBusy locks controls, setFeedback shows text-only errors.
+  // update may replace business content; callers restore values/hydrate selects.
+  // Focus, Escape, scroll locking and settlement remain uiModal's responsibility.
+  function uiFormModal(options) {
+    let value = { ...options };
+    if (!String(value.submitLabel || '').trim() || !String(value.busyLabel || '').trim()) {
+      throw new TypeError('uiFormModal requires localized submitLabel and busyLabel');
+    }
+    const modal = root.uiModal({ ...value, actions: [] });
+    const formId = `ui-form-modal-${++modalSequence}`;
+    const body = modal.dialog.querySelector('.ui-modal__body');
+    const footer = document.createElement('footer');
+    footer.className = 'ui-modal__footer';
+    modal.dialog.classList.add('ui-form-modal');
+    modal.dialog.appendChild(footer);
+    let busy = false;
+    let closed = false;
+    let message = '';
+    let form;
+    let feedback;
+    let submitButton;
+    const disabledControls = new Map();
+
+    function restoreControls() {
+      disabledControls.forEach((disabled, control) => { control.disabled = disabled; });
+      disabledControls.clear();
+    }
+    function setBusy(next) {
+      if (closed) return;
+      busy = Boolean(next);
+      if (busy) {
+        for (const control of form.querySelectorAll('input, textarea, select, button')) {
+          if (!disabledControls.has(control)) disabledControls.set(control, control.disabled);
+          control.disabled = true;
+        }
+      } else restoreControls();
+      form.setAttribute('aria-busy', String(busy));
+      submitButton.disabled = busy;
+      submitButton.classList.toggle('is-loading', busy);
+      submitButton.classList.toggle('is-disabled', busy);
+      if (busy) submitButton.setAttribute('aria-busy', 'true');
+      else submitButton.removeAttribute('aria-busy');
+      submitButton.querySelector('.ui-button__label').textContent = busy ? value.busyLabel : value.submitLabel;
+      submitButton.querySelectorAll('.ui-button__icon').forEach(icon => { icon.hidden = busy; });
+    }
+    function setFeedback(text) {
+      if (closed) return;
+      message = String(text || '');
+      feedback.textContent = message;
+      feedback.hidden = !message;
+    }
+    function bindBody() {
+      const forms = body.querySelectorAll('form');
+      if (forms.length !== 1) {
+        modal.close(null, 'invalid-form');
+        throw new TypeError('uiFormModal requires exactly one form');
+      }
+      form = forms[0];
+      form.setAttribute('id', formId);
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        if (!busy && !closed && typeof value.onSubmit === 'function') return value.onSubmit(event);
+      });
+      feedback = document.createElement('p');
+      feedback.className = 'ui-form-modal__feedback';
+      feedback.setAttribute('role', 'alert');
+      feedback.setAttribute('aria-live', 'polite');
+      for (const [name, text] of Object.entries(value.feedbackAttrs || {})) {
+        if (/^data-[a-z0-9-]+$/.test(name)) feedback.setAttribute(name, text);
+      }
+      feedback.setAttribute('hidden', '');
+      body.appendChild(feedback);
+      setFeedback(message);
+    }
+    function renderFooter() {
+      footer.innerHTML = (value.cancelLabel ? root.uiButton({
+        label: value.cancelLabel, role: 'secondary', attrs: { 'data-ui-form-cancel': 'true' },
+      }) : '') + root.uiButton({
+        label: value.submitLabel, role: 'primary', icon: value.submitIcon,
+        attrs: { ...(value.submitAttrs || {}), 'data-ui-form-submit': 'true' },
+      });
+      submitButton = footer.querySelector('[data-ui-form-submit]');
+      // uiButton deliberately filters native form/type attributes. Associate the
+      // footer action here so click and Enter both use browser form validation.
+      submitButton.type = 'submit';
+      submitButton.setAttribute('form', formId);
+      footer.querySelector('[data-ui-form-cancel]')?.addEventListener('click', () => modal.close(null, 'cancel'));
+    }
+    function update(next) {
+      if (closed) return;
+      const replacesBody = Object.prototype.hasOwnProperty.call(next, 'bodyHtml');
+      const active = document.activeElement;
+      const focusId = active && body.contains(active)
+        ? (active.id || active.closest('[data-ui-select]')?.id) : null;
+      value = { ...value, ...next };
+      modal.dialog.querySelector('.ui-modal__title').textContent = value.title;
+      const close = modal.dialog.querySelector('[data-ui-modal-close]');
+      if (close) {
+        close.setAttribute('aria-label', value.closeLabel);
+        close.setAttribute('title', value.closeLabel);
+      }
+      if (replacesBody) {
+        restoreControls();
+        body.innerHTML = value.bodyHtml;
+        bindBody();
+      }
+      const cancel = footer.querySelector('[data-ui-form-cancel]');
+      if (cancel) cancel.querySelector('.ui-button__label').textContent = value.cancelLabel;
+      setBusy(busy);
+      if (replacesBody && focusId) requestAnimationFrame(() => {
+        if (closed || busy) return;
+        const host = Array.from(form.querySelectorAll('[id]')).find(node => node.id === focusId);
+        const target = host?.hasAttribute('data-ui-select') ? host.querySelector('button') : host;
+        target?.focus();
+      });
+    }
+    bindBody();
+    renderFooter();
+    setBusy(false);
+    modal.then(() => {
+      closed = true;
+      // Do not retain detached credential controls after closing during a request.
+      disabledControls.clear();
+    });
+    return Object.assign(modal, { setBusy, setFeedback, update });
+  }
+
   root.uiModal = uiModal;
   root.uiModalController = uiModalController;
-  if (typeof module !== 'undefined' && module.exports) module.exports = { uiModal, uiModalController };
+  root.uiFormModal = uiFormModal;
+  if (typeof module !== 'undefined' && module.exports) module.exports = { uiModal, uiModalController, uiFormModal };
 })(typeof window !== 'undefined' ? window : globalThis);

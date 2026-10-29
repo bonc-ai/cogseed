@@ -164,6 +164,12 @@ export function createCogSeedOpenAICompatibleProvider(
     const response = await fetchImpl(endpointFor(profile.baseUrl), {
       method: 'POST',
       headers: {
+        // OpenCode-fronting endpoints (direct or through a relay) answer
+        // 400 {"type":"MissingSessionID"} without this routing header. The runtime
+        // talks to providers over its own fetch path, so pi-provider's header never
+        // covered it (2026-10-13: worker's first attempt 400'd while every pi-provider
+        // request returned 200). Unknown headers are ignored by other endpoints.
+        'x-opencode-session': `cogseed-${(profile as any).id || profile.model || 'runtime'}`,
         Accept: 'text/event-stream',
         Authorization: `Bearer ${profile.apiKey}`,
         'Content-Type': 'application/json',
@@ -252,6 +258,12 @@ export function createCogSeedAnthropicProvider(
       } : {}),
     };
     const headers: Record<string, string> = {
+      // OpenCode-fronting endpoints (direct or through a relay) answer
+      // 400 {"type":"MissingSessionID"} without this routing header. The runtime
+      // talks to providers over its own fetch path, so pi-provider's header never
+      // covered it (2026-10-13: worker's first attempt 400'd while every pi-provider
+      // request returned 200). Unknown headers are ignored by other endpoints.
+      'x-opencode-session': `cogseed-${(profile as any).id || profile.model || 'runtime'}`,
       Accept: 'text/event-stream',
       'Content-Type': 'application/json',
       'anthropic-version': '2023-06-01',
@@ -398,6 +410,12 @@ export function createCogSeedGeminiProvider(
     const response = await fetchImpl(geminiStreamUrl(profile.baseUrl, profile.model), {
       method: 'POST',
       headers: {
+        // OpenCode-fronting endpoints (direct or through a relay) answer
+        // 400 {"type":"MissingSessionID"} without this routing header. The runtime
+        // talks to providers over its own fetch path, so pi-provider's header never
+        // covered it (2026-10-13: worker's first attempt 400'd while every pi-provider
+        // request returned 200). Unknown headers are ignored by other endpoints.
+        'x-opencode-session': `cogseed-${(profile as any).id || profile.model || 'runtime'}`,
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
         'x-goog-api-key': profile.apiKey,
@@ -500,6 +518,12 @@ export function createCogSeedOpenAIResponsesProvider(
     const response = await fetchImpl(endpointForResponses(profile.baseUrl), {
       method: 'POST',
       headers: {
+        // OpenCode-fronting endpoints (direct or through a relay) answer
+        // 400 {"type":"MissingSessionID"} without this routing header. The runtime
+        // talks to providers over its own fetch path, so pi-provider's header never
+        // covered it (2026-10-13: worker's first attempt 400'd while every pi-provider
+        // request returned 200). Unknown headers are ignored by other endpoints.
+        'x-opencode-session': `cogseed-${(profile as any).id || profile.model || 'runtime'}`,
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
         Authorization: `Bearer ${profile.apiKey}`,

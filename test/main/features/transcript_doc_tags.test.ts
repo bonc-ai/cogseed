@@ -1,3 +1,4 @@
+// 身份、发言与标签均为合成测试样例；时间仅用于解析和顺序断言。
 /**
  * transcript_doc_tags — 转写文档的「场景标签」存储与建议
  *
@@ -28,7 +29,7 @@ describe('标签归一（与渲染层同规则）', () => {
     expect(normalizeTags(['  英语演讲课  '])).toEqual(['英语演讲课']);
     expect(normalizeTags(['英语  演讲\t课'])).toEqual(['英语 演讲 课']);
     // 全角字母/数字折叠成半角，避免"看起来一样但存了两种"
-    expect(normalizeTags(['ＥＣＳ１'])).toEqual(['ECS1']);
+    expect(normalizeTags(['ＴＥＳＴ１'])).toEqual(['TEST1']);
   });
 
   it('去重按大小写不敏感，保留先出现的写法', () => {

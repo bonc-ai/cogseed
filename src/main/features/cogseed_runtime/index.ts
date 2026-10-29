@@ -1,7 +1,8 @@
 import { genId12, nowIso } from '../../storage';
 import { createLogger } from '../../logger';
 import { getWorkspacePath } from '../user_workspace';
-import { captureRuntimeKstarClosure, type RuntimeKstarClosureInput } from '../kstar/task-closure';
+// 2026-10-08 U09：KSTAR 运行时收口动态导入——缺失时任务收口照常交付。
+import type { RuntimeKstarClosureInput } from '../kstar/task-closure';
 import { defaultRuntimeWorkerService, type RuntimeWorkerService } from './worker-process';
 import {
   normalizeRuntimeRunRequest,
@@ -70,6 +71,8 @@ export interface CogSeedAgentRuntimeInput {
   skill_version_pins?: import('./protocol').RuntimeSkillVersionPin[];
   model_profile?: string;
   working_dir?: string;
+  /** Root task id of the delegation tree (observability only). */
+  trace_id?: string;
   /** Main-process-derived capability grants (Commander-only tools). */
   capabilities?: string[];
   /** Main-process-derived tool policy for this run (see
@@ -90,7 +93,7 @@ export interface CogSeedAgentRuntimeOptions {
 }
 
 export interface CogSeedAgentRuntimeFacade {
-  run(uid: string, raw: CogSeedAgentRuntimeInput, opts?: { signal?: AbortSignal | null }): AsyncGenerator<RuntimeEventEnvelope, void, unknown>;
+  run(uid: string, raw: CogSeedAgentRuntimeInput, opts?: { signal?: AbortSignal | null; allowedRoots?: readonly string[] }): AsyncGenerator<RuntimeEventEnvelope, void, unknown>;
   shutdown(): Promise<void>;
 }
 
@@ -101,12 +104,22 @@ export function createCogSeedAgentRuntime(options: CogSeedAgentRuntimeOptions = 
     catch { return []; }
   });
   const projectResult = options.projectResult;
-  const captureClosure = options.captureClosure || captureRuntimeKstarClosure;
+  const captureClosure = options.captureClosure || (async (input: RuntimeKstarClosureInput) => {
+    const { captureRuntimeKstarClosure } = await import('../kstar/task-closure');
+    return captureRuntimeKstarClosure(input);
+  });
   const log = createLogger('cogseed-runtime');
 
-  async function* run(uid: string, raw: CogSeedAgentRuntimeInput, opts: { signal?: AbortSignal | null } = {}): AsyncGenerator<RuntimeEventEnvelope, void, unknown> {
-    const normalized = normalizeRuntimeRunRequest(uid, raw, { allowedRoots: allowedRootsForUser(uid) });
-    if (normalized.ok === false) throw new Error(normalized.error);
+  async function* run(uid: string, raw: CogSeedAgentRuntimeInput, opts: { signal?: AbortSignal | null; allowedRoots?: readonly string[] } = {}): AsyncGenerator<RuntimeEventEnvelope, void, unknown> {
+    // The Run Center workspace is chosen by the user and persisted on the task.
+    // It is main-derived, not model input, so it may extend the default roots.
+    const allowedRoots = [...allowedRootsForUser(uid), ...(opts.allowedRoots ?? [])];
+    const normalized = normalizeRuntimeRunRequest(uid, raw, { allowedRoots });
+    if (normalized.ok === false) {
+      const error = new Error(normalized.error) as Error & { code?: string };
+      error.code = normalized.code;
+      throw error;
+    }
     const request = normalized.request;
     const runId = `run_${genId12()}`;
     const createdAt = nowIso();

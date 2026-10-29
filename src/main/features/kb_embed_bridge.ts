@@ -10,11 +10,11 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { PC_ROOT, embeddingModelDir } from '../paths';
+import { embeddingModelDir } from '../paths';
 import { createLogger } from '../logger';
+import { childWorkerScriptPath, typescriptChildEnv } from '../util/packaged-child-env';
 
 const log = createLogger('kb_embed_bridge');
 
@@ -40,14 +40,12 @@ const READY_TIMEOUT_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 function defaultSpawnWorker(): EmbedBridgeChild {
-  const pcDir = PC_ROOT.replace(/\bapp\.asar\b/, 'app.asar.unpacked');
-  const script = path.join(pcDir, 'bin', 'cogseed-embed-worker.cjs');
+  const script = childWorkerScriptPath('cogseed-embed-worker.cjs');
   return spawn(process.execPath, [script], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      COGSEED_PC_DIR: pcDir,
+      ...typescriptChildEnv(),
       COGSEED_EMBED_MODEL_DIR: embeddingModelDir(),
     },
   }) as ChildProcessWithoutNullStreams;

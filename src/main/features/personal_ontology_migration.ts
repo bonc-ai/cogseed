@@ -906,8 +906,10 @@ export interface ApplyMigrationResult {
   templateId: string;
   /**
    * `migrated`        文件被重写（补坑 / 只更新版本行）+ 台账同步；
-   * `ledger_repaired` 文件本来就已经是目标版本与目标结构，只补台账缓存
-   *                   （上一次迁移「文件已写、台账未更新」中途崩溃的自愈路径）；
+   * `ledger_repaired` 内容零变化（结构已在目标形状，只有版本元信息行要前进）
+   *                   → 不重写文件、不留备份，只抬版本列（P-r1-34 如实化：
+   *                   v2 版本列与文件同源于组 JSON，v1「文件已写、台账未更新」
+   *                   的崩溃窗口不再存在，此 outcome 不再有独立的自愈入口）；
    * `noop`            无事可做；
    * `refused`         识别到本轮不支持的变化或冲突 —— **不升级版本号**；
    * `failed`          执行中出错 —— 文件与台账都保持迁移前状态。
@@ -1155,9 +1157,10 @@ function validateFixedPoint(templateId: string, after: TemplateFileContent): str
  * 顺序：锁 → 锁内重读并重新 detect → 备份 → 内存 apply → validate →
  * 原子写文件 → 更新台账 → 通知索引 → 清理旧备份。
  *
- * 文件写成功、台账没来得及更新就崩溃：下一次 detect 读的是**文件**版本，
- * 会发现结构与版本都已到位，于是走 `ledger_repaired` 只补台账，不重复迁移。
- * 这就是「文件优先于台账」的红利 —— 自愈不需要额外的修复代码。
+ * P-r1-34 如实化：v1 的「文件写成功、台账没来得及更新就崩溃 → 下次走
+ * `ledger_repaired` 只补台账」自愈故事在 v2 已不成立——版本列与文件同源于
+ * 组 JSON 单文档，一次 editPoDoc 同时落两者，没有半写窗口。`ledger_repaired`
+ * 现在只表示「内容零变化、只抬版本列」（见 stripMeta 等价比较处）。
  */
 export async function applyRoleTemplateMigration(
   uid: string,
@@ -1229,31 +1232,12 @@ export async function applyRoleTemplateMigration(
       });
     };
 
-    // 结构已完全对齐 catalog（含分节顺序）且实例已处于目标版本 → 只抬版本
-    // 列。版本列落后时仍走完整重建：分节顺序等「非变更项」的 reconcile
-    // 依赖重建路径（v1 同语义）。
-    if (plan.versionOnly && before.version === plan.toVersion) {
-      await syncLedger(plan.toVersion);
-      log.info('role template ledger version repaired from file', {
-        uid, templateId, ledgerWas: row.template_version, version: plan.toVersion,
-      });
-      const countsLr = {
-        addedSections: plan.additions.sections.length,
-        addedFields: plan.additions.fields.length,
-        renamedSections: plan.renamedSections.length,
-        renamedFields: plan.renamedFields.length,
-        movedFields: plan.movedFields.length,
-        retiredFields: plan.retiredFields.length,
-      };
-      return {
-        ok: true,
-        templateId,
-        outcome: 'ledger_repaired',
-        fromVersion: plan.fromVersion,
-        toVersion: plan.toVersion,
-        ...countsLr,
-      };
-    }
+    // P-r1-34：v1 的「台账与文件分叉」前置分支（plan.versionOnly &&
+    // before.version === plan.toVersion → 只补台账）在 v2 存储模型下结构性
+    // 恒假，已删——版本列与文件同源于组 JSON 单文档，不存在「文件已是目标
+    // 版本而台账落后」的窗口。「只抬版本列」的真实路径在下面完整重建的
+    // stripMeta 等价比较里（内容零变化 → 不重写、不留备份，outcome 仍为
+    // ledger_repaired）；分节顺序等「非变更项」的 reconcile 也依赖该重建路径。
 
     let backupDir: string | undefined;
     try {
@@ -1317,10 +1301,14 @@ export async function applyRoleTemplateMigration(
           ctx.fail('template is not installed');
           return;
         }
+        // P-r1-100：touch 必须前移到改内容之前——editPoDoc 的改前快照在首次
+        // touch 时抓取，先改后 touch 会把「改后」当成「改前」，store 的恒等
+        // 跳过检查（before===after）随即跳过快照：结构重建级迁移在历史里不
+        // 留迁移前版本，快照弹窗无法回滚到迁移前。
+        ctx.touch(group.id);
         applyMigratedContentToGroup(group, after);
         group.templateVersion = plan.toVersion;
         group.updatedAt = nowIso();
-        ctx.touch(group.id);
       });
       if (!writeResult.ok) {
         return { ok: false, templateId, outcome: 'failed', error: writeResult.error || 'migration write failed', backupDir };

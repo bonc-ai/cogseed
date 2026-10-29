@@ -113,6 +113,79 @@ describe('metacognition › writeContent', () => {
     mod.writeContent('agent-a', 'competence', 'version 2');
     expect(mod.readContent('agent-a', 'competence').content).toBe('version 2');
   });
+
+  // ── Optimistic locking (P-r2-13) ─────────────────────────────────────
+
+  it('readContent reports mtimeMs when the file exists and omits it when not', async () => {
+    const mod = await loadModule();
+    const before = mod.readContent('agent-a', 'competence');
+    expect(before.ok).toBe(true);
+    expect(before.mtimeMs).toBeUndefined(); // never written → no file → no mtime
+
+    mod.writeContent('agent-a', 'competence', 'baseline version');
+    const after = mod.readContent('agent-a', 'competence');
+    expect(typeof after.mtimeMs).toBe('number');
+  });
+
+  it('writeContent returns the new mtimeMs as the next baseline', async () => {
+    const mod = await loadModule();
+    const r = mod.writeContent('agent-a', 'competence', 'version 1');
+    expect(r.ok).toBe(true);
+    expect(typeof r.mtimeMs).toBe('number');
+  });
+
+  it('accepts a write whose expectedMtimeMs matches the current file', async () => {
+    const mod = await loadModule();
+    mod.writeContent('agent-a', 'competence', 'version 1');
+    // Pin the mtime so the check below is deterministic (consecutive sync
+    // writes could otherwise land in the same millisecond).
+    const file = path.join(metaDir('agent-a'), 'COMPETENCE.md');
+    const pinned = Date.now() / 1000 - 50;
+    fs.utimesSync(file, pinned, pinned);
+    const baseline = mod.readContent('agent-a', 'competence').mtimeMs;
+    const r = mod.writeContent('agent-a', 'competence', 'version 2', { expectedMtimeMs: baseline });
+    expect(r.ok).toBe(true);
+    expect(mod.readContent('agent-a', 'competence').content).toBe('version 2');
+  });
+
+  it('rejects a write whose expectedMtimeMs is stale (concurrent write happened)', async () => {
+    const mod = await loadModule();
+    mod.writeContent('agent-a', 'competence', 'reflection snapshot');
+    const staleBaseline = mod.readContent('agent-a', 'competence').mtimeMs;
+
+    // The "user lesson saved mid-reflection": a newer write lands in between.
+    mod.writeContent('agent-a', 'competence', 'user lesson saved in chat');
+    // Force a different mtime so the conflict is deterministic.
+    const file = path.join(metaDir('agent-a'), 'COMPETENCE.md');
+    const moved = Date.now() / 1000 - 30;
+    fs.utimesSync(file, moved, moved);
+
+    // The reflection's write based on the stale snapshot must be refused…
+    const r = mod.writeContent('agent-a', 'competence', 'reflection overwrite', { expectedMtimeMs: staleBaseline });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/conflict/);
+    // …and the user's lesson must survive untouched.
+    expect(mod.readContent('agent-a', 'competence').content).toBe('user lesson saved in chat');
+  });
+
+  it('rejects a write with baseline 0 when the file was created after the read', async () => {
+    const mod = await loadModule();
+    // Read while the file does not exist yet → baseline would be 0.
+    expect(mod.readContent('agent-a', 'competence').mtimeMs).toBeUndefined();
+    // Someone creates it in between.
+    mod.writeContent('agent-a', 'competence', 'created concurrently');
+    const r = mod.writeContent('agent-a', 'competence', 'late writer', { expectedMtimeMs: 0 });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/conflict/);
+    expect(mod.readContent('agent-a', 'competence').content).toBe('created concurrently');
+  });
+
+  it('write with baseline 0 succeeds when the file is still absent', async () => {
+    const mod = await loadModule();
+    const r = mod.writeContent('agent-a', 'competence', 'first writer', { expectedMtimeMs: 0 });
+    expect(r.ok).toBe(true);
+    expect(mod.readContent('agent-a', 'competence').content).toBe('first writer');
+  });
 });
 
 // ── Security ────────────────────────────────────────────────────────────
@@ -132,21 +205,7 @@ describe('metacognition › security', () => {
   });
 });
 
-// ── clearContent ────────────────────────────────────────────────────────
-
-describe('metacognition › clearContent', () => {
-  it('clears existing content', async () => {
-    const mod = await loadModule();
-    mod.writeContent('agent-a', 'competence', 'some content');
-    mod.clearContent('agent-a', 'competence');
-    expect(mod.readContent('agent-a', 'competence').content).toBe('');
-  });
-
-  it('does not throw for non-existent file', async () => {
-    const mod = await loadModule();
-    expect(() => mod.clearContent('agent-a', 'strategies')).not.toThrow();
-  });
-});
+// ── clearContent 测试块已随函数删除（P-r2-14：全仓零调用死导出） ────────
 
 // ── formatForSystemPrompt ───────────────────────────────────────────────
 

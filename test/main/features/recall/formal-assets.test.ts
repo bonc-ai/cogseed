@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -32,7 +33,7 @@ async function modules() {
 }
 
 async function promoteRule(candidates: Awaited<ReturnType<typeof modules>>['candidates']) {
-  const candidate = await candidates.saveRecallCandidate(UID, {
+  const candidate = await createNightlyCandidateFixture(UID, {
     judgment: '正式评审必须先讲产品模型，再谈实现细节。',
     summary: '评审次序纪律',
     value: '避免评审跑偏到实现细节上。',
@@ -46,6 +47,28 @@ async function promoteRule(candidates: Awaited<ReturnType<typeof modules>>['cand
 }
 
 describe('formal asset canonical boundary', () => {
+  it('stores and reads unclassified cognition without changing legacy asset identity', async () => {
+    const { formal, candidates } = await modules();
+    const legacy = await promoteRule(candidates);
+    const candidate = await createNightlyCandidateFixture(UID, {
+      judgment: '工程判断应记录适用条件和证据，以便后续变化时重新核对。',
+      summary: '条件证据记录', value: '便于后续工作核对决策依据及适用条件。',
+      suggestedType: 'cognition', suggestedScope: 'review', suggestedAction: 'create',
+      sourceRefs: [{ kind: 'execution', id: 'exec-unclassified' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate(UID, candidate.id, { actor: 'user' });
+    expect(await formal.getFormalAsset(UID, asset.id)).toMatchObject({
+      assetType: 'cognition', payload: { kind: 'cognition' }, record: { type: 'cognition' },
+    });
+    expect(await formal.getFormalAsset(UID, legacy.asset.id)).toMatchObject({ assetType: 'rule' });
+    expect(await candidates.alignUpdateCandidateType(UID, {
+      suggestedType: 'cognition', suggestedAction: 'update', targetAssetId: legacy.asset.id,
+    })).toBe('rule');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await assets.pauseAbilityAsset(UID, asset.id, { actor: 'user', reason: 'governance test' });
+    expect(await formal.getFormalAsset(UID, asset.id)).toMatchObject({ status: 'paused', assetType: 'cognition' });
+  });
+
   it('returns the four formal asset types in one envelope shape', async () => {
     const { formal, candidates } = await modules();
     const { asset } = await promoteRule(candidates);
@@ -62,7 +85,7 @@ describe('formal asset canonical boundary', () => {
       maturity: 'bud',
       status: 'active',
     });
-    expect(list[0].payload).toEqual({ kind: 'rule' });
+    expect(list[0].payload).toEqual({ kind: 'rule', action: asset.statement, applicableWhen: [], forbiddenWhen: [], boundaryRecorded: false });
   });
 
   // PRD 3.3：支撑对象不占四类一级分类。个人本体分组曾被合成 `CA-PERSONAL-*`

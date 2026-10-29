@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -10,6 +11,7 @@ import { userSkillsDir } from '../../../../paths';
 // (PC/CLAUDE.md §Boundary). `skill_reverify` depends only on quality + paths.
 import { isSkillTrustedForLoadDeep } from '../../../skill_reverify';
 import { normalizeRuntimePath } from './permissions';
+import { isPathAllowed } from '../../../../util/path-sandbox';
 import { captureSkillTree } from '../../../skills/snapshot-service';
 import { verifySkillRuntimeSnapshot } from '../../../skills/runtime-snapshot-service';
 import { isHubManagedContent, resolveHubPinnedTree } from '../../../marketplace/version-store';
@@ -96,6 +98,30 @@ export async function runRuntimeSkillTool(
       return formatError('E_RUNTIME_SKILL_DISABLED', `Hub skill "${skillId}" is disabled for new use`);
     }
     let pinnedSkillDir: string | undefined;
+    if (skillId.startsWith('ws-')) {
+      const name = skillId.slice(3);
+      if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(name) || !ctx.workspaceRoot) {
+        return formatError('E_RUNTIME_SKILL_WITHHELD', `workspace skill "${skillId}" is unavailable`);
+      }
+      const candidates = [
+        path.join(ctx.workspaceRoot, '.cogseed', 'skills', name),
+        path.join(ctx.workspaceRoot, '.claude', 'skills', name),
+      ];
+      for (const candidate of candidates) {
+        try {
+          if (!isPathAllowed(candidate, [ctx.workspaceRoot])) continue;
+          if (!fs.statSync(candidate).isDirectory()) continue;
+          if (!fs.statSync(path.join(candidate, 'SKILL.md')).isFile()) continue;
+          pinnedSkillDir = candidate;
+          break;
+        } catch {
+          // Try the other workspace skill root.
+        }
+      }
+      if (!pinnedSkillDir) {
+        return formatError('E_RUNTIME_SKILL_WITHHELD', `workspace skill "${skillId}" was not found in this workspace`);
+      }
+    }
     if (pin) {
       // ── 按来源分派（specs/010 FR-031/FR-032）────────────────────────────
       // Hub 官方副本解析**不可变版本副本**；创作流 Skill 不命中本分支，
@@ -173,12 +199,13 @@ export async function runRuntimeSkillTool(
     }
     const cwd = typeof input.cwd === 'string' && input.cwd.trim()
       ? normalizeRuntimePath(input.cwd, ctx.allowedRoots)
-      : (ctx.allowedRoots[0] || process.cwd());
+      : (ctx.workspaceRoot || ctx.allowedRoots[0] || process.cwd());
     const args = Array.isArray(input.args) ? input.args.map((arg) => String(arg)) : [];
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       COGSEED_PC_DIR: ctx.pcDir,
       COGSEED_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
+      ...(ctx.workspaceRoot ? { COGSEED_WORKSPACE_DIR: ctx.workspaceRoot } : {}),
       COGSEED_UID: ctx.userId,
       ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || '1',
       ...(pinnedSkillDir ? { COGSEED_RUN_SKILL_DIR: pinnedSkillDir } : {}),
@@ -190,6 +217,10 @@ export async function runRuntimeSkillTool(
       if (!pin && isContentDisabled(ctx.userId, skillId)) {
         return formatError('E_RUNTIME_SKILL_DISABLED', `Hub skill "${skillId}" is disabled for new use`);
       }
+      const denied = ctx.beforeAction ? await ctx.beforeAction('run_skill', input as Record<string, unknown>, opts.signal)
+        : formatError('E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE', 'current host conditions unavailable');
+      if (denied) return denied;
+      if (opts.signal?.aborted) return formatError('E_RUNTIME_ABORTED', 'action cancelled');
       const result = await runProcess([
         runSkillPath,
         skillId,

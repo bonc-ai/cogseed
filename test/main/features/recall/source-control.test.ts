@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -38,6 +39,48 @@ const conversationSource = {
 };
 
 describe('Recall source controls', () => {
+  it('keeps attachment coordinates and invalidates dependent evidence when its parent conversation is removed', async () => {
+    const { candidates, assets, controls } = await modules();
+    const candidate = await createNightlyCandidateFixture('user-a', {
+      judgment: 'Record architecture decisions.', summary: 'Architecture decision log', suggestedType: 'rule',
+      ...RULE_BOUNDARY, suggestedScope: 'architecture', sourceRefs: [conversationSource],
+    });
+    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' })).asset;
+    const identity = await import('../../../../src/main/features/recall/source-identity');
+    const ref = { kind: 'artifact_file', subtype: 'artifact', taxonomyVersion: 2,
+      id: identity.cognitionAttachmentSourceId('conv-a', 'message-a', 'transcript.txt'),
+      locator: { conversationId: 'conv-a', messageId: 'message-a', attachmentName: 'transcript.txt' } } as const;
+    // Synthetic pre-existing asset with attachment-only evidence.
+    await (await import('../../../../src/main/features/recall/store')).writeRecallJsonRecord('user-a', 'ability-assets', asset.id,
+      { ...asset, evidenceRefs: [ref], maturity: 'effectiveness_validated' });
+    await controls.pauseCognitionSource('user-a', ref);
+    expect((await controls.readCognitionSourceControl('user-a', ref))?.locator).toEqual(ref.locator);
+    await controls.resumeCognitionSource('user-a', ref);
+    const baseline = controls.cognitionSourceControlSnapshot('user-a', ref);
+    expect(await controls.previewCognitionSourceRemoval('user-a', conversationSource as any))
+      .toMatchObject({ affectedAssetCount: 1 });
+    const removed = await controls.removeCognitionSource('user-a', conversationSource as any, false);
+    expect(removed).toMatchObject({ pausedAssetIds: [asset.id], downgradedAssetIds: [asset.id] });
+    expect(await controls.isCognitionSourceEnabled('user-a', ref)).toBe(false);
+    expect(controls.cognitionSourceControlSnapshot('user-a', ref)).not.toBe(baseline);
+    expect(await assets.readAbilityAsset('user-a', asset.id)).toMatchObject({ status: 'paused', maturity: 'bud', evidenceRefs: [ref] });
+  });
+
+  it('lists paused message controls for a frozen message set', async () => {
+    const { controls } = await modules();
+    const identity = await import('../../../../src/main/features/recall/source-identity');
+    const ref = {
+      kind: 'conversation' as const, subtype: 'message' as const, taxonomyVersion: 2 as const, scope: 'conversation' as const,
+      id: identity.cognitionMessageSourceId('conv-a', 'message-a'),
+      locator: { conversationId: 'conv-a', messageId: 'message-a' },
+    };
+    await controls.pauseCognitionSource('user-a', ref);
+    expect(await controls.listDisabledCognitionMessageIds('user-a', 'conv-a', ['message-a', 'message-b'])).toEqual(new Set(['message-a']));
+    expect(await controls.listDisabledCognitionMessageIds('user-a', 'conv-b', ['message-a'])).toEqual(new Set());
+    await controls.resumeCognitionSource('user-a', ref);
+    expect(await controls.listDisabledCognitionMessageIds('user-a', 'conv-a', ['message-a'])).toEqual(new Set());
+  });
+
   it('persists pause, resume, removal, and reconnection without deleting the source', async () => {
     const { controls } = await modules();
 
@@ -67,14 +110,14 @@ describe('Recall source controls', () => {
 
   it('previews affected assets and revokes only matching assets after explicit confirmation', async () => {
     const { candidates, assets, controls } = await modules();
-    const matchingCandidate = await candidates.saveRecallCandidate('user-a', {
+    const matchingCandidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Record architecture decisions.', summary: 'Architecture decision log',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
       sourceRefs: [conversationSource],
     });
-    const otherCandidate = await candidates.saveRecallCandidate('user-a', {
+    const otherCandidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Prefer concise status reports.', summary: 'Concise status habit',
       suggestedType: 'personal',
       suggestedScope: 'global',
@@ -99,7 +142,7 @@ describe('Recall source controls', () => {
 
   it('downgrades and pauses verified assets when their Evidence is removed without revoking the asset', async () => {
     const { candidates, assets, controls } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', {
+    const candidate = await createNightlyCandidateFixture('user-a', {
       judgment: 'Record architecture decisions.', summary: 'Architecture decision log',
       suggestedType: 'rule',
       ...RULE_BOUNDARY,

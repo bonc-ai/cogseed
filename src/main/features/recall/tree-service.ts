@@ -78,7 +78,7 @@ export interface CognitionTreeRecord extends RecallJsonRecord {
 }
 
 const ASSET_TYPES = new Set<RecallAbilityAssetRecord['type']>([
-  'personal', 'rule', 'template', 'skill_method', 'fact',
+  'cognition', 'personal', 'rule', 'template', 'skill_method', 'fact',
 ]);
 const ASSET_STATUSES = new Set<RecallAbilityAssetRecord['status']>([
   'active', 'paused', 'archived', 'deleted', 'purged', 'revoked',

@@ -1,4 +1,4 @@
-// 「本次使用的记忆」卡引用行标签的词表门禁（2026-09-29）。
+// 「本轮带入的相关资产」卡标签的词表门禁（2026-09-29）。
 //
 // 病灶：卡上「类型 · 范围」的白话词表只认类型 personal/rule/template/skill_method
 // 与范围 global/project/agent/personal——而资产的权威取值是类型五枚
@@ -7,8 +7,8 @@
 // review | product）。没进词表的取值会原样上屏（用户截图里「模板 · general」）。
 //
 // 本文件遍历两份权威枚举 + 历史范围值，钉三件事：
-//   1) 已引用行（citations）每个取值都命中词表（渲染时真的请求了词条 key）；
-//   2) 带入行（projection.assetSummaries，未被引用的行）与已引用行同一套白话；
+//   1) 已带入行（历史字段名 citations）每个取值都命中词表（渲染时真的请求了词条 key）；
+//   2) 投影行（projection.assetSummaries）与已带入行同一套白话；
 //   3) 上述 key 四语齐全（zh/en/ja/pt——缺一门只会退回代码兜底，中文界面看不出来）。
 // 枚举从源文件解析而不是硬编码：将来加第六个取值而忘了词表，这里先红。
 import { describe, expect, it } from 'vitest';
@@ -96,7 +96,7 @@ describe('引用行标签词表（类型·范围）', () => {
     expect(contractScopes).toContain('review');
   });
 
-  it('已引用行：每个类型/范围取值都命中词表', () => {
+  it('已带入行：每个类型/范围取值都命中词表', () => {
     const { context, hits } = loadCard();
     // _validCitations 每卡最多 12 条，分两批渲染。
     context.window.recallMemoryCardHtml(types.map((type, i) => ({
@@ -111,7 +111,7 @@ describe('引用行标签词表（类型·范围）', () => {
     for (const scope of LEGACY_SCOPES) expect(seen).toContain(`chat.recall.scope_${scope}`);
   });
 
-  it('带入行（未被引用的资产行）与已引用行同一套白话', async () => {
+  it('投影行与已带入行同一套白话', async () => {
     const lab = loadCard();
     lab.card.assetSummaries = [
       ...types.map((type, i) => ({ assetId: `aa-t${i}`, title: `类型 ${type}`, type, status: 'active', scope: 'general', version: '1' })),

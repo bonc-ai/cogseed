@@ -4,14 +4,14 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-VARIANT="cogseed"
 
 usage() {
   cat <<'EOF'
 Usage: ./run.sh
 
-This worktree is locked to the CogSeed runtime identity. Run cognition,
-expense, or optimization module development from their dedicated worktrees.
+The source runtime identity is locked by this checkout's package.json.
+Optional source/dev loopback debugging: COGSEED_DEV_CDP_PORT and
+COGSEED_DEV_INSPECT_PORT (1024..65535). Debugging is off by default.
 EOF
 }
 
@@ -30,27 +30,21 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if [ -n "${COGSEED_RUNTIME_VARIANT:-}" ] && [ "$COGSEED_RUNTIME_VARIANT" != "cogseed" ]; then
-  echo "[CogSeed] This worktree is locked to the cogseed runtime; COGSEED_RUNTIME_VARIANT=$COGSEED_RUNTIME_VARIANT is not allowed." >&2
-  exit 2
-fi
-if [ -n "${COGSEED_WORKSPACE_ROOT:-}" ]; then
-  echo "[CogSeed] This worktree manages its own cogseed data root; inherited COGSEED_WORKSPACE_ROOT is not allowed." >&2
-  exit 2
-fi
+# shellcheck source=scripts/lib/source-launch.sh
+source "$APP_DIR/scripts/lib/source-launch.sh"
 # Do not inherit gateway-only Anthropic credentials into the app model layer.
 unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_MODEL
 # ELECTRON_RUN_AS_NODE makes the Electron binary run as plain Node and is
 # inherited by `open`-launched app instances; never let it leak into the app.
 unset ELECTRON_RUN_AS_NODE
 
-export COGSEED_RUNTIME_VARIANT="cogseed"
-
-# Hub 服务地址：源码运行默认走代码内的 dev 默认值（本地 Hub 服务
-# http://localhost:3000）。需要连共享 Hub 时显式导出：
+# Hub 服务地址：源码运行会**自动选择** —— 先探生产，生产不可用再探本地，
+# 结果在启动时缓存一次（src/main/features/service_origins.ts）。
+# 需要强制指定时显式导出，优先级高于自动选择：
 #   COGSEED_HUB_API_BASE=https://<hub-host> ./run.sh
-# 这里刻意不再提供默认值——源码树不携带非归属域名，而硬编码一个开源占位符
-# 只会让源码运行也连不上服务。打包产物走 build-info.json 里的注入值。
+# 教育平台同理：EDUSEED_PLATFORM_BASE_URL=https://<host>/edu
+# 该机制只服务 dev / unknown 通道；release 与 packaged-dev 不参与
+# —— 发布包绝不会因为"连不上生产"而回退去连本机端口。
 
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[CogSeed] $APP_DIR/package.json not found; check the project directory layout." >&2
@@ -96,10 +90,14 @@ node "$APP_DIR/scripts/prepare-source-runtime.cjs" --variant="$VARIANT"
 
 cd "$APP_DIR"
 if [ "$(uname -s)" = "Darwin" ]; then
-  APP_BUNDLE="$APP_DIR/node_modules/electron/dist/CogSeed.app"
   if [ -d "$APP_BUNDLE" ]; then
-    ARGS=("$APP_DIR" "--cogseed-runtime-variant=$VARIANT")
-    OPEN_ENV_ARGS=()
+    ARGS=()
+    if (( ${#DEBUG_ARGS[@]} > 0 )); then ARGS+=("${DEBUG_ARGS[@]}"); fi
+    ARGS+=("$APP_DIR" "--cogseed-runtime-variant=$VARIANT")
+    OPEN_ENV_ARGS=(--env 'COGSEED_RUNTIME_VARIANT=' --env 'COGSEED_SOURCE_RUNTIME_VARIANT=')
+    for key in COGSEED_BUILD_CHANNEL COGSEED_BUILD_COMMIT COGSEED_BUILD_DIRTY COGSEED_BUILD_TIME; do
+      OPEN_ENV_ARGS+=(--env "$key=${!key}")
+    done
     if [ -n "${COGSEED_HUB_API_BASE:-}" ]; then
       OPEN_ENV_ARGS+=(--env "COGSEED_HUB_API_BASE=$COGSEED_HUB_API_BASE")
     fi
@@ -128,5 +126,8 @@ if [ "$(uname -s)" = "Darwin" ]; then
   fi
 fi
 
-exec npm run start:electron -- --cogseed-runtime-variant="$VARIANT" \
+if (( ${#DEBUG_ARGS[@]} > 0 )); then
+  exec "$APP_DIR/node_modules/.bin/electron" "${DEBUG_ARGS[@]}" "$APP_DIR" "--cogseed-runtime-variant=$VARIANT"
+fi
+exec "$APP_DIR/node_modules/.bin/electron" "$APP_DIR" "--cogseed-runtime-variant=$VARIANT" \
   2> >(grep -v --line-buffered "EGL Driver message" >&2)

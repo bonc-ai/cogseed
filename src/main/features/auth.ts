@@ -86,10 +86,17 @@ import {
 } from '../model/provider_catalog';
 import { publicModelAbilitiesFor } from '../model/public_model_catalog';
 import {
+  declaredReasoningLevelsFromCustomDeclarations,
+  declaredReasoningLevelsFromPiModel,
+} from '../model/reasoning_effort';
+import {
   assertModelProviderAllowed,
   isModelProviderAllowed,
 } from '../model/provider_policy';
-import { isCooledDown, getCooldown, clearCooldown } from '../model/core-agent/profile-cooldown';
+import {
+  isCooledDown, getCooldown, clearCooldown,
+  isCooledDownForUser, getCooldownForUser, clearCooldownForUser,
+} from '../model/core-agent/profile-cooldown';
 import type { KeyFailureKind } from '../model/core-agent/auth-error';
 import { createLogger } from '../logger';
 import { t } from '../i18n';
@@ -519,9 +526,13 @@ function loadProfilesForActiveUserOrEmpty(): ProfilesFile {
 }
 
 export function getProfilesStoreStatus(): ProfilesStoreStatus {
+  return getProfilesStoreStatusForUser(getActiveUserId());
+}
+
+export function getProfilesStoreStatusForUser(userId: string): ProfilesStoreStatus {
   let raw = '';
   try {
-    raw = fs.readFileSync(profilesFile(), 'utf-8');
+    raw = fs.readFileSync(profilesFile(userId), 'utf-8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return { ok: true, exists: false, encrypted: false, recoverable: false, reason: 'missing', entries: 0, profiles: 0 };
@@ -534,8 +545,7 @@ export function getProfilesStoreStatus(): ProfilesStoreStatus {
 
   const encrypted = localSecrets.isEncryptedSecret(raw);
   try {
-    const uid = getActiveUserId();
-    const { json } = decryptProfilesPayload(raw, uid);
+    const { json } = decryptProfilesPayload(raw, userId);
     const data = JSON.parse(json) as Partial<ProfilesFile>;
     return {
       ok: true, exists: true, encrypted, recoverable: false,
@@ -554,19 +564,23 @@ export function getProfilesStoreStatus(): ProfilesStoreStatus {
 }
 
 export function resetProfilesStoreAfterDecryptFailure(): { ok: boolean; backupPath?: string; error?: string } {
-  const status = getProfilesStoreStatus();
+  return resetProfilesStoreAfterDecryptFailureForUser(getActiveUserId());
+}
+
+export function resetProfilesStoreAfterDecryptFailureForUser(userId: string): { ok: boolean; backupPath?: string; error?: string } {
+  const status = getProfilesStoreStatusForUser(userId);
   if (status.ok) return { ok: true };
   if (!status.recoverable) return { ok: false, error: status.error || 'profiles store is not recoverable' };
-  ensureAuthDir();
+  ensureAuthDir(userId);
   let backupPath = '';
   try {
-    const source = profilesFile();
+    const source = profilesFile(userId);
     if (fs.existsSync(source)) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       backupPath = `${source}.unreadable-${stamp}.bak`;
       fs.copyFileSync(source, backupPath);
     }
-    saveProfiles(emptyProfilesStore());
+    saveProfilesForUser(userId, emptyProfilesStore());
     return { ok: true, ...(backupPath ? { backupPath } : {}) };
   } catch (err) {
     return { ok: false, ...(backupPath ? { backupPath } : {}), error: (err as Error).message };
@@ -669,12 +683,13 @@ function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
       normalizedLegacyCustomProviderNumber(
         metadata.maxTokens,
         // 未显式存过输出上限时优先取目录预设（2026-09-13 起目录登记 DeepSeek
-        // V4/V4.1 的 384K；此前一律兜 8192，编辑页显示偏低的根因）。已存的
-        // 显式值不受影响。
+        // V4/V4.1 的 384K；此前一律兜 8192，编辑页显示偏低的根因）。
+        // 已存的较低值保留；旧的超额值受下方已知模型上限约束。
         publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
         MAX_CUSTOM_PROVIDER_MAX_TOKENS,
       ),
       contextWindow,
+      publicModelAbilitiesFor(id).maxTokens ?? Infinity,
     );
     // vision 只收显式 boolean（probe/用户口径）；未知保持未知，不猜。
     const rawVision = (metadata as { vision?: unknown }).vision;
@@ -1034,15 +1049,6 @@ export interface AuthConfig { provider: string; model: string }
  * LLM-driven feature should treat `configured === false` as "disabled
  * pending setup" and redirect the user to the settings page.
  */
-export function hasConfiguredModel(): { configured: boolean } {
-  const store = loadProfilesForActiveUserOrEmpty();
-  if (store.entries.some((e) => isEntryAllowed(store, e))) return { configured: true };
-  if (process.env.ANTHROPIC_API_KEY) return { configured: true };
-  return { configured: false };
-}
-
-/** Explicit-user probe for background work that must not depend on whichever
- * user happens to be active when the asynchronous task completes. */
 export function hasConfiguredModelForUser(userId: string): { configured: boolean } {
   const store = loadProfilesForUser(userId);
   if (store.entries.some((e) => isEntryAllowed(store, e))) return { configured: true };
@@ -1050,22 +1056,38 @@ export function hasConfiguredModelForUser(userId: string): { configured: boolean
   return { configured: false };
 }
 
-export function getConfiguredModelCooldown(): {
+export function getConfiguredModelCooldownForUser(userId: string): {
   profileId: string;
   cooledUntil: number;
   kind: KeyFailureKind;
   reason: string;
 } | null {
-  const store = loadProfilesForActiveUserOrEmpty();
+  const store = loadProfilesForUser(userId);
   let best: { profileId: string; cooledUntil: number; kind: KeyFailureKind; reason: string } | null = null;
   for (const entry of store.entries) {
     if (!isEntryAllowed(store, entry)) continue;
-    const cooldown = getCooldown(entry.profileId);
+    const cooldown = getCooldownForUser(userId, entry.profileId);
     if (!cooldown) continue;
     const current = { profileId: entry.profileId, ...cooldown };
     if (!best || current.cooledUntil < best.cooledUntil) best = current;
   }
   return best;
+}
+
+export function getConfiguredModelCooldown(): ReturnType<typeof getConfiguredModelCooldownForUser> {
+  try {
+    const userId = getActiveUserId();
+    const scoped = getConfiguredModelCooldownForUser(userId);
+    if (scoped) return scoped;
+    const store = loadProfilesForActiveUserOrEmpty();
+    let best: ReturnType<typeof getConfiguredModelCooldownForUser> = null;
+    for (const entry of store.entries) {
+      const cooldown = getCooldown(entry.profileId);
+      if (cooldown && (!best || cooldown.cooledUntil < best.cooledUntil)) best = { profileId: entry.profileId, ...cooldown };
+    }
+    return best;
+  }
+  catch { return null; }
 }
 
 /**
@@ -1076,8 +1098,8 @@ export function getConfiguredModelCooldown(): {
  * refresh either succeeded (profile no longer counts as expired) or failed
  * (the expired profile is skipped and the user needs to reauthorize).
  */
-export function getConfiguredModelOAuthExpiredMessage(): string | null {
-  const store = loadProfilesForActiveUserOrEmpty();
+export function getConfiguredModelOAuthExpiredMessageForUser(userId: string): string | null {
+  const store = loadProfilesForUser(userId);
   for (const entry of store.entries) {
     if (!isEntryAllowed(store, entry)) continue;
     const profile = store.profiles[entry.profileId];
@@ -1088,11 +1110,20 @@ export function getConfiguredModelOAuthExpiredMessage(): string | null {
   return null;
 }
 
+export function getConfiguredModelOAuthExpiredMessage(): string | null {
+  try { return getConfiguredModelOAuthExpiredMessageForUser(getActiveUserId()); }
+  catch { return null; }
+}
+
 export async function getConfig(): Promise<AuthConfig> {
   // Default (provider, model) pair is `entries[0]` — the top of the priority
   // list. Credentials + model selection share one source of truth
   // (auth-profiles.json); there's no longer a fallback config.json.
-  const store = loadProfilesForActiveUserOrEmpty();
+  return getConfigForUser(getActiveUserId());
+}
+
+export async function getConfigForUser(userId: string): Promise<AuthConfig> {
+  const store = loadProfilesForUser(userId);
   const first = store.entries.find((e) => isEntryAllowed(store, e));
   if (first) return { provider: first.provider, model: first.model };
   return { provider: '', model: '' };
@@ -1180,10 +1211,13 @@ function profileToView(id: string, p: StoredProfile): ProfileView {
  * OAuth-only backends like `openai-codex` are hidden and reached via the
  * `oauthProvider` field on their API-key-facing sibling.
  */
-export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
+export async function listProvidersForUser(userId: string): Promise<{ providers: ProviderEntry[] }> {
   let mod: CoreAgentModule | null = null;
-  try { mod = await ca(); } catch (e) {
-    log.warn('core-agent unavailable for listProviders; falling back to static catalog', { error: (e as Error).message });
+  try { mod = await ca(); } catch {
+    log.warn('core-agent unavailable for listProviders; falling back to static catalog', {
+      error_code: 'core_agent_unavailable',
+      fallback: 'static_catalog',
+    });
   }
   // OAuth capability source = pi-ai's runtime registry. Custom
   // providers (e.g. MiniMax Portal) are registered synchronously by
@@ -1200,7 +1234,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     oauthIds = new Set(OAUTH_PROVIDERS.map((p) => p.id));
   }
 
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const byProvider = new Map<string, ProfileView[]>();
   for (const [id, prof] of Object.entries(store.profiles)) {
     if (!isStoredProfileAllowed(prof)) continue;
@@ -1303,6 +1337,11 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
   return { providers };
 }
 
+/** Active-user compatibility wrapper. User-scoped callers must use the explicit API. */
+export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
+  return listProvidersForUser(getActiveUserId());
+}
+
 /**
  * Model list for a provider.
  *
@@ -1313,7 +1352,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
  *      minor) version bands from pi-ai's raw list. Only used for
  *      uncurated providers.
  */
-export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] }> {
+export async function listModelsForUser(userId: string, providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean; reasoningLevels?: string[] }[] }> {
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
@@ -1323,11 +1362,11 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
     // deepseek 模型未配任何推理等级，前端却可切低/中/高）。声明后档位
     // 恢复，形成"配置驱动展示"的闭环。运行时的 reasoning_effort 透传
     // 判定（custom_provider_runtime）不变——展示链与执行链职责分离。
-    const custom = customProviderForId(loadProfiles(), id);
+    const custom = customProviderForId(loadProfilesForUser(userId), id);
     // 模型级开关关闭的不进选择器（S2：隐藏 + 阻止新绑定；详情卡用的是
     // customProviders.list 的全量清单，开关本身仍然可见可拨回）。
     const models = (custom?.models || []).filter((model) => model.enabled !== false);
-    const out: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] = [];
+    const out: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean; reasoningLevels?: string[] }[] = [];
     // contextWindow/vision 透传不依赖识别器（目录解析独立）。
     for (const model of models) {
       const abilities = publicModelAbilitiesFor(model.id);
@@ -1340,12 +1379,16 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
         ? model.vision : abilities.vision;
       const declaredReasoning = (Array.isArray(model.reasoningLevels) && model.reasoningLevels.length > 0)
         || (model.reasoningParamsMap && Object.keys(model.reasoningParamsMap).length > 0);
+      // Option C：把「声明的档位」投影成宿主可表达的档位集合，UI 只暴露这些，
+      // 后端也据此拒绝显式越档（同一份判定，见 model/reasoning_effort.ts）。
+      const reasoningLevels = declaredReasoningLevelsFromCustomDeclarations(model);
       out.push({
         id: model.id,
         name: model.id,
         ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
         ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
         ...(declaredReasoning ? { reasoning: true } : {}),
+        ...(reasoningLevels.length ? { reasoningLevels } : {}),
       });
     }
     return { models: out };
@@ -1354,26 +1397,32 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   const allowed = (models: { id: string; name: string }[]) =>
     models.filter((m) => isModelProviderAllowed(id, m.id));
   const annotate = async (models: { id: string; name: string }[]) => {
-    const out: { id: string; name: string; reasoning?: boolean }[] = [];
+    const out: { id: string; name: string; reasoning?: boolean; reasoningLevels?: string[] }[] = [];
     let mod: Awaited<ReturnType<typeof ca>> | null = null;
     for (const m of models) {
       let reasoning: boolean | undefined;
+      let reasoningLevels: string[] | undefined;
       try {
         mod = mod || await ca();
         const resolved = resolveConfiguredPiModel(mod, id, m.id);
-        reasoning = resolved?.model && typeof (resolved.model as { reasoning?: unknown }).reasoning === 'boolean'
-          ? (resolved.model as { reasoning?: boolean }).reasoning
-          : undefined;
+        const piModel = resolved?.model as { reasoning?: unknown; thinkingLevelMap?: unknown } | undefined;
+        reasoning = typeof piModel?.reasoning === 'boolean' ? piModel.reasoning : undefined;
+        const levels = declaredReasoningLevelsFromPiModel(piModel);
+        if (levels.length) reasoningLevels = levels;
       } catch {
         reasoning = undefined;
       }
-      out.push(reasoning === undefined ? m : { ...m, reasoning });
+      out.push({
+        ...m,
+        ...(reasoning === undefined ? {} : { reasoning }),
+        ...(reasoningLevels ? { reasoningLevels } : {}),
+      });
     }
     return out;
   };
   // 本地覆盖（设置页「预设详情」）优先于预设：模型下拉/上下文分母读的就是这里，
   // 设置页改了窗口而列表还显示预设值会立刻造成"界面与运行时两套数"。
-  const curated = applyModelOverrides(id, curatedModelsFor(id));
+  const curated = applyModelOverrides(userId, id, curatedModelsFor(id));
   if (curated.length) return { models: await annotate(allowed(curated)) };
   try {
     const mod = await ca();
@@ -1382,6 +1431,11 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   } catch {
     return { models: [] };
   }
+}
+
+/** Active-user compatibility wrapper. User-scoped callers must use the explicit API. */
+export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean; reasoningLevels?: string[] }[] }> {
+  return listModelsForUser(getActiveUserId(), providerId);
 }
 
 function isOpenAICompatibleProvider(providerId: string): boolean {
@@ -1427,6 +1481,20 @@ export async function addApiKey(
   label?: string,
   opts?: { baseUrl?: string; maxOutputTokens?: number },
 ): Promise<{ profileId: string }> {
+  const result = await addApiKeyForUser(getActiveUserId(), providerId, apiKey, label, opts);
+  // Preserve the legacy process-wide cooldown contract for callers that still
+  // use markCooldown(profileId), while the explicit-user path remains scoped.
+  clearCooldown(result.profileId);
+  return result;
+}
+
+export async function addApiKeyForUser(
+  userId: string,
+  providerId: string,
+  apiKey: string,
+  label?: string,
+  opts?: { baseUrl?: string; maxOutputTokens?: number },
+): Promise<{ profileId: string }> {
   const id = String(providerId || '').trim();
   const key = String(apiKey || '').trim();
   if (!id) throw new Error('provider required');
@@ -1435,7 +1503,7 @@ export async function addApiKey(
   const baseUrl = normalizeCustomBaseUrl(id, opts?.baseUrl);
   const maxOutputTokens = normalizeOpenAICompatibleMaxOutputTokens(id, opts?.maxOutputTokens);
 
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const chosenLabel = label ? sanitizeLabel(label) : autoLabel(store, id);
   const profileId = makeProfileId(id, chosenLabel);
   const now = Date.now();
@@ -1451,25 +1519,29 @@ export async function addApiKey(
     createdAt: existing?.createdAt ?? now,
     lastUsed: 0,
   };
-  saveProfiles(store);
+  saveProfilesForUser(userId, store);
   // User updated the key — their manual intervention overrides any auto
   // cooldown from a past failure. Clear it so the next chat request
   // actually tries this profile again instead of skipping it.
-  clearCooldown(profileId);
+  clearCooldownForUser(userId, profileId);
   invalidateCoreAgentRunner();
   return { profileId };
 }
 
 export async function removeCredential(profileId: string): Promise<{ removed: boolean }> {
+  return removeCredentialForUser(getActiveUserId(), profileId);
+}
+
+export async function removeCredentialForUser(userId: string, profileId: string): Promise<{ removed: boolean }> {
   const id = String(profileId || '').trim();
   if (!id) throw new Error('profileId required');
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   if (!store.profiles[id]) return { removed: false };
   delete store.profiles[id];
   // Cascade: any entry referencing this profile is now dangling; drop those
   // entries too so the priority list doesn't silently skip a hole.
   store.entries = store.entries.filter((e) => e.profileId !== id);
-  saveProfiles(store);
+  saveProfilesForUser(userId, store);
   invalidateCoreAgentRunner();
   return { removed: true };
 }
@@ -1478,10 +1550,18 @@ export async function renameProfile(
   profileId: string,
   newLabel: string,
 ): Promise<{ profileId: string }> {
+  return renameProfileForUser(getActiveUserId(), profileId, newLabel);
+}
+
+export async function renameProfileForUser(
+  userId: string,
+  profileId: string,
+  newLabel: string,
+): Promise<{ profileId: string }> {
   const id = String(profileId || '').trim();
   const label = sanitizeLabel(newLabel);
   if (!id) throw new Error('profileId required');
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const prof = store.profiles[id];
   if (!prof) throw new Error('profile not found');
   const newId = makeProfileId(prof.provider, label);
@@ -1491,7 +1571,7 @@ export async function renameProfile(
   store.profiles[newId] = { ...prof, label };
   // Update any entries referencing the old profile id.
   store.entries = store.entries.map((e) => e.profileId === id ? { ...e, profileId: newId } : e);
-  saveProfiles(store);
+  saveProfilesForUser(userId, store);
   invalidateCoreAgentRunner();
   return { profileId: newId };
 }
@@ -1499,9 +1579,13 @@ export async function renameProfile(
 // Full API key is returned only on explicit reveal. Every other path keeps
 // renderer-facing payloads masked (`profileMasked` / `apiKeyMasked`).
 export async function revealApiKey(profileId: string): Promise<{ apiKey: string }> {
+  return revealApiKeyForUser(getActiveUserId(), profileId);
+}
+
+export async function revealApiKeyForUser(userId: string, profileId: string): Promise<{ apiKey: string }> {
   const id = String(profileId || '').trim();
   if (!id) throw new Error('profileId required');
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   if (isCustomProviderId(id)) {
     const custom = customProviderForId(store, id);
     return { apiKey: custom?.apiKey || '' };
@@ -1515,17 +1599,25 @@ export async function updateApiKey(
   profileId: string,
   apiKey: string,
 ): Promise<{ profileId: string }> {
+  return updateApiKeyForUser(getActiveUserId(), profileId, apiKey);
+}
+
+export async function updateApiKeyForUser(
+  userId: string,
+  profileId: string,
+  apiKey: string,
+): Promise<{ profileId: string }> {
   const id = String(profileId || '').trim();
   const key = String(apiKey || '').trim();
   if (!id) throw new Error('profileId required');
   if (!key) throw new Error('api key required');
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   if (isCustomProviderId(id)) {
     const custom = customProviderForId(store, id);
     if (!custom) throw new Error('custom provider not found');
     custom.apiKey = key;
     custom.updatedAt = Date.now();
-    saveProfiles(store);
+    saveProfilesForUser(userId, store);
     invalidateCoreAgentRunner();
     return { profileId: id };
   }
@@ -1533,10 +1625,10 @@ export async function updateApiKey(
   if (!prof) throw new Error('profile not found');
   if (prof.type !== 'api_key') throw new Error('profile is not an api key profile');
   store.profiles[id] = { ...prof, key };
-  saveProfiles(store);
+  saveProfilesForUser(userId, store);
   // User updated the key — mirror addApiKey: drop any failure cooldown so the
   // next request actually tries this profile again.
-  clearCooldown(id);
+  clearCooldownForUser(userId, id);
   invalidateCoreAgentRunner();
   return { profileId: id };
 }
@@ -1561,11 +1653,10 @@ export interface EntryView {
 
 /** 用户本地覆盖（features/model_overrides）叠加到预设条目上，覆盖字段优先。 */
 function applyModelOverrides<T extends { id: string; contextWindow?: number; maxTokens?: number }>(
+  uid: string,
   providerId: string,
   models: T[],
 ): T[] {
-  let uid = '';
-  try { uid = getActiveUserId(); } catch { return models; }
   if (!uid) return models;
   return models.map((model) => {
     const override = resolveModelOverride(uid, providerId, model.id);
@@ -1640,10 +1731,11 @@ export interface ListEntriesOptions {
   includeUnavailable?: boolean;
 }
 
-export async function listEntries(
+export async function listEntriesForUser(
+  userId: string,
   options: ListEntriesOptions = {},
 ): Promise<{ entries: EntryView[] }> {
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const lookup = await buildModelNameLookup();
   const includeUnavailable = options.includeUnavailable === true;
   return {
@@ -1657,7 +1749,17 @@ export async function listEntries(
   };
 }
 
-export async function addEntry({
+export async function listEntries(options: ListEntriesOptions = {}): Promise<{ entries: EntryView[] }> {
+  return listEntriesForUser(getActiveUserId(), options);
+}
+
+export async function addEntry(args: {
+  provider: string; model: string; profileId: string; position?: 'front' | 'back';
+}): Promise<{ entryId: string }> {
+  return addEntryForUser(getActiveUserId(), args);
+}
+
+export async function addEntryForUser(userId: string, {
   provider,
   model,
   profileId,
@@ -1672,7 +1774,7 @@ export async function addEntry({
   const m = String(model || '').trim();
   const pid = String(profileId || '').trim();
   if (!p || !m || !pid) throw new Error('provider / model / profileId required');
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const custom = customProviderForId(store, p);
   if (custom) {
     if (pid !== p) throw new Error('custom provider profile mismatch');
@@ -1702,16 +1804,20 @@ export async function addEntry({
   };
   if (position === 'back') store.entries.push(entry);
   else store.entries.unshift(entry);
-  saveProfiles(store);
+  saveProfilesForUser(userId, store);
   invalidateCoreAgentRunner();
   return { entryId };
 }
 
 export async function updateEntryModel(entryId: string, model: string): Promise<{ entryId: string; model: string }> {
+  return updateEntryModelForUser(getActiveUserId(), entryId, model);
+}
+
+export async function updateEntryModelForUser(userId: string, entryId: string, model: string): Promise<{ entryId: string; model: string }> {
   const id = String(entryId || '').trim();
   const m = String(model || '').trim();
   if (!id || !m) throw new Error('entryId and model required');
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const target = store.entries.find((e) => e.entryId === id);
   if (!target) throw new Error('entry not found');
   const custom = customProviderForId(store, target.provider);
@@ -1727,26 +1833,34 @@ export async function updateEntryModel(entryId: string, model: string): Promise<
   );
   if (collision) throw new Error('same (provider, model, profile) entry already exists');
   target.model = m;
-  saveProfiles(store);
+  saveProfilesForUser(userId, store);
   invalidateCoreAgentRunner();
   return { entryId: id, model: m };
 }
 
 export async function removeEntry(entryId: string): Promise<{ removed: boolean }> {
+  return removeEntryForUser(getActiveUserId(), entryId);
+}
+
+export async function removeEntryForUser(userId: string, entryId: string): Promise<{ removed: boolean }> {
   const id = String(entryId || '').trim();
   if (!id) throw new Error('entryId required');
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const before = store.entries.length;
   store.entries = store.entries.filter((e) => e.entryId !== id);
   if (store.entries.length === before) return { removed: false };
-  saveProfiles(store);
+  saveProfilesForUser(userId, store);
   invalidateCoreAgentRunner();
   return { removed: true };
 }
 
 export async function reorderEntries(orderedIds: string[]): Promise<{ entries: EntryView[] }> {
+  return reorderEntriesForUser(getActiveUserId(), orderedIds);
+}
+
+export async function reorderEntriesForUser(userId: string, orderedIds: string[]): Promise<{ entries: EntryView[] }> {
   if (!Array.isArray(orderedIds)) throw new Error('orderedIds must be an array');
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const byId = new Map(store.entries.map((e) => [e.entryId, e]));
   const reordered: Entry[] = [];
   for (const id of orderedIds) {
@@ -1758,7 +1872,7 @@ export async function reorderEntries(orderedIds: string[]): Promise<{ entries: E
     if (byId.has(e.entryId)) reordered.push(e);
   }
   store.entries = reordered;
-  saveProfiles(store);
+  saveProfilesForUser(userId, store);
   invalidateCoreAgentRunner();
   const lookup = await buildModelNameLookup();
   return {
@@ -2211,6 +2325,7 @@ type FlowStatus =
 
 interface Flow {
   flowId: string;
+  ownerUserId: string;
   provider: string;
   label: string;
   status: FlowStatus;
@@ -2221,10 +2336,18 @@ interface Flow {
    *  paste the code, whichever they prefer. */
   manualInputResolver?: (value: string) => void;
   abortController: AbortController;
+  cancelled: boolean;
 }
 
 const flows = new Map<string, Flow>();
 let _flowCounter = 0;
+const OAUTH_FLOW_RETENTION_MS = 5_000;
+
+function scheduleOAuthFlowCleanup(flow: Flow): void {
+  setTimeout(() => {
+    if (flows.get(flow.flowId) === flow) flows.delete(flow.flowId);
+  }, OAUTH_FLOW_RETENTION_MS);
+}
 
 function nextFlowId(): string {
   _flowCounter = (_flowCounter + 1) % 100000;
@@ -2291,9 +2414,11 @@ export function openExternalUrl(url: string): { ok: boolean; error?: string } {
 }
 
 export async function startOAuth(
+  userId: string,
   providerId: string,
   label?: string,
 ): Promise<{ flowId: string; status: FlowStatus }> {
+  const ownerUserId = assertAuthUserId(userId);
   const id = String(providerId || '').trim();
   if (!id) throw new Error('provider required');
   const oauth = await piOauth();
@@ -2306,16 +2431,18 @@ export async function startOAuth(
   }
 
   const flowId = nextFlowId();
-  const chosenLabel = label ? sanitizeLabel(label) : autoLabel(loadProfiles(), id);
+  const chosenLabel = label ? sanitizeLabel(label) : autoLabel(loadProfilesForUser(ownerUserId), id);
   // Device-code style flows (MiniMax) don't bind a local port — the UI must
   // hide its "paste callback URL" input in that case.
   const usesCallbackServer = provider.usesCallbackServer !== false;
   const flow: Flow = {
     flowId,
+    ownerUserId,
     provider: id,
     label: chosenLabel,
     status: { kind: 'starting' },
     abortController: new AbortController(),
+    cancelled: false,
   };
   flows.set(flowId, flow);
 
@@ -2323,6 +2450,7 @@ export async function startOAuth(
     .login({
       signal: flow.abortController.signal,
       onAuth: (info) => {
+        if (flow.cancelled) return;
         flow.status = {
           kind: 'awaiting_auth',
           url: info.url,
@@ -2334,6 +2462,7 @@ export async function startOAuth(
         openExternalUrl(info.url);
       },
       onDeviceCode: (info) => {
+        if (flow.cancelled) return;
         const details = [`Code: ${info.userCode}`];
         if (info.expiresInSeconds) details.push(`Expires in ${info.expiresInSeconds} seconds.`);
         flow.status = {
@@ -2345,6 +2474,7 @@ export async function startOAuth(
         openExternalUrl(info.verificationUri);
       },
       onPrompt: async (prompt) => {
+        if (flow.cancelled) return '';
         flow.status = {
           kind: 'awaiting_input',
           prompt: {
@@ -2371,12 +2501,17 @@ export async function startOAuth(
       //      `finally { server.close() }` block, so port 1455 gets freed
       //      instead of leaking.
       onManualCodeInput: () => new Promise<string>((resolve) => {
+        if (flow.cancelled) {
+          resolve('');
+          return;
+        }
         flow.manualInputResolver = (val) => {
           flow.manualInputResolver = undefined;
           resolve(val);
         };
       }),
       onSelect: async (prompt) => {
+        if (flow.cancelled) return undefined;
         const selected = prompt.options[0];
         flow.status = {
           kind: 'progress',
@@ -2385,11 +2520,14 @@ export async function startOAuth(
         return selected?.id;
       },
       onProgress: (message) => {
+        if (flow.cancelled) return;
         flow.status = { kind: 'progress', message };
       },
     })
     .then((credentials) => {
-      const store = loadProfiles();
+      if (flow.cancelled) return;
+      const ownerUserId = flow.ownerUserId;
+      const store = loadProfilesForUser(ownerUserId);
       // Prefer a human-identifiable label from the token if the caller
       // didn't supply one — email local-part, then accountId prefix —
       // so multi-account rows don't all read "default".
@@ -2415,25 +2553,35 @@ export async function startOAuth(
           ),
         ),
       };
-      saveProfiles(store);
+      saveProfilesForUser(ownerUserId, store);
       invalidateCoreAgentRunner();
       flow.status = { kind: 'done', profileId: pid };
+      scheduleOAuthFlowCleanup(flow);
     })
     .catch((err: unknown) => {
+      if (flow.cancelled) return;
       flow.status = { kind: 'error', error: (err as Error)?.message || String(err) };
+      scheduleOAuthFlowCleanup(flow);
     });
 
   return { flowId, status: flow.status };
 }
 
-export function pollOAuthFlow(flowId: string): { status: FlowStatus } {
+function getOwnedOAuthFlow(userId: string, flowId: string): Flow | undefined {
+  const ownerUserId = assertAuthUserId(userId);
   const flow = flows.get(flowId);
+  if (!flow || flow.ownerUserId !== ownerUserId) return undefined;
+  return flow;
+}
+
+export function pollOAuthFlow(userId: string, flowId: string): { status: FlowStatus } {
+  const flow = getOwnedOAuthFlow(userId, flowId);
   if (!flow) return { status: { kind: 'error', error: 'unknown flow' } };
   return { status: flow.status };
 }
 
-export function submitOAuthInput(flowId: string, value: string): { ok: boolean } {
-  const flow = flows.get(flowId);
+export function submitOAuthInput(userId: string, flowId: string, value: string): { ok: boolean } {
+  const flow = getOwnedOAuthFlow(userId, flowId);
   if (!flow) return { ok: false };
   const val = String(value ?? '');
   // Prefer the late-stage `onPrompt` resolver if active (bind failed), else
@@ -2446,9 +2594,11 @@ export function submitOAuthInput(flowId: string, value: string): { ok: boolean }
   return { ok: true };
 }
 
-export function cancelOAuthFlow(flowId: string): { ok: boolean } {
-  const flow = flows.get(flowId);
+export function cancelOAuthFlow(userId: string, flowId: string): { ok: boolean } {
+  const flow = getOwnedOAuthFlow(userId, flowId);
   if (!flow) return { ok: false };
+  if (flow.cancelled || flow.status.kind === 'done' || flow.status.kind === 'error') return { ok: false };
+  flow.cancelled = true;
   try { flow.abortController.abort(); } catch { /* noop */ }
   // Resolve both resolvers with empty string so pi-ai's flow drains out,
   // hits its `finally { server.close() }` and releases port 1455. Without
@@ -2461,7 +2611,7 @@ export function cancelOAuthFlow(flowId: string): { ok: boolean } {
     try { flow.manualInputResolver(''); } catch { /* noop */ }
   }
   flow.status = { kind: 'error', error: 'cancelled' };
-  setTimeout(() => flows.delete(flowId), 5000);
+  scheduleOAuthFlowCleanup(flow);
   return { ok: true };
 }
 
@@ -2550,7 +2700,7 @@ export async function pickRuntimeChatEntryForUser(
     if (!isEntryAllowed(store, entry)) continue;
     const protocol = runtimeProtocolForEntry(store, entry);
     if (!protocol) continue;
-    const apiKey = await resolveEntryApiKey(store, entry);
+    const apiKey = await resolveEntryApiKey(uid, store, entry);
     if (!apiKey) continue;
     const profile = store.profiles[entry.profileId];
     const apiProfile = profile?.type === 'api_key' ? profile as ApiKeyProfile : undefined;
@@ -2600,7 +2750,7 @@ function groupEntries(entries: Entry[]): Entry[][] {
  * Resolve the usable `apiKey` for an entry (returns undefined if the
  * profile is gone, the OAuth token expired and refresh fails, etc.).
  */
-async function resolveEntryApiKey(store: ProfilesFile, entry: Entry): Promise<string | undefined> {
+async function resolveEntryApiKey(userId: string, store: ProfilesFile, entry: Entry): Promise<string | undefined> {
   const custom = customProviderForId(store, entry.provider);
   if (custom) return custom.apiKey || undefined;
   const prof = store.profiles[entry.profileId];
@@ -2608,7 +2758,7 @@ async function resolveEntryApiKey(store: ProfilesFile, entry: Entry): Promise<st
   if (prof.type === 'api_key') return prof.key;
   if (Date.now() < prof.expires) return prof.access;
   try {
-    return await refreshOAuthProfile(entry.profileId);
+    return await refreshOAuthProfileForUser(userId, entry.profileId);
   } catch (err) {
     log.warn(`OAuth refresh failed for ${entry.profileId}:`, (err as Error).message);
     return undefined;
@@ -2662,13 +2812,17 @@ export function listApiKeyEntries(): ApiKeyEntryChoice[] {
  * Bump `lastUsed` on a specific entry (re-reads the store to avoid
  * clobbering concurrent writes). Safe no-op if the entry disappeared.
  */
-export function bumpEntryLastUsed(entryId: string): void {
-  const fresh = loadProfiles();
+export function bumpEntryLastUsedForUser(userId: string, entryId: string): void {
+  const fresh = loadProfilesForUser(userId);
   const target = fresh.entries.find((e) => e.entryId === entryId);
   if (target) {
     target.lastUsed = Date.now();
-    saveProfiles(fresh);
+    saveProfilesForUser(userId, fresh);
   }
+}
+
+export function bumpEntryLastUsed(entryId: string): void {
+  bumpEntryLastUsedForUser(getActiveUserId(), entryId);
 }
 
 /**
@@ -2699,8 +2853,8 @@ export function bumpEntryLastUsed(entryId: string): void {
  * Does NOT bump `lastUsed` — that's the caller's job (rotating-provider
  * bumps the winning candidate via `onSuccess`).
  */
-export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
-  const store = loadProfilesForActiveUserOrEmpty();
+export async function pickChatEntryGroupForUser(userId: string): Promise<ChatEntryChoice[]> {
+  const store = loadProfilesForUser(userId);
   if (store.entries.length === 0) return [];
 
   // Flatten: preserve entries[] order across groups, but within a
@@ -2724,13 +2878,20 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
   // block a fresh user turn. Healthy candidates still win, and a fallback that
   // fails again re-enters cooldown through the normal rotation path.
   const cooledFallback: ChatEntryChoice[] = [];
+  // Legacy cooldowns (written by the process-wide `markCooldown` when the failing caller had
+  // no explicit user scope, e.g. a rotating provider built without `userId`) carry no user
+  // identity. Honour them only when the requested user *is* the active user; an explicit-scope
+  // caller asking for someone else must not inherit another user's process-wide cooldown.
+  let activeUid = '';
+  try { activeUid = getActiveUserId(); } catch { /* no active user yet */ }
   for (const entry of ordered) {
     if (!isEntryAllowed(store, entry)) {
       log.info(`skipping disabled provider/model ${entry.provider}/${entry.model}`);
       continue;
     }
-    const cooled = isCooledDown(entry.profileId);
-    const apiKey = await resolveEntryApiKey(store, entry);
+    const cooled = isCooledDownForUser(userId, entry.profileId)
+      || (!!activeUid && userId === activeUid && isCooledDown(entry.profileId));
+    const apiKey = await resolveEntryApiKey(userId, store, entry);
     if (!apiKey) continue;
     const prof = store.profiles[entry.profileId];
     const apiProfile = prof?.type === 'api_key' ? prof as ApiKeyProfile : undefined;
@@ -2761,6 +2922,13 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
   return choices;
 }
 
+export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
+  try {
+    return await pickChatEntryGroupForUser(getActiveUserId());
+  }
+  catch { return []; }
+}
+
 /**
  * Resolve the chat entry group for an explicit per-task model override
  * (unified execution entry: user picked a specific provider+model for this
@@ -2774,16 +2942,57 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
  * no credentials, everything cooled down). Callers fall back to the
  * default group in that case so a stale override never hard-fails a turn.
  */
-export async function pickChatEntryGroupForModelOverride(
+export async function pickChatEntryGroupForModelOverrideForUser(
+  userId: string,
   override: { provider: string; model: string },
 ): Promise<ChatEntryChoice[] | null> {
   const providerId = String(override?.provider || '').trim();
   const modelId = String(override?.model || '').trim();
   if (!providerId || !modelId) return null;
-  const group = await pickChatEntryGroup();
+  const group = await pickChatEntryGroupForUser(userId);
   const matching = group.filter((c) => c.provider === providerId);
   if (!matching.length) return null;
   return matching.map((c) => ({ ...c, model: modelId }));
+}
+
+/** Resolve an explicit ordered task route using the requested user's credential and model gates.
+ * Empty routes are handled by the caller as "follow global settings". Unavailable
+ * explicit candidates are skipped; never substitute an unrelated default model. */
+export async function pickChatEntryGroupForModelCandidatesForUser(
+  userId: string,
+  candidates: readonly { provider: string; model: string }[],
+): Promise<ChatEntryChoice[]> {
+  const store = loadProfilesForUser(userId);
+  const group = await pickChatEntryGroupForUser(userId);
+  const seen = new Set<string>();
+  const choices: ChatEntryChoice[] = [];
+  for (const candidate of candidates) {
+    for (const choice of group) {
+      if (choice.provider !== candidate.provider) continue;
+      const entry = store.entries.find(entry => entry.entryId === choice.entryId);
+      if (!entry || !isEntryAllowed(store, { ...entry, model: candidate.model })) continue;
+      const key = JSON.stringify([choice.profileId, candidate.provider, candidate.model]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      choices.push({ ...choice, model: candidate.model });
+    }
+  }
+  return choices;
+}
+
+/** Active-user compatibility entry point. Background callers pass their user explicitly. */
+export async function pickChatEntryGroupForModelCandidates(
+  candidates: readonly { provider: string; model: string }[],
+): Promise<ChatEntryChoice[]> {
+  let userId: string;
+  try { userId = getActiveUserId(); } catch { return []; }
+  return pickChatEntryGroupForModelCandidatesForUser(userId, candidates);
+}
+
+export async function pickChatEntryGroupForModelOverride(
+  override: { provider: string; model: string },
+): Promise<ChatEntryChoice[] | null> {
+  return pickChatEntryGroupForModelOverrideForUser(getActiveUserId(), override);
 }
 
 /**
@@ -2808,15 +3017,21 @@ export async function pickChatEntry(): Promise<ChatEntryChoice | null> {
 export async function pickRotationKey(providerId: string): Promise<{
   profileId: string; provider: string; label: string; apiKey: string; baseUrl?: string;
 } | null> {
+  return pickRotationKeyForUser(getActiveUserId(), providerId);
+}
+
+export async function pickRotationKeyForUser(userId: string, providerId: string): Promise<{
+  profileId: string; provider: string; label: string; apiKey: string; baseUrl?: string;
+} | null> {
   const id = String(providerId || '').trim();
   if (!id) return null;
   if (!isModelProviderAllowed(id)) return null;
-  const store = loadProfiles();
+  const store = loadProfilesForUser(userId);
   const candidates = Object.entries(store.profiles)
     .filter(([, p]) => p.provider === id)
     .sort(([, a], [, b]) => (a.lastUsed || 0) - (b.lastUsed || 0));
   for (const [pid, prof] of candidates) {
-    if (isCooledDown(pid)) {
+    if (isCooledDownForUser(userId, pid)) {
       log.info(`skipping cooled-down profile ${pid}`);
       continue;
     }
@@ -2824,11 +3039,11 @@ export async function pickRotationKey(providerId: string): Promise<{
     let baseUrl: string | undefined;
     if (prof.type === 'api_key') { apiKey = prof.key; baseUrl = prof.baseUrl; }
     else if (Date.now() < prof.expires) apiKey = prof.access;
-    else apiKey = await refreshOAuthProfile(pid).catch(() => undefined);
+    else apiKey = await refreshOAuthProfileForUser(userId, pid).catch(() => undefined);
     if (!apiKey) continue;
-    const fresh = loadProfiles();
+    const fresh = loadProfilesForUser(userId);
     const target = fresh.profiles[pid];
-    if (target) { target.lastUsed = Date.now(); saveProfiles(fresh); }
+    if (target) { target.lastUsed = Date.now(); saveProfilesForUser(userId, fresh); }
     return {
       profileId: pid,
       provider: id,
@@ -2841,7 +3056,11 @@ export async function pickRotationKey(providerId: string): Promise<{
 }
 
 async function refreshOAuthProfile(profileId: string): Promise<string | undefined> {
-  const store = loadProfiles();
+  return refreshOAuthProfileForUser(getActiveUserId(), profileId);
+}
+
+async function refreshOAuthProfileForUser(userId: string, profileId: string): Promise<string | undefined> {
+  const store = loadProfilesForUser(userId);
   const prof = store.profiles[profileId];
   if (!prof || prof.type !== 'oauth') return undefined;
 
@@ -2860,7 +3079,7 @@ async function refreshOAuthProfile(profileId: string): Promise<string | undefine
     ),
   };
   const newCreds = await provider.refreshToken(creds as any);
-  const fresh = loadProfiles();
+  const fresh = loadProfilesForUser(userId);
   const target = fresh.profiles[profileId];
   if (target && target.type === 'oauth') {
     target.access = newCreds.access;
@@ -2871,7 +3090,7 @@ async function refreshOAuthProfile(profileId: string): Promise<string | undefine
         (target as OAuthProfile)[k] = v;
       }
     }
-    saveProfiles(fresh);
+    saveProfilesForUser(userId, fresh);
   }
   return provider.getApiKey(newCreds);
 }
@@ -2952,7 +3171,7 @@ export async function testAuthorizationDraft(
             apiKey,
             modelId: model,
             override: (() => {
-              try { return resolveModelOverride(getActiveUserId(), 'deepseek', model); } catch { return null; }
+              try { return resolveModelOverride(userId, 'deepseek', model); } catch { return null; }
             })(),
           });
         }
@@ -2992,6 +3211,15 @@ export async function testConnection(
   modelId?: string,
   profileId?: string,
 ): Promise<TestConnectionResult> {
+  return testConnectionForUser(getActiveUserId(), providerId, modelId, profileId);
+}
+
+export async function testConnectionForUser(
+  userId: string,
+  providerId: string,
+  modelId?: string,
+  profileId?: string,
+): Promise<TestConnectionResult> {
   const pid = String(providerId || '').trim();
   if (!pid) return { ok: false, error: 'provider required' };
   if (!isModelProviderAllowed(pid, modelId)) {
@@ -3004,14 +3232,14 @@ export async function testConnection(
   let baseUrl: string | undefined;
 
   if (chosenProfileId) {
-    const store = loadProfiles();
+    const store = loadProfilesForUser(userId);
     const prof = store.profiles[chosenProfileId];
     if (!prof || prof.provider !== pid) return { ok: false, error: 'profile not found' };
     if (prof.type === 'api_key') { apiKey = prof.key; baseUrl = prof.baseUrl; }
     else if (Date.now() < prof.expires) apiKey = prof.access;
-    else apiKey = await refreshOAuthProfile(chosenProfileId).catch(() => undefined);
+    else apiKey = await refreshOAuthProfileForUser(userId, chosenProfileId).catch(() => undefined);
   } else {
-    const choice = await pickRotationKey(pid);
+    const choice = await pickRotationKeyForUser(userId, pid);
     if (choice) { apiKey = choice.apiKey; baseUrl = choice.baseUrl; chosenProfileId = choice.profileId; }
   }
 
@@ -3037,7 +3265,7 @@ export async function testConnection(
           apiKey,
           modelId: probeModel,
           override: (() => {
-            try { return resolveModelOverride(getActiveUserId(), 'deepseek', probeModel); } catch { return null; }
+            try { return resolveModelOverride(userId, 'deepseek', probeModel); } catch { return null; }
           })(),
         });
       } else if (pid === 'doubao') {
@@ -3056,7 +3284,7 @@ export async function testConnection(
         messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
         maxTokens: 1,
       });
-      if (chosenProfileId) clearCooldown(chosenProfileId);
+      if (chosenProfileId) clearCooldownForUser(userId, chosenProfileId);
       return { ok: true, durationMs: Date.now() - t0, model: msg.model || probeModel, profileId: chosenProfileId };
     } catch (err) {
       const errMsg = (err as Error).message || String(err);
@@ -3119,7 +3347,7 @@ export async function testConnection(
       messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
       maxTokens: 1,
     });
-    if (chosenProfileId) clearCooldown(chosenProfileId);
+    if (chosenProfileId) clearCooldownForUser(userId, chosenProfileId);
     return { ok: true, durationMs: Date.now() - t0, model: msg.model || '', profileId: chosenProfileId };
   } catch (err) {
     return {
@@ -3134,3 +3362,9 @@ export async function testConnection(
 // ── Legacy aliases ───────────────────────────────────────────────────────
 export const saveApiKey = (providerId: string, apiKey: string, label?: string, opts?: { baseUrl?: string; maxOutputTokens?: number }) =>
   addApiKey(providerId, apiKey, label, opts);
+
+/** [rebase 合并] B 线的显式用户入口：现行实现仍以活动用户为准（上游活动用户单例模型）。 */
+export function hasConfiguredModel(): { configured: boolean } {
+  try { return hasConfiguredModelForUser(getActiveUserId()); }
+  catch { return { configured: false }; }
+}

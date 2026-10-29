@@ -64,10 +64,21 @@ describe('automation page shared-component integration', () => {
         'auto.load_failed_hint',
         'auto.creating',
         'auto.saving',
+        'auto.run_now',
+        'auto.running_now',
+        'auto.run_failed',
+        'auto.run_device_mismatch',
       ]) {
         expect(locale[key], key).toBeTruthy();
       }
     }
+  });
+
+  it('routes the saved task through the authenticated main IPC handler', () => {
+    const ipc = read('src/main/ipc/index.ts');
+    expect(auto).toContain("invoke('autoTasks.runNow', { taskId: task.id })");
+    expect(ipc).toContain("'autoTasks.runNow': async ({ taskId } = {}, ctx)");
+    expect(ipc).toContain('return autoTasks.runTaskNow(ctx.userId, taskId)');
   });
 
   it('uses the shared three-column resource-card geometry for templates', () => {

@@ -51,6 +51,14 @@ function contextsRoot(): string {
   return contextsRootForUser(getActiveUserId());
 }
 
+/** 某个用户的知识库域根目录（`<uid>/cloud/contexts`）。
+ *  公开理由：调用方（如会议产物沉淀）需要在**不要求目标已存在**的前提下算出落点，
+ *  而本模块的 `resolveContextEntryAbsPath` 是 `mustExist: true` 语义，不能用于此用途。
+ *  只读暴露；写入仍必须走本模块的写入原语。 */
+export function libraryRootAbsForUser(uid: string): string {
+  return contextsRootForUser(uid);
+}
+
 function contextsRootForUser(uid: string): string {
   return userContextsDir(uid);
 }

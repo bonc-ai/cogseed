@@ -30,7 +30,10 @@ export type CogSeedTaskStatus =
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'recoverable';
+  | 'recoverable'
+  // Decision 1B: the run outlived its turn and keeps going in the background.
+  // Deliberately NOT terminal — a later completed/failed still supersedes it.
+  | 'background';
 
 export type CogSeedTaskExecutionKind = 'cogseed-native' | 'local-cli' | 'group-chat';
 export type CogSeedResultDeliveryState = 'not-applicable' | 'pending' | 'delivered' | 'pending-recovery';
@@ -75,6 +78,8 @@ export interface CogSeedTaskRecord {
   spaceId?: string;
   worktreeName?: string;
   conversationId?: string;
+  /** Decision 1B/2: the p3394 background job this task was promoted into. */
+  backgroundJobId?: string;
   agentId?: string;
   executionKind?: CogSeedTaskExecutionKind;
   /** Delivery of the terminal result into the bound CogSeed conversation.
@@ -98,6 +103,8 @@ export interface CogSeedTaskRecord {
   profileId?: string;
   /** Explicit Commander-granted Recall ability assets for this task. */
   abilityAssetIds?: string[];
+  /** Root task id of the delegation tree (observability correlation only). */
+  traceId?: string;
   /** Validated CLI working directory for this task. */
   workingDir?: string;
   retryOfTaskId?: string;
@@ -109,6 +116,8 @@ export interface CogSeedTaskRecord {
   coordinationDepth?: number;
   createdAt: string;
   updatedAt: string;
+  /** Start of the current execution attempt, excluding time waiting for input. */
+  executionStartedAt?: string;
   terminalAt?: string;
   /** User-hidden timestamp. Archiving removes a terminal run from default
    * dashboard lists without rewriting its lifecycle status or history. */
@@ -203,6 +212,13 @@ export interface CogSeedTaskEvent {
   sequence: number;
   type: CogSeedTaskEventType;
   createdAt: string;
+  /** Traceability refs, filled by the writer from the task record when known.
+   *  Absent on events written before 2026-10-13: until then a run could only be
+   *  attributed by parsing the `sessionId` string, which is why the 17:07
+   *  incident could not be traced from the event stream (N-09). */
+  conversationId?: string;
+  agentId?: string;
+  runId?: string;
   payload: Record<string, unknown>;
 }
 

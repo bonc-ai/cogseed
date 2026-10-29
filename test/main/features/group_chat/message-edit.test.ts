@@ -131,6 +131,28 @@ describe('group_chat user message replacement', () => {
     expect(mocks.clearForConversation).toHaveBeenCalledWith(UID, CID);
   });
 
+  it('restores source eligibility after a failed edit rolls its message tombstones back', async () => {
+    const chats = await import('../../../../src/main/features/chats');
+    await chats.createConversation(UID, { conversationId: CID, title: 'Synthetic source rollback', kind: 'normal' });
+    const row = { id: 'source-message', ts: '2026-08-06T11:00:00.000Z', from: 'user', to: ['commander'], text: 'Keep the synthetic source intact.' };
+    const { groupChat } = await writeConversationRows([row]);
+    const { cognitionMessageSourceRef } = await import('../../../../src/main/features/recall/source-locator');
+    const { createAssetSourceAvailability } = await import('../../../../src/main/features/recall/asset-source-availability');
+    const source = { id: 'source-backed-asset', candidateId: '', sourceSessionIds: [CID], evidenceRefs: [cognitionMessageSourceRef(CID, row)] };
+    const available = () => createAssetSourceAvailability(UID)(source);
+    expect(await available()).toBe(true);
+    mocks.enqueue.mockImplementationOnce(async () => {
+      expect(await available()).toBe(false);
+      throw new Error('Synthetic enqueue failure');
+    });
+    expect(await groupChat.replaceUserMessage({ userId: UID, cid: CID, messageId: row.id, text: 'Replacement' }))
+      .toMatchObject({ ok: false });
+    expect(await available()).toBe(true);
+    expect(await groupChat.replaceUserMessage({ userId: UID, cid: CID, messageId: row.id, text: 'Replacement' }))
+      .toMatchObject({ ok: true });
+    expect(await available()).toBe(false);
+  });
+
   it('rejects assistant, deleted, invalid, and running targets before any rewrite', async () => {
     const { layout, groupChat } = await writeConversationRows([
       { id: 'assistant-msg', ts: '2026-08-06T11:00:00.000Z', from: 'commander', to: ['user'], text: 'reply' },

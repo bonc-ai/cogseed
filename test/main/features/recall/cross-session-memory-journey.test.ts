@@ -82,84 +82,54 @@ describe('cross-session memory end-to-end journey', () => {
   it.each([
     ['Japanese', '覚えておいて：簡潔な回答を好みます。', '簡潔な回答を好みます。'],
     ['Portuguese', 'Por favor, lembre-se: Prefiro respostas concisas.', 'Prefiro respostas concisas.'],
-  ])('creates a formal personal asset from an exact %s save request', async (_language, userMessage, content) => {
+  ])('rejects the retired write action for an exact %s save request', async (_language, userMessage, content) => {
     const saved = await invokeMemoryTool(
       userMessage,
       `gconv-memory-journey-localized-${String(_language).toLowerCase()}`,
       { action: 'add', target: 'user', content },
     );
-    expect(saved.result).toMatchObject({ ok: true });
-    expect(saved.result.entries[0]).toContain('Saved as active cognition asset');
-
+    expect(saved.result).toMatchObject({ ok: false, error: expect.stringContaining('read-only') });
     const assets = await import('../../../../src/main/features/recall/asset-service');
-    expect(await assets.listAbilityAssets(USER_ID)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ statement: content, type: 'personal', status: 'active' }),
-    ]));
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    expect(await assets.listAbilityAssets(USER_ID)).toEqual([]);
+    expect(await candidates.listRecallCandidates(USER_ID)).toEqual([]);
+
   });
 
-  it('saves only on request, injects on the next task, carries corrections forward, and stops when paused', async () => {
-    const original = '我偏好简洁回答。';
-    const corrected = '我偏好先给结论，再用一段话解释原因。';
-
-    const saved = await invokeMemoryTool(
-      '请记住：我偏好简洁回答。',
-      'gconv-memory-journey-save',
-      { action: 'add', target: 'user', content: original },
-    );
-    expect(saved.result).toMatchObject({ ok: true });
-    expect(saved.result.entries[0]).toContain('Saved as active cognition asset');
-
+  it('reads preserved personal assets while retired memory writes cannot create or edit them', async () => {
+    const original = '我长期偏好简洁回答。';
+    const corrected = '我长期偏好先给结论，再解释原因。';
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const assets = await import('../../../../src/main/features/recall/asset-service');
-    const asset = (await assets.listAbilityAssets(USER_ID)).find((item) => item.type === 'personal');
-    expect(asset).toMatchObject({ statement: original, status: 'active' });
-
-    const nextTask = await buildRunner('帮我整理一份说明。', 'gconv-memory-journey-next');
-    expect(nextTask.resolvedSystemPrompt).toContain(original);
-
-    const deniedCorrection = await invokeMemoryTool(
-      'This preference seems wrong now.',
-      'gconv-memory-journey-denied-correction',
-      { action: 'replace', target: 'user', old_text: original, content: corrected },
-    );
-    expect(deniedCorrection.result).toMatchObject({ ok: false });
-    const deniedRemoval = await invokeMemoryTool(
-      'Do not forget this preference.',
-      'gconv-memory-journey-denied-removal',
-      { action: 'remove', target: 'user', old_text: original },
-    );
-    expect(deniedRemoval.result).toMatchObject({ ok: false });
-    expect(await assets.readAbilityAsset(USER_ID, asset!.id)).toMatchObject({ statement: original, status: 'active' });
-
-    const correctedResult = await invokeMemoryTool(
-      `请把这条改成：${corrected}`,
-      'gconv-memory-journey-correct',
-      { action: 'replace', target: 'user', old_text: original, content: corrected },
-    );
-    expect(correctedResult.result).toMatchObject({ ok: true });
-    const revised = await assets.readAbilityAsset(USER_ID, asset!.id);
-    expect(revised).toMatchObject({ statement: corrected, status: 'active' });
-    expect(revised.version).not.toBe(asset!.version);
-
-    const correctedTask = await buildRunner('继续帮我整理。', 'gconv-memory-journey-corrected-task');
-    expect(correctedTask.resolvedSystemPrompt).toContain(corrected);
-    expect(correctedTask.resolvedSystemPrompt).not.toContain(original);
-
-    await assets.pauseAbilityAsset(USER_ID, asset!.id, {
-      actor: 'user',
-      reason: 'The user temporarily disabled this memory.',
-      expectedVersion: revised.version,
+    // This scenario starts from a historical user-authored asset; no removed
+    // creation path is used to manufacture it.
+    const { seedStoredAbilityAsset } = await import('../../../helpers/stored-ability-asset');
+    const { writeReviewDecision } = await import('../../../../src/main/features/cognition/review-decision');
+    await writeReviewDecision(USER_ID, { targetRef: 'recall_candidate:cand-existing-user-profile',
+      antecedentRef: 'cand-existing-user-profile', decisionType: 'accept', decision: 'accept', actor: 'user',
+      scope: 'general', decisionId: 'rd_existing_profile_fixture' });
+    const now = new Date().toISOString();
+    const asset = await seedStoredAbilityAsset(USER_ID, {
+      schemaVersion: 2, ownerId: USER_ID, id: 'aa-existing-user-profile-fixture',
+      candidateId: 'cand-existing-user-profile', sourceCandidateIds: ['cand-existing-user-profile'],
+      reviewDecisionId: 'rd_existing_profile_fixture', type: 'personal', title: '简洁回答偏好', statement: original,
+      origin: 'manual', scope: 'general', evidenceRefs: [], version: '1', activeVersion: '1',
+      maturity: 'bud', lifecycleStatus: 'user_confirmed_unverified', status: 'active',
+      createdAt: now, updatedAt: now,
     });
-    const pausedTask = await buildRunner('再继续整理。', 'gconv-memory-journey-paused-task');
-    expect(pausedTask.resolvedSystemPrompt).not.toContain(corrected);
-    expect((await assets.readAbilityAsset(USER_ID, asset!.id)).status).toBe('paused');
-
-    await assets.resumeAbilityAsset(USER_ID, asset!.id, { actor: 'user', reason: 'Resume before explicit removal.' });
-    const removed = await invokeMemoryTool(
-      'Please forget this preference.',
-      'gconv-memory-journey-remove',
-      { action: 'remove', target: 'user', old_text: corrected },
-    );
-    expect(removed.result).toMatchObject({ ok: true });
-    expect((await assets.readAbilityAsset(USER_ID, asset!.id)).status).toBe('deleted');
+    const next = await buildRunner('帮我整理一份说明。', 'gconv-memory-existing-next');
+    expect(next.resolvedSystemPrompt).toContain(original);
+    const listed = await invokeMemoryTool('列出已有记忆。', 'gconv-memory-existing-list', { action: 'list', target: 'user' });
+    expect(listed.result.ok).toBe(true);
+    expect(listed.result.entries.join('\n')).toContain(original);
+    for (const action of ['add', 'replace', 'remove']) {
+      expect((await invokeMemoryTool('请修改这条记忆。', `gconv-memory-retired-${action}`,
+        { action, target: 'user', old_text: original, content: corrected })).result.ok).toBe(false);
+    }
+    expect((await assets.readAbilityAsset(USER_ID, asset.id)).statement).toBe(original);
+    const revised = await assets.updateAbilityAsset(USER_ID, asset.id, { statement: corrected, actor: 'user', reason: 'Edit an existing asset through its management service.' });
+    expect((await buildRunner('继续整理。', 'gconv-memory-edited')).resolvedSystemPrompt).toContain(corrected);
+    await assets.pauseAbilityAsset(USER_ID, asset.id, { actor: 'user', reason: 'Pause preserved asset.', expectedVersion: revised.version });
+    expect((await buildRunner('继续整理。', 'gconv-memory-paused')).resolvedSystemPrompt).not.toContain(corrected);
   });
 });

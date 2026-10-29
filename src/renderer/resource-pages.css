@@ -11,20 +11,8 @@
   background: var(--surface-card);
 }
 
-/* Keep the title aligned with the body gutter while retaining a full-width
- * header divider and the existing macOS drag-region behavior. */
-.ui-resource-page :is(
-  #auto-page-header,
-  #connections-page-header,
-  #cognition-page-header,
-  .ws-center-header
-) .ui-page-header {
-  padding-inline-end: var(--resource-page-inset);
-  padding-inline-start: max(
-    var(--resource-page-inset),
-    var(--shell-header-inset, var(--resource-page-gutter))
-  );
-}
+/* Page headers keep the shared uiPageHeader padding (specs/008 D12): every
+ * top-level header starts at the same left edge with the shell slot. */
 
 /* Each page keeps its own scroll owner and data flow. The shared wrapper only
  * owns the usable width, page inset, and outer whitespace. */
@@ -45,6 +33,10 @@
 
 /* Workspace already keeps a stable refresh/status slot. Use that slot as the
  * top whitespace so normal, refreshing, and recovery states do not jump. */
+/* The scroll owner defaults to the app tint; keep the notice slot and the
+ * body on the same white as the header so no grey band shows under it. */
+.ui-resource-page .ws-view { background: var(--surface-card); }
+
 .ui-resource-page .ws-center-header + .ws-refresh-notice {
   min-height: var(--space-6);
   padding: 0 var(--resource-page-inset);

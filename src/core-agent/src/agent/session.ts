@@ -27,6 +27,13 @@ export const ACTIVE_CHECKPOINT_EXACT_FACTS_HEADING =
 // the turn. We rewrite the payload to this marker (keeping the block's
 // type/toolUseId/isError) so a heavy-fetch turn does not hold every fetched page
 // resident. Only results larger than the marker are worth pruning.
+import { pruneToolResultContent } from "./context-compaction-policy.js";
+
+import { createLogger } from "../shared/logger.js";
+import { noNewVolumeSince } from "./context-compaction-policy.js";
+
+const log = createLogger("agent-session");
+
 export const ARCHIVED_TOOL_RESULT_MARKER =
   "[archived: folded into the current-turn checkpoint summary; re-read the source if exact bytes are needed]";
 export const ARCHIVED_TOOL_RESULT_PRUNE_MIN_CHARS = 400;
@@ -572,7 +579,12 @@ export class Session {
    * content blocks is appended *after* the tool_result message. This fallback
    * shape works across providers whose native tool_result channel does not
    * accept images (OpenAI, Gemini) — the model sees "tool returned text,
-   * then the very next user turn is the associated image(s)". */
+   * then the very next user turn is the associated image(s)".
+   *
+   * The images are stamped with the producing `tool_use` id (C1/R-09): the
+   * positional shape loses the association once results are batched or the
+   * session is replayed, and the id is what lets the request builder externalize
+   * exactly these images to text handles when the image budget is exceeded. */
   addToolResult(
     toolUseId: string,
     result: string,
@@ -580,16 +592,21 @@ export class Session {
     isError?: boolean,
   ): void {
     this.addMessage("user", [{ type: "tool_result", toolUseId, content: result, isError }]);
-    this.addToolImages(images);
+    this.addToolImages(images, toolUseId);
   }
 
-  /** Append images produced by tools without inserting another tool result. */
-  addToolImages(images?: ToolResultImage[]): void {
+  /** Append images produced by tools without inserting another tool result.
+   *  `toolUseId` attributes them to their call when the caller still knows it. */
+  addToolImages(images?: ToolResultImage[], toolUseId?: string): void {
     if (!images?.length) return;
+    const attributedTo = String(toolUseId || "").trim();
     const imageBlocks: ImageContent[] = images.map((img) => ({
       type: "image",
       data: img.data,
       mediaType: img.mediaType as ImageContent["mediaType"],
+      ...(attributedTo ? { toolUseId: attributedTo } : {}),
+      ...(img.name ? { name: img.name } : {}),
+      ...(img.readonlyPath ? { readonlyPath: img.readonlyPath } : {}),
     }));
     this.addMessage("user", imageBlocks);
   }
@@ -875,6 +892,12 @@ export class Session {
     return total;
   }
 
+  /** B (checkpoint path): model-view tokens left behind by the last applied checkpoint.
+   *  The same history must not be checkpoint-compacted again without genuinely new
+   *  volume — a real run compacted four times in three minutes with shrinking savings
+   *  because the retained tail kept dominating the window. */
+  private lastActiveCheckpointModelViewTokensAfter: number | null = null;
+
   getPendingActiveCheckpoint(): ActiveCheckpointCandidate | null {
     const state = this.turnState;
     const active = state?.activeTurn;
@@ -913,6 +936,26 @@ export class Session {
       return null;
     }
 
+    // B (checkpoint path): require genuinely new volume over what the last applied
+    // checkpoint left behind (default +25%). Declining here is a supported outcome —
+    // the runner's `if (activeCandidate && ...)` simply skips — so the gate lives with
+    // the session state instead of the runner's control flow.
+    const lastApplied = this.lastActiveCheckpointModelViewTokensAfter;
+    if (lastApplied !== null) {
+      const modelViewTokensNow = this.esticogseedModelTokens();
+      if (noNewVolumeSince(modelViewTokensNow, lastApplied)) {
+        // Observable on purpose: a silent decline is indistinguishable from "the
+        // context never grew", which made the first real-machine check inconclusive.
+        log.info("context compaction skipped", {
+          phase: "active_checkpoint",
+          reason: "no_new_volume",
+          modelViewTokensNow,
+          lastApplied,
+        });
+        return null;
+      }
+    }
+
     return {
       groups: archiveGroups,
       messages: this.buildActiveCheckpointMessages(archiveGroups),
@@ -930,6 +973,12 @@ export class Session {
     active.checkpointSummary = mergedSummary;
     active.checkpointThroughMessageIndex = Math.max(prevThrough, checkpointThroughMessageIndex);
     this.pruneArchivedActiveProcess(prevThrough, active.checkpointThroughMessageIndex);
+    // A′: the tail that survives the checkpoint still occupies the window — and a
+    // single 16K-token tool result can be over half of it, which is what made the
+    // session re-cross the trigger after a couple of operations. Bound each kept
+    // result to head+tail (type/toolUseId/isError and indices untouched).
+    this.pruneRetainedTailToolResults(active.checkpointThroughMessageIndex);
+    this.lastActiveCheckpointModelViewTokensAfter = this.esticogseedModelTokens();
     return mergedSummary;
   }
 
@@ -993,6 +1042,28 @@ export class Session {
           return { ...c, content: ARCHIVED_TOOL_RESULT_MARKER };
         }
         return c;
+      });
+      if (changed) this.messages[i] = { ...msg, content };
+    }
+  }
+
+  /**
+   * A′: shrink oversized tool results in the part of the history that survives the
+   * checkpoint (indices > throughInclusive). Only `content` changes — block type,
+   * toolUseId, isError, message role and every index stay valid, exactly like
+   * `pruneArchivedActiveProcess`. Results at or below the threshold stay verbatim.
+   */
+  private pruneRetainedTailToolResults(throughInclusive: number): void {
+    const start = Math.max(0, throughInclusive + 1);
+    for (let i = start; i < this.messages.length; i++) {
+      const msg = this.messages[i];
+      let changed = false;
+      const content = msg.content.map((c) => {
+        if (c.type !== "tool_result" || typeof c.content !== "string") return c;
+        const pruned = pruneToolResultContent(c.content);
+        if (!pruned.pruned) return c;
+        changed = true;
+        return { ...c, content: pruned.text };
       });
       if (changed) this.messages[i] = { ...msg, content };
     }

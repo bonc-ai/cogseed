@@ -152,14 +152,13 @@ const nav = (loaded: { elements: Map<string, any> }) => loaded.elements.get('per
 
 describe('personal ontology v2 renderer › wiring', () => {
   it('keeps the parking section, modals, and cognition-assets mount contract', () => {
-    for (const id of [
-      'panel-personal-ontology', 'personal-onto-sidebar',
-      'personal-onto-nav', 'personal-onto-main-header', 'personal-onto-main-body',
-      'personal-onto-template-library-modal',
-    ]) expect(html).toContain(`id="${id}"`);
+    // 页面已并入认知资产外壳：面板由 cognition-assets 在 ca-root 内构建，
+    // index.html 只保留挂载点，旧 personal-onto-* 容器已退役。
+    expect(html).toContain('id="ca-root"');
     expect(boot).toContain("const openPersonalOntology = view === 'personal-ontology'");
     expect(cognitionViews).toContain('data-act="open-ontology"');
-    expect(cognitionCore).toContain('renderPersonalOntology');
+    // 入口已收口到 CogAssets.openPersonalOntology（boot 只做转发）。
+    expect(cognitionCore).toContain('NS.openPersonalOntology');
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
   });
 

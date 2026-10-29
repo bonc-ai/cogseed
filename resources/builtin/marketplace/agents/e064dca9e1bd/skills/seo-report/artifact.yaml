@@ -1,0 +1,29 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.seo.report
+  name: seo-report
+  version: 1.0.0
+  description: 'Aggregate seo-tech-audit, keyword opportunities and GEO probe results
+    into an inline-renderable :::dashboard JSON (health score, dimension charts, issue
+    table, opportunity pool, GEO SoV snapshot) plus an ACTION-PLAN.md; For: ''produce
+    the diagnosis report'', ''give me a SEO dashboar'
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: python
+    scripts:
+    - scripts/report.py
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

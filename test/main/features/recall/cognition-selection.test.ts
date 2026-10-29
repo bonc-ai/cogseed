@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -109,10 +110,19 @@ describe('单条资产的判定（纯函数）', () => {
 });
 
 describe('作用域白名单的三态在选择层生效', () => {
-  it('缺失 = 不设限，放行', async () => {
+  it('scopePolicy 缺失 = 不设限，放行', async () => {
     const { classifyInheritedAsset } = await mod();
-    const a = asset({ id: 'aa-nolimit', scopePolicy: { purposeTags: ['review'] } });
+    const a = asset({ id: 'aa-nolimit' });
     expect(classifyInheritedAsset(await refFor(a), a, { agentId: 'ag-any', scope: 'delivery' })).toEqual([]);
+  });
+
+  it('声明了 purposeTags 却不传 purpose = fail-closed 拒绝，不因缺上下文绕开', async () => {
+    // 反转：旧实现只判四维，purposeTags 声明了也没人看——不传 purpose
+    // 等于白给。与 isAssetScopeAllowed 同语义：一旦声明限制，未知上下文即拒。
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-nopurpose', scopePolicy: { purposeTags: ['review'] } });
+    expect(classifyInheritedAsset(await refFor(a), a, { agentId: 'ag-any', scope: 'delivery' }))
+      .toEqual(['scope_purpose_not_allowed']);
   });
 
   it('空数组 = 谁都不给，任何 Agent 都拦', async () => {
@@ -131,7 +141,76 @@ describe('作用域白名单的三态在选择层生效', () => {
   });
 });
 
-describe('规范 10.2 矩阵在这里被真正消费', () => {
+describe('scopePolicy 七维全量判定', () => {
+  it('purposeTags 按词元命中放行，整词边界外不算命中', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-purpose', scopePolicy: { purposeTags: ['review'] } });
+    expect(classifyInheritedAsset(await refFor(a), a, { purpose: 'knowledge review pass', scope: 'delivery' }))
+      .toEqual([]);
+    // 'research' 不含整词 'review'——词元匹配不是子串匹配。
+    expect(classifyInheritedAsset(await refFor(a), a, { purpose: 'research', scope: 'delivery' }))
+      .toEqual(['scope_purpose_not_allowed']);
+  });
+
+  it('conversationKinds 命中放行，未命中与缺失都拦', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-conv', scopePolicy: { conversationKinds: ['solo'] } });
+    expect(classifyInheritedAsset(await refFor(a), a, { conversationKind: 'solo', scope: 'delivery' })).toEqual([]);
+    expect(classifyInheritedAsset(await refFor(a), a, { conversationKind: 'group', scope: 'delivery' }))
+      .toEqual(['scope_conversation_not_allowed']);
+    expect(classifyInheritedAsset(await refFor(a), a, { scope: 'delivery' }))
+      .toEqual(['scope_conversation_not_allowed']);
+  });
+
+  it('fileKinds 混合输入必须全部在界内，一个越界即拦', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-files', scopePolicy: { fileKinds: ['pdf', 'md'] } });
+    expect(classifyInheritedAsset(await refFor(a), a, { fileKinds: ['pdf'], scope: 'delivery' })).toEqual([]);
+    expect(classifyInheritedAsset(await refFor(a), a, { fileKinds: ['pdf', 'xlsx'], scope: 'delivery' }))
+      .toEqual(['scope_file_kind_not_allowed']);
+    expect(classifyInheritedAsset(await refFor(a), a, { fileKinds: [], scope: 'delivery' }))
+      .toEqual(['scope_file_kind_not_allowed']);
+  });
+
+  it('多维同时被拦时全部记下，回执主因按固定次序挑', async () => {
+    const { classifyInheritedAsset, primaryWithheldReason } = await mod();
+    const a = asset({
+      id: 'aa-multi-dim',
+      scopePolicy: { purposeTags: ['review'], conversationKinds: ['solo'], agentIds: ['ag-me'] },
+    });
+    const reasons = classifyInheritedAsset(await refFor(a), a, {
+      conversationKind: 'group', agentId: 'ag-you', scope: 'delivery',
+    });
+    expect(reasons).toEqual([
+      'scope_purpose_not_allowed',
+      'scope_agent_not_allowed',
+      'scope_conversation_not_allowed',
+    ]);
+    expect(primaryWithheldReason(reasons)).toBe('scope_purpose_not_allowed');
+  });
+
+  it('end-to-end：越权维度的资产进 withheld，不再静默注入', async () => {
+    const { selectInheritedCognition } = await mod();
+    const { recordAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+    const ok = asset({ id: 'aa-scope-ok' });
+    const leaky = asset({ id: 'aa-scope-leak', scopePolicy: { fileKinds: ['pdf'] } });
+    await recordAgentInheritance(UID, {
+      agentId: 'ag-scopem2', rolePrompt: '角色', assets: [ok, leaky], createdAt: AT,
+    });
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    vi.spyOn(assets, 'readAbilityAsset').mockImplementation(async (_u: string, id: string) => (
+      id === 'aa-scope-ok' ? ok : leaky
+    ) as never);
+
+    // 运行没带任何文件，fileKinds 声明了 [pdf] → fail-closed。
+    const result = await selectInheritedCognition(UID, 'ag-scopem2', { scope: 'delivery' });
+    expect(result!.selected.map((s) => s.assetRef.asset_id)).toEqual(['aa-scope-ok']);
+    expect(result!.withheld).toHaveLength(1);
+    expect(result!.withheld[0].reasons).toEqual(['scope_file_kind_not_allowed']);
+  });
+});
+
+describe('同域与跨域资产的默认使用档', () => {
   it('seed 档默认不带入', async () => {
     const { classifyInheritedAsset } = await mod();
     const a = asset({ id: 'aa-seed', maturity: 'seed' });
@@ -298,7 +377,7 @@ describe('跨作用域授权的落盘与撤回', () => {
   it('确认、撤回都留审计，且撤回后立刻回到需要确认', async () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const assets = await import('../../../../src/main/features/recall/asset-service');
-    const c = await candidates.saveRecallCandidate(UID, {
+    const c = await createNightlyCandidateFixture(UID, {
       judgment: '一条会被授权跨域的判断。', summary: '跨域授权样本', suggestedType: 'rule', suggestedScope: 'delivery',
       sourceRefs: [{ kind: 'execution', id: 'exec-cross' }],
     });
@@ -320,7 +399,7 @@ describe('跨作用域授权的落盘与撤回', () => {
   it('彻底清除时一并清掉授权——不给墓碑留一张跨域许可', async () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const assets = await import('../../../../src/main/features/recall/asset-service');
-    const c = await candidates.saveRecallCandidate(UID, {
+    const c = await createNightlyCandidateFixture(UID, {
       judgment: '会被彻底清除的判断。', summary: '清除授权样本', suggestedType: 'rule', suggestedScope: 'delivery',
       sourceRefs: [{ kind: 'execution', id: 'exec-purge-cross' }],
     });

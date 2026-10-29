@@ -22,6 +22,7 @@ import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { createLogger } from '../../logger';
 import { createTask, listTasks, type Schedule } from '../auto_tasks';
+import { deriveCurrentRequest } from './task-context';
 
 const log = createLogger('session-import:codex-import');
 
@@ -353,7 +354,7 @@ export async function importCodexMemory(
   }
 
   // Import via the memory module
-  const { addEntry, listEntries } = await import('../memory');
+  const { addEntryTransactional, listEntries } = await import('../memory');
   const existing = new Set<string>();
   const cur = listEntries(userId, 'memory');
   if (cur.ok && Array.isArray(cur.entries)) {
@@ -369,7 +370,8 @@ export async function importCodexMemory(
     if (!t) continue;
     if (existing.has(t)) { skipped += 1; continue; }
 
-    const res = addEntry(userId, 'memory', t);
+    // P-r2-11：shared MEMORY.md 写入走事务通道（避免被并发事务回滚抹掉）。
+    const res = await addEntryTransactional(userId, 'memory', t);
     if (res.ok) { added += 1; existing.add(t); }
     else { rejected += 1; }
   }
@@ -464,15 +466,21 @@ export async function importCodexSession(
 
   // Build a minimal extraction shape (no cognitions for Codex, just a plain
   // summary). Skip the synthetic turns Codex injects ahead of the real prompt.
-  const firstUserMsg = turns
+  const userTexts = turns
     .filter((t) => t.role === 'user' && !isSyntheticUserText(t.content))
     .map((t) => unwrapUserText(t.content))
-    .find((t) => t);
+    .filter((text): text is string => !!text);
+  const firstUserMsg = userTexts[0];
   const sessionSummary = condense(firstUserMsg || '', 200) || '从 Codex 导入的会话';
+  // The summary is the FIRST prompt (what the session was about). The current
+  // request is the LAST substantive prompt (where the user actually left off);
+  // keeping only the first one is what lost the continuation target.
+  const currentRequest = deriveCurrentRequest(userTexts.map((text) => ({ role: 'user', text })));
 
   const extraction = {
     ok: true,
     sessionSummary,
+    currentRequest,
     candidates: [],
     degraded: false,
   };

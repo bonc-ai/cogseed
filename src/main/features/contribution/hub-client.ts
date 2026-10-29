@@ -4,6 +4,7 @@ import { app } from 'electron';
 import { createLogger } from '../../logger';
 import { desktopPlatform, type DesktopPlatform } from '../../system_info';
 import { getCurrentLang } from '../../i18n';
+import { currentClientChannel } from '../client_channel';
 import { apiBase } from '../marketplace';
 import { ensureFreshSession } from '../hub_account';
 
@@ -69,6 +70,8 @@ function requestHeaders(token?: string, requestId = randomUUID()): Record<string
     'X-CogSeed-Client-Version': clientAppVersion(),
     'X-CogSeed-Platform': platformWireValue(desktopPlatform()),
     'X-CogSeed-Request-ID': requestId,
+    // Hub 的企业线/开源线隔离依赖客户端在每个请求上带通道头（AG-FR-072）
+    'CogSeed-Channel': currentClientChannel(),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
@@ -137,7 +140,22 @@ export interface SubmissionManifest extends JsonObject {
   local_check: JsonObject;
 }
 
-function assertCurrentManifest(manifest: SubmissionManifest): void {
+/** Agent 提交清单：字段集对应 `agent-api-proposal.md` v3 §5；Hub 白名单扩充前真实请求会被拒绝。 */
+export interface AgentSubmissionManifest extends JsonObject {
+  content_type: 'agent';
+  local_agent_id: string;
+  target_content_id: string | null;
+  package_digest: string;
+  package_size: number;
+  file_list: Array<{ path: string; size: number; sha256: string }>;
+  metadata: { name: string; description: string; version: string };
+  declarations: JsonObject;
+  local_check: JsonObject;
+}
+
+export type AnySubmissionManifest = SubmissionManifest | AgentSubmissionManifest;
+
+function assertCurrentManifest(manifest: AnySubmissionManifest): void {
   if (Object.prototype.hasOwnProperty.call(manifest.local_check, 'components')) {
     throw new Error('components_contract_not_frozen');
   }
@@ -158,7 +176,7 @@ export async function readTerms(etag?: string): Promise<{ notModified: boolean; 
 
 export async function createSubmission(userId: string, args: {
   idempotencyKey: string;
-  manifest: SubmissionManifest;
+  manifest: AnySubmissionManifest;
   packageBytes: Buffer;
   signal?: AbortSignal;
 }): Promise<JsonObject> {
@@ -169,7 +187,7 @@ export async function createSubmission(userId: string, args: {
   form.append('manifest', new Blob([JSON.stringify(args.manifest)], { type: 'application/json' }), 'manifest.json');
   const packageBytes = new Uint8Array(args.packageBytes.byteLength);
   packageBytes.set(args.packageBytes);
-  form.append('package', new Blob([packageBytes], { type: 'application/zip' }), 'skill.zip');
+  form.append('package', new Blob([packageBytes], { type: 'application/zip' }), args.manifest.content_type === 'agent' ? 'agent.zip' : 'skill.zip');
   return fetchEnvelope('/marketplace/contributions/submissions', { method: 'POST', headers, body: form }, args.signal);
 }
 

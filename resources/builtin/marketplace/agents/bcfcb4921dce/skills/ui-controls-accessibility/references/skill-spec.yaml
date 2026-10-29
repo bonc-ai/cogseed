@@ -1,0 +1,10 @@
+name: ui-controls-accessibility
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Handle complex forms, composite widgets, or focused accessibility reviews
+  across control taxonomy, states, responsive behavior, text fit, keyboard use, and
+  A11y; ordinary UI uses the compact executor's baseline rules.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

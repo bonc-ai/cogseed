@@ -1,0 +1,11 @@
+name: seo-report
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'Aggregate seo-tech-audit, keyword opportunities and GEO probe results into
+  an inline-renderable :::dashboard JSON (health score, dimension charts, issue table,
+  opportunity pool, GEO SoV snapshot) plus an ACTION-PLAN.md; For: ''produce the diagnosis
+  report'', ''give me a SEO dashboar'
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

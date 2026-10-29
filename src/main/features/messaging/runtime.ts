@@ -207,6 +207,8 @@ export class RuntimeInstance {
    *  否则入站路径的幂等检查会让旧任务的订阅一直占着 key。 */
   private readonly listenerCids = new Map<string, string>();
   readonly outboundDeliveries = new Set<Promise<void>>();
+  private readonly deliveryPreflights = new Map<string, () => Promise<void>>();
+  setDeliveryPreflight(key: string, gate: () => Promise<void>): void { this.deliveryPreflights.set(key, gate); }
   active = true;
   statusWrite: Promise<void> = Promise.resolve();
   readonly bindingContexts = new Map<string, MessagingBinding>();
@@ -291,6 +293,11 @@ export class RuntimeInstance {
   async attemptDelivery(key: string, entry: DeliveryLedgerEntry): Promise<void> {
     if (!this.isCurrent()) return;
     try {
+      if (entry.requiresOperationPreflight) {
+        const gate = this.deliveryPreflights.get(key);
+        if (!gate) throw Object.assign(new Error('current host operation context is unavailable after recovery'), { code: 'E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE' });
+        await gate();
+      }
       // Interactive-card sends (touchpoint intents) replay through sendCard;
       // file sends go through sendFile when the adapter supports it;
       // everything else stays on the plain-text path. Non-card/file adapters
@@ -316,6 +323,7 @@ export class RuntimeInstance {
             this.controller.signal,
             deliveryContext(entry),
           );
+      this.deliveryPreflights.delete(key);
       await ledger.finishDelivery(this.uid, key, {
         status: 'sent',
         ...(receipt.deliveryId ? { externalDeliveryId: receipt.deliveryId } : {}),
@@ -329,6 +337,12 @@ export class RuntimeInstance {
         return;
       }
       const messageText = (error as Error).message || 'delivery failed';
+      if (String((error as { code?: unknown }).code || '').startsWith('E_ONTOLOGY_OPERATION_')
+        || messageText.includes('E_ONTOLOGY_OPERATION_')) {
+        this.deliveryPreflights.delete(key);
+        await ledger.finishDelivery(this.uid, key, { status: 'failed', error: 'delivery blocked: current required operation conditions are unavailable or unresolved' });
+        return;
+      }
       await this.scheduleRetry(key, messageText);
     }
   }

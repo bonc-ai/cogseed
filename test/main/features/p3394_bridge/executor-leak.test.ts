@@ -1,22 +1,19 @@
 /**
  * M-06/S-04：executor 异常路径的泄漏防护——deliver 抛错与 onEvent 抛错
- * 携带原始 token 时，episode 落盘与审计记录都必须脱敏。
+ * 携带原始 token 时，审计记录与 host 事件通道都必须脱敏。
+ *
+ * 注：executor 原有的 episode 落盘汇点已随 P3394 平行 episode 存储一并删除，
+ * 故 deliver 抛错一例改为校验 host 落盘所依赖的同一条脱敏路径。
  */
 
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildP3394BridgeManifest,
   P3394BridgeExecutor,
   P3394BridgeKernel,
 } from '../../../../src/main/features/p3394';
-import { recordP3394Episode } from '../../../../src/main/features/p3394_bridge/kstar-episodes';
+import { redactP3394Secrets } from '../../../../src/main/features/p3394_bridge/secrets';
 import type { P3394RuntimeAdapter, P3394RuntimeEvent, P3394RuntimeSessionBinding, P3394RuntimeSnapshot } from '../../../../src/main/features/p3394_bridge/runtime-adapter';
-
-const SCRATCH_VARIANT = 'p3394-leak-test-' + Math.random().toString(36).slice(2, 8);
-process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
 
 function manifest(id: string) {
   const result = buildP3394BridgeManifest({
@@ -42,7 +39,7 @@ function envelope() {
 }
 
 describe('P3394 executor exception-path leak protection (M-06/S-04)', () => {
-  it('deliver 抛错带 token 时，episode 落盘已脱敏', async () => {
+  it('deliver 抛错带 token 时，host 事件通道的失败事件经脱敏后不泄漏', async () => {
     const secret = 'abcDEF1234567890';
     const failing: P3394RuntimeAdapter = {
       async openSession(input): Promise<P3394RuntimeSessionBinding> {
@@ -62,22 +59,27 @@ describe('P3394 executor exception-path leak protection (M-06/S-04)', () => {
     const bridge = new P3394BridgeKernel();
     bridge.registry.register({ identity: { agent_id: 'peer-a', display_name: 'Peer' }, manifest: manifest('peer-a') });
     bridge.registry.register({ identity: { agent_id: 'local-agent', display_name: 'Local' }, manifest: manifest('local-agent') });
+    const seen: Array<{ sessionId: string; event: P3394RuntimeEvent }> = [];
     const executor = new P3394BridgeExecutor({
       bridge,
       runtime: failing,
-      recordEpisode: (episode) => {
-        recordP3394Episode({ ...episode, agent_id: 'local-agent' } as never);
-      },
+      onEvent: (sessionId, event) => { seen.push({ sessionId, event }); },
     });
     const result = executor.execute(envelope());
     expect(result.ok).toBe(true);
     if (result.ok) await executor.awaitForward(result.task_id as string);
 
-    const file = path.join(os.homedir(), '.cogseed', 'runtime-variants', SCRATCH_VARIANT, 'p3394-kstar', 'ses-leak-1', 'tsk-leak-1.json');
-    expect(fs.existsSync(file)).toBe(true);
-    const text = fs.readFileSync(file, 'utf8');
-    expect(text).not.toContain(secret);
-    expect(text).toContain('Bearer ***');
+    // 失败事件经 host 通道落盘，脱敏由 redactP3394Secrets 承担——与 app-wiring
+    // 写审计 JSONL 时走的是同一个函数。
+    const failed = seen.find((entry) => entry.event.kind === 'failed');
+    expect(failed).toBeDefined();
+    const line = redactP3394Secrets(JSON.stringify({
+      at: '2026-01-01T00:00:00.000Z',
+      session_id: failed?.sessionId,
+      event: failed?.event,
+    }));
+    expect(line).not.toContain(secret);
+    expect(line).toContain('Bearer ***');
   });
 
   it('onEvent 抛错带 token 时，审计 stream.pause 已脱敏且任务 recoverable', async () => {

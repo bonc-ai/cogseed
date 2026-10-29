@@ -9,6 +9,7 @@ const fakeClient = vi.hoisted(() => ({
   refresh: vi.fn(),
   logout: vi.fn(),
   me: vi.fn(),
+  updateProfile: vi.fn(),
   bind: vi.fn(),
   listDevices: vi.fn(),
   revokeDevice: vi.fn(),
@@ -52,7 +53,7 @@ vi.mock('../../../../src/main/features/hub_account/client', () => ({
 }));
 
 import * as authFlow from '../../../../src/main/features/hub_account/auth-flow';
-import { loadHubSession, clearHubSession } from '../../../../src/main/features/hub_account/tokens';
+import { loadHubSession, saveHubSession, clearHubSession } from '../../../../src/main/features/hub_account/tokens';
 import { readHubAccountState } from '../../../../src/main/features/hub_account/state';
 
 const SESSION = {
@@ -60,6 +61,13 @@ const SESSION = {
   access_token: 'at1',
   refresh_token: 'rt1',
   access_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  refresh_expires_at: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+};
+
+const ROTATED = {
+  access_token: 'at2',
+  refresh_token: 'rt2',
+  access_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
   refresh_expires_at: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
 };
 
@@ -72,6 +80,7 @@ describe('hub account auth-flow', () => {
   beforeEach(() => {
     mocks.tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-account-test-'));
     vi.clearAllMocks();
+    authFlow._resetHubAuthStateForTest();
     fakeClient.login.mockResolvedValue({ authorize_url: 'https://hub.example.com/login', state: 'state_abc' });
     fakeClient.callback.mockResolvedValue({
       is_new_account: true,
@@ -157,6 +166,26 @@ describe('hub account auth-flow', () => {
     await authFlow.startLogin('88492103');
     await authFlow.completeLogin('88492103', 'code1', 'state_abc');
     expect(fakeClient.bind).not.toHaveBeenCalled();
+  });
+
+  it('does not report a successful login or restore binding after logout during bind', async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fakeClient.bind.mockImplementationOnce(async () => {
+      entered(); await gate;
+      return { device: { device_id: 'late-device', device_name: 'late' }, bound_at: 'late' };
+    });
+    await authFlow.startLogin('88492103');
+    const pending = authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    const result = pending.then(() => ({ code: 'unexpected_success' }), (error) => error);
+    await started;
+    await authFlow.logout('88492103');
+    release();
+    expect(await result).toMatchObject({ code: 'AUTH_REQUIRED' });
+    expect(loadHubSession('88492103')).toBeNull();
+    expect(readHubAccountState('88492103').bound).toBe(false);
   });
 
   // 回归：bind 是设备元数据，不是认证步骤。它一旦抛出就会让"已经保存 session"的
@@ -350,5 +379,165 @@ describe('hub account auth-flow', () => {
   it('cleanup helper clears the session', () => {
     clearHubSession('88492103');
     expect(loadHubSession('88492103')).toBeNull();
+  });
+});
+
+describe('hub account refresh herd suppression', () => {
+  const UID = '88492103';
+  const OTHER_UID = '11111111';
+
+  beforeEach(() => {
+    mocks.tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-account-herd-'));
+    vi.clearAllMocks();
+    authFlow._resetHubAuthStateForTest();
+    fakeClient.login.mockResolvedValue({ authorize_url: 'https://hub.example.com/login', state: 'state_abc' });
+    fakeClient.callback.mockResolvedValue({
+      is_new_account: false,
+      account: { account_id: 'cogseed_acc_1', auth_provider: 'web', status: 'active', created_at: 't' },
+      session: SESSION,
+    });
+    fakeClient.refresh.mockResolvedValue(ROTATED);
+    fakeClient.logout.mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    fs.rmSync(mocks.tmpConfigDir, { recursive: true, force: true });
+  });
+
+  it('collapses concurrent refreshes into a single network call', async () => {
+    await loginForTest();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fakeClient.refresh.mockImplementation(async () => {
+      await gate;
+      return ROTATED;
+    });
+
+    // The settings page fires several authenticated IPC calls at once; each one
+    // reaches the silent-refresh path with the same credentials.
+    const first = authFlow.refreshSession(UID);
+    const second = authFlow.refreshSession(UID);
+    const third = authFlow.refreshSession(UID);
+    release();
+
+    const [a, b, c] = await Promise.all([first, second, third]);
+    expect(fakeClient.refresh).toHaveBeenCalledTimes(1);
+    expect([a.access_token, b.access_token, c.access_token]).toEqual(['at2', 'at2', 'at2']);
+    expect(loadHubSession(UID)?.refresh_token).toBe('rt2');
+  });
+
+  it('stops hitting the network once the refresh token is revoked', async () => {
+    const { HubApiError } = await import('../../../../src/main/features/hub_account/client');
+    await loginForTest();
+    fakeClient.refresh.mockRejectedValue(
+      new HubApiError('AUTH_REFRESH_TOKEN_REVOKED', 'refresh_token 已撤销，请重新登录', 401),
+    );
+
+    await expect(authFlow.refreshSession(UID)).rejects.toMatchObject({ code: 'AUTH_REFRESH_TOKEN_REVOKED' });
+    expect(fakeClient.refresh).toHaveBeenCalledTimes(1);
+
+    // A revoked refresh token cannot come back: the near-expiry silent path must
+    // surface the same terminal error without another round trip.
+    saveHubSession(UID, { ...SESSION, access_expires_at: new Date(Date.now() + 1000).toISOString() });
+    await expect(authFlow.ensureFreshSession(UID)).rejects.toMatchObject({ code: 'AUTH_REFRESH_TOKEN_REVOKED' });
+    await expect(authFlow.ensureFreshSession(UID)).rejects.toMatchObject({ code: 'AUTH_REFRESH_TOKEN_REVOKED' });
+    await expect(authFlow.refreshSession(UID)).rejects.toMatchObject({ code: 'AUTH_REFRESH_TOKEN_REVOKED' });
+    expect(fakeClient.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps retrying after a transient network failure', async () => {
+    const { HubApiError } = await import('../../../../src/main/features/hub_account/client');
+    await loginForTest();
+    fakeClient.refresh.mockRejectedValueOnce(new HubApiError('HUB_NETWORK_ERROR', '无法连接 Hub 服务', 0));
+
+    await expect(authFlow.refreshSession(UID)).rejects.toMatchObject({ code: 'HUB_NETWORK_ERROR' });
+
+    fakeClient.refresh.mockResolvedValueOnce(ROTATED);
+    const next = await authFlow.refreshSession(UID);
+    expect(next.refresh_token).toBe('rt2');
+    expect(fakeClient.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-arms silent refresh after a fresh login', async () => {
+    const { HubApiError } = await import('../../../../src/main/features/hub_account/client');
+    await loginForTest();
+    fakeClient.refresh.mockRejectedValue(
+      new HubApiError('AUTH_REFRESH_TOKEN_REVOKED', 'refresh_token 已撤销，请重新登录', 401),
+    );
+    await expect(authFlow.refreshSession(UID)).rejects.toMatchObject({ code: 'AUTH_REFRESH_TOKEN_REVOKED' });
+
+    // The user signs in again; a persisted session must clear the terminal marker.
+    await authFlow.startLogin(UID);
+    await authFlow.completeLogin(UID, 'code2', 'state_abc');
+
+    fakeClient.refresh.mockResolvedValueOnce(ROTATED);
+    const next = await authFlow.refreshSession(UID);
+    expect(next.refresh_token).toBe('rt2');
+  });
+
+  it('clears the terminal marker on sign-out', async () => {
+    const { HubApiError } = await import('../../../../src/main/features/hub_account/client');
+    await loginForTest();
+    fakeClient.refresh.mockRejectedValue(
+      new HubApiError('AUTH_REFRESH_TOKEN_REVOKED', 'refresh_token 已撤销，请重新登录', 401),
+    );
+    await expect(authFlow.refreshSession(UID)).rejects.toMatchObject({ code: 'AUTH_REFRESH_TOKEN_REVOKED' });
+
+    await authFlow.logout(UID);
+
+    // Marker gone: the failure is now the local "no session" check, not the
+    // stale terminal error.
+    await expect(authFlow.refreshSession(UID)).rejects.toMatchObject({ code: 'AUTH_REQUIRED' });
+    expect(fakeClient.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the terminal marker scoped to the failing user', async () => {
+    const { HubApiError } = await import('../../../../src/main/features/hub_account/client');
+    await loginForTest();
+    fakeClient.refresh.mockRejectedValue(
+      new HubApiError('AUTH_REFRESH_TOKEN_REVOKED', 'refresh_token 已撤销，请重新登录', 401),
+    );
+    await expect(authFlow.refreshSession(UID)).rejects.toMatchObject({ code: 'AUTH_REFRESH_TOKEN_REVOKED' });
+
+    // Stage the second identity only now: the mocked config dir is shared, so
+    // writing it earlier would replace the first user's stored session.
+    saveHubSession(OTHER_UID, SESSION);
+    fakeClient.refresh.mockResolvedValueOnce(ROTATED);
+    const other = await authFlow.refreshSession(OTHER_UID);
+    expect(other.refresh_token).toBe('rt2');
+    expect(fakeClient.refresh).toHaveBeenCalledTimes(2);
+  });
+});
+
+// T6: completion belongs to the originating session generation.
+describe('nickname lifecycle', () => {
+  beforeEach(() => {
+    mocks.tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nickname-session-'));
+    vi.clearAllMocks();
+    saveHubSession('88492103', SESSION);
+  });
+  afterEach(() => fs.rmSync(mocks.tmpConfigDir, {recursive:true, force:true}));
+  it.each(['logout', 'replacement'])('rejects a late nickname response after %s', async change => {
+    let finish!: (value: unknown) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(r => {entered = r;});
+    fakeClient.updateProfile.mockImplementation(() => {entered(); return new Promise(r => {finish = r;});});
+    const pending = authFlow.updateProfile('88492103', {display_name:'New'});
+    await started;
+    clearHubSession('88492103');
+    if (change === 'replacement') saveHubSession('88492103', {...SESSION, session_id:'replacement'});
+    finish({account:{account_id:'old', community_profile:{display_name:'New'}}});
+    await expect(pending).rejects.toMatchObject({code:'AUTH_REQUIRED'});
+  });
+  it('uses authenticated retry for PATCH and returns only the profile DTO', async () => {
+    const {HubApiError} = await import('../../../../src/main/features/hub_account/client');
+    fakeClient.updateProfile.mockRejectedValueOnce(new HubApiError('AUTH_INVALID_TOKEN','expired',401))
+      .mockResolvedValueOnce({account:{account_id:'self', community_profile:{display_name:'New'}}});
+    fakeClient.refresh.mockResolvedValue(ROTATED);
+    const result = await authFlow.updateProfile('88492103', {display_name:'New'});
+    expect(result.account.community_profile.display_name).toBe('New');
+    expect(fakeClient.updateProfile.mock.calls.map(c => c[0])).toEqual(['at1','at2']);
+    expect(JSON.stringify(result)).not.toMatch(/access_token|refresh_token/);
   });
 });

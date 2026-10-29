@@ -76,7 +76,7 @@ function _walk(root: string, rel: string, out: PreviewFile[]): void {
  * 路径按字典序排序：同一份内容在任何机器上必须产出同一个 `digest`，而目录遍历
  * 顺序依赖文件系统。不排序会让「提交前重新校验摘要」在换机或重装后误报不一致。
  */
-export function buildPreview(staging: ContributionStaging): PreviewManifest {
+export function buildPreview(staging: Pick<ContributionStaging, 'dir'>): PreviewManifest {
   const files: PreviewFile[] = [];
   _walk(staging.dir, '', files);
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));

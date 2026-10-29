@@ -16,8 +16,7 @@ const BUILTIN_EXTRA_RESOURCE_FILTERS = Object.freeze([
   '!**/*.pyc',
 ]);
 const SAFE_SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-// Marketplace skill display names may be Chinese (product decision 2026-08-10:
-// shared skill assets ship with Chinese display names). Directory ids stay
+// Marketplace skill display names may be Chinese. Directory ids stay
 // 12-hex; only the frontmatter `name` is relaxed.
 const SKILL_DISPLAY_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u;
 const MARKETPLACE_ID = /^[0-9a-f]{12}$/;
@@ -46,6 +45,7 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     '57f6f828af9f',
     '5a5fe1598ed0',
     '662cb1c1de2c',
+    '287ce6012204',
     '736cc1ac94b4',
     '78900d8758bc',
     '78ef7f901e81',
@@ -66,6 +66,7 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     'c045605cb916',
   ]),
   marketplace_skills: Object.freeze([
+    'c09e11d17a01',
     '02d958231673',
     '058e3bb57bf5',
     '06d69ee5f1bc',
@@ -117,13 +118,6 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     'e7f5c0e6f1be',
     'ee99fbb42964',
     'ffaad9705891',
-    '36867a076129',
-    '396f58aeffd0',
-    '56023303d185',
-    '910301a3f5be',
-    'a79d235e416b',
-    'd1e0d20f4b28',
-    'f45f8fe237c9',
   ]),
 });
 

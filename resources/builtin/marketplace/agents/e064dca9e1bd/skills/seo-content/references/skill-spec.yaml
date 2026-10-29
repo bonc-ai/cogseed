@@ -1,0 +1,11 @@
+name: seo-content
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: 'Heuristic content-quality & GEO-readiness findings over seo-crawl text:
+  AI/filler tone, uncited statistical claims, answer-first placement, over-long sentences,
+  title↔body mismatch; emits content-dimension findings; For: ''check this page''s
+  content quality'', ''is the content AI-sou'
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

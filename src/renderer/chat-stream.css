@@ -31,6 +31,10 @@
 }
 /* 展开态（diff/输出/思考全文）回到全宽：块级展开区需要整行宽可读。 */
 .cs-row.cs-open { align-self: stretch; }
+/* 运行中紧凑态（COGSEED-497）：思考/工具/输出行默认收在徽章后面。
+   不能整块隐藏 .cs-flow-body —— 运行中的回答边生成边写在这里，
+   回合收尾才交回气泡，所以只收过程行，正文段与审批/提问卡保留。 */
+.cs-flow.cs-compact .cs-flow-body > .cs-row:not([data-cs-live="1"]) { display: none; }
 /* 正文段时间线段保持全宽：markdown 段落的排版基线与消息正文一致。 */
 .cs-text { width: 100%; }
 
@@ -53,6 +57,16 @@
   user-select: none;
 }
 .cs-badge:hover { background: var(--color-stream-hover-2); color: var(--color-stream-muted); }
+/* 归属段：折叠条必须写明这是谁的执行过程（2026-10-13 需求 B），
+   否则派单链里会被误读成主 Agent 的任务执行过程。可截断不撑宽消息头。 */
+.cs-badge-owner {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  max-width: 15em;
+}
+/* 折叠态也必须能看出「在跑」（真机 2026-10-14：worker 默认折叠后，唯一的动效
+   随折叠区一起被隐藏，界面上没有任何运行迹象）。旋转指示常显在徽章上。 */
+.cs-badge-live { display: inline-flex; align-items: center; flex: none; }
+.cs-badge-live .cs-loading-spinner svg { width: 11px; height: 11px; }
 .cs-badge-label {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
@@ -63,8 +77,6 @@
    与「已完成」文本在徽章内自然分组；无工具行时元素为空不占位。 */
 .cs-badge-tools { flex: none; opacity: .72; }
 .cs-badge-tools:not(:empty)::before { content: '·'; padding: 0 4px 0 2px; opacity: .55; }
-/* 思考行运行中实时显示最新思考文本（截断一行；收行后仍只显时长）。 */
-.cs-think-live { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .72; }
 .cs-flow.failed .cs-badge { color: var(--color-stream-fail); }
 .cs-flow.failed .cs-badge:hover { color: var(--color-stream-fail-3); }
 .cs-badge-stop {
@@ -178,10 +190,67 @@
   font-size: var(--font-size-1); white-space: pre-wrap; word-break: break-all;
 }
 
-/* ── 思考行： brain 图标 + 思考 + 时长 + 常显单行预览；点开看全文 ── */
-.cs-row-think .cs-think-dur { color: var(--color-stream-dim); }
-/* 思考全文（点击行展开，2026-09-11 方案 C）：纯文本块——无边框、无底色、
-   无圆角，不算卡片。缩进对齐时间线正文。 */
+/* ── 思考行：对齐 DeepSeek Harness 的 reasoning disclosure ──────────────
+   收起态是一行 24px 的安静说明：图标 + 思考 + 用时 + 圆点 + 单行摘要；
+   运行中摘要右端渐隐并扫光，点开才是缩进 22px 的完整思考正文（无卡片）。 */
+.cs-row.cs-row-think { height: 24px; padding: 0 6px; }
+.cs-row.cs-row-think:hover { background: transparent; }
+.cs-row-think .cs-row-line { width: 100%; align-items: center; gap: 0; }
+.cs-think-head { cursor: pointer; }
+.cs-row-think .cs-ico { width: 16px; height: 16px; justify-content: center; margin-right: 6px; }
+.cs-row-think .cs-ico-svg { width: 14px; height: 14px; }
+.cs-think-ico { position: relative; }
+.cs-think-ico-chevron {
+  position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .1s ease;
+}
+.cs-row.cs-row-think:hover .cs-think-ico-idle { opacity: 0; }
+.cs-row.cs-row-think:hover .cs-think-ico-chevron { opacity: 1; }
+.cs-row-think.cs-open .cs-think-ico-chevron { opacity: 1; transform: rotate(180deg); }
+.cs-row-think .cs-verb {
+  flex: none; color: var(--color-stream-chip);
+  font-size: var(--font-size-2); font-weight: 400; line-height: 24px;
+}
+.cs-row-think .cs-think-dur { color: var(--color-stream-dim); font-size: 11px; white-space: nowrap; }
+.cs-think-sep {
+  flex: none; width: 2px; height: 2px; margin: 0 8px;
+  border-radius: 50%; background: var(--color-stream-dim);
+}
+.cs-think-live {
+  position: relative; display: inline-grid; flex: 1 1 auto;
+  width: max-content; max-width: 100%; min-width: 0; overflow: hidden;
+  color: var(--color-stream-think); font-size: var(--font-size-2); line-height: 20px;
+}
+.cs-think-live-text, .cs-think-sweep-text {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cs-think-live[data-streaming] .cs-think-live-text {
+  mask-image: linear-gradient(90deg, var(--color-black) calc(100% - 48px), transparent);
+}
+.cs-think-shimmer { display: none; }
+.cs-think-live[data-streaming] .cs-think-shimmer {
+  display: block; position: absolute; inset: 0;
+  overflow: clip; pointer-events: none; user-select: none;
+}
+.cs-think-shimmer-sweep {
+  position: absolute; inset: 0; overflow: hidden; color: var(--color-stream-chip-2);
+  mask-image: linear-gradient(105deg, transparent 0%, var(--color-black) 40% 60%, transparent 100%);
+  transform: translate(-100%);
+  animation: cs-think-sweep 1.5s steps(48, end) .3s infinite;
+}
+@keyframes cs-think-sweep {
+  0% { transform: translate(-100%); }
+  66.6667%, 100% { transform: translate(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cs-think-live[data-streaming] .cs-think-shimmer { display: none; }
+}
+/* 展开：表头吸顶（长思考滚动时不丢「这是哪一段」），正文缩进 22px。 */
+.cs-row-think.cs-open { height: auto; padding: 3px 6px; }
+.cs-row-think.cs-open .cs-think-head {
+  position: sticky; top: 0; z-index: var(--z-raised); background: var(--surface-card);
+}
+/* 思考全文：无边框、无底色的纯文本块，缩进对齐 DSH 的 thinkBody。 */
 .cs-think-full {
   display: none;
   margin: 2px 0 2px 22px;
@@ -192,8 +261,9 @@
   line-height: 1.55;
 }
 .cs-row.cs-open .cs-think-full { display: block; }
-/* 展开态隐藏行内预览，避免与全文重复显示。 */
-.cs-row.cs-open .cs-think-live { display: none; }
+/* 展开态隐藏行内预览与分隔点，避免与全文重复显示。 */
+.cs-row.cs-open .cs-think-live,
+.cs-row.cs-open .cs-think-sep { display: none; }
 
 /* ── 时间线正文段（边说边执行的文字，交回前的时间线内呈现） ── */
 /* 实时 markdown 渲染后段内是块级 <p>/<ul>（各带自身 margin）——
@@ -243,6 +313,18 @@
 .cs-interaction-actions, .cs-interactions-input-row {
   display: flex; gap: 6px; margin-top: 6px; align-items: center;
 }
+/* ── 审批卡宽度约束（COGSEED-486）──────────────────────────────────────────
+   摘要行是 flex 项，默认 min-width:auto = min-content；长 URL / 多行脚本被压成
+   一行后是不可断词的连续串，min-content 直接等于整串宽度，会把卡片撑出对话区，
+   对话区因此出现横向滚动条。只约束 .approval：提问卡复用同一个
+   .cs-interaction-prompt，它的一句话 prompt 需要正常换行，不能被压成单行。 */
+.cs-card.cs-interaction.approval { max-width: 100%; min-width: 0; }
+.cs-interaction.approval .cs-interaction-prompt {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cs-interaction.approval .cs-interaction-reasons { overflow-wrap: anywhere; }
+.cs-interaction.approval .cs-interaction-actions { flex-wrap: wrap; }
 .cs-btn {
   border: 1px solid var(--color-stream-guide-3); border-radius: var(--radius-1);
   background: var(--color-stream-white); padding: 4px 12px; font-size: var(--font-size-2); cursor: pointer;

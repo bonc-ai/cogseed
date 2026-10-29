@@ -35,6 +35,7 @@ export type ToolGroup =
   | 'pdf'        // PDF rendering
   | 'office'     // Word / Excel / PowerPoint documents
   | 'kb'         // Library
+  | 'transcript' // meeting transcript correction glossary (会议转写纠错词表)
   | 'recall'     // ability assets (沉淀的认知资产)
   | 'chat'       // conversation history
   | 'image'      // image generation
@@ -88,6 +89,9 @@ export const DEEP_RESEARCH_AGENT_IDS = [
 
 export const TOOL_CATALOG: ToolCatalogEntry[] = [
   // Files / workspace
+  { name: 'background_list',   group: 'meta', summary: 'List CLI runs moved to the background because they hit their wall-clock or idle deadline; shows liveness and where the output goes.' },
+  { name: 'background_output', group: 'meta', summary: 'Read the bounded tail of a background run output.' },
+  { name: 'background_stop',   group: 'meta', summary: 'Stop a still-running background run and its child processes; output stays readable.' },
   { name: 'read_file',     group: 'fs', summary: 'Read a slice of text from a workspace or attachment file (PDF/modern Office text or image as multimodal).' },
   { name: 'write_file',    group: 'fs', permission: 'localExec', summary: 'Write text/code/markdown into the workspace; resolves under $working_dir.' },
   { name: 'edit_file',     group: 'fs', permission: 'localExec', summary: 'In-place `old_string → new_string` replacement on an existing text file (instead of rewriting the whole file).' },
@@ -129,28 +133,43 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'material_list', group: 'kb', summary: 'List the full material boundary for the conversation (Library + attachments + space artifacts), each marked in-scope or out-of-scope.' },
   { name: 'ask_materials', group: 'kb', summary: 'Grounded Q&A evidence service over the material set (Library + attachments): returns evidence to answer from with citations, or an explicit no-material/low-confidence marker.' },
   { name: 'research_rerank', group: 'kb', ownerAgent: DEEP_RESEARCH_AGENT_IDS, summary: 'Semantically rerank candidate research passages against a sub-question by local embedding similarity — the second stage after the deep-research compress skill\'s lexical filter, surfacing on-topic passages that share no keywords. Read-only, local, no Tool Execution Access. Owned by the deep-research + data-research agents (hidden from the commander).' },
+  // ── 会议转写纠错词表（会议工作流：取转写 → 纠错 → 核对新词 → 生成纪要）──────
+  { name: 'transcript_glossary_scan', group: 'transcript', summary: 'Scan a meeting transcript against the user\'s correction glossary and report matches WITHOUT changing the text. Run this right after fetching a Tencent Meeting transcript and before writing minutes. Reports auto-applicable (risk=low|medium) and needs-confirmation (risk=high) matches separately.' },
+  { name: 'transcript_glossary_apply', group: 'transcript', summary: 'Apply glossary corrections and return the corrected transcript text. `high` risk candidates are never auto-applied; when the result is `status: draft` you must confirm the listed items with the user (an inline card is offered) before generating minutes. Does not write files.' },
+  { name: 'transcript_glossary_upsert', group: 'transcript', summary: 'Add or update one glossary entry (mangled form → authoritative spelling) so future transcripts are corrected automatically. Use after the user confirms a correction or names a person/proper noun the transcript mangled. The engine derives risk level and can only raise it, never lower it.' },
+  { name: 'transcript_glossary_list', group: 'transcript', summary: 'List correction-glossary entries (people, products, domain terms and the mangled forms they replace) with kind, risk, scope and boundary. Use to answer what is corrected or to check a term before adding it.' },
 
   // Recall ability assets
   { name: 'personal_ontology_fields', group: 'recall', summary: 'List the fillable fields of the user\'s installed role templates (个人本体挖空表单), so a candidate can be routed to a concrete field by opaque field_ref.' },
+  { name: 'ontology_graph_read', group: 'recall', summary: 'Read the ontology graph by keyword, domain or category (descendants included), or one entity with its one-hop neighbours; returns entity ids for linking meeting records.' },
+  { name: 'ontology_projection_apply', group: 'recall', summary: 'Project one confirmed meeting_record.v1 JSON file from the visible workspace into the ontology graph; idempotent, archives instead of deleting, links people/projects/series only by given entity ids.' },
   { name: 'list_ontology_graph', group: 'recall', summary: 'Read saved ontology categories, entities, properties, source references, and explicit relations; supports domain and keyword filters.' },
   { name: 'search_ability_assets', group: 'recall', summary: 'Semantic search over the user\'s ability asset pool (沉淀的可复用经验/规则/模板/方法；全量只读，含所有空间与全局资产).' },
+  { name: 'ontology_query', group: 'recall', summary: 'Navigate governed ability-asset relations with bounded hops and return auditable evidence paths.' },
+  // 个人字段读取与缺口检查；缺失字段在当前对话中补充。
+  { name: 'personal_fields_check', group: 'recall', summary: 'Read which cognition slots a task type needs across three axes (personal fields / ontology facts and rules / method assets), which are bound, and which are missing (pack: weekly_report). Ask the user in the conversation for the missing ones.' },
+  { name: 'transcript_corrections_query', group: 'recall', summary: 'Read confirmed conversation/ontology-scene transcript corrections and canonical names before revising a transcript; exclude uncertain identities.' },
+  { name: 'cognition_ontology_query', group: 'recall', summary: 'Read time-aware ontology facts and applicable rules through explicit module references, with source/version citations and private-scope filtering.' },
 
-  // 任务经验（specs/016 T024 / US-802）：与资产**完全隔离**的第二套集合（exp- 前缀）。
+  // 任务经验：与资产**完全隔离**的第二套集合（exp- 前缀）。
   // 2 读 + 0 写、无 localExec（读写都在 <uid> 数据域内，不碰 shell/文件系统），
   // 不按 agent 收窄（与 search_ability_assets 同一面）；同样**不进只读会话白名单**
   // ——读正文会写 agent_read 回执与流水，不是无副作用（runner.ts:417-434 口径）。
   { name: 'list_task_experiences', group: 'recall', summary: 'List the user\'s task experiences (lessons/workflows/gaps precipitated from finished tasks — a collection separate from ability assets) as one-line entries filtered by task type; no body text.' },
   { name: 'read_task_experience', group: 'recall', summary: 'Read one task experience body by id in ≤2000-character chunks (use `chunk` to continue); enforces the same runtime gate and reports blocked state honestly instead of pretending it is missing.' },
 
-  // 资产管家（specs/008 US-401/402）：把既有的资产读写能力暴露给模型。
-  // 归属标注——读工具属 US-401、写工具属 US-402；**没有 localExec**（读写都经
+  // 资产管家：把既有的资产读写能力暴露给模型。
+  // **没有 localExec**（读写都经
   // asset-service 的写函数与 <uid> 数据域，不碰 shell/文件系统），也不受
   // ownerAgent 限：主会话与 group_chat 各 actor 都能用（与 search_ability_assets 同）。
   // 顺序按"最常用优先"：先看全貌、再取正文，然后才是改动类动作。
   { name: 'list_ability_assets', group: 'recall', summary: 'Page through EVERY ability asset the user owns (title/type/status/tags + total), with optional type/status/space filters — deliberately not capped by the UI catalog page size.' },
   { name: 'read_ability_asset', group: 'recall', summary: 'Read one ability asset by id in ≤2000-character chunks (use `chunk` to continue); reports deleted/paused/blocked state honestly instead of pretending it is missing.' },
+  { name: 'report_ability_asset_usage', group: 'recall', summary: 'Report adoption of one supplied asset version with an exact final-output excerpt; the host verifies the persisted message before recording adoption, never effectiveness.' },
   { name: 'list_asset_change_proposals', group: 'recall', summary: 'List AI-proposed asset changes still awaiting the user (approval cards): proposed values, current values, reason, state — read-only, because only the user may confirm/reject.' },
-  { name: 'edit_ability_asset', group: 'recall', summary: 'Edit an ability asset (title/body/scope/boundaries) on the user\'s explicit instruction, writing an audit record; AI-initiated substantial changes to method body / facts / applicability must go through an approval card instead of taking effect.' },
+  { name: 'create_cognition', group: 'recall', summary: 'Create user-requested durable cognition, ontology records or a joint shared rule through one complete host confirmation and the governed storage pipeline; returns actual saved IDs and receipt.' },
+  { name: 'edit_cognition', group: 'recall', summary: 'Edit an existing user-named cognition or ontology record, or merge/split named cognitions with complete outputs and archive the originals, preserving source/access boundaries, reviewed user intent and shared rule bodies in one commit; AI rewrites require one complete preview confirmation.' },
+  { name: 'edit_ability_asset', group: 'recall', summary: 'Submit a pending asset improvement with mode=propose (writes a real approval proposal, keeps the current version); or edit on verified user instruction. Only a returned proposal receipt establishes submission; listing proposals is read-only.' },
   { name: 'merge_ability_assets', group: 'recall', summary: 'Merge a duplicate ability asset into a target asset: both share one version group, the source is archived with a pointer, history stays traceable.' },
   { name: 'archive_ability_asset', group: 'recall', summary: 'Archive an ability asset: removed from daily lists and recommendations, content + evidence + history kept, restorable.' },
   { name: 'delete_ability_asset', group: 'recall', summary: 'Delete an ability asset into the 30-day recovery window; restorable within it, then permanently purged (content and records erased).' },
@@ -199,7 +218,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
 
   // Task-local and cross-session state
   { name: 'manage_execution_plan', group: 'meta', summary: 'Manage the durable current-task objective and milestone statuses for long/tool-heavy work; session-local and independent of context summaries.' },
-  { name: 'cross_session_memory', group: 'meta', summary: 'Read/write user profile, shared facts, and agent memory that persist across sessions.' },
+  { name: 'cross_session_memory', group: 'meta', summary: 'Read existing user profile, shared facts, and caller-scoped agent memory.' },
   { name: 'project_instructions', group: 'meta', summary: "Replace the project's standing goal + rules (COGSEED.md, the Project instructions block); commander-only, project sessions." },
   { name: 'metacognition',        group: 'meta', summary: 'Read/write metacognition (COMPETENCE / LEARNING_STRATEGIES); env-flag gated.' },
 
@@ -216,11 +235,14 @@ const GROUP_ORDER: ReadonlyArray<{ group: ToolGroup; title: string }> = [
   { group: 'pdf',   title: 'PDF' },
   { group: 'office', title: 'Office documents' },
   { group: 'kb',    title: 'Library' },
+  { group: 'transcript', title: 'Meeting transcript correction (glossary)' },
   { group: 'chat',  title: 'Conversation history' },
+  { group: 'recall', title: 'Ability assets / cognition' },
   { group: 'image', title: 'Image' },
   { group: 'web',       title: 'Web' },
   { group: 'connector', title: 'Connectors (third-party services)' },
   { group: 'expense', title: 'Reimbursement' },
+  { group: 'p3394', title: 'P3394 peer agents' },
   { group: 'messaging', title: 'Messaging' },
   { group: 'meta',      title: 'Task / cross-session state' },
 ];

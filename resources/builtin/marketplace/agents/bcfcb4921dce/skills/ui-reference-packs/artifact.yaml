@@ -1,0 +1,28 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.reference.packs
+  name: ui-reference-packs
+  version: 1.0.0
+  description: Select conditional neutral design-system reference archetypes and page-pattern
+    boundaries for UIDesigner; use when references, brand material, or weak visual
+    systems need style DNA while preventing accidental dashboard/kanban/pricing template
+    use.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: markdown
+    scripts: []
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

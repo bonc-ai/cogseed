@@ -139,6 +139,9 @@ async function bootApp() {
   // chat render finds the commander avatar warm; one cheap IPC, worth
   // it to avoid a default-avatar flash on the first frame.
   _restoreLastView();
+  // A2A relay 收件箱（H-04）：订阅主进程推送。relay 只有一个消费者（主进程），
+  // 而接待可能在任何页面发生，所以不能等用户进会话才订阅。
+  try { window.a2aRelayInbox?.start(); } catch { /* 模块未加载 */ }
   // Warm code and data only. Hidden DOM must not compete with an explicit
   // workspace destination or reset the space selected while data is loading.
   {
@@ -180,6 +183,13 @@ async function bootApp() {
   // timeout because no renderer was listening yet.
   if (typeof startDeleteFileConfirmSubscription === 'function') {
     startDeleteFileConfirmSubscription();
+  }
+
+  // 转写纠错的高危候选确认卡片。同样在 boot 末尾就订阅、不延迟：会议流程里
+  // agent 取到转写后**立刻**发卡，晚订阅就会漏掉推送（卡片不出现，用户只看到
+  // 模型说"请看上面的卡片"）。订阅本身只是一次 IPC 监听，成本可忽略。
+  if (typeof startTranscriptGlossaryConfirmSubscription === 'function') {
+    startTranscriptGlossaryConfirmSubscription();
   }
 
   const _bootTotalMs = Math.round(performance.now() - _bootT0);
@@ -369,6 +379,7 @@ function _lazyFeaturePanel(view) {
   const panelId = view === 'skills' ? 'panel-connections'
     : view === 'recall' ? 'panel-recall'
     : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
+    : view === 'contacts' ? 'panel-contacts'
     : view === 'kb' ? 'panel-kb'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
@@ -460,7 +471,6 @@ function setView(view, cid, opts = {}) {
     };
   }
   if (view === 'spaces') view = 'workspace';
-  if (typeof window.closeRunCenterGlobal === 'function') window.closeRunCenterGlobal();
   if (typeof window.closeModelChipMenu === 'function') window.closeModelChipMenu();
   const openPersonalOntology = view === 'personal-ontology';
   const openLegacyAgentDashboard = view === 'dashboard';
@@ -486,6 +496,10 @@ function setView(view, cid, opts = {}) {
     _bootLog.info('view change', { view, cid: cid || undefined });
   }
   currentView = view;
+  // 视图变化广播（任何视图）：页面级跨方消息卡据此重算哪些消息已在当前会话里。
+  try {
+    window.dispatchEvent(new CustomEvent('cogseed:view-changed', { detail: { view, cid } }));
+  } catch (_) { /* 无 DOM 环境忽略 */ }
   if (view !== 'agents' && typeof closeExpenseWorkbench === 'function') {
     closeExpenseWorkbench();
   }
@@ -508,6 +522,8 @@ function setView(view, cid, opts = {}) {
     window.__cogseedPendingOpenSpace = null;
     if (typeof window.leaveWorkspace === 'function') window.leaveWorkspace();
   }
+  // 离开页面后，刚安装的卡片才按「已安装在前」重新排序（specs/009 FR-002）。
+  if (typeof window.catalogResetJustInstalled === 'function') window.catalogResetJustInstalled();
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'
                 : view === 'auto' ? 'panel-auto'
@@ -517,6 +533,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
+                : view === 'contacts' ? 'panel-contacts'
                 : view === 'kb' ? 'panel-kb'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'devtools' ? 'panel-devtools'
@@ -524,13 +541,12 @@ function setView(view, cid, opts = {}) {
                 : 'panel-conversation';
   document.getElementById(panelId).classList.add('active');
 
-  document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
-  document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
-  document.getElementById('kb-btn')?.classList.toggle('active', view === 'kb');
-  document.getElementById('run-center-btn')?.classList.toggle('active', view === 'run-center');
-  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
-  document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
-  document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
+  document.getElementById('new-chat-btn')?.classList.toggle('active', view === 'new-chat');
+  // 通讯录不是 rail 顶层模块（AppShell 没有对应 module），它挂在任务模块侧栏，
+  // 高亮只能在这里单独同步。
+  document.getElementById('contacts-btn')?.classList.toggle('active', view === 'contacts');
+  // Rail highlight + contextual sidebar host (specs/008-shell-rail-layout).
+  if (window.AppShell) window.AppShell.setShellView(view);
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
   if (typeof window.setChipSettingsActive === 'function') {
     window.setChipSettingsActive(view === 'settings');
@@ -543,6 +559,16 @@ function setView(view, cid, opts = {}) {
   // Memory page retired (2026-09-20): its entry card now routes to the
   // cognition-assets view; memory.js stays loaded as the export/import tool
   // (window.MemoryTools), reused from the personal-ontology subpage.
+  if (view === 'contacts') {
+    _loadViewFeature('contacts', 'contacts', () => {
+      // 进入视图总是先回列表（详情是独立一页，形态 B）。
+      if (window.contactsPage && typeof window.contactsPage.showList === 'function') {
+        window.contactsPage.showList();
+      } else if (typeof renderContactsPage === 'function') {
+        renderContactsPage();
+      }
+    });
+  }
   if (view === 'run-center') {
     _loadViewFeature('run-center', 'run-center', () => {
       if (typeof renderRunCenter === 'function') renderRunCenter(runCenterInitialView, opts.runCenterOptions || {});
@@ -552,6 +578,10 @@ function setView(view, cid, opts = {}) {
     currentCid = cid;
     lastConversationCid = cid;
     if (typeof onEnterConversationView === 'function') onEnterConversationView();
+    // A2A 请示条：进入会话时按 cid 拉一次（D-7）。
+    try { window.consultationStrip?.setConversation(cid); } catch { /* 模块未加载 */ }
+    // A2A relay 收件箱（H-04）：同一入口启动轮询，把跨方消息渲染在输入框上方。
+    try { window.a2aRelayInbox?.start(); } catch { /* 模块未加载 */ }
     if (opts.openRunContext && window.ConversationInfo?.openAndSetTab) {
       window.ConversationInfo.openAndSetTab(opts.openRunContext);
     }
@@ -711,3 +741,5 @@ function setView(view, cid, opts = {}) {
 
 // Expose setView to window for interactive tour
 window.setView = setView;
+/** 当前打开的会话 id（只读）：收件箱据此避免把「已经在会话里」的消息再列一遍。 */
+window.getCurrentConversationId = () => currentCid;

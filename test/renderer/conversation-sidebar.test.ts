@@ -40,6 +40,17 @@ function loadConversationRenderer() {
     groupBusyConvs,
     isGroupConversationBusy: (cid: string) => groupBusyConvs.has(cid),
     isConvPending: (cid: string) => pendingConvs.has(cid) || groupBusyConvs.has(cid),
+    // state.js 提供的全局 seam（生产里由 index.html 先加载）。
+    setGroupConversationBusy: (cid: string, busy: boolean) => {
+      if (busy) groupBusyConvs.set(cid, true);
+      else groupBusyConvs.delete(cid);
+    },
+    // 轮询控制同样由其它渲染脚本提供（生产里 index.html 先加载）；本用例只验
+    // 状态→指示器的映射，不验轮询本身。
+    startPolling: () => {},
+    stopPolling: () => {},
+    // 队列排空由 queue-draft.js 提供（同上，生产里先加载）。
+    _dispatchNextQueued: () => {},
     createLogger: () => ({ warn() {}, info() {}, error() {}, debug() {} }),
     escapeHtml,
     t: (key: string, params: any = {}) => ({
@@ -54,6 +65,7 @@ function loadConversationRenderer() {
       'project.menu.more_actions': 'More actions',
       'auto.title': 'Automation',
       'chat.status.running': 'Running',
+      'chat.status.waiting_approval': 'Waiting for your approval',
       'agents.use_label': `Agent: ${params?.agent || ''}`,
       'skills.use_label': `Skill: ${params?.skill || ''}`,
       'chat.stream.compaction_tokens': `Context compressed: ${params?.before} -> ${params?.after} tokens`,
@@ -100,11 +112,19 @@ function loadConversationRenderer() {
   vm.createContext(context);
   const uiButtonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
   const uiFormSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-form.js'), 'utf8');
-  vm.runInContext(`${uiButtonSource}\n${uiFormSource}\nthis.uiButton = window.uiButton; this.uiIconButton = window.uiIconButton; this.uiInput = window.uiInput;`, context);
+  // 侧栏的「等待批准」指示器用共享状态组件（ui-status.js），与生产加载顺序一致。
+  const uiStatusSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-status.js'), 'utf8');
+  vm.runInContext(`${uiButtonSource}\n${uiFormSource}\n${uiStatusSource}\nthis.uiButton = window.uiButton; this.uiIconButton = window.uiIconButton; this.uiInput = window.uiInput; this.uiStatusPill = window.uiStatusPill;`, context);
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
   vm.runInContext(source, context);
   return context;
 }
+
+describe('conversation renderer optional A2A dependency', () => {
+  it('loads non-A2A harnesses without compose guards', () => {
+    expect(() => loadConversationRenderer()).not.toThrow();
+  });
+});
 
 describe('conversation create-agent inline gate', () => {
   it('hides while the current task is pending even without a scroll spacer', () => {
@@ -561,6 +581,95 @@ describe('conversation sidebar task row actions', () => {
     expect(html).toContain('aria-label="Running"');
     expect(html.indexOf('conv-task-indicator')).toBeLessThan(html.indexOf('class="conv-item-title"'));
     expect(html).not.toContain('conv-task-line');
+  });
+
+  it('renders a runtime waiting_approval response as the shared status pill, not a spinner', async () => {
+    // 真机症状：外部智能体派发在等用户点批准，run 停在 running、actor 停在 pending
+    // （bus 不收口、wake 不过期），侧栏却一直转圈。现在 main 如实报
+    // waiting_approval，侧栏据此显示状态而不是转圈。
+    const context = loadConversationRenderer();
+    vm.runInContext('pendingConvs.set("waiting-1", { aborted: false })', context);
+    vm.runInContext(
+      '_readConversationRuntime = async () => ({ ok: true, processing: false, in_flight: [], active_turns: [], backend_active: false, waiting_approval: true })',
+      context,
+    );
+    expect(await context._syncPendingActorsFromRuntime('waiting-1')).toBe(true);
+
+    const html = context._renderConversationSidebarItem({
+      conversation_id: 'waiting-1',
+      title: 'Waiting task',
+    });
+
+    expect(html).toContain('ui-status-pill');
+    expect(html).toContain('Waiting for your approval');
+    expect(html).not.toContain('conv-task-indicator');
+    expect(html.indexOf('ui-status-pill')).toBeLessThan(html.indexOf('class="conv-item-title"'));
+  });
+
+  it('labels a stale conversation straight from the list payload (never polled)', () => {
+    // 闲置会话不会被 runtime 轮询，它的「等批准」只能靠列表下发。
+    const context = loadConversationRenderer();
+    context._applyWaitingApprovalFromRows([
+      { conversation_id: 'stale-1', waiting_approval: true },
+      { conversation_id: 'fresh-1', waiting_approval: false },
+    ]);
+
+    const stale = context._renderConversationSidebarItem({ conversation_id: 'stale-1', title: 'Stale' });
+    expect(stale).toContain('ui-status-pill');
+    expect(stale).toContain('Waiting for your approval');
+    expect(stale).not.toContain('conv-task-indicator');
+
+    const fresh = context._renderConversationSidebarItem({ conversation_id: 'fresh-1', title: 'Fresh' });
+    expect(fresh).not.toContain('ui-status-pill');
+
+    // 批准/拒绝后列表再下发 false → 标记必须消失。
+    context._applyWaitingApprovalFromRows([{ conversation_id: 'stale-1', waiting_approval: false }]);
+    expect(context._renderConversationSidebarItem({ conversation_id: 'stale-1', title: 'Stale' })).not.toContain('ui-status-pill');
+  });
+
+  it('clears the pill when the index no longer flags the row (用户批准/中止后)', async () => {
+    const context = loadConversationRenderer();
+    context._applyWaitingApprovalFromRows([{ conversation_id: 'gone-1', waiting_approval: true }]);
+    expect(context._renderConversationSidebarItem({ conversation_id: 'gone-1', title: 'Gone' })).toContain('ui-status-pill');
+
+    // main 的索引现在为空（用户已批准/已中止）→ 绝对同步必须把标记删掉，而不是只增不减。
+    vm.runInContext('conversations = [{ conversation_id: "gone-1" }]', context);
+    vm.runInContext('window.cogseed = { invoke: async () => ({ ok: true, conversations: [] }) }', context);
+    await context._syncWaitingApprovalFlags();
+    expect(context._renderConversationSidebarItem({ conversation_id: 'gone-1', title: 'Gone' })).not.toContain('ui-status-pill');
+  });
+
+  it('keeps exactly one indicator: live work wins over a pending approval', () => {
+    const context = loadConversationRenderer();
+    vm.runInContext('_latestInFlight.set("both-1", ["commander"]); _latestWaitingApproval.set("both-1", true)', context);
+
+    const html = context._renderConversationSidebarItem({ conversation_id: 'both-1', title: 'Both' });
+
+    expect(html).toContain('conv-task-indicator');
+    expect(html).not.toContain('ui-status-pill');
+  });
+
+  it('drops the approval pill once the runtime stops reporting it', async () => {
+    const context = loadConversationRenderer();
+    vm.runInContext('pendingConvs.set("cleared-1", { aborted: false })', context);
+    vm.runInContext(
+      '_readConversationRuntime = async () => ({ ok: true, processing: false, in_flight: [], active_turns: [], waiting_approval: true })',
+      context,
+    );
+    await context._syncPendingActorsFromRuntime('cleared-1');
+    expect(context._renderConversationSidebarItem({ conversation_id: 'cleared-1', title: 'T' })).toContain('ui-status-pill');
+
+    // 第一次同步的收尾会把该会话从 pending 集合摘掉（真实行为）；重新进入
+    // pending 才代表渲染层又为这个会话读了一次 runtime。
+    vm.runInContext('pendingConvs.set("cleared-1", { aborted: false })', context);
+    vm.runInContext(
+      '_readConversationRuntime = async () => ({ ok: true, processing: false, in_flight: [], active_turns: [] })',
+      context,
+    );
+    expect(await context._syncPendingActorsFromRuntime('cleared-1')).toBe(true);
+    const html = context._renderConversationSidebarItem({ conversation_id: 'cleared-1', title: 'T' });
+    expect(html).not.toContain('ui-status-pill');
+    expect(html).not.toContain('conv-task-indicator');
   });
 
   it('renders an inline title input while renaming a row', () => {
@@ -1674,6 +1783,7 @@ describe('conversation auto recipient', () => {
       extra: {
         recipient_agent_id: 'a1',
         recipient_origin: 'user_selection',
+        submit_request_id: expect.stringMatching(/^req_/),
       },
     }]);
   });
@@ -1714,7 +1824,10 @@ describe('conversation auto recipient', () => {
       __second = _dispatchNextQueued("c1");
     `, context);
     await context.__second;
-    expect(context.__sent[1].extra).toEqual({ mention_agent_ids: ['a1'] });
+    expect(context.__sent[1].extra).toEqual({
+      mention_agent_ids: ['a1'],
+      submit_request_id: expect.stringMatching(/^req_/),
+    });
   });
 
   it('keeps a queued message when optimistic start is followed by server failure', async () => {
@@ -1794,6 +1907,81 @@ describe('conversation auto recipient', () => {
       __dispatch = _dispatchNextQueued("c1");
     `, context);
     await context.__dispatch;
+    expect(context.messageQueues.get('c1')).toHaveLength(0);
+  });
+
+  // 回归：表单提交（_mountChatInputForm → sendInConversation）在会话忙时入队，
+  // 调用方不带 submit_request_id。没有请求号就拿不到精确受理回执，队首永远
+  // 不出队，每次流结束都重放同一条提交（2026-10-14 会话 9bd16b45554a 重发 16 次）。
+  it('accepts a busy-queued send without caller request id exactly once', async () => {
+    const context = loadConversationRenderer();
+    context.messageQueues = new Map();
+    context._QUEUE_KEY = (cid: string) => `queue_${cid}`;
+    context._DRAFT_KEY = (cid: string) => `draft_${cid}`;
+    const queueSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/queue-draft.js'), 'utf8');
+    vm.runInContext(queueSource, context);
+    context.performance = performance;
+    context.pendingConvs.set('c1', {});
+    vm.runInContext(`
+      currentCid = "c1";
+      __queued = sendInConversation("c1", "- ready：yes\\n\\n<agent-input-submission form_id=\\"dabd4cdc5c3be38e\\" agent_id=\\"a1\\">{}</agent-input-submission>", {
+        recipient_agent_id: "a1",
+        recipient_origin: "user_selection",
+      });
+    `, context);
+    expect(await context.__queued).toMatchObject({ queued: true });
+
+    context.pendingConvs.delete('c1');
+    vm.runInContext(`
+      __sent = [];
+      // 与真实 controller 一致：只有带请求号的发送才能拿到受理回执。
+      sendInCurrentConversation = async (_content, extra) => {
+        __sent.push(extra);
+        const id = String((extra && extra.submit_request_id) || "");
+        return id
+          ? { accepted: true, cid: "c1", submit_request_id: id, started: true, errored: false, result: "success" }
+          : { started: true, errored: false, result: "success" };
+      };
+      __dispatch = _dispatchNextQueued("c1");
+    `, context);
+    await context.__dispatch;
+    // 下一轮流结束再次排空：已受理的提交不能被重放。
+    vm.runInContext('__dispatch = _dispatchNextQueued("c1");', context);
+    await context.__dispatch;
+
+    expect(context.__sent).toHaveLength(1);
+    expect(context.__sent[0]).toMatchObject({ recipient_agent_id: 'a1', recipient_origin: 'user_selection' });
+    expect(context.__sent[0].submit_request_id).toMatch(/^req_/);
+    expect(context.messageQueues.get('c1')).toHaveLength(0);
+  });
+
+  it('dequeues a legacy persisted row that has no request id instead of replaying it', async () => {
+    const context = loadConversationRenderer();
+    context.messageQueues = new Map([['c1', [
+      { id: 'qlegacy', content: 'form submission', direct: true, extra: { recipient_agent_id: 'a1' } },
+    ]]]);
+    context._QUEUE_KEY = (cid: string) => `queue_${cid}`;
+    context._DRAFT_KEY = (cid: string) => `draft_${cid}`;
+    const queueSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/queue-draft.js'), 'utf8');
+    vm.runInContext(queueSource, context);
+    vm.runInContext(`
+      currentCid = "c1";
+      __sent = [];
+      sendInCurrentConversation = async (_content, extra) => {
+        __sent.push(extra);
+        const id = String((extra && extra.submit_request_id) || "");
+        return id
+          ? { accepted: true, cid: "c1", submit_request_id: id, started: true, errored: false, result: "success" }
+          : { started: true, errored: false, result: "success" };
+      };
+      __dispatch = _dispatchNextQueued("c1");
+    `, context);
+    await context.__dispatch;
+    vm.runInContext('__dispatch = _dispatchNextQueued("c1");', context);
+    await context.__dispatch;
+
+    expect(context.__sent).toHaveLength(1);
+    expect(context.__sent[0]).toMatchObject({ recipient_agent_id: 'a1' });
     expect(context.messageQueues.get('c1')).toHaveLength(0);
   });
 });
@@ -1941,8 +2129,93 @@ describe('conversation controller settlement', () => {
     }
   });
 
+  it.each([
+    [false, 0],
+    [true, 1],
+  ])('renders a stream event only when the conversation is the active view (isViewActive=%s)', async (active, expected) => {
+    const context = loadConversationRenderer();
+    context.TextDecoder = TextDecoder;
+    context.AbortController = AbortController;
+    context.performance = performance;
+    context.ensureModelConfigured = () => true;
+    context.nowIsoLocal = () => '2026-07-17T00:00:00';
+    context._createStreamingAssistantMessage = () => ({ dataset: {} });
+    context._makeStreamPaintYield = () => () => null;
+    let handled = 0;
+    context._handleStreamEvent = () => { handled += 1; };
+    const encoded = new TextEncoder().encode(`data: ${JSON.stringify({ type: 'progress', text: 'x' })}\n\n`);
+    let readCount = 0;
+    context.apiFetch = async () => ({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => (readCount++ === 0
+            ? { done: false, value: encoded }
+            : { done: true, value: undefined }),
+        }),
+      },
+    });
+    const controller = context.createChatController({
+      historyEl: { dataset: {} },
+      getCurrentId: () => 'c1',
+      isViewActive: () => active,
+      streamEndpoint: () => '/stream',
+      features: { bindInput: false, scrollPin: false },
+      hooks: { appendHistoryMessage: () => ({ dataset: {} }) },
+    });
+
+    await controller.send('hello');
+
+    expect(handled).toBe(expected);
+  });
+
+  it('does not mint an actor placeholder for a non-visible conversation', () => {
+    const context = loadConversationRenderer();
+    context.currentCid = 'c1';
+    expect(context._ensureActorPlaceholder('c2', 'prd-agent')).toBeNull();
+  });
+
+  it('buffers a background conversation process event instead of rendering it', () => {
+    const context = loadConversationRenderer();
+    context.currentCid = 'c1';
+    let buffered = 0;
+    let placeholders = 0;
+    context._bufferBackgroundGroupEvent = () => { buffered += 1; };
+    context._ensureActorPlaceholder = () => { placeholders += 1; return null; };
+
+    context._handleGroupBusEvent('c2', null, {
+      type: 'process',
+      actor: 'prd-agent',
+      data: { type: 'event', event: { stream: 'tool', data: { name: 'write_file', phase: 'start' } } },
+    });
+
+    expect(buffered).toBe(1);
+    expect(placeholders).toBe(0);
+  });
+
+  it('does not append a welcome placeholder into another conversation view', () => {
+    const context = loadConversationRenderer();
+    context.currentCid = 'c1';
+    const appended: any[] = [];
+    const host = {
+      appendChild: (node: any) => { appended.push(node); return node; },
+      scrollTop: 0,
+      scrollHeight: 0,
+    };
+    context.document.getElementById = () => host;
+    context.document.createElement = () => ({ dataset: {}, innerHTML: '', className: '' });
+
+    expect(context._appendWelcomeThinkingPlaceholder('c2')).toBeNull();
+    expect(appended).toHaveLength(0);
+
+    const own = context._appendWelcomeThinkingPlaceholder('c1');
+    expect(own).not.toBeNull();
+    expect(appended).toHaveLength(1);
+  });
+
   it('renders a server abort as stopped instead of a model error', () => {
     const context = loadConversationRenderer();
+    context.currentCid = 'c1';
     let stopped = 0;
     let errors = 0;
     context._streamingMarkAborted = () => { stopped += 1; };
@@ -2105,5 +2378,329 @@ describe('conversation sidebar relative time refresh', () => {
     // 沙箱未提供 setInterval：若 ticker 启动缺少类型守卫，这里会直接 TypeError。
     expect(() => context.renderConversationList()).not.toThrow();
     expect(container.innerHTML).toContain('conv-item-time');
+  });
+});
+
+describe('sidebar recent tasks pagination (COGSEED-551)', () => {
+  const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
+  // 12 条按活跃时间倒序的普通任务（无置顶、无空间），标题 Task 1 最新。
+  const recentTasks = (n: number) => Array.from({ length: n }, (_, i) => ({
+    conversation_id: `recent-${i + 1}`,
+    title: `Task ${i + 1}`,
+    updated_at: isoAgo((i + 1) * 60_000),
+  }));
+
+  // 容器级委托容器：链接点击经 container 的 click 监听派发（解 closest 后命中的节点）。
+  function makeDelegatingContainer() {
+    const container: any = {
+      innerHTML: '',
+      dataset: {},
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      contains: () => true,
+      addEventListener(type: string, fn: (e: any) => void) { if (type === 'click') container._click = fn; },
+    };
+    return container;
+  }
+
+  function clickPager(container: any, attr: string, value = '1') {
+    const hit: any = { dataset: { [attr]: value } };
+    container._click({ target: { closest: () => hit }, preventDefault() {}, stopPropagation() {} });
+  }
+
+  function renderSidebar(context: any, count: number) {
+    const container = makeDelegatingContainer();
+    context.document.getElementById = (id: string) => (id === 'conversation-list' ? container : null);
+    vm.runInContext('_sidebarSpacesLoaded = true; _sidebarSpaces = []; _sidebarCollapse.recent = false;', context);
+    context.conversations = recentTasks(count);
+    context.renderConversationList();
+    return container;
+  }
+
+  const rowCount = (html: string) => (html.match(/class="conv-item-title/g) || []).length;
+  const hasExpand = (html: string) => html.includes('data-sidebar-recent-more="1"');
+  const hasCollapse = (html: string) => html.includes('data-sidebar-recent-collapse="1"');
+
+  it('首屏只铺 5 条，第 6 条起不渲染，链接显示「展开其余 7 个会话」', () => {
+    const context = loadConversationRenderer();
+    const html = renderSidebar(context, 12).innerHTML;
+    expect(rowCount(html)).toBe(5);
+    expect(html).toContain('Task 5');
+    expect(html).not.toContain('Task 6');
+    expect(hasExpand(html)).toBe(true);
+    expect(html).toContain('展开其余 7 个会话');
+    // 首屏还没展开过，不出现「收起」。
+    expect(hasCollapse(html)).toBe(false);
+  });
+
+  it('5 条及以内全量展示，且不出现任何分页入口', () => {
+    for (const count of [0, 4, 5]) {
+      const context = loadConversationRenderer();
+      const html = renderSidebar(context, count).innerHTML;
+      expect(rowCount(html)).toBe(count);
+      expect(hasExpand(html)).toBe(false);
+      expect(hasCollapse(html)).toBe(false);
+    }
+  });
+
+  it('展开追加下一页、出现「收起」，收起后回到首屏 5 条', () => {
+    const context = loadConversationRenderer();
+    const container = renderSidebar(context, 12);
+    expect(rowCount(container.innerHTML)).toBe(5);
+
+    clickPager(container, 'sidebarRecentMore');
+    const paged = container.innerHTML;
+    expect(rowCount(paged)).toBe(10);
+    expect(paged).toContain('Task 10');
+    // 已展开 → 补充入口换成「收起」，剩余数也同步变小。
+    expect(hasCollapse(paged)).toBe(true);
+    expect(paged).toContain('展开其余 2 个会话');
+
+    clickPager(container, 'sidebarRecentCollapse');
+    const collapsed = container.innerHTML;
+    expect(rowCount(collapsed)).toBe(5);
+    expect(hasCollapse(collapsed)).toBe(false);
+    expect(collapsed).toContain('展开其余 7 个会话');
+  });
+
+  it('展开两次后连续收起两次都能生效（真实鼠标跨重渲染的回归）', () => {
+    const context = loadConversationRenderer();
+    const container = renderSidebar(context, 12);
+
+    clickPager(container, 'sidebarRecentMore');
+    clickPager(container, 'sidebarRecentMore');
+    expect(rowCount(container.innerHTML)).toBe(12);
+
+    clickPager(container, 'sidebarRecentCollapse');
+    expect(rowCount(container.innerHTML)).toBe(5);
+
+    // 第二轮：再展开两次、收起两次，都必须回到 5 条。
+    clickPager(container, 'sidebarRecentMore');
+    clickPager(container, 'sidebarRecentMore');
+    expect(rowCount(container.innerHTML)).toBe(12);
+    clickPager(container, 'sidebarRecentCollapse');
+    expect(rowCount(container.innerHTML)).toBe(5);
+    clickPager(container, 'sidebarRecentMore');
+    clickPager(container, 'sidebarRecentCollapse');
+    expect(rowCount(container.innerHTML)).toBe(5);
+  });
+
+  it('翻完全部任务后不再显示「展开」，仍保留「收起」', () => {
+    const context = loadConversationRenderer();
+    const container = renderSidebar(context, 12);
+
+    clickPager(container, 'sidebarRecentMore');
+    clickPager(container, 'sidebarRecentMore');
+
+    const html = container.innerHTML;
+    expect(rowCount(html)).toBe(12);
+    expect(hasExpand(html)).toBe(false);
+    expect(hasCollapse(html)).toBe(true);
+  });
+});
+
+describe('commander running chip navigates to running tasks (COGSEED-496)', () => {
+  // 挂载点 + 内部按钮的假 DOM：innerHTML 赋值会「造出」button，
+  // 这样才走得通 _refreshCommanderRunningChip 的首建 / 仅更新文案两条分支。
+  function makeChipMount() {
+    const labelEl = { textContent: '' };
+    const btn: any = {
+      hidden: false,
+      textContent: '',
+      handlers: {} as Record<string, (e: any) => void>,
+      labelEl,
+      addEventListener(type: string, fn: (e: any) => void) { btn.handlers[type] = fn; },
+      querySelector: (sel: string) => (sel === '.ui-button__label' ? labelEl : null),
+    };
+    const mount: any = {
+      hidden: true,
+      _html: '',
+      _hasButton: false,
+      get innerHTML() { return mount._html; },
+      set innerHTML(v: string) {
+        mount._html = v;
+        mount._hasButton = /<button/.test(v);
+      },
+    };
+    mount.querySelector = (sel: string) => (sel === 'button' && mount._hasButton ? btn : null);
+    return { mount, btn };
+  }
+
+  const click = (btn: any, ev: any = { preventDefault() {}, stopPropagation() {} }) => {
+    btn.handlers.click(ev);
+    return ev;
+  };
+
+  it('单个任务执行中：徽标可点并直接进入该会话', () => {
+    const context = loadConversationRenderer();
+    const { mount, btn } = makeChipMount();
+    const navigations: string[] = [];
+    context.document.getElementById = (id: string) => (id === 'commander-running-chip' ? mount : null);
+    context.setView = (_view: string, cid: string) => { navigations.push(cid); };
+    context.pendingConvs.set('c-solo', {});
+
+    context._refreshCommanderRunningChip();
+
+    expect(mount.hidden).toBe(false);
+    // 文案仍走 sidebar.commander_running；harness 未提供该键时退回英文兜底。
+    expect(mount.innerHTML).toContain('<button');
+    expect(mount.innerHTML).toContain('>1<');
+    click(btn);
+    // 旧行为是点击冒泡去「新建任务」；现在必须直进执行中的会话。
+    expect(navigations).toEqual(['c-solo']);
+  });
+
+  it('多个任务执行中：点击弹出任务列表，选中项进入对应会话', () => {
+    const context = loadConversationRenderer();
+    const { mount, btn } = makeChipMount();
+    const navigations: string[] = [];
+    let menuItems: any[] = [];
+    context.document.getElementById = (id: string) => (id === 'commander-running-chip' ? mount : null);
+    context.setView = (_view: string, cid: string) => { navigations.push(cid); };
+    context.showContextMenu = (_ev: any, items: any[]) => { menuItems = items; };
+    context.conversations = [
+      { conversation_id: 'c-a', title: 'Task A', updated_at: new Date().toISOString() },
+      { conversation_id: 'c-b', title: 'Task B', updated_at: new Date().toISOString() },
+    ];
+    context.pendingConvs.set('c-a', {});
+    context.pendingConvs.set('c-b', {});
+
+    context._refreshCommanderRunningChip();
+    expect(mount.innerHTML).toContain('>2<');
+    click(btn);
+
+    // 两个任务 → 不再直接跳转，而是给出可选的列表。
+    expect(navigations).toEqual([]);
+    expect(menuItems.map((it: any) => it.label)).toEqual(['Task A', 'Task B']);
+    menuItems[1].onClick();
+    expect(navigations).toEqual(['c-b']);
+  });
+
+  it('没有任务执行中时隐藏徽标，缩到 1 个时只更新文案不重建按钮', () => {
+    const context = loadConversationRenderer();
+    const { mount, btn } = makeChipMount();
+    context.document.getElementById = (id: string) => (id === 'commander-running-chip' ? mount : null);
+    context.pendingConvs.set('c-a', {});
+    context.pendingConvs.set('c-b', {});
+
+    context._refreshCommanderRunningChip();
+    const htmlAfterFirstPaint = mount.innerHTML;
+    expect(mount.innerHTML).toContain('>2<');
+
+    // 一个结束：只改变量文案，节点不重建（否则每次流式事件都掉焦点）。
+    context.pendingConvs.delete('c-b');
+    context._refreshCommanderRunningChip();
+    expect(mount.innerHTML).toBe(htmlAfterFirstPaint);
+    expect(btn.labelEl.textContent).toBe('1');
+
+    context.pendingConvs.delete('c-a');
+    context._refreshCommanderRunningChip();
+    expect(mount.hidden).toBe(true);
+  });
+
+  it('已中止的会话不计入执行数量', () => {
+    const context = loadConversationRenderer();
+    const { mount } = makeChipMount();
+    context.document.getElementById = (id: string) => (id === 'commander-running-chip' ? mount : null);
+    context.pendingConvs.set('c-aborted', { aborted: true });
+
+    context._refreshCommanderRunningChip();
+    expect(mount.hidden).toBe(true);
+  });
+});
+
+describe('space group task pagination (COGSEED-551)', () => {
+  const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const SID = 'sp-aaa';
+
+  function spaceTasks(count: number) {
+    return Array.from({ length: count }, (_, i) => ({
+      conversation_id: `${SID}-c${i + 1}`,
+      title: `Space Task ${i + 1}`,
+      space_id: SID,
+      updated_at: isoAgo((i + 1) * 60_000),
+    }));
+  }
+
+  const rowCount = (html: string) => (html.match(/class="conv-item-title/g) || []).length;
+
+  function makeDelegatingContainer() {
+    const container: any = {
+      innerHTML: '',
+      dataset: {},
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      contains: () => true,
+      addEventListener(type: string, fn: (e: any) => void) { if (type === 'click') container._click = fn; },
+    };
+    return container;
+  }
+
+  function clickPager(container: any, attr: string, value: string) {
+    const hit: any = { dataset: { [attr]: value } };
+    container._click({ target: { closest: () => hit }, preventDefault() {}, stopPropagation() {} });
+  }
+
+  function renderSpace(context: any, count: number) {
+    const container = makeDelegatingContainer();
+    context.document.getElementById = (id: string) => (id === 'conversation-list' ? container : null);
+    vm.runInContext(
+      `_sidebarSpacesLoaded = true; _sidebarSpaces = [{ space_id: '${SID}', name: '空间A' }];`
+      + ' _sidebarCollapse.spaces = false; _sidebarCollapse.spaceGroups = {}; _sidebarCollapse.recent = false;',
+      context,
+    );
+    context.conversations = spaceTasks(count);
+    context.renderConversationList();
+    return container;
+  }
+
+  it('空间组 14 条任务只铺 5 条，组头计数仍是 14，链接显示「展开其余 9 个会话」', () => {
+    const context = loadConversationRenderer();
+    const html = renderSpace(context, 14).innerHTML;
+
+    expect(rowCount(html)).toBe(5);
+    // 组头计数是空间总数，不是可见行数——否则用户会以为任务丢了。
+    expect(html).toContain('<span class="conv-list-section-count">14</span>');
+    expect(html).toContain('data-conv-space-more-tasks="sp-aaa"');
+    expect(html).toContain('展开其余 9 个会话');
+    expect(html).not.toContain('data-conv-space-collapse-tasks');
+  });
+
+  it('空间组 5 条及以内全量展示且不出现分页入口', () => {
+    for (const count of [3, 5]) {
+      const context = loadConversationRenderer();
+      const html = renderSpace(context, count).innerHTML;
+      expect(rowCount(html)).toBe(count);
+      expect(html).not.toContain('data-conv-space-more-tasks');
+      expect(html).not.toContain('data-conv-space-collapse-tasks');
+    }
+  });
+
+  it('展开两次再收起两次都生效，组头计数始终不变', () => {
+    const context = loadConversationRenderer();
+    const container = renderSpace(context, 14);
+    expect(rowCount(container.innerHTML)).toBe(5);
+
+    // 第一次展开：10 条 + 收起入口。
+    clickPager(container, 'convSpaceMoreTasks', SID);
+    expect(rowCount(container.innerHTML)).toBe(10);
+    expect(container.innerHTML).toContain('data-conv-space-collapse-tasks="sp-aaa"');
+    expect(container.innerHTML).toContain('<span class="conv-list-section-count">14</span>');
+
+    // 第二次展开：14 条，展开入口消失、只剩收起。
+    clickPager(container, 'convSpaceMoreTasks', SID);
+    expect(rowCount(container.innerHTML)).toBe(14);
+    expect(container.innerHTML).not.toContain('data-conv-space-more-tasks');
+
+    clickPager(container, 'convSpaceCollapseTasks', SID);
+    expect(rowCount(container.innerHTML)).toBe(5);
+
+    // 第二轮重来一次，覆盖「第二次收起失效」这个真实反馈。
+    clickPager(container, 'convSpaceMoreTasks', SID);
+    clickPager(container, 'convSpaceMoreTasks', SID);
+    clickPager(container, 'convSpaceCollapseTasks', SID);
+    expect(rowCount(container.innerHTML)).toBe(5);
+    expect(container.innerHTML).toContain('data-conv-space-more-tasks="sp-aaa"');
+    expect(container.innerHTML).toContain('<span class="conv-list-section-count">14</span>');
   });
 });

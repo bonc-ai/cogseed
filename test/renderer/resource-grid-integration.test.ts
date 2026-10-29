@@ -9,9 +9,12 @@ describe('shared resource grid integration', () => {
   it('uses the shared grid in the gallery and every requested real page', () => {
     expect(read('component-gallery.html')).toContain('class="gallery-resource-grid ui-resource-grid"');
     const gallery = read('component-gallery.js');
-    for (const action of ['继续工作', '使用模板', '使用智能体', '使用技能', '连接账户', '查看记录']) {
+    for (const action of ['继续工作', '使用模板', '使用智能体', '使用技能', '连接账户']) {
       expect(gallery).toContain(`action: '${action}'`);
     }
+    expect(gallery).toContain("layout: 'compact-row'");
+    expect(gallery).toContain('uiDropdownMenu({ trigger');
+    expect(gallery).not.toContain("action: '查看记录'");
     expect(gallery).toContain("title: '社区贡献'");
     expect(gallery).toContain("status: { label: '待审核', tone: 'attention' }");
     for (const action of ['提交新版本', '撤回投稿', '撤回申请历史']) {

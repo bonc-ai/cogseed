@@ -20,6 +20,9 @@ const TEST_UID = 'u1';
 function builtinDir(): string {
   return path.join(tmpDir, TEST_UID, 'local', 'marketplace', 'skills');
 }
+function builtinDirFor(uid: string): string {
+  return path.join(tmpDir, uid, 'local', 'marketplace', 'skills');
+}
 function customDir(): string {
   return path.join(tmpDir, TEST_UID, 'cloud', 'skills');
 }
@@ -112,6 +115,29 @@ describe('skill-registry › getSystemPromptBlock(allowlist)', () => {
     const { getSystemPromptBlock } = await loadRegistry();
     const text = await getSystemPromptBlock({ allowlist: [] });
     expect(text).toBe('');
+  });
+
+  // 会议纪要场景实测（2026-10-13）：内置 agent 的 skill_list 用**技能名**书写
+  // （如 `meeting-actions` / `scope-wbs`），必须能被解析到真实技能；存量内置 agent
+  // 则多用目录 id，两种形态都要在运行时可解。这里用真实的 id/name 对做回归。
+  it('resolves the builtin meeting agent skill names meeting-actions / scope-wbs', async () => {
+    writeSkill(builtinDir(), '0d95910c7f2f', 'meeting-actions', '会议与行动项');
+    writeSkill(builtinDir(), '15af984d02a5', 'scope-wbs', '交付物导向 WBS');
+    const { getSystemPromptBlock } = await loadRegistry();
+    const text = await getSystemPromptBlock({ allowlist: ['meeting-actions', 'scope-wbs'] });
+    expect(text).toContain('**meeting-actions**');
+    expect(text).toContain('**scope-wbs**');
+    expect(text).toContain('internal read id: 0d95910c7f2f');
+    expect(text).toContain('internal read id: 15af984d02a5');
+  });
+
+  it('resolves the same skills when referenced by directory id (legacy form)', async () => {
+    writeSkill(builtinDir(), '0d95910c7f2f', 'meeting-actions', '会议与行动项');
+    writeSkill(builtinDir(), '15af984d02a5', 'scope-wbs', '交付物导向 WBS');
+    const { getSystemPromptBlock } = await loadRegistry();
+    const text = await getSystemPromptBlock({ allowlist: ['0d95910c7f2f', '15af984d02a5'] });
+    expect(text).toContain('**meeting-actions**');
+    expect(text).toContain('**scope-wbs**');
   });
 
   it('runs no trust verification for an explicit empty allowlist', async () => {
@@ -358,6 +384,29 @@ describe('skill-registry › getSystemPromptBlock(allowlist)', () => {
     expect(constructed).toBe(2);
   });
 
+  it('captures explicit user roots before a dynamic loader import can observe an active-user switch', async () => {
+    const otherUid = 'u2';
+    writeSkill(customDir(), 'requested-skill', 'requested-skill', 'requested user skill');
+    writeSkill(path.join(tmpDir, otherUid, 'cloud', 'skills'), 'active-skill', 'active-skill', 'active user skill');
+
+    let releaseImport!: () => void;
+    const importGate = new Promise<void>((resolve) => { releaseImport = resolve; });
+    vi.doMock('#core-agent', async (importOriginal) => {
+      await importGate;
+      return importOriginal<any>();
+    });
+
+    const { getSystemPromptBlock } = await loadRegistry();
+    const promptPromise = getSystemPromptBlock({ userId: TEST_UID });
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(otherUid);
+    releaseImport();
+
+    const prompt = await promptPromise;
+    expect(prompt).toContain('requested-skill');
+    expect(prompt).not.toContain('active-skill');
+  });
+
   it('lists agent-owned private and self-evolved skill ids', async () => {
     writeSkill(agentPrivateDir('sample-agent'), 'private-one', 'private-one', 'first private skill');
     writeSkill(agentEvolvedDir('sample-agent'), 'evolved-one', 'evolved-one', 'first evolved skill');
@@ -396,6 +445,41 @@ describe('skill-registry › getSystemSkillsPromptBlock', () => {
     expect(regularText).not.toContain('**coding**');
     expect(regularText).not.toContain('package-installer');
     expect(regularText).not.toContain('skill-creator');
+  });
+
+  it('with `only`: shows just the built-in capabilities an agent references, under its own heading', async () => {
+    writeSkill(systemDir(), 'agent-creator', 'agent-creator', 'Create agents');
+    writeSkill(systemDir(), 'coding', 'coding', 'Change project code');
+    writeSkill(systemDir(), 'package-installer', 'package-installer', 'Install packages');
+    writeSkill(systemDir(), 'kb-mindmap', 'kb-mindmap', 'Mind maps');
+    const { getSystemSkillsPromptBlock } = await loadRegistry();
+
+    const text = await getSystemSkillsPromptBlock(undefined, { only: ['coding', 'kb-mindmap'] });
+    expect(text).toContain('## Built-in capabilities');
+    expect(text).not.toContain('## System skills');
+    expect(text).toContain('**coding**');
+    expect(text).toContain('**kb-mindmap**');
+    // Everything not named stays hidden — including the powerful ones.
+    expect(text).not.toContain('agent-creator');
+    expect(text).not.toContain('package-installer');
+    // The same read-only root and "only when it matches" rule apply.
+    expect(text).toContain('SYSTEM_SKILLS_ROOT');
+    expect(text).toContain('Do not load system skills that do not match.');
+  });
+
+  it('with `only`: a name that is not installed on this machine renders nothing for it, and an empty result is an empty block', async () => {
+    writeSkill(systemDir(), 'coding', 'coding', 'Change project code');
+    const { getSystemSkillsPromptBlock } = await loadRegistry();
+    expect(await getSystemSkillsPromptBlock(undefined, { only: ['kb-mindmap'] })).toBe('');
+    const text = await getSystemSkillsPromptBlock(undefined, { only: ['coding', 'kb-mindmap'] });
+    expect(text).toContain('**coding**');
+    expect(text).not.toContain('kb-mindmap');
+  });
+
+  it('with an empty `only` list: nothing is shown (not "everything")', async () => {
+    writeSkill(systemDir(), 'coding', 'coding', 'Change project code');
+    const { getSystemSkillsPromptBlock } = await loadRegistry();
+    expect(await getSystemSkillsPromptBlock(undefined, { only: [] })).toBe('');
   });
 
   it('uses an explicit user id for SYSTEM_SKILLS_ROOT', async () => {
@@ -681,5 +765,31 @@ describe('skill-registry › trust withholding', () => {
     await drainTrustRefreshForTest();
     // Same cache generation: the background verdict now withholds it.
     expect(await getSystemPromptBlock()).not.toContain('fresh');
+  });
+
+  it('keeps mixed-user deep trust refresh work paired with its requesting uid', async () => {
+    writeSkill(builtinDirFor('u1'), 'u1-skill', 'u1-skill', 'one');
+    writeSkill(builtinDirFor('u2'), 'u2-skill', 'u2-skill', 'two');
+    let releaseFirst: (() => void) | null = null;
+    const firstScan = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const partitionSkillsByTrustDeep = vi.fn(async (uid: string, skillIds: readonly string[]) => {
+      if (uid === 'u1') await firstScan;
+      return { loadable: [...skillIds], withheld: [] };
+    });
+    vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
+      partitionSkillsByTrustDeep,
+    }));
+
+    const { getSystemPromptBlock, drainTrustRefreshForTest } = await loadRegistry();
+    await getSystemPromptBlock({ userId: 'u1' });
+    await getSystemPromptBlock({ userId: 'u2' });
+    releaseFirst!();
+    await drainTrustRefreshForTest();
+
+    expect(partitionSkillsByTrustDeep.mock.calls).toEqual([
+      ['u1', ['u1-skill']],
+      ['u2', ['u2-skill']],
+    ]);
   });
 });

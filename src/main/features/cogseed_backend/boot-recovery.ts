@@ -6,6 +6,7 @@ import { logErrorRef } from '../../util/log-redact';
 import { recoverCogSeedTasks, type CogSeedRecoveryReport } from './recovery';
 import { reconcileCogSeedPendingResult } from './result-delivery-reconciler';
 import { cogseedResultDeliveryStore } from './result-delivery-store';
+import { closeStaleRunActorsAtBoot } from '../group_chat/run_recovery';
 import {
   ensureCogSeedTaskCreationArtifacts,
   ensureCogSeedTaskLifecycleArtifact,
@@ -18,6 +19,8 @@ export interface CogSeedBootRecoveryReport extends CogSeedRecoveryReport {
   retainedResultsRecovered: number;
   retainedResultsPending: number;
   retainedResultsQuarantined: number;
+  /** Run actors left `pending` by a previous process and closed at boot. */
+  closedRunActors: number;
 }
 
 /**
@@ -61,15 +64,24 @@ export async function recoverCogSeedTasksAtBoot(userId: string): Promise<CogSeed
     await ensureCogSeedTaskLifecycleArtifact(userId, task.taskId);
   }
   const taskRecovery = await recoverCogSeedTasks(userId, { activeTaskIds: [] });
+
+  // Card/worker side of the same story: a run actor left `pending` by a previous
+  // process has no live worker behind it, so the card would read as "running"
+  // forever. Closing it here is what makes the UI honest after a crash or a
+  // killed turn (task state alone could not tell the user that).
+  const runActorRecovery = await closeStaleRunActorsAtBoot(userId);
+
   log.info('CogSeed retained-result boot recovery completed', {
     recovered: retainedResultsRecovered,
     pending: retainedResultsPending,
     quarantined: retainedResultsQuarantined,
+    closedRunActors: runActorRecovery.closedActors,
   });
   return {
     ...taskRecovery,
     retainedResultsRecovered,
     retainedResultsPending,
     retainedResultsQuarantined,
+    closedRunActors: runActorRecovery.closedActors,
   };
 }

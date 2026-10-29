@@ -12,10 +12,13 @@ vi.mock('../../../src/main/logger', () => ({
 // extractor's model output.
 let __nextChat: (message: string, systemPrompt?: string) => { ok: boolean; text: string } =
   () => ({ ok: true, text: '' });
-// The extractor imports chatWithModel from model/core-agent/client, so that is
-// the module we must intercept (not the lower-level model/client).
+let __chatCallCount = 0;
+// The extractor and the welcome Action Plan both import chatWithModel from
+// model/core-agent/client, so that is the module we must intercept (not the
+// lower-level model/client).
 vi.mock('../../../src/main/model/core-agent/client', () => ({
   async chatWithModel(opts: any) {
+    __chatCallCount += 1;
     const r = __nextChat(opts.message, opts.systemPrompt);
     return { ok: r.ok, text: r.text, error: r.ok ? '' : 'stub-fail', aborted: false };
   },
@@ -70,6 +73,7 @@ beforeEach(async () => {
   process.env.HOME = homeDir;
   process.env.USERPROFILE = homeDir;
   __nextChat = () => ({ ok: true, text: '' });
+  __chatCallCount = 0;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
@@ -109,6 +113,21 @@ describe('session_import › transcript-normalize', () => {
       { role: 'user', text: 'hello', ts: '2026-01-01T00:00:00Z' },
       { role: 'assistant', text: 'hi there', ts: '' },
     ]);
+  });
+});
+
+describe('session_import › transcript-normalize drop accounting', () => {
+  it('counts malformed, internal and empty lines so a partial import is visible', async () => {
+    const { parseClaudeTranscript } = await import('../../../src/main/features/session_import/transcript-normalize');
+    const body = [
+      'not json',                                                                 // malformed
+      JSON.stringify({ type: 'queue-operation', operation: 'enqueue' }),           // internal
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [] } }), // empty
+      JSON.stringify({ type: 'user', message: { role: 'user', content: '你好' } }),
+    ].join('\n');
+    const parsed = parseClaudeTranscript(body, 'sess');
+    expect(parsed.turns.map((t) => t.text)).toEqual(['你好']);
+    expect(parsed.skipped).toEqual({ malformed: 1, internal: 1, empty: 1 });
   });
 });
 
@@ -220,66 +239,29 @@ describe('session_import › extractor', () => {
     expect(res.degraded).toBe(true);
     expect(res.reason).toBe('model_unavailable');
   });
-});
 
-describe('session_import › asset-router (cognitions → Recall candidate pool)', () => {
-  it('routes five-type candidates with the full field set to matching suggestedType', async () => {
-    const { routeCognitions } = await import('../../../src/main/features/session_import/asset-router');
-    const recall = await import('../../../src/main/features/recall/candidate-service');
-
-    // A conversation id must be a safeId; use one materialize would produce.
-    const cid = 'imp-claude-abc123';
-    const counts = await routeCognitions(TEST_UID, 'claude', 'sess-1', cid, [
-      { text: '偏好 TypeScript', suggestedType: 'personal' },
-      { text: '项目发布日固定在周四', suggestedType: 'fact' },
-      {
-        text: '提交前必须过 lint',
-        note: '用户强调过两次',
-        suggestedType: 'rule',
-        value: '减少 CI 失败返工',
-        risk: 'low',
-        applicableWhen: ['提交代码前'],
-        forbiddenWhen: ['紧急热修'],
-      },
-      { text: 'PR 描述用三段式', suggestedType: 'template' },
-      { text: '支付回调用重试队列', suggestedType: 'skill_method' },
-    ]);
-    expect(counts).toEqual({ personal: 1, fact: 1, rule: 1, template: 1, skill_method: 1 });
-
-    const candidates = await recall.listRecallCandidates(TEST_UID);
-    const byType = (t: string) => candidates.filter((c: any) => c.suggestedType === t);
-    expect(byType('personal')[0].judgment).toBe('偏好 TypeScript');
-    expect(byType('fact')[0].judgment).toBe('项目发布日固定在周四');
-    expect(byType('rule')[0].judgment).toBe('提交前必须过 lint');
-    expect(byType('rule')[0].summary).toBe('用户强调过两次');
-    expect(byType('rule')[0].value).toBe('减少 CI 失败返工');
-    expect(byType('rule')[0].risk).toBe('low');
-    expect(byType('rule')[0].applicableWhen).toEqual(['提交代码前']);
-    expect(byType('rule')[0].forbiddenWhen).toEqual(['紧急热修']);
-    expect(byType('template')[0].judgment).toBe('PR 描述用三段式');
-    expect(byType('skill_method')[0].judgment).toBe('支付回调用重试队列');
-    // Evidence points at the materialized conversation.
-    expect(byType('personal')[0].sourceRefs[0].id).toBe(cid);
-    expect(byType('personal')[0].sourceRefs[0].kind).toBe('conversation');
-  });
-
-  it('is idempotent — same cognition from same session dedupes via captureKey', async () => {
-    const { routeCognitions } = await import('../../../src/main/features/session_import/asset-router');
-    const recall = await import('../../../src/main/features/recall/candidate-service');
-    const cid = 'imp-claude-dedup1';
-
-    await routeCognitions(TEST_UID, 'claude', 'sess-dup', cid, [
-      { text: '偏好深色主题', suggestedType: 'personal' },
-    ]);
-    await routeCognitions(TEST_UID, 'claude', 'sess-dup', cid, [
-      { text: '偏好深色主题', suggestedType: 'personal' },
-    ]);
-
-    const personal = (await recall.listRecallCandidates(TEST_UID))
-      .filter((c: any) => c.suggestedType === 'personal' && c.judgment === '偏好深色主题');
-    expect(personal.length).toBe(1);
+  it('records the last substantive user request as currentRequest, even when degraded', async () => {
+    __nextChat = () => ({ ok: true, text: 'not json at all' });
+    const { extractSession } = await import('../../../src/main/features/session_import/extractor');
+    const res = await extractSession(TEST_UID, {
+      source: 'claude', sourceId: 's', projectPath: '',
+      turns: [
+        { role: 'user', text: '帮我梳理 Q3 的项目进展', ts: '' },
+        { role: 'assistant', text: '已整理三份周报', ts: '' },
+        { role: 'user', text: '好的', ts: '' },
+        { role: 'user', text: '把这段工作内容整理成可汇报版本', ts: '' },
+        { role: 'assistant', text: '正在整理', ts: '' },
+      ],
+    });
+    expect(res.degraded).toBe(true);
+    expect(res.sessionSummary).toContain('帮我梳理 Q3');
+    // The task target survives a degraded extraction: it never depends on the
+    // summary happening to mention the user's latest request.
+    expect(res.currentRequest).toBe('把这段工作内容整理成可汇报版本');
   });
 });
+
+
 
 describe('session_import › skill-import (Claude skills → skill library)', () => {
   function stageClaudeSkill(dirName: string, md: string, helpers: Record<string, string> = {}) {
@@ -419,10 +401,9 @@ describe('session_import › full pipeline (importClaudeSession)', () => {
     const after = await chats.getMessages(TEST_UID, res.conversationId!);
     expect(after[0].text).toContain('CI 缓存 key');
 
-    // Cognition landed in the candidate pool as a rule.
-    const rules = (await recall.listRecallCandidates(TEST_UID))
-      .filter((c: any) => c.suggestedType === 'rule');
-    expect(rules.some((c: any) => c.judgment === 'CI 必须绿灯才能合')).toBe(true);
+    // Import context is continuable, but it does not produce any cognition candidate.
+    expect(await recall.listRecallCandidates(TEST_UID)).toEqual([]);
+    expect(await (await import('../../../src/main/features/recall/asset-service')).listAbilityAssets(TEST_UID)).toEqual([]);
 
     // Cleanup staged file.
     fs.rmSync(filePath, { force: true });
@@ -476,8 +457,10 @@ describe('session_import › prefetch (read+extract cache)', () => {
     // Count the (slow) extraction model calls. This is the whole point of the
     // feature: prefetch pays the cost ahead of the click; import reuses it.
     let extractCalls = 0;
-    __nextChat = () => {
-      extractCalls += 1;
+    __nextChat = (_message, systemPrompt) => {
+      // The welcome Action Plan now shares this tool-free text call, but has no
+      // extractor system prompt. Count only real extraction passes.
+      if (systemPrompt && systemPrompt.includes('会话提炼助手')) extractCalls += 1;
       return {
         ok: true,
         text: JSON.stringify({ summary: 'S', personal: [], rules: [{ text: 'CI 必须绿灯才能合' }], templates: [] }),
@@ -494,7 +477,10 @@ describe('session_import › prefetch (read+extract cache)', () => {
     // The click: import must reuse the cached extraction, NOT call the model again.
     const res = await mod.importClaudeSession({ userId: TEST_UID, filePath });
     expect(res.ok).toBe(true);
-    expect(res.cognitions.rule).toBe(1);
+    expect(res.cognitions).toEqual({ personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 });
+    const recall = await import('../../../src/main/features/recall/candidate-service');
+    expect(await recall.listRecallCandidates(TEST_UID)).toEqual([]);
+    expect(await (await import('../../../src/main/features/recall/asset-service')).listAbilityAssets(TEST_UID)).toEqual([]);
     expect(extractCalls).toBe(1); // still 1 — the slow half was skipped.
 
     fs.rmSync(filePath, { force: true });
@@ -503,8 +489,8 @@ describe('session_import › prefetch (read+extract cache)', () => {
   it('without a settled prefetch, import returns instantly and extracts in the background', async () => {
     const filePath = stageClaudeSession('enc-cold', 'cold.jsonl');
     let extractCalls = 0;
-    __nextChat = () => {
-      extractCalls += 1;
+    __nextChat = (_message, systemPrompt) => {
+      if (systemPrompt && systemPrompt.includes('会话提炼助手')) extractCalls += 1;
       return { ok: true, text: JSON.stringify({ summary: 'S', personal: [], rules: [], templates: [] }) };
     };
 
@@ -567,6 +553,7 @@ describe('session_import › materialize', () => {
       extraction: {
         ok: true,
         sessionSummary: '上次进展：完成支付迁移，退款回调待测。',
+        currentRequest: '把这段工作内容整理成可汇报版本',
         candidates: [],
       },
     });
@@ -587,6 +574,16 @@ describe('session_import › materialize', () => {
     expect(msgs[0].text).toContain('已提炼');
     expect(msgs[0].text).toContain('支付迁移');
     expect(msgs[0].model_text).toContain('继续协助');
+    // The continuation target rides in the model-facing seed, separated from
+    // the summary material.
+    expect(msgs[0].model_text).toContain('用户最近一次明确请求');
+    expect(msgs[0].model_text).toContain('把这段工作内容整理成可汇报版本');
+
+    // The snapshot stores the same target and uses it as the next step.
+    const { readContinuationSnapshot } = await import('../../../src/main/features/task_continuation');
+    const snapshot = await readContinuationSnapshot(TEST_UID, result.conversationId);
+    expect(snapshot?.currentRequest).toBe('把这段工作内容整理成可汇报版本');
+    expect(snapshot?.nextStep).toBe('把这段工作内容整理成可汇报版本');
   });
 
   it('binds the original project directory as the conversation coding_project_dir', async () => {
@@ -738,6 +735,186 @@ describe('session_import › materialize', () => {
     const list = await chats.listConversations(TEST_UID);
     const found = list.find((c: any) => c.conversation_id === res.conversationId);
     expect(found.title).toBe('⤴ 修复自动沉淀流程');
+  });
+});
+
+describe('session_import › continuation task context', () => {
+  it('derives the last substantive user request and skips acks/synthetic turns', async () => {
+    const { deriveCurrentRequest } = await import('../../../src/main/features/session_import/task-context');
+
+    expect(deriveCurrentRequest([
+      { role: 'user', text: '帮我梳理 Q3 项目进展' },
+      { role: 'assistant', text: '已整理三份周报' },
+      { role: 'user', text: '好的' },
+      { role: 'user', text: '<environment_context>cwd: /x</environment_context>' },
+      { role: 'user', text: '把这段工作内容整理成可汇报版本' },
+      { role: 'assistant', text: '正在整理' },
+    ])).toBe('把这段工作内容整理成可汇报版本');
+
+    // Bare acknowledgement/continue turns are not tasks.
+    expect(deriveCurrentRequest([{ role: 'user', text: '继续' }])).toBe('');
+    expect(deriveCurrentRequest(null)).toBe('');
+  });
+
+  it('round-trips the seed text and reads the legacy format', async () => {
+    const { buildSeedModelText, parseSeedModelText } = await import(
+      '../../../src/main/features/session_import/task-context'
+    );
+
+    const built = buildSeedModelText({
+      sourceName: 'Codex',
+      summary: '第一行\n第二行',
+      currentRequest: '把这段工作内容整理成可汇报版本',
+    });
+    expect(parseSeedModelText(built)).toEqual({
+      summary: '第一行\n第二行',
+      currentRequest: '把这段工作内容整理成可汇报版本',
+    });
+
+    // Legacy seeds (no request block) still parse the whole body as summary.
+    const legacy =
+      '以下是用户从 Codex 导入的一段历史会话的提炼简报。' +
+      '请把它当作已发生的上下文，在此基础上继续协助用户，不要重复已完成的工作：\n\n旧摘要';
+    expect(parseSeedModelText(legacy)).toEqual({ summary: '旧摘要', currentRequest: '' });
+    expect(parseSeedModelText('')).toEqual({ summary: '', currentRequest: '' });
+  });
+
+  it('opening an imported conversation writes no fabricated user turn', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const chats = await import('../../../src/main/features/chats');
+
+    const res = await materializeSession({
+      userId: TEST_UID,
+      source: 'claude',
+      sourceId: 'welcome-no-fake-turn',
+      extraction: {
+        ok: true,
+        sessionSummary: '上次进展：完成支付迁移。',
+        currentRequest: '把这段工作内容整理成可汇报版本',
+        candidates: [],
+      },
+    });
+
+    expect((await chats.beginWelcome(TEST_UID, res.conversationId)).ok).toBe(true);
+
+    const msgs = await chats.getMessages(TEST_UID, res.conversationId);
+    expect(msgs.length).toBe(1); // hidden seed only
+    expect(msgs.filter((m) => m.from === 'user')).toEqual([]);
+
+    // Still pending: the handoff reply is the commit point that clears it.
+    const conv = await chats.getConversation(TEST_UID, res.conversationId);
+    expect(conv?.needs_welcome).toBe(true);
+  });
+
+  it('the commander welcome states the imported request and the runtime carries it', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const chats = await import('../../../src/main/features/chats');
+
+    const res = await materializeSession({
+      userId: TEST_UID,
+      source: 'claude',
+      sourceId: 'welcome-carries-request',
+      extraction: {
+        ok: true,
+        sessionSummary: '上次进展：完成支付迁移。',
+        currentRequest: '把这段工作内容整理成可汇报版本',
+        candidates: [],
+      },
+    });
+
+    expect((await chats.beginWelcome(TEST_UID, res.conversationId)).ok).toBe(true);
+    const chatCallsBefore = __chatCallCount;
+    expect((await chats.handoffWelcomeReply(TEST_UID, res.conversationId)).ok).toBe(true);
+    // One handoff must generate the welcome ONCE. The old path built the panel
+    // and then regenerated it, running the plan model twice per handoff.
+    expect(__chatCallCount - chatCallsBefore).toBe(1);
+
+    const msgs = await chats.getMessages(TEST_UID, res.conversationId);
+    expect(msgs.length).toBe(2);
+    expect(msgs[1].from).toBe('commander');
+    expect(msgs[1].text).toContain('**当前请求**：把这段工作内容整理成可汇报版本');
+    const resume = JSON.parse(String(msgs[1].welcome_resume));
+    expect(resume.currentRequest).toBe('把这段工作内容整理成可汇报版本');
+    // The welcome consumed the flag only after the reply was appended.
+    // (An absent flag is the persisted "not pending" state — the field is
+    // only written as `true`.)
+    expect((await chats.getConversation(TEST_UID, res.conversationId))?.needs_welcome).not.toBe(true);
+  });
+
+  it('a typed request becomes the target instead of the imported request', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const chats = await import('../../../src/main/features/chats');
+
+    const res = await materializeSession({
+      userId: TEST_UID,
+      source: 'claude',
+      sourceId: 'welcome-typed-request',
+      extraction: {
+        ok: true,
+        sessionSummary: '上次进展：整理 Q3 材料。',
+        currentRequest: '把这段工作内容整理成可汇报版本',
+        candidates: [],
+      },
+    });
+
+    const typed = '继续这项工作，改成给管理层看的版本';
+    expect((await chats.handoffWelcomeReply(TEST_UID, res.conversationId, typed)).ok).toBe(true);
+
+    const msgs = await chats.getMessages(TEST_UID, res.conversationId);
+    const reply = msgs[msgs.length - 1];
+    expect(reply.from).toBe('commander');
+    expect(reply.text).toContain('改成给管理层看的版本');
+    const resume = JSON.parse(String(reply.welcome_resume));
+    expect(resume.currentRequest).toBe(typed);
+  });
+
+  it('rejects the handoff template outside imported conversations', async () => {
+    const chats = await import('../../../src/main/features/chats');
+    const conv = await chats.createConversation(TEST_UID, { kind: 'normal', title: 'normal' });
+
+    const res = await chats.handoffWelcomeReply(TEST_UID, conv.conversation_id, '继续这项工作');
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('not_imported');
+    expect(await chats.getMessages(TEST_UID, conv.conversation_id)).toEqual([]);
+  });
+
+  it('backfills currentRequest into a snapshot created before the field existed', async () => {
+    const chats = await import('../../../src/main/features/chats');
+    const { buildContinuationSnapshot, readContinuationSnapshot } = await import(
+      '../../../src/main/features/task_continuation'
+    );
+    const { conversationLayout } = await import('../../../src/main/util/project-layout');
+
+    const conv = await chats.createConversation(TEST_UID, { kind: 'normal', title: 'legacy' });
+    const file = path.join(
+      conversationLayout(TEST_UID, conv.conversation_id, null).groupDir,
+      'continuation-snapshot.json',
+    );
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1,
+      conversationId: conv.conversation_id,
+      createdAt: new Date().toISOString(),
+      goal: '旧目标',
+      stage: '旧进展',
+      constraints: [],
+      latestArtifact: null,
+      nextStep: '继续这项工作',
+      sourceSummary: '旧摘要',
+    }));
+
+    const updated = await buildContinuationSnapshot({
+      userId: TEST_UID,
+      conversationId: conv.conversation_id,
+      sessionSummary: '旧摘要',
+      currentRequest: '把这段工作内容整理成可汇报版本',
+    });
+
+    expect(updated?.currentRequest).toBe('把这段工作内容整理成可汇报版本');
+    expect(updated?.nextStep).toBe('把这段工作内容整理成可汇报版本');
+    expect((await readContinuationSnapshot(TEST_UID, conv.conversation_id))?.currentRequest)
+      .toBe('把这段工作内容整理成可汇报版本');
   });
 });
 
@@ -1069,6 +1246,32 @@ describe('session_import › Codex import', () => {
       { role: 'user', content: '这个函数怎么改' },
       { role: 'assistant', content: '先把副作用提出来' },
     ]);
+  });
+
+  it('carries the last substantive Codex request into the imported conversation', async () => {
+    writeCodexSession('2026-08-09', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '帮我梳理 Q3 项目进展' }] } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: '已整理三份周报' }] } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '把这段工作内容整理成可汇报版本' }] } }),
+    ].join('\n'));
+
+    const { listCodexSessions, importCodexSession } = await import(
+      '../../../src/main/features/session_import/codex-import'
+    );
+    const [session] = await listCodexSessions(homeDir);
+    const res = await importCodexSession(TEST_UID, session.filePath);
+    expect(res.ok).toBe(true);
+
+    const chats = await import('../../../src/main/features/chats');
+    const msgs = await chats.getMessages(TEST_UID, res.conversationId!);
+    // Codex used to keep only the FIRST prompt. The seed must carry the last
+    // substantive request as the continuation target.
+    expect(msgs[0].model_text).toContain('把这段工作内容整理成可汇报版本');
+
+    const { readContinuationSnapshot } = await import('../../../src/main/features/task_continuation');
+    const snapshot = await readContinuationSnapshot(TEST_UID, res.conversationId!);
+    expect(snapshot?.currentRequest).toBe('把这段工作内容整理成可汇报版本');
   });
 
   it('extracts facts from config.toml', async () => {

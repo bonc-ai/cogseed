@@ -30,41 +30,6 @@ export interface KstarTaskAggregateResult {
   candidates: RecallCandidateRecord[];
 }
 
-export async function startPendingTopicSwitchTask(
-  userId: string,
-  state: KstarConversationTaskStateRecord,
-): Promise<KstarConversationTaskStateRecord> {
-  const pending = state.pendingTaskStart;
-  if (!pending) return state;
-  const task = createKstarTaskRecord(userId, {
-    conversationId: state.conversationId,
-    title: pending.text,
-    ...(pending.workspaceId ? { workspaceId: pending.workspaceId } : {}),
-  });
-  const requirement = createKstarRequirementRecord(userId, {
-    taskId: task.id,
-    conversationId: state.conversationId,
-    userMessageIds: [pending.userMessageId],
-    title: pending.text,
-    goalText: pending.text,
-    rHat: { summary: pending.text, acceptanceSignals: [], source: 'user_message', confidence: 0.6 },
-  });
-  task.requirementIds = [requirement.id];
-  task.currentRequirementId = requirement.id;
-  await replaceKstarRequirement(userId, requirement);
-  await replaceKstarTask(userId, task);
-  const nextState: KstarConversationTaskStateRecord = {
-    ...state,
-    currentTaskId: task.id,
-    currentRequirementId: requirement.id,
-    requirementJustClosed: undefined,
-    taskComplete: false,
-    pendingTaskStart: undefined,
-    updatedAt: nowIso(),
-  };
-  return replaceConversationTaskState(userId, nextState);
-}
-
 export async function drainKstarTaskState(
   userId: string,
   conversationId: string,
@@ -120,25 +85,18 @@ export async function drainKstarTaskState(
     candidates,
   };
 
-  if (state.pendingTaskStart) {
-    await startPendingTopicSwitchTask(userId, {
-      ...state,
-      currentTaskId: undefined,
-      currentRequirementId: undefined,
-      taskComplete: false,
-      updatedAt: nowIso(),
-    });
-  } else {
-    await replaceConversationTaskState(userId, {
-      ...state,
-      currentTaskId: undefined,
-      currentRequirementId: undefined,
-      requirementJustClosed: undefined,
-      taskComplete: false,
-      pendingTaskStart: undefined,
-      updatedAt: nowIso(),
-    });
-  }
+  // No deferred task open here: a topic switch closes the old task and lets the
+  // next message open its own. Stashing a "to be started" task and creating it
+  // at close time would land the task after the work it describes is already
+  // done, so the mechanism was removed rather than wired.
+  await replaceConversationTaskState(userId, {
+    ...state,
+    currentTaskId: undefined,
+    currentRequirementId: undefined,
+    requirementJustClosed: undefined,
+    taskComplete: false,
+    updatedAt: nowIso(),
+  });
 
   return result;
 }

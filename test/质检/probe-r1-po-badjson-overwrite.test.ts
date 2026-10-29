@@ -1,19 +1,7 @@
 /**
- * 红队探针 r1：坏 JSON → 空文档静默覆盖（数据丢失面）。
- *
- * 推演链：loadPoDocSync（po/store.ts:64）在 JSON.parse 失败时返回
- * emptyPoDocument() 且**不迁移、不备份**；editPoDoc（po/store.ts:235）
- * 在业务变更成功后无条件 writeJson 覆盖原文件。两者叠加 = 磁盘 JSON 一旦
- * 损坏（云同步冲突 / 外部编辑截断），下一次**成功**的写操作会把旧文档
- * （可能大部分可修复）整体替换成「空文档 + 本次新增」——无坏档备份、
- * 无用户可见错误。
- *
- * 本探针：seed 真实组 → 截断 JSON → createGroup → 断言旧组永久消失。
- *
- * 2026-09-30 r1 收尾（记账员）：对应待议 P-r1-8（high，坏档静默覆盖、无备份；
- * A 抢救性复制 / B corrupted 标志拒写 / A+B 组合待拍板）→ it.skip。
- * 断言锁定的是「现状会丢」，拍板修复后反转为「坏档有 .corrupt 备份且拒绝
- * 静默覆盖」。拍板前保持 skip，见 round-1-甄别.md toPending。
+ * 本体 JSON 损坏时的写入拒绝与原始字节保留边界（corrupt-guard）：
+ * 坏档 → copy 备份 + 登记 + 拒写 latch；下一次写被拒，盘上坏字节不被
+ * 「空文档+新增」静默替换。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -22,7 +10,7 @@ import * as path from 'node:path';
 
 vi.mock('../../src/main/features/kb_indexer', () => ({
   enqueue: () => {},
-  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+  kbEvents: { on: () => {}, emit: () => {}, off: () => {} },
 }));
 vi.mock('../../src/main/features/search', () => ({
   upsertContext: () => {},
@@ -53,43 +41,32 @@ async function loadGroups() {
   return import('../../src/main/features/personal_ontology_groups');
 }
 
-describe('probe r1 › 坏 JSON 覆盖（待议 P-r1-8，拍板前 skip）', () => {
-  it.skip('磁盘 JSON 损坏后，下一次成功写入把旧文档静默替换（无坏档备份）', async () => {
+describe('坏 JSON 覆盖防护', () => {
+  it('磁盘 JSON 损坏后：写被拒、坏档备份在场、原字节不被覆盖', async () => {
     // 1) seed：一个带字段值的真实组
     const groups = await loadGroups();
     const created = await groups.createGroup(UID, '珍藏组');
     expect(created.ok).toBe(true);
     const gid = created.group!.group_id;
     await groups.appendFieldValue(UID, gid, '重要事实', '不可丢的数据', '手动');
-    const before = fs.readFileSync(poDocFile(), 'utf8');
-    expect(before).toContain('珍藏组');
-    expect(before).toContain('不可丢的数据');
+    expect(fs.readFileSync(poDocFile(), 'utf8')).toContain('不可丢的数据');
 
     // 2) 破坏：模拟云同步冲突 / 截断写（半截 JSON）
-    fs.writeFileSync(poDocFile(), '{"schemaVersion":2,"groups":[{"id":"g1","ti');
+    const corruptBytes = '{"schemaVersion":2,"groups":[{"id":"g1","ti';
+    fs.writeFileSync(poDocFile(), corruptBytes);
 
-    // 3) 触发：一次会成功的写（新建组是最常见操作）
+    // 3) 触发：一次最常见的写（新建组）——被坏档写侧门拒绝
     const second = await groups.createGroup(UID, '后来组');
-    expect(second.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    expect(String(second.error)).toContain('corrupt');
 
-    // 4) 断言：旧文档被替换——珍藏组与它的值从磁盘上消失
-    const after = JSON.parse(fs.readFileSync(poDocFile(), 'utf8'));
-    const titles = (after.groups || []).map((g: any) => g.title);
-    expect(titles).toContain('后来组');
-    expect(titles).not.toContain('珍藏组');
-    expect(JSON.stringify(after)).not.toContain('不可丢的数据');
-    expect((after.trash || []).length).toBe(0);
+    // 4) 断言：盘上仍是坏档原字节（未被空文档+新组替换），可循备份抢救
+    expect(fs.readFileSync(poDocFile(), 'utf8')).toBe(corruptBytes);
 
-    // 5) 断言：坏档没有任何备份副本（local/ 下无 backup/corrupt；cognition/
-    //    下除正常 po-history 快照目录与正文外没有别的）
-    const localDir = path.join(tmpDir, UID, 'local');
-    const backups: string[] = fs.existsSync(localDir)
-      ? fs.readdirSync(localDir).filter((n) => n.includes('backup') || n.includes('corrupt'))
-      : [];
-    const cognitionDir = path.join(tmpDir, UID, 'cloud', 'cognition');
-    const cognitionFiles = fs.readdirSync(cognitionDir)
-      .filter((n) => n !== 'personal-ontology.json' && n !== 'po-history');
-    expect(backups.length).toBe(0);
-    expect(cognitionFiles.length).toBe(0);
+    // 5) 断言：坏档已有 copy 备份（原字节，非 move）
+    const backups = fs.readdirSync(path.dirname(poDocFile()))
+      .filter((n) => n.startsWith('personal-ontology.json.corrupt-'));
+    expect(backups.length).toBe(1);
+    expect(fs.readFileSync(path.join(path.dirname(poDocFile()), backups[0]), 'utf8')).toBe(corruptBytes);
   });
 });

@@ -12,6 +12,8 @@ export {
   type AssetRuntimeContext,
   type AssetRuntimeEligibility,
   type AssetRuntimeMode,
+  type AssetRuntimeOperation,
+  type AssetRuntimeRelevance,
 } from './runtime';
 export {
   describePromotionBlock,

@@ -224,7 +224,8 @@ describe('候选决定的收尾', () => {
 
   it('确认并限域成功后离开候选详情页，回到对应落点', () => {
     expect(adopt).toContain("router.go({ name: 'overview', assetId: promotedAssetId })");
-    expect(adopt).toContain("router.go({ name: 'review' })");
+    // 收尾不再主动跳回 review，而是就地重读列表（缺候选时退回全量 reload）。
+    expect(adopt).toContain('await NS.reload();');
     expect(adopt).toContain("toast(T('cognition.candidate_promoted'");
     // 成功路径只有 toast 分支；scope 拦截的 alertUser 在 promote 之前 return。
     const gate = adopt.indexOf("alertUser(T('cognition.candidate_scope_required'");
@@ -254,14 +255,16 @@ describe('候选决定的收尾', () => {
     const gate = adopt.indexOf("alertUser(T('cognition.candidate_scope_required'");
     expect(gate).toBeGreaterThan(-1);
     const stop = adopt.indexOf('return;', gate);
-    const promote = adopt.indexOf("'recall.candidates.promote'");
+    // organization 分支在上方也有一次 promote；这里校验的是常规路径：
+    // 先过作用范围闸门并 return，才可能落到 promote。
+    const promote = adopt.indexOf("'recall.candidates.promote'", gate);
     expect(stop).toBeGreaterThan(-1);
     expect(promote).toBeGreaterThan(-1);
     expect(stop).toBeLessThan(promote);
   });
 
   it('未改动的证据引用连元数据一起留住，不被压成裸 kind:id', () => {
-    expect(adopt).toContain('sourceRefs: candidate.evidenceRefs || candidate.sourceRefs || []');
+    expect(adopt).toContain('sourceRefs: candidate.sourceRefs || candidate.evidenceRefs || []');
     expect(adopt).toContain('evidenceRefs: candidate.evidenceRefs || candidate.sourceRefs || []');
     expect(adopt).toContain('Object.assign({');
   });

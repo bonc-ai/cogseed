@@ -15,6 +15,22 @@
  */
 
 import type { AgentTool, HistoryResource } from '#core-agent';
+import type { OntologyAnswerEvidenceBundle } from '../features/recall/ontology-answer-validation';
+
+export interface ShellApprovalInput {
+  toolName: 'bash' | 'interactive_cli_start';
+  command: string;
+  workingDir: string;
+  signal?: AbortSignal | null;
+}
+
+/** Invocation-local grant; execution reporting never contains command inputs. */
+export interface ShellApprovalGrant {
+  requestId: string;
+  record(requestId: string, phase: 'started' | 'succeeded' | 'failed', resultCode?: string): Promise<void>;
+}
+
+export type ShellApprovalDecision = string | null | ShellApprovalGrant;
 
 import {
   abortActiveSession as _abortActiveSession,
@@ -71,10 +87,12 @@ export interface ChatAttachmentMetadata {
  * `target: 'candidate'` + `outcome: 'taught-pending-review'` 装进同一回执链，
  * 渲染层不再有独立教学卡。 */
 export interface CognitionSaveReceipt {
-  target: 'asset' | 'candidate';
+  target: 'asset' | 'candidate' | 'ontology';
+    moduleId?: string;
+    version?: number;
   id: string;
   summary: string;
-  outcome: 'created' | 'already-confirmed' | 'pending-review' | 'merged' | 'fused-update-pending' | 'taught-pending-review';
+  outcome: 'created' | 'already-confirmed' | 'pending-review' | 'merged' | 'fused-update-pending' | 'taught-pending-review' | 'ontology-saved' | 'ontology-pending';
 }
 
 export interface ChatResolvedRuntime {
@@ -120,6 +138,9 @@ export interface ChatOptions {
    * Use this for conversation-level rules that must stay in context for every
    * turn (kept on the system channel, not duplicated into each user message). */
   systemPrompt?: string;
+  /** Governed, turn-local evidence attached to automatically injected
+   * Semantica assets. It is consumed only by the final response gate. */
+  recallAnswerEvidence?: OntologyAnswerEvidenceBundle;
   /** Human-readable actor name used in user-facing local permission prompts. */
   agentName?: string;
   /** Working directory for tool execution (list_files, read_file, bash, etc.).
@@ -207,6 +228,11 @@ export interface ChatOptions {
   /** 每会话访问权限模式（full / auto_approve / ask），由调用方从会话元数据
    *  解析后传入，透传给 local-tools / file-tools 的敏感操作门。 */
   permissionMode?: 'full' | 'auto_approve' | 'ask';
+  /** 逐次写入审批（A2A 接待）：调用方在接访会话里注入，返回拒绝码表示本人没有批准。
+   *  普通会话不传，写路径行为不变。 */
+  beforeWriteApproval?: (input: { toolName: 'write_file' | 'edit_file'; path: string; content: string }) => Promise<string | null>;
+  /** Receiver approval for each shell invocation, independent of permission mode. */
+  beforeShellApproval?: (input: ShellApprovalInput) => Promise<ShellApprovalDecision>;
   /** Stable id for the visible actor turn. Group chat passes this through as
    *  part of its turn-scoped execution contract; file output now stays in the
    *  conversation workspace rather than a turn-specific subdirectory. */
@@ -223,6 +249,13 @@ export interface ChatOptions {
    * this chain on 2026-09-28 (四病整改 7.0 修7): the runner emits
    * candidate+taught-pending-review here instead of a separate callback. */
   onCognitionSaveReceipt?: (receipt: CognitionSaveReceipt) => void | Promise<void>;
+  onAssetUsageClaim?: (claim: import('../features/recall/asset-usage-claim').AssetUsageClaim) => void | Promise<void>;
+  suppliedAbilityAssets?: Array<{ assetId: string; assetVersion: string }>;
+  /** Immutable execution/context ceiling for a trusted inbound A2A reception
+   *  turn, frozen by the host from the conversation marker + the validated
+   *  workspace grant before any model or tool work. Undefined for ordinary
+   *  local turns, which keep their existing workspace and history behavior. */
+  receptionScope?: import('../features/a2a/reception-scope').TrustedReceptionScope;
   /** Host observation of the actual runtime candidate and final tool catalog. */
   onResolvedRuntime?: (runtime: ChatResolvedRuntime) => void;
   /** Project id of the conversation, when it belongs to one. Threaded
@@ -235,6 +268,8 @@ export interface ChatOptions {
    *  context-policy 系统提示词块注入 + 空间 memory 层级与 instructions 工具。
    *  由 group_chat 每 turn 从 conversation.space_id 解析一次传入。 */
   spaceId?: string;
+  /** 会话类型（conversation.kind）；作为 recall scopePolicy.conversationKinds 上下文。 */
+  conversationKind?: string;
   /** Extra absolute directory roots whitelisted for file-tools on top of
    *  workspace + attachment. Read AND write are permitted under these roots.
    *  Per-skill edit chats pass the skill dir so the LLM can read / search /
@@ -304,6 +339,15 @@ export interface ChatOptions {
    *  preserving). Set `'off'` to suppress thinking even on a reasoner;
    *  set `'low'` / `'high'` to override. */
   thinkingLevel?: 'off' | 'low' | 'high';
+  /**
+   * Option C preflight: the thinking tiers the effective model declares (host
+   * vocabulary `off` | `low` | `high`). When provided and `thinkingLevel` is an
+   * explicit tier outside the list, the call is refused **before** the provider
+   * sees it — the throw lands while the run has not started, so it is classified
+   * `model_preflight` rather than an opaque provider 400. Omit the field when no
+   * declaration could be resolved: absent means "not validated", never "no tiers".
+   */
+  supportedReasoningLevels?: readonly string[];
   /** Per-task model override from the unified execution entry (user picked a
    *  specific provider+model for this conversation, or temporarily switched
    *  an in-process agent's model). Resolved against the user's configured

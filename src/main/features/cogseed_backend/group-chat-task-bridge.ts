@@ -82,6 +82,17 @@ function safeErrorCode(value: unknown): string | undefined {
   return code && /^[A-Za-z0-9_.:-]+$/.test(code) ? code : undefined;
 }
 
+/** N-09：任务生命周期事件一直带 cid/run 引用，但投影出来的 tool.* 事件此前不带，
+ *  于是「哪个会话/哪次运行的这一步工具」只能靠时间戳猜。引用只取任务记录里已有
+ *  的标识，缺席不发明（absence stays semantic）。 */
+function taskEventRefs(task: CogSeedTaskRecord): { conversationId?: string; agentId?: string; runId?: string } {
+  return {
+    ...(task.conversationId ? { conversationId: task.conversationId } : {}),
+    ...(task.agentId ? { agentId: task.agentId } : {}),
+    ...(task.groupChatRunId ? { runId: task.groupChatRunId } : {}),
+  };
+}
+
 type SafeToolEvent = {
   type: Extract<CogSeedTaskEventType, 'tool.started' | 'tool.finished'>;
   payload: { toolName: string; isError?: boolean; errorCode?: string };
@@ -240,7 +251,7 @@ export function createGroupChatTaskBridge(deps: GroupChatTaskBridgeDeps = {}): G
           }));
         }
         for (const event of safeToolEventsFromGroupChatProcess(input.process)) {
-          await appendEvent(input.userId, task.taskId, task.sessionId, event.type, event.payload);
+          await appendEvent(input.userId, task.taskId, task.sessionId, event.type, event.payload, taskEventRefs(task));
         }
         const nextStatus = targetStatus(input.status);
         if (task.status === nextStatus || TERMINAL.has(task.status)) return task;

@@ -113,6 +113,40 @@ describe('metacognition › write', () => {
     );
     expect(result.isError).toBe(true);
   });
+
+  // P-r1-48: a hallucinating model can pass a non-string `content`; the old
+  // `(input.content as string) || ''` cast let it reach `content.trim()` in
+  // the handler and blow up with a technical TypeError instead of a precise
+  // tool error.
+  it('returns a precise error when content is not a string (e.g. a number)', async () => {
+    const handler = mockHandler();
+    const tool = createMetacognitionTool(handler);
+    const result = await tool.execute(
+      { action: 'write', target: 'competence', content: 123 },
+      dummyCtx,
+    );
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error).toMatch(/content.*must be a string/i);
+    expect(handler.write).not.toHaveBeenCalled();
+  });
+});
+
+// ── read honors the handler's `ok` (dead contract bit, P-r1-48) ─────────
+
+describe('metacognition › read error propagation', () => {
+  it('marks the tool result as error when handler.read reports ok:false', async () => {
+    const handler = mockHandler();
+    (handler.read as any).mockReturnValue({
+      ok: false, content: '', error: 'active user changed; metacognition store unavailable',
+      usage: { current: 0, limit: 0 },
+    });
+    const tool = createMetacognitionTool(handler);
+    const result = await tool.execute({ action: 'read', target: 'competence' }, dummyCtx);
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content).error).toMatch(/active user changed/);
+  });
 });
 
 describe('metacognition › error handling', () => {

@@ -1,3 +1,4 @@
+// 身份、发言与文件名均为合成测试样例；时间仅用于解析和顺序断言。
 import { describe, it, expect } from 'vitest';
 import {
   buildReviewRequest,
@@ -9,11 +10,11 @@ import {
   REVIEW_MAX_PER_CHUNK,
 } from '../../../src/main/features/transcript_llm_candidates';
 
-// 一份真实形态的中文会议转写：错写是小写英文/同音字，不是 CamelCase
+// 合成中文转写：身份和内容均为示例，错写含小写英文/同音字，而非仅 CamelCase。
 const TRANSCRIPT = [
-  '嗯然后我们这个季度的 roadmap 还没有对齐，傅平老师说下周要过一遍。',
+  '嗯然后这份示例的 roadmap 还没有对齐，例甲角色将在练习中再确认。',
   'coxyx 那边负责 tools 的部分，plugins 也要一起看。',
-  '这块是 SpeakerA 在跟，他提过 KSTAR 的事情。',
+  '这部分由 SpeakerA 演示，示例中会用到 KSTAR。',
 ].join('\n');
 
 const known = ['SpeakerA', 'Cogseed', 'KSTAR'];
@@ -79,6 +80,21 @@ describe('读正文提候选：不再靠词形准入', () => {
     );
     expect(candidates).toEqual([]);
     expect(rejected.map((r) => r.why)).toEqual(['not_in_text', 'identical_pair']);
+  });
+
+  it('模型给不出正确写法（「?」这类占位目标）时不成为候选', () => {
+    const { candidates, rejected } = parseReviewResponse(
+      JSON.stringify([
+        { wrong: 'xrd', correct: '?', confidence: 0.4, reason: '无法确定' },
+        { wrong: 'xrd', correct: '？…', confidence: 0.4, reason: '' },
+        { wrong: 'xrd', correct: 'PRD', confidence: 0.8, reason: '' },
+      ]),
+      '清除原型跟 xrd 的区别',
+      0,
+      [],
+    );
+    expect(candidates.map((c) => c.correct)).toEqual(['PRD']);
+    expect(rejected.map((r) => r.why)).toEqual(['placeholder_target', 'placeholder_target']);
   });
 
   it('模型回的片段两头带空格时，span 按正文实际长度算（不按模型字符串长度）', () => {
@@ -207,7 +223,7 @@ describe('部分失败不拖垮其余段（诚实回报）', () => {
   });
 });
 
-// ── token 用量（specs/013 T004：键名/量纲已按 runner 类型核实）──────────
+// ── token 用量（键名/量纲已按 runner 类型核实）──────────
 //
 // 生产路径取 `runner.run()` 的 `result.meta.usage`
 // （`{ inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, totalTokens }`，
@@ -278,8 +294,44 @@ describe('请求构造', () => {
     expect(request.message).toContain('SpeakerA、Cogseed、KSTAR');
     expect(request.message).toContain('重点线索');
     expect(request.systemPrompt).toContain('逐字');
-    // 提示词必须说清"产出只是候选"
-    expect(request.systemPrompt).toContain('给人复核的候选');
+    // 提示词必须如实说明产出的去向 —— **不能再说"不会被自动采纳"**：
+    // 高置信且指向已确认写法的建议现在会自动生效（见 applyCorrections 的入选判据）。
+    // 提示词与实现不一致会让模型按错的预期工作（此前正是如此）。
+    expect(request.systemPrompt).toContain('先给人复核');
+    expect(request.systemPrompt).toContain('可能被直接采纳');
+    expect(request.systemPrompt).not.toContain('不会被自动采纳');
+  });
+
+  /**
+   * **错写对照表**必须进提示词。
+   *
+   * 此前只把"正确写法"那一列（`knownTargets`）平铺给模型，**错形那一列完全没给**。
+   * 后果（2026-10-15 真机实测）：模型只能靠"长得像哪个已知写法"猜读音，
+   * 把 `maas` 猜成 `MaaS`（团队实际指的是 MeshSeed）、`magic C` 猜成 `MCP`。
+   * 词表的核心就是这张对照表，不给它等于让模型放弃最可靠的依据。
+   */
+  it('错写对照表进提示词，且标为最可靠依据', () => {
+    const request = buildReviewRequest(
+      'coxy 在跟', ['Cogseed'], [],
+      [{ wrong: 'coxy', correct: 'Cogseed' }, { wrong: 'cogsed', correct: 'Cogseed' }],
+    );
+    expect(request.message).toContain('团队已确认的错写对照');
+    expect(request.message).toContain('「coxy」→「Cogseed」');
+    expect(request.message).toContain('「cogsed」→「Cogseed」');
+    expect(request.message).toContain('最可靠的依据');
+    expect(request.systemPrompt).toContain('错写对照');
+  });
+
+  it('对照表剔除空值、左右相同项与超长项（提示词不被污染）', () => {
+    const request = buildReviewRequest('coxy 在跟', ['Cogseed'], [], [
+      { wrong: 'coxy', correct: 'Cogseed' },
+      { wrong: '同同', correct: '同同' },      // 左右相同 ⇒ 无对照信息
+      { wrong: '', correct: 'X' },             // 空
+      { wrong: 'x'.repeat(41), correct: 'y' }, // 超长
+    ]);
+    expect(request.message).toContain('「coxy」→「Cogseed」');
+    expect(request.message).not.toContain('「同同」');
+    expect(request.message).not.toContain('xxxxx');
   });
 
   it('没有已知写法也照常问（这正是最需要模型看一眼的情况）', () => {
@@ -313,4 +365,13 @@ describe('请求构造', () => {
     expect(result.candidates[0]).toMatchObject({ wrong: 'KSTAR', correct: 'KSTAR2', pending: true });
     expect(result.rejected.some((r) => r.why === 'identical_pair')).toBe(true);
   });
+});
+
+it.each(['No changes needed.', '["unstructured row"]', '[{"wrong":"x"}]'])('does not treat an unstructured answer as a completed review: %s', async raw => {
+  const result = await generateReviewCandidates('u', TRANSCRIPT, { runModel: async () => raw });
+  expect(result.reviewedRanges).toEqual([]);
+});
+it('records an explicit empty JSON array as a reviewed source range', async () => {
+  const result = await generateReviewCandidates('u', TRANSCRIPT, { runModel: async () => '[]' });
+  expect(result.reviewedRanges).toEqual([{ start: 0, end: TRANSCRIPT.length }]);
 });

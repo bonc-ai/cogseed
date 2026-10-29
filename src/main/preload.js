@@ -347,7 +347,11 @@ function logRecord(record) {
 // the lifecycle (unlike `stream` which the renderer starts). Channel names are restricted to
 // a known prefix list so the renderer can't tap into arbitrary internal IPC traffic.
 const PUSH_EVENT_CHANNELS = new Set();
-const PUSH_EVENT_PREFIXES = ['marketplace:', 'conversations:', 'connectors:', 'client-config:', 'delete_file.', 'bridge:', 'bash:', 'action-approval:', 'interactive-cli:', 'messaging:', 'personal-context:', 'hub-account:', 'local-agents:', 'updates:', 'workspace-import:', 'cognition:'];
+// 新增推送通道必须同时登记在这里，否则渲染层订阅时**静默失败**（只打一条 warn）：
+// 实测 `transcript_glossary.confirmation_required` 漏登记，卡片订阅直接抛
+// "push channel not allowed"，用户永远看不到那张待确认卡片，而主进程侧工具
+// 还在等回执——表现为"模型说请看卡片，但什么都没有"。
+const PUSH_EVENT_PREFIXES = ['marketplace:', 'conversations:', 'connectors:', 'client-config:', 'delete_file.', 'contacts:', 'a2a:', 'transcript_glossary.', 'p3394.bridge.', 'execution:', 'bridge:', 'bash:', 'action-approval:', 'interactive-cli:', 'messaging:', 'personal-context:', 'hub-account:', 'local-agents:', 'updates:', 'workspace-import:', 'cognition:', 'packages:'];
 function isAllowedPushChannel(channel) {
   if (typeof channel !== 'string') return false;
   return PUSH_EVENT_CHANNELS.has(channel) || PUSH_EVENT_PREFIXES.some((p) => channel.startsWith(p));

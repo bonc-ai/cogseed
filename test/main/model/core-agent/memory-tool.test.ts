@@ -1,55 +1,36 @@
-import { describe, it, expect, vi } from 'vitest';
-import { createCrossSessionMemoryTool, type MemoryToolHandler, type MemoryTier } from '../../../../src/core-agent/src/tools/memory-tool';
-
-function stubHandler(): MemoryToolHandler & { calls: Array<{ op: string; tier: MemoryTier }> } {
-  const calls: Array<{ op: string; tier: MemoryTier }> = [];
-  const res = { ok: true, entries: [], usage: { current: 0, limit: 100 } };
-  return {
-    calls,
-    add: vi.fn((tier: MemoryTier) => { calls.push({ op: 'add', tier }); return res; }),
-    replace: vi.fn((tier: MemoryTier) => { calls.push({ op: 'replace', tier }); return res; }),
-    remove: vi.fn((tier: MemoryTier) => { calls.push({ op: 'remove', tier }); return res; }),
-    list: vi.fn((tier: MemoryTier) => { calls.push({ op: 'list', tier }); return res; }),
-  };
-}
-
-const enumOf = (tool: ReturnType<typeof createCrossSessionMemoryTool>): string[] =>
-  ((tool.inputSchema as any).properties.target.enum as string[]);
-
-describe('cross_session_memory tool › space tier exposure', () => {
-  it('non-space sessions: legacy three-tier schema, no space mention in the description', () => {
-    const tool = createCrossSessionMemoryTool(stubHandler());
-    expect(enumOf(tool)).toEqual(['agent', 'shared', 'user']);
-    expect(tool.description).not.toContain('space:');
-    expect(tool.description).toContain('repo/project conventions -> shared'); // legacy routing line intact
+import { describe, expect, it, vi } from 'vitest';
+import { createCrossSessionMemoryTool } from '../../../../src/core-agent/src/tools/memory-tool';
+const context = {} as never;
+describe('existing cross-session memory is read-only for every actor', () => {
+  it('exposes only inventory reads, retaining caller-scoped stores', () => {
+    const tool = createCrossSessionMemoryTool({ list: vi.fn() });
+    expect((tool.inputSchema as any).properties.action.enum).toEqual(['list']);
+    expect((tool.inputSchema as any).properties.target.enum).toEqual(['agent', 'shared', 'user']);
+    expect((tool.inputSchema as any).properties).not.toHaveProperty('content');
+    expect((tool.inputSchema as any).properties).not.toHaveProperty('old_text');
+    expect(tool.description).toMatch(/read-only/i);
   });
-
-  it('space sessions: four-tier schema and the belongs-where routing rule', () => {
-    const tool = createCrossSessionMemoryTool(stubHandler(), { includeProjectTier: true });
-    expect(enumOf(tool)).toEqual(['agent', 'space', 'shared', 'user']);
-    expect(tool.description).toContain('space: durable facts, decisions, outcomes, milestones, and conventions that belong to THIS space only');
-    expect(tool.description).toContain('would this still hold in another space?');
+  it.each(['add', 'replace', 'remove', 'unknown'])('rejects retired %s dispatch before any IO', async action => {
+    const handler = { list: vi.fn() };
+    const tool = createCrossSessionMemoryTool(handler, { includeProjectTier: true });
+    for (const target of ['agent', 'shared', 'user', 'space']) {
+      expect(await tool.execute({ action, target, content: 'new', old_text: 'old' }, context)).toMatchObject({ isError: true });
+    }
+    expect(handler.list).not.toHaveBeenCalled();
   });
-
-  it('space target executes against the handler only when the tier is offered', async () => {
-    const withProject = stubHandler();
-    const t1 = createCrossSessionMemoryTool(withProject, { includeProjectTier: true });
-    const okRes = await t1.execute({ action: 'add', target: 'space', content: 'x' }, {} as any);
-    expect(okRes.isError).toBeFalsy();
-    expect(withProject.calls).toEqual([{ op: 'add', tier: 'space' }]);
-
-    const without = stubHandler();
-    const t2 = createCrossSessionMemoryTool(without);
-    const errRes = await t2.execute({ action: 'add', target: 'space', content: 'x' }, {} as any);
-    expect(errRes.isError).toBe(true);
-    expect(String(errRes.content)).toContain('target must be one of');
-    expect(without.calls).toEqual([]); // never reached the handler
+  it('lists existing space entries only when space scope is offered', async () => {
+    const existing = { ok: true, entries: ['existing decision'], usage: { current: 1, limit: 100 } };
+    const handler = { list: vi.fn().mockResolvedValue(existing) };
+    const scoped = createCrossSessionMemoryTool(handler, { includeProjectTier: true });
+    expect(JSON.parse((await scoped.execute({ action: 'list', target: 'space' }, context)).content)).toEqual(existing);
+    expect(handler.list).toHaveBeenCalledWith('space');
+    handler.list.mockClear();
+    expect(await createCrossSessionMemoryTool(handler).execute({ action: 'list', target: 'space' }, context)).toMatchObject({ isError: true });
+    expect(handler.list).not.toHaveBeenCalled();
   });
-
-  it('default target stays "agent" in both shapes', async () => {
-    const h = stubHandler();
-    const tool = createCrossSessionMemoryTool(h, { includeProjectTier: true });
-    await tool.execute({ action: 'list' }, {} as any);
-    expect(h.calls).toEqual([{ op: 'list', tier: 'agent' }]);
+  it('defaults to the caller agent and preserves read failures', async () => {
+    const handler = { list: vi.fn().mockResolvedValue({ ok: false, error: 'unavailable', entries: [], usage: { current: 0, limit: 100 } }) };
+    expect(await createCrossSessionMemoryTool(handler).execute({ action: 'list' }, context)).toMatchObject({ isError: true });
+    expect(handler.list).toHaveBeenCalledWith('agent');
   });
 });

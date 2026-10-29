@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -193,7 +194,7 @@ describe('跨类型去重集成：已有同主题资产时不产 personal', () =
     // 预置一条"周报模板"template 资产（模拟模型提炼已沉淀）
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const c = await candidates.saveRecallCandidate('user-dedup', {
+    const c = await createNightlyCandidateFixture('user-dedup', {
       judgment: '写团队周报时采用固定结构：先按「本周完成→数据指标表→风险与阻塞→下周计划」组织。',
       value: '写团队周报时采用固定结构：先按「本周完成→数据指标表→风险与阻塞→下周计划」组织。',
       summary: '周报模板',
@@ -204,7 +205,7 @@ describe('跨类型去重集成：已有同主题资产时不产 personal', () =
       sourceRefs: [{ kind: 'execution', id: 'exec-dedup' }],
       evidenceRefs: [{ kind: 'execution', id: 'exec-dedup' }],
     });
-    await candidates.autoApplyRecallCandidate('user-dedup', c.id, { provenance: 'kstar' });
+    await candidates.promoteRecallCandidate('user-dedup', c.id, { actor: 'user', provenance: 'kstar' });
 
     // mock chats 返回"我以后的周报都要按这个格式"（同主题偏好）
     vi.doMock('../../../../src/main/features/chats', () => ({

@@ -1,7 +1,7 @@
 // 对话里「本轮带入了什么」的卡只有一张（2026-09-28 拍板项 #8 合并后）。
-//   「本次使用的记忆」（.chat-recall-citations）—— modules/recall-projection-card.js
+//   「本轮资产检索与带入状态」（.chat-recall-citations）—— modules/recall-projection-card.js
 // 引用卡（事后回执）与投影卡（事前面板）合并为一张：头部投影状态摘要、列表
-// 资产行（带入+已引用标记；省略灰显）、尾部反馈+投影操作。本文件钉住合并后
+// 资产行（带入标记；省略灰显）、尾部反馈+投影操作。本文件钉住合并后
 // 的契约：壳与头部仍是一份分组规则（历史壳类 .chat-recall-projection-card
 // 保留给生产不可达的预载草稿分支）、动作行只用共享按钮、头部图标/标题/右侧
 // 状态同构、图标原语缺席时优雅降级。
@@ -73,7 +73,7 @@ function loadCardModule(withIconPrimitive: boolean) {
   return { context, host };
 }
 
-describe('对话内「本次使用的记忆」卡（引用卡＋投影卡合并后）', () => {
+describe('对话内「本轮资产检索与带入状态」卡（引用卡＋投影卡合并后）', () => {
   it('壳仍是一份分组共享块，禁止单卡壳覆写', () => {
     const sharedShell = [
       'margin: 6px 0;',
@@ -174,7 +174,7 @@ describe('对话内「本次使用的记忆」卡（引用卡＋投影卡合并�
     await withoutIcons.context.window.mountRecallProjectionCard(withoutIcons.host, { projectionId: 'proj-a' }, { cid: 'cid-a', onlyModelSelected: true });
     expect(withoutIcons.host.innerHTML).not.toContain('chat-recall-citations-icon');
     // 降级不能顺手把卡也弄丢：标题、行与撤销口照旧
-    expect(withoutIcons.host.innerHTML).toContain('本次使用的记忆');
+    expect(withoutIcons.host.innerHTML).toContain('本轮资产检索与带入状态');
     expect(withoutIcons.host.innerHTML).toContain('data-asset-citation="asset-a"');
     expect(withoutIcons.host.innerHTML).toContain('data-recall-projection-revoke');
   });

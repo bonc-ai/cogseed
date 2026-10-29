@@ -1,5 +1,6 @@
 import { createLogger } from '../../logger';
-import { embedQuery } from '../kb_embed';
+import { createHash } from 'node:crypto';
+import { embedQuery, embedTexts } from '../kb_embed';
 
 /**
  * similarity.ts — shared semantic-similarity utilities for recall dedup
@@ -25,9 +26,12 @@ export const QUALITY_GAP = 0.10;
 /** LRU for judgment → embedding, keyed by userId (bounded). */
 const EMBED_CACHE_MAX = 500;
 const embedCache = new Map<string, { vector: number[]; at: number }>();
+/** Tracked per owner so a model/dimension change cannot reuse vectors from the
+ * previous embedding space under the unchanged text hash. */
+const embedDimensions = new Map<string, number>();
 
-function embedCacheKey(userId: string, text: string): string {
-  return `${userId}\n${text.slice(0, 2_000)}`;
+function embedCacheKey(userId: string, text: string, dimensions = embedDimensions.get(userId) || 0): string {
+  return `${userId}\n${dimensions}\n${createHash('sha256').update(text).digest('hex')}`;
 }
 
 function cacheGet(key: string): number[] | undefined {
@@ -37,18 +41,23 @@ function cacheGet(key: string): number[] | undefined {
   return hit.vector;
 }
 
-function cacheSet(key: string, vector: number[]): void {
+function cacheSet(userId: string, text: string, vector: number[]): void {
   if (embedCache.size >= EMBED_CACHE_MAX) {
     const oldest = [...embedCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
     if (oldest) embedCache.delete(oldest[0]);
   }
-  embedCache.set(key, { vector, at: Date.now() });
+  embedDimensions.set(userId, vector.length);
+  embedCache.set(embedCacheKey(userId, text, vector.length), { vector, at: Date.now() });
 }
 
-/** Cosine similarity between two equal-length vectors (unit-safe). */
+/** Cosine similarity between two equal-length vectors (unit-safe).
+ * Different dimensions mean the embeddings cannot be compared at all; a value
+ * computed over the shorter prefix would invent similarity between unrelated
+ * models, so the result is NaN and callers must treat it as unmeasured. */
 export function cosineScore(left: number[], right: number[]): number {
+  if (left.length !== right.length) return Number.NaN;
   let dot = 0; let leftMag = 0; let rightMag = 0;
-  const len = Math.min(left.length, right.length);
+  const len = left.length;
   for (let i = 0; i < len; i += 1) {
     const a = Number(left[i]) || 0;
     const b = Number(right[i]) || 0;
@@ -66,8 +75,31 @@ export async function embedForDedup(userId: string, text: string): Promise<numbe
   const cached = cacheGet(key);
   if (cached) return cached;
   try {
-    const vector = await embedQuery(text.slice(0, 2_000));
-    cacheSet(key, vector);
+    // The installed BGE tokenizer truncates at 512 tokens. Reuse the KB's
+    // established 400-character, overlapping chunks instead of sending one
+    // silently truncated document. Short texts keep their original embedding.
+    // One batched request covers the whole long body, including its last clause.
+    let vector: number[];
+    if (text.length <= 400) vector = await embedQuery(text);
+    else {
+      const { chunkPlainText } = await import('../../util/file_to_chunks');
+      const chunks = chunkPlainText(text).map(chunk => chunk.content);
+      const vectors = await embedTexts(chunks);
+      const dimensions = vectors[0]?.length;
+      if (!dimensions || vectors.length !== chunks.length || vectors.some(value => value.length !== dimensions
+        || value.some(component => !Number.isFinite(component)))) throw new Error('incomplete dedup embedding');
+      const combined = new Array<number>(dimensions).fill(0);
+      for (const [index, value] of vectors.entries()) {
+        const norm = Math.sqrt(value.reduce((sum, component) => sum + component * component, 0));
+        if (!norm) throw new Error('empty dedup embedding');
+        const weight = chunks[index].length;
+        for (let i = 0; i < dimensions; i++) combined[i] += value[i] / norm * weight;
+      }
+      const norm = Math.sqrt(combined.reduce((sum, component) => sum + component * component, 0));
+      if (!norm) throw new Error('empty combined dedup embedding');
+      vector = combined.map(component => component / norm);
+    }
+    cacheSet(userId, text, vector);
     return vector;
   } catch (error) {
     log.warn('recall dedup embed degraded', { error: (error as Error).message });
@@ -78,11 +110,12 @@ export async function embedForDedup(userId: string, text: string): Promise<numbe
 /** Clear the LRU (mainly for tests / app shutdown). */
 export function clearEmbedCacheForTest(): void {
   embedCache.clear();
+  embedDimensions.clear();
 }
 
 /** Test-only: inject a vector for a judgment text. */
 export function _injectEmbeddingForTest(userId: string, text: string, vector: number[]): void {
-  cacheSet(embedCacheKey(userId, text), vector);
+  cacheSet(userId, text, vector);
 }
 
 /** Payloads comparable for semantic dedup. */
@@ -106,7 +139,7 @@ export interface SemanticDedupCandidate {
   structureBonus?: boolean;
 }
 
-/** 质量评分（设计 §4.9，权重未校准——命名常量便于统一调参）。 */
+/** 质量评分（权重未校准——命名常量便于统一调参）。 */
 export const QUALITY_WEIGHTS = Object.freeze({
   maturity: 0.30,
   completeness: 0.25,
@@ -189,8 +222,10 @@ export async function findSemanticDuplicate(
   let skipped = 0;
   const consider = (kind: SemanticDuplicateMatch['kind'], id: string, vector: number[] | null): void => {
     if (!vector) { skipped += 1; return; }
-    compared += 1;
     const score = cosineScore(query, vector);
+    // Vectors from another embedding space are unmeasured, not unrelated.
+    if (!Number.isFinite(score)) { skipped += 1; return; }
+    compared += 1;
     if (score >= SEMANTIC_DUP_THRESHOLD && (!best || score > best.score)) {
       best = { kind, id, score };
     } else if (score >= SEMANTIC_RELATED_THRESHOLD && (!bestRelated || score > bestRelated.score)) {

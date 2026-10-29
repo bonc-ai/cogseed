@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -64,11 +65,13 @@ describe('fact ability asset type', () => {
 
   it('saves, updates, and promotes a fact candidate without inventing another type', async () => {
     const { candidates } = await modules();
-    const saved = await candidates.saveRecallCandidate('user-fact', factCandidate());
+    const saved = await createNightlyCandidateFixture('user-fact', factCandidate());
     expect(saved).toMatchObject({ status: 'pending_review', suggestedType: 'fact' });
 
     const updated = await candidates.updateRecallCandidate('user-fact', saved.id, {
       ...factCandidate(),
+      // Review edits preserve the nightly proof references instead of replacing them with legacy execution-only refs.
+      sourceRefs: saved.sourceRefs, evidenceRefs: saved.evidenceRefs,
       judgment: '团队长期使用自托管 Git 服务；MR 审查是必须流程。',
     });
     expect(updated.suggestedType).toBe('fact');
@@ -80,7 +83,7 @@ describe('fact ability asset type', () => {
 
   it('keeps fact inside the formal asset canonical boundary', async () => {
     const { candidates, formal } = await modules();
-    const saved = await candidates.saveRecallCandidate('user-fact', factCandidate());
+    const saved = await createNightlyCandidateFixture('user-fact', factCandidate());
     const promoted = await candidates.promoteRecallCandidate('user-fact', saved.id, { actor: 'user' });
 
     const list = await formal.listFormalAssets('user-fact', { assetType: 'fact' });
@@ -91,7 +94,7 @@ describe('fact ability asset type', () => {
 
   it('projects fact assets on cognition tree contract v3', async () => {
     const { candidates, tree } = await modules();
-    const saved = await candidates.saveRecallCandidate('user-fact', factCandidate());
+    const saved = await createNightlyCandidateFixture('user-fact', factCandidate());
     const promoted = await candidates.promoteRecallCandidate('user-fact', saved.id, { actor: 'user' });
 
     const graph = await tree.rebuildCognitionTree('user-fact');
@@ -103,18 +106,21 @@ describe('fact ability asset type', () => {
     }));
   });
 
-  it('extraction prompts define fact as a durable factual category', () => {
+  it('does not require a model category for new extracted content', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src/main/features/recall/capture-service.ts'), 'utf8');
     const contract = fs.readFileSync(path.join(process.cwd(), 'src/main/prompts/recall_candidate_contract.md'), 'utf8');
     expect(source).toContain("prompts.load('recall_candidate_contract')");
-    expect(contract).toContain('`fact`: durable fact about a project, tool, organisation, workflow, or long-lived environment');
-    expect(contract).toContain('Exclude transient task state');
+    const shape = JSON.parse(contract.match(/```json\s*([\s\S]*?)```/)![1]);
+    expect(shape).not.toHaveProperty('suggestedType');
+    expect(shape).toHaveProperty('judgment');
+    expect(shape).toHaveProperty('applicableWhen');
+    expect(shape).toHaveProperty('evidence');
   });
 
   it('keeps the four existing asset types valid', async () => {
     const { candidates } = await modules();
     for (const type of ['personal', 'rule', 'template', 'skill_method'] as const) {
-      const saved = await candidates.saveRecallCandidate(`user-${type}`, {
+      const saved = await createNightlyCandidateFixture(`user-${type}`, {
         ...factCandidate(),
         suggestedType: type,
       });

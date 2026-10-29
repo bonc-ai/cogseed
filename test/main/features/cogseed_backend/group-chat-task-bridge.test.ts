@@ -172,5 +172,44 @@ describe('Group Chat task bridge', () => {
     expect(storedEvents).not.toContain('/Users/alice/secret.txt');
     expect(storedEvents).not.toContain('secret-value');
     expect(storedEvents).not.toContain('secret-output');
+    // N-09：投影出的 tool.* 事件必须带 cid/run 引用（此前第 6 个 refs 参数没传）。
+    expect(appendEvent.mock.calls.map((call) => call[5])).toEqual([
+      { conversationId: 'conv-a', runId: 'run-a' },
+      { conversationId: 'conv-a', runId: 'run-a' },
+    ]);
+  });
+
+  it('attaches actor refs to projected Group Chat tool events', async () => {
+    let task = record({ status: 'running', agentId: 'agent-review', groupChatRunId: 'run-a' });
+    const appendEvent = vi.fn(async () => ({ eventId: 'event-a' }));
+    const bridge = createGroupChatTaskBridge({
+      createTask: vi.fn() as never,
+      readTask: (async () => task) as never,
+      updateTask: (async (_userId: string, _taskId: string, mutate: (current: CogSeedTaskRecord) => CogSeedTaskRecord) => {
+        task = await mutate(task);
+        return task;
+      }) as never,
+      transitionTask: (async (_userId: string, _taskId: string, status: CogSeedTaskRecord['status']) => {
+        task = { ...task, status };
+        return task;
+      }) as never,
+      appendEvent: appendEvent as never,
+      setSessionDisplayName: vi.fn() as never,
+    });
+
+    await bridge.finishTask({
+      userId: 'user-a',
+      taskId: task.taskId,
+      status: 'completed',
+      process: [
+        { type: 'event', event: { stream: 'tool', data: { phase: 'start', name: 'read_file' } } },
+        { type: 'event', event: { stream: 'tool', data: { phase: 'done', name: 'read_file' } } },
+      ],
+    });
+
+    expect(appendEvent.mock.calls.map((call) => [call[3], call[5]])).toEqual([
+      ['tool.started', { conversationId: 'conv-a', agentId: 'agent-review', runId: 'run-a' }],
+      ['tool.finished', { conversationId: 'conv-a', agentId: 'agent-review', runId: 'run-a' }],
+    ]);
   });
 });

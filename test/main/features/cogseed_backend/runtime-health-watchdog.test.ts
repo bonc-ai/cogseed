@@ -139,13 +139,13 @@ describe('CogSeed Runtime health watchdog', () => {
     await watchdog.shutdown();
   });
 
-  it('does not probe or recover planned tasks', async () => {
+  it.each(['planned', 'waiting_user'] as const)('does not probe or recover %s tasks', async (status) => {
     const controllerOwnsTask = vi.fn(async () => false);
     const probeProcess = vi.fn(async () => 'missing' as const);
     const recoverTask = vi.fn(async () => true);
     const watchdog = createCogSeedRuntimeHealthWatchdog({
       listTasks: async () => [task('planned', {
-        status: 'planned', executionId: undefined, runtimeWorkerId: undefined,
+        status, executionId: undefined, runtimeWorkerId: undefined,
       })],
       controllerOwnsTask,
       probeProcess,

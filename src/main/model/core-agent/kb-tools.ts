@@ -36,6 +36,14 @@ export interface KbToolsOpts {
   userId: string;
   spaceId?: string;
   cid?: string;
+  /**
+   * Trusted reception narrowing: keep the explicitly authorized Library
+   * semantics only. The conversation-attachment source, attachment listing and
+   * attachment retrieval are outside the single confirmed root R, so
+   * `kb_read source="attachment"` fails closed and the material tools never
+   * request attachments (or list space artifacts).
+   */
+  libraryOnly?: boolean;
 }
 
 const PREVIEW_CHARS = 400;
@@ -384,12 +392,16 @@ function createKbReadTool(opts: KbToolsOpts): AgentTool {
         path: { type: 'string', description: 'Library-relative path (as returned by kb_search hits).' },
         source: {
           type: 'string',
-          enum: ['library', 'attachment'],
-          description: 'Source to read from. Default library. Use "attachment" with `name` to read a conversation attachment.',
+          enum: opts.libraryOnly ? ['library'] : ['library', 'attachment'],
+          description: opts.libraryOnly
+            ? 'Only "library" is readable on this turn.'
+            : 'Source to read from. Default library. Use "attachment" with `name` to read a conversation attachment.',
         },
         name: {
           type: 'string',
-          description: 'Attachment filename (only when source="attachment"). Use names from `material_list`.',
+          description: opts.libraryOnly
+            ? 'Not available on this turn.'
+            : 'Attachment filename (only when source="attachment"). Use names from `material_list`.',
         },
         scope: {
           type: 'string',
@@ -409,6 +421,15 @@ function createKbReadTool(opts: KbToolsOpts): AgentTool {
     async execute(input) {
       const src = input.source === 'attachment' ? 'attachment' : 'library';
       if (src === 'attachment') {
+        // Fail closed even if the model sends the enum value directly: the
+        // conversation attachment directory is outside the confirmed reception
+        // root, so KB may only expose Library semantics on this turn.
+        if (opts.libraryOnly) {
+          return {
+            content: 'E_RECEPTION_KB_ATTACHMENT_UNAVAILABLE: conversation attachments are outside the confirmed reception root; only the Library is readable on this turn. Use kb_list/kb_search for Library content.',
+            isError: true,
+          };
+        }
         const name = String(input.name ?? '').trim();
         if (!name) return { content: 'kb_read: `name` is required when source="attachment"', isError: true };
         if (!opts.cid) return { content: 'kb_read: no conversation context (cid) to read attachments from', isError: true };
@@ -524,12 +545,19 @@ function createAskMaterialsTool(opts: KbToolsOpts): AgentTool {
   return {
     name: 'ask_materials',
     description:
-      'Grounded Q&A over the material set: hybrid search (Library + this conversation\'s\n'
-      + 'attachments) with a relevance threshold. Returns either an evidence package\n'
-      + 'to answer from — cite every claim as `path#chunk N` — or an explicit\n'
-      + '"no material" / "low confidence" marker. Use for questions about imported\n'
-      + 'materials; do NOT answer material questions from memory or web search\n'
-      + 'without consulting this (or material_search) first.',
+      (opts.libraryOnly
+        ? 'Grounded Q&A over the Library only (conversation attachments are not part of\n'
+          + 'this turn\'s material set) with a relevance threshold. Returns either an\n'
+          + 'evidence package to answer from — cite every claim as `path#chunk N` — or an\n'
+          + 'explicit "no material" / "low confidence" marker. Do NOT answer material\n'
+          + 'questions from memory or web search without consulting this (or\n'
+          + 'material_search) first.'
+        : 'Grounded Q&A over the material set: hybrid search (Library + this conversation\'s\n'
+          + 'attachments) with a relevance threshold. Returns either an evidence package\n'
+          + 'to answer from — cite every claim as `path#chunk N` — or an explicit\n'
+          + '"no material" / "low confidence" marker. Use for questions about imported\n'
+          + 'materials; do NOT answer material questions from memory or web search\n'
+          + 'without consulting this (or material_search) first.'),
     inputSchema: {
       type: 'object',
       properties: {
@@ -561,7 +589,7 @@ function createAskMaterialsTool(opts: KbToolsOpts): AgentTool {
       const res = await askMaterials({
         userId: opts.userId,
         ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
-        ...(opts.cid ? { cid: opts.cid, attachments: true } : {}),
+        ...(opts.cid && !opts.libraryOnly ? { cid: opts.cid, attachments: true } : {}),
         query: question,
         ...(input.k !== undefined ? { k: Number(input.k) } : {}),
         ...(hasSpace && input.scope !== undefined ? { scope: input.scope as MaterialSearchOptions['scope'] } : {}),
@@ -584,12 +612,18 @@ function createMaterialListTool(opts: KbToolsOpts): AgentTool {
     name: 'material_list',
     executionMode: 'parallel',
     description:
-      'List everything in the current material boundary for grounded Q&A: Library files'
-      + (hasSpace ? ' (global + current space)' : '')
-      + ', this conversation\'s attachments'
-      + (hasSpace ? ', and space artifacts' : '')
-      + '. Each entry is marked in-scope or out-of-scope. Use before asking '
-      + '"what materials can you answer from?" or when a question\'s scope is unclear.',
+      (opts.libraryOnly
+        ? 'List the Library files available to grounded Q&A on this turn'
+          + (hasSpace ? ' (global + current space)' : '')
+          + '. Conversation attachments and space artifacts are not part of this '
+          + 'turn\'s material set. Use before asking "what materials can you answer '
+          + 'from?" or when a question\'s scope is unclear.'
+        : 'List everything in the current material boundary for grounded Q&A: Library files'
+          + (hasSpace ? ' (global + current space)' : '')
+          + ', this conversation\'s attachments'
+          + (hasSpace ? ', and space artifacts' : '')
+          + '. Each entry is marked in-scope or out-of-scope. Use before asking '
+          + '"what materials can you answer from?" or when a question\'s scope is unclear.'),
     inputSchema: {
       type: 'object',
       properties: {
@@ -604,11 +638,13 @@ function createMaterialListTool(opts: KbToolsOpts): AgentTool {
       const boundary = await resolveMaterialSet({
         userId: opts.userId,
         ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
-        ...(opts.cid ? { cid: opts.cid } : {}),
+        // Attachments (and their inventory) are outside the confirmed
+        // reception root; never resolve or list them on a narrow turn.
+        ...(opts.cid && !opts.libraryOnly ? { cid: opts.cid } : {}),
       });
 
       const lines: string[] = [];
-      lines.push(`Material boundary (history=${boundary.history}, library global=${boundary.library.global} space=${boundary.library.space}):`);
+      lines.push(`Material boundary (history=${boundary.history}, library global=${boundary.library.global} space=${boundary.library.space}${opts.libraryOnly ? ', library-only' : ''}):`);
 
       const library: Array<{ scope: string; path: string; status: string; chunks: number }> = [];
       if (boundary.library.global) {
@@ -631,24 +667,28 @@ function createMaterialListTool(opts: KbToolsOpts): AgentTool {
         lines.push('Library: (empty)');
       }
 
-      if (boundary.attachments.length) {
-        lines.push('Attachments:');
-        for (const a of boundary.attachments.slice(0, limit)) {
-          lines.push(`- [attachment] ${a.name} (${a.kind}, ${formatBytes(a.bytes)}, ${a.inScope ? 'in-scope' : 'OUT-OF-SCOPE'})`);
+      // A Library-only turn (trusted reception) has no attachment or artifact
+      // section at all: they live outside the single confirmed root.
+      if (!opts.libraryOnly) {
+        if (boundary.attachments.length) {
+          lines.push('Attachments:');
+          for (const a of boundary.attachments.slice(0, limit)) {
+            lines.push(`- [attachment] ${a.name} (${a.kind}, ${formatBytes(a.bytes)}, ${a.inScope ? 'in-scope' : 'OUT-OF-SCOPE'})`);
+          }
+          if (boundary.attachments.length > limit) lines.push(`... ${boundary.attachments.length - limit} more attachment(s)`);
+        } else {
+          lines.push('Attachments: (none)');
         }
-        if (boundary.attachments.length > limit) lines.push(`... ${boundary.attachments.length - limit} more attachment(s)`);
-      } else {
-        lines.push('Attachments: (none)');
-      }
 
-      if (boundary.artifacts.length) {
-        lines.push('Space artifacts:');
-        for (const ar of boundary.artifacts.slice(0, limit)) {
-          lines.push(`- [artifact] ${ar.name} (${ar.type}${ar.ext}, ${ar.inScope ? 'in-scope' : 'OUT-OF-SCOPE'})`);
+        if (boundary.artifacts.length) {
+          lines.push('Space artifacts:');
+          for (const ar of boundary.artifacts.slice(0, limit)) {
+            lines.push(`- [artifact] ${ar.name} (${ar.type}${ar.ext}, ${ar.inScope ? 'in-scope' : 'OUT-OF-SCOPE'})`);
+          }
+          if (boundary.artifacts.length > limit) lines.push(`... ${boundary.artifacts.length - limit} more artifact(s)`);
+        } else {
+          lines.push('Space artifacts: (none)');
         }
-        if (boundary.artifacts.length > limit) lines.push(`... ${boundary.artifacts.length - limit} more artifact(s)`);
-      } else {
-        lines.push('Space artifacts: (none)');
       }
 
       return { content: lines.join('\n') };
@@ -671,7 +711,7 @@ function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
     description:
       'Hybrid search over the user Library (semantic vector + BM25 keyword, fused)'
       + (hasSpace ? ' (current space + global by default)' : '')
-      + ', plus this conversation\'s attachments when present.'
+      + (opts.libraryOnly ? '.' : ', plus this conversation\'s attachments when present.')
       + ' Use for grounded Q&A about imported materials: returns the top-k most\n'
       + 'relevant chunks with a citation anchor (scope + path + chunk index) and a\n'
       + 'short snippet. Preferred over `kb_search` when the question mixes exact\n'
@@ -718,7 +758,7 @@ function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
       const searchOpts: MaterialSearchOptions = {
         userId: opts.userId,
         ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
-        ...(opts.cid ? { cid: opts.cid, attachments: true } : {}),
+        ...(opts.cid && !opts.libraryOnly ? { cid: opts.cid, attachments: true } : {}),
         query,
         ...(input.k !== undefined ? { k: Number(input.k) } : {}),
         ...(typeof input.dir === 'string' && input.dir.trim() ? { dir: input.dir.trim() } : {}),

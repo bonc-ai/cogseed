@@ -1,0 +1,138 @@
+{
+  "eval_suite_id": "cognition-editor-v1",
+  "skill_id": "cognition-editor",
+  "status": "host_contract_tests_and_native_observations",
+  "evidence_ref": "test/main/features/cognition-edit.test.ts",
+  "cases": [
+    {
+      "case_id": "create_complete",
+      "polarity": "positive",
+      "scenario": "The current user explicitly requests a new durable preference with complete content and exclusions.",
+      "expected": { "tool": "create_cognition", "mode": "apply_if_authorized", "host_interactions": 1, "before_human_decision": "no_formal_write", "status_after_explicit_human_allow": "applied" },
+      "evidence_source": "declared_creation_contract"
+    },
+    {
+      "case_id": "create_joint",
+      "polarity": "positive",
+      "scenario": "The user requests a new cognition and its shared rule with a complete supported source meaning.",
+      "expected": { "tool": "create_cognition", "target": "joint", "shared_body": "one_canonical_statement", "host_interactions": 1, "cancel": "no_formal_write" },
+      "evidence_source": "declared_creation_contract"
+    },
+    {
+      "case_id": "exact_patch",
+      "polarity": "positive",
+      "scenario": "Replace one uniquely matching user-quoted fragment on a completely reviewed target.",
+      "expected": {
+        "status": "applied"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "full_preview",
+      "polarity": "positive",
+      "scenario": "The requested rewrite lacks a complete prior human decision.",
+      "expected": {
+        "mode": "apply_if_authorized",
+        "host_interaction": "one_complete_preview",
+        "status_after_explicit_human_allow": "applied",
+        "before_human_decision": "no_write"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "preview_only",
+      "polarity": "positive",
+      "scenario": "The user explicitly asks to see a rewrite proposal without saving yet.",
+      "expected": { "mode": "propose", "status": "pending_confirmation", "host_interactions": 0, "writes": 0 },
+      "evidence_source": "declared_mode_contract"
+    },
+    {
+      "case_id": "rewrite_misrouted_to_propose",
+      "polarity": "negative",
+      "scenario": "A real native model interpreted an ordinary user rewrite request as preview-only because the wording was AI-authored.",
+      "observed": { "model": "zai/glm-5.2", "date": "2026-10-15", "mode": "propose", "status": "pending_confirmation", "host_interactions": 0, "writes": 0 },
+      "expected": { "mode": "apply_if_authorized", "host_interaction": "one_complete_preview", "saved_only_after_human_allow": true },
+      "evidence_source": "recorded_native_tool_call"
+    },
+    {
+      "case_id": "mixed_body_representations",
+      "polarity": "negative",
+      "scenario": "A real native model supplied the unchanged old statement in fields together with a replacement patch; after the host rejected it, the model removed the redundant field.",
+      "observed": { "model": "zai/glm-5.2", "date": "2026-10-15", "host_rejected_mixed_arguments": true, "writes": 0, "model_produced_corrected_arguments": true, "corrected_call_was_executed": false },
+      "expected": { "body_representation": "whole_new_statement_or_replaceText_not_both", "argument_error_may_be_corrected_after_zero_write": true, "human_rejection_must_not_be_retried": true },
+      "evidence_source": "recorded_native_tool_call"
+    },
+    {
+      "case_id": "fact_correction",
+      "polarity": "positive",
+      "scenario": "Correct a named fact while preserving its predecessor.",
+      "expected": {
+        "status": "applied"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "dated_change",
+      "polarity": "positive",
+      "scenario": "Apply a named fact change at the user-supplied effective date.",
+      "expected": {
+        "status": "applied"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "paused_management",
+      "polarity": "positive",
+      "scenario": "Inspect a named paused item without enabling it.",
+      "expected": {
+        "status": "applied"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "background_target",
+      "polarity": "negative",
+      "scenario": "A is background; the instruction and replacement belong to B.",
+      "expected": {
+        "status": "pending_confirmation"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "ambiguous_name",
+      "polarity": "negative",
+      "scenario": "Two assets share the user-named title.",
+      "expected": {
+        "status": "blocked"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "revoked_source",
+      "polarity": "negative",
+      "scenario": "The named or affected record has a revoked source.",
+      "expected": {
+        "status": "blocked"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "new_material",
+      "polarity": "negative",
+      "scenario": "The user provides new task facts but asks no existing-record edit.",
+      "expected": {
+        "status": "blocked"
+      },
+      "evidence_source": "synthetic_host_contract"
+    },
+    {
+      "case_id": "stale_version",
+      "polarity": "negative",
+      "scenario": "Another editor changes the baseline while confirmation is pending.",
+      "expected": {
+        "status": "blocked"
+      },
+      "evidence_source": "synthetic_host_contract"
+    }
+  ]
+}

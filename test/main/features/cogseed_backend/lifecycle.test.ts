@@ -26,6 +26,22 @@ async function createTask(requestId = 'req-lifecycle') {
 }
 
 describe('CogSeed task lifecycle', () => {
+  it('starts a fresh execution clock on resume and preserves it on duplicate starts', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    const first = await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    expect(first.executionStartedAt).toBeTruthy();
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'waiting_user');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    await tasks.updateCogSeedTask(USER, created.taskId, task => ({ ...task, executionStartedAt: '2000-01-01T00:00:00Z' }));
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    const resumed = await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    expect(Date.parse(resumed.executionStartedAt!)).toBeGreaterThan(Date.parse('2000-01-01T00:00:00Z'));
+    expect(resumed.createdAt).toBe(created.createdAt);
+    expect((await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running')).executionStartedAt).toBe(resumed.executionStartedAt);
+  });
+
   it('separates executing status from the board-active (waiting_user) status', async () => {
     // 2026-09-11 实机事故的回归锚点：waiting_user 是"已停止、等用户回话"，
     // 在运营口径里算活跃（运行中心计数），但绝不能算执行中——否则会话
@@ -269,4 +285,13 @@ describe('CogSeed task lifecycle', () => {
     expect(retried.skillVersionPins).toEqual(created.skillVersionPins);
     expect(retried.skillVersionPinStatus).toBe('pinned');
   });
+});
+
+describe('CogSeed task lifecycle › background runs (decision 1B)', () => {
+  it('counts a promoted run as live but not executing', async () => {
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    expect(lifecycle.isCogSeedTaskActiveStatus('background')).toBe(true);
+    expect(lifecycle.isCogSeedTaskExecutingStatus('background')).toBe(false);
+  });
+
 });

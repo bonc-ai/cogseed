@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -98,16 +99,19 @@ async function holdConversationAdmission(conversationId: string): Promise<{
   };
 }
 
-function runtimeFrom(events: RuntimeEventEnvelope[]): CogSeedAgentRuntimeFacade & { inputs: unknown[] } {
+function runtimeFrom(events: RuntimeEventEnvelope[]): CogSeedAgentRuntimeFacade & { inputs: unknown[]; options: unknown[] } {
   const inputs: unknown[] = [];
+  const options: unknown[] = [];
   return {
     inputs,
-    async *run(_userId: string, input: unknown) {
+    options,
+    async *run(_userId: string, input: unknown, opts?: { signal?: AbortSignal | null; allowedRoots?: readonly string[] }) {
       inputs.push(input);
+      options.push(opts);
       for (const event of events) yield event;
     },
     async shutdown() {},
-  } as CogSeedAgentRuntimeFacade & { inputs: unknown[] };
+  } as CogSeedAgentRuntimeFacade & { inputs: unknown[]; options: unknown[] };
 }
 
 describe('CogSeed Runtime controller', () => {
@@ -1047,7 +1051,7 @@ describe('CogSeed Runtime controller', () => {
       { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'started' },
       { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'running', text: 'thinking' },
       { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'running', metadata: { kernel_event: 'tool_call', name: 'read_file' } },
-      { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'running', metadata: { kernel_event: 'artifact', uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown', secret: 'must-not-cross' } },
+      { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'running', metadata: { kernel_event: 'artifact', uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown', secret: 'synthetic-secret-must-not-cross' } },
       { type: 'result', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'completed', text: 'final answer' },
     ]);
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
@@ -2283,9 +2287,8 @@ describe('CogSeed Runtime controller', () => {
     const controller = createCogSeedRuntimeController({ runtime: runtimeFrom([]) });
 
     const cancelling = controller.cancelCogSeedTask(USER, seeded.taskId);
-    // 让取消先真正拿到任务文件锁并完成，再启动恢复：此前用两个固定 20ms 去赌
-    // 调度顺序，满载并发下恢复会抢先（全量套件里 recoveredCount 变成 1）。
-    // 断言不变——恢复不得复活一个已取消的任务。
+    // 先等取消拿到任务文件锁并完成，再启动恢复，避免用固定延迟猜调度顺序。
+    // 恢复不得复活一个已取消的任务。
     releaseTaskFile();
     await expect(cancelling).resolves.toMatchObject({ status: 'cancelled' });
 
@@ -2513,7 +2516,8 @@ describe('CogSeed Runtime controller', () => {
       import('../../../../src/main/storage'),
       import('../../../../src/main/util/project-layout'),
     ]);
-    const candidate = await candidates.saveRecallCandidate(USER, {
+    const { createNightlyCandidateFixture } = await import('../../../helpers/nightly-formation-fixture');
+    const candidate = await createNightlyCandidateFixture(USER, {
       judgment: 'Keep runtime boundaries explicit before changing them.',
       summary: 'Runtime boundary decision log',
       suggestedType: 'rule',
@@ -2575,7 +2579,8 @@ describe('CogSeed Runtime controller', () => {
 
   it('injects the live Commander-granted asset body into the runtime prompt', async () => {
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    const candidate = await candidates.saveRecallCandidate(USER, {
+    const { createNightlyCandidateFixture } = await import('../../../helpers/nightly-formation-fixture');
+    const candidate = await createNightlyCandidateFixture(USER, {
       judgment: 'Always include the acceptance criteria in the implementation report.',
       summary: 'Implementation report acceptance criteria',
       suggestedType: 'rule',
@@ -2604,4 +2609,96 @@ describe('CogSeed Runtime controller', () => {
     });
   });
 
+  it('passes the selected task workspace as an additional runtime root', async () => {
+    await createConversation('cid-workspace-root');
+    const runtime = runtimeFrom([
+      { type: 'result', request_id: 'req-workspace-root', runtime_session_id: 'mruntime-workspace-root', status: 'completed', text: 'done' },
+    ]);
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = trackController(createCogSeedRuntimeController({
+      runtime,
+      projectTaskEvent: vi.fn(async () => undefined),
+    } as any));
+    const workingDir = path.join(tmpDir, 'selected-workspace');
+    fs.mkdirSync(workingDir, { recursive: true });
+
+    const task = await controller.startCogSeedTask(USER, {
+      requestId: 'req-workspace-root',
+      task: 'Work in the selected meeting workspace.',
+      conversationId: 'cid-workspace-root',
+      agentId: 'agent-workspace-root',
+      workingDir,
+    });
+
+    await eventually(async () => {
+      const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+      await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({ status: 'completed' });
+    });
+    expect(runtime.options[0]).toMatchObject({ allowedRoots: [workingDir] });
+  });
+
+  it('preserves a workspace error code when the runtime rejects the root', async () => {
+    await createConversation('cid-workspace-error');
+    const runtime = {
+      async *run() {
+        const error = new Error('workspace is outside the declared roots');
+        (error as Error & { code?: string }).code = 'E_WORKSPACE_OUTSIDE_DECLARED_ROOTS';
+        throw error;
+      },
+      async shutdown() {},
+    } as unknown as CogSeedAgentRuntimeFacade;
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = trackController(createCogSeedRuntimeController({
+      runtime,
+      projectTaskEvent: vi.fn(async () => undefined),
+    } as any));
+
+    const task = await controller.startCogSeedTask(USER, {
+      requestId: 'req-workspace-error',
+      task: 'Run from an invalid workspace.',
+      conversationId: 'cid-workspace-error',
+      agentId: 'agent-workspace-error',
+    });
+
+    await eventually(async () => {
+      const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+      await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({
+        status: 'recoverable',
+        errorCode: 'E_WORKSPACE_OUTSIDE_DECLARED_ROOTS',
+      });
+    });
+  });
+
+  it('passes attachment files as runtime allowed roots', async () => {
+    await createConversation('cid-attachment-root');
+    const attachment = path.join(tmpDir, 'attachment.txt');
+    fs.writeFileSync(attachment, 'attachment');
+    const runtime = runtimeFrom([
+      { type: 'result', request_id: 'req-attachment-root', runtime_session_id: 'mruntime-attachment-root', status: 'completed', text: 'done' },
+    ]);
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = trackController(createCogSeedRuntimeController({
+      runtime,
+      projectTaskEvent: vi.fn(async () => undefined),
+    } as any));
+    const workingDir = path.join(tmpDir, 'workspace');
+    fs.mkdirSync(workingDir, { recursive: true });
+
+    const task = await controller.startCogSeedTask(USER, {
+      requestId: 'req-attachment-root',
+      task: 'Read the attached file.',
+      conversationId: 'cid-attachment-root',
+      agentId: 'agent-attachment-root',
+      workingDir,
+      attachments: [{ type: 'file', path: attachment, name: 'attachment.txt' }],
+    });
+
+    await eventually(async () => {
+      const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+      await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({ status: 'completed' });
+    });
+    expect(runtime.options[0]).toMatchObject({
+      allowedRoots: expect.arrayContaining([workingDir, attachment]),
+    });
+  });
 });

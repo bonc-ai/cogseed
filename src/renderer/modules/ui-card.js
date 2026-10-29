@@ -44,6 +44,20 @@
     const title = String(value.title || '').trim();
     if (!title) throw new TypeError('uiResourceCard requires a title');
     if (value.action && value.actions) throw new TypeError('uiResourceCard accepts either action or actions, not both');
+    // Compact rows have exactly two text lines and a single menu trigger.
+    // The shared shell owns truncation and geometry; pages own menu actions.
+    if (value.layout === 'compact-row') {
+      if (value.action || value.actions || value.status || value.bodyHtml) {
+        throw new TypeError('compact-row accepts description and menu, without a footer or body');
+      }
+      const menu = value.menu ? root.uiIconButton({
+        icon: 'more-horizontal', label: value.menu.label,
+        attrs: { ...value.menu.attrs, 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
+      }) : '';
+      return uiCard({ ...value, className: ['ui-resource-card--standard', 'ui-resource-card--compact-row', value.className || ''].filter(Boolean).join(' '),
+        bodyHtml: `<div class="ui-resource-card__header"><div class="ui-resource-card__heading"><h3 class="ui-resource-card__title" title="${escapeText(title)}">${escapeText(title)}</h3><p class="ui-resource-card__description" title="${escapeText(value.description || '')}">${escapeText(value.description || '')}</p></div>${menu}</div>`,
+      });
+    }
     const usesLegacyAction = value.actions == null && Boolean(value.action);
     const actions = value.actions == null
       ? (value.action ? [value.action] : [])

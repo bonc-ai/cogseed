@@ -71,7 +71,7 @@
 import type { LLMProvider, CompletionParams, CompletionResult } from '#core-agent';
 import type { StreamEvent } from '#core-agent';
 import { classifyKeyFailure, formatKeyFailure, type KeyFailureKind } from './auth-error';
-import { markCooldown } from './profile-cooldown';
+import { markCooldown, markCooldownForUser } from './profile-cooldown';
 import { createLogger } from '../../logger';
 
 const log = createLogger('rotating-provider');
@@ -205,6 +205,8 @@ export interface RotatingCandidate {
 }
 
 export interface CreateRotatingProviderConfig {
+  /** Explicit owner for queued turns; keeps cooldown state user-scoped. */
+  userId?: string;
   /** Ordered list of candidates. First entry is the primary (matches
    *  `pickChatEntryGroup()[0]`). Further entries are fallbacks. */
   candidates: RotatingCandidate[];
@@ -226,8 +228,13 @@ export interface CreateRotatingProviderConfig {
   /** How many times to retry a network-class failure on the same candidate
    *  before cooling it down and rotating to the next configured candidate. */
   networkRetryAttempts?: number;
+  /** Host budget gate; failures abort before another provider request. */
+  beforeDispatch?: () => Promise<void>;
   /** Test hook / tuning knob for network retry backoff. */
   networkRetryDelayMs?: (attempt: number) => number;
+  /** Optional already-restricted output ceiling for a runtime policy. When
+   *  present, candidate caps and caller maxTokens can only narrow it. */
+  maxOutputTokensCeiling?: number;
   /** Max ms a candidate may take to produce its FIRST content event (the
    *  whole preamble-drain phase counts). On expiry the candidate is treated
    *  as stalled and rotation moves to the next one (no cooldown), yielding a
@@ -250,6 +257,10 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
   const networkRetryDelayMs = config.networkRetryDelayMs ?? ((attempt: number) => {
     return Math.min(NETWORK_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1), NETWORK_RETRY_MAX_DELAY_MS);
   });
+  const maxOutputTokensCeiling = typeof config.maxOutputTokensCeiling === 'number'
+    && config.maxOutputTokensCeiling > 0
+    ? config.maxOutputTokensCeiling
+    : undefined;
 
   /**
    * Events that are pure preamble — getting one doesn't commit us to this
@@ -276,8 +287,18 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
     // Carry the candidate's OWN cap (when known) instead of the primary's:
     // a smaller-cap fallback would otherwise get a request the provider
     // rejects, and a bigger-cap fallback would be silently truncated.
-    if (typeof cand.maxOutputTokens === 'number' && cand.maxOutputTokens > 0) {
-      out.maxTokens = cand.maxOutputTokens;
+    const candidateCap = typeof cand.maxOutputTokens === 'number' && cand.maxOutputTokens > 0
+      ? cand.maxOutputTokens
+      : undefined;
+    if (maxOutputTokensCeiling !== undefined) {
+      const requestedCap = typeof out.maxTokens === 'number' && out.maxTokens > 0
+        ? out.maxTokens
+        : undefined;
+      const caps = [maxOutputTokensCeiling, candidateCap, requestedCap]
+        .filter((value): value is number => value !== undefined);
+      out.maxTokens = Math.min(...caps);
+    } else if (candidateCap !== undefined) {
+      out.maxTokens = candidateCap;
     }
     return out;
   }
@@ -307,6 +328,7 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
       return { rotatable: false, err };
     }
 
+    await config.beforeDispatch?.();
     const iter = provider.stream(paramsFor(cand, params));
     const iterator: AsyncIterator<StreamEvent> = (iter as AsyncIterable<StreamEvent>)[Symbol.asyncIterator]();
     const buffered: StreamEvent[] = [];
@@ -381,6 +403,7 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
         for (let retry = 0; retry <= networkRetryAttempts; retry++) {
           try {
             const provider = await cand.build();
+            await config.beforeDispatch?.();
             const result = await provider.complete(paramsFor(cand, params));
             config.onCandidateChosen?.({ profileId: cand.profileId, providerId: cand.providerId, modelId: cand.modelId });
             config.onSuccess?.(cand.profileId);
@@ -402,7 +425,8 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
 
             const reason = formatKeyFailure(err);
             if (kind !== 'network') {
-              markCooldown(cand.profileId, kind, reason);
+              if (config.userId) markCooldownForUser(config.userId, cand.profileId, kind, reason);
+              else markCooldown(cand.profileId, kind, reason);
               lastKeyKind = kind;
             } else {
               lastKeyKind = null;
@@ -492,7 +516,8 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
           }
           const reason = formatKeyFailure(attempt.err);
           if (kind !== 'network') {
-            markCooldown(cand.profileId, kind, reason);
+            if (config.userId) markCooldownForUser(config.userId, cand.profileId, kind, reason);
+            else markCooldown(cand.profileId, kind, reason);
             lastKeyKind = kind;
             exhaustedNetwork = false;
             exhaustedTimeout = false;

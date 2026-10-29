@@ -31,6 +31,8 @@ const {
 
 afterEach(() => {
   delete (globalThis as typeof globalThis & { DOMPurify?: unknown }).DOMPurify;
+  // 有测试会造一个 window 来模拟浏览器侧；不清掉会污染后续用例的判定。
+  delete (globalThis as typeof globalThis & { window?: unknown }).window;
 });
 
 describe('_safeHref — safe URI allow-list', () => {
@@ -121,14 +123,38 @@ describe('inlineFormat — markdown link XSS hardening', () => {
   });
 });
 
-describe('sanitizeHtml — Node fallback (no DOM/DOMPurify)', () => {
-  it('returns the input unchanged when DOMPurify is unavailable', () => {
-    // In the Node test env there is no window/DOMPurify, so sanitizeHtml is a
-    // passthrough — this pins that it does not throw and does not corrupt the
-    // markdown renderer output that other Node tests assert on.
+describe('sanitizeHtml — 净化收口的两侧语义（安全审计 2026-09-21）', () => {
+  it('Node（无 window）：无 DOM 可注入，保持透传以让 markdown 渲染逻辑可测', () => {
+    // 这条是**有意保留**的语义，不是遗漏：Node 侧没有 DOM，字符串永远到不了
+    // innerHTML，所以透传安全；而且必须透传，否则下面那些断言 markdown 产物的
+    // 测试会被整体转义掉。真正危险的是"有 window 却没有 DOMPurify"—— 见下一条。
     const s = '<div class="markdown-body"><p>hi</p></div>';
     expect(sanitizeHtml(s)).toBe(s);
     expect(sanitizeHtml(null as unknown as string)).toBe('');
+  });
+
+  it('🔴 浏览器（有 window）但 DOMPurify 缺席：必须转义，绝不原样放行', () => {
+    // 回归防线：加固前这里是 `return s`，即把原始 HTML 交给主框架的 innerHTML。
+    // renderMarkdownFull 末尾这次 sanitizeHtml 是全部消息渲染的唯一净化点，
+    // 而主框架握有 window.cogseed.invoke —— 原样放行 = 任意 IPC 交给注入脚本。
+    (globalThis as typeof globalThis & { window?: unknown }).window = {};
+
+    const out = sanitizeHtml('<img src=x onerror="alert(1)"><script>alert(2)</script>');
+
+    expect(out).not.toContain('<img');
+    expect(out).not.toContain('<script');
+    expect(out).toContain('&lt;img');
+    // 降级为文本而不是丢空串：内容仍可读，避免被误判成「渲染坏了」。
+    expect(out).toContain('alert(1)');
+  });
+
+  it('DOMPurify 在位时仍然走净化（不是一律转义）', () => {
+    const sanitize = vi.fn(() => '<p>clean</p>');
+    (globalThis as typeof globalThis & { DOMPurify?: unknown }).DOMPurify = { sanitize };
+
+    expect(sanitizeHtml('<p onclick="x()">clean</p>')).toBe('<p>clean</p>');
+    expect(sanitize).toHaveBeenCalledTimes(1);
+    expect(sanitize.mock.calls[0][1].ADD_ATTR).toEqual(['target']);
   });
 });
 

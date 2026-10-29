@@ -47,7 +47,7 @@ export function recallStatementIssues(input: StatementPolicyInput): AbilityAsset
   if (!text) return ['empty'];
   const type = String(input?.type ?? '');
   const issues: AbilityAssetStatementIssue[] = [];
-  if (text.length > ABILITY_ASSET_STATEMENT_HARD_MAX) issues.push('too_long');
+  if (type !== 'cognition' && text.length > ABILITY_ASSET_STATEMENT_HARD_MAX) issues.push('too_long');
   if (SESSION_DEBRIS.test(text)) issues.push('session_debris');
   if ((type === 'rule' || type === 'personal') && LOCAL_PATH.test(text)) issues.push('local_path');
   return issues;

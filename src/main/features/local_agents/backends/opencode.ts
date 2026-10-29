@@ -79,6 +79,7 @@ const opencodeOneShotBackend: LocalBackend = {
       timeoutMs: opts.timeoutMs,
       idleKillMs: opts.idleKillMs,
       lastEventAt: opts.lastEventAt,
+      ...(opts.onDeadline ? { onDeadline: opts.onDeadline } : {}),
     });
 
     // opencode reads prompt from argv; close stdin so it doesn't wait.

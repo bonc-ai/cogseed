@@ -11,6 +11,9 @@ import { userOntologyGraphFile } from '../paths';
 import { genId12, nowIso, safeId, writeJson } from '../storage';
 import { fileEditLock } from '../util/locks';
 import { notifyCognitionWrite } from './recall/store-events';
+import { createLogger } from '../logger';
+
+const log = createLogger('ontology-graph');
 
 export const ONTOLOGY_GRAPH_SCHEMA_VERSION = 1 as const;
 export const ONTOLOGY_DOMAINS = ['affairs', 'resources', 'concepts'] as const;
@@ -346,7 +349,7 @@ function validateGraphFile(userId: string, value: unknown): OntologyGraphFile {
   };
 }
 
-async function readGraphFile(userId: string): Promise<OntologyGraphFile> {
+async function readGraphFile(userId: string, allowDegraded = true): Promise<OntologyGraphFile> {
   if (!safeId(userId)) throw new Error('invalid user id');
   const file = userOntologyGraphFile(userId);
   let rawText: string;
@@ -360,7 +363,179 @@ async function readGraphFile(userId: string): Promise<OntologyGraphFile> {
   let parsed: unknown;
   try { parsed = JSON.parse(rawText) as unknown; }
   catch { throw new Error('malformed ontology graph file'); }
-  return validateGraphFile(userId, parsed);
+  try {
+    return validateGraphFile(userId, parsed);
+  } catch (strictError) {
+    if (!allowDegraded) throw strictError;
+    // 读降级隔离。strict 校验抛错时不再让单条坏记录（如悬空
+    // categoryId）锁死本体图全部读写通道——改为逐条剔除坏记录（连带剔除
+    // 依赖它的下游记录），其余记录正常读回，剔除明细记 warn。文件级损伤
+    // （schemaVersion / ownerId / 集合非数组 / 超限）仍抛错：那不是单条
+    // 毒丸，降级救不了，「拒绝且不覆盖」的既有防线（测试锁定）保持不动。
+    // 下一次成功的写会把剔除后的干净状态落盘（写侧自愈），毒丸从此清出。
+    const salvaged = salvageGraphFile(userId, parsed, strictError as Error);
+    if (salvaged.warnings.length) {
+      log.warn('ontology graph degraded read: dropped damaged records', { userId, warnings: salvaged.warnings });
+    }
+    return salvaged.file;
+  }
+}
+
+/**
+ * 降级读：单条剔除 + 剔除明细。仅处理**记录级**损伤；文件级前提
+ * 不满足时原样抛回 strict 错误。剔除规则与 validateGraphFile 的校验一一对应
+ * （重复 id/名称保首条，父分类不可达/成环的分类连同其后代一并剔除，悬空
+ * categoryId 的实体剔除，端点缺失/重复的关系剔除）。
+ */
+function salvageGraphFile(
+  userId: string,
+  value: unknown,
+  strictError: Error,
+): { file: OntologyGraphFile; warnings: string[] } {
+  const raw = plainObject(value, 'graph file');
+  if (raw.schemaVersion !== ONTOLOGY_GRAPH_SCHEMA_VERSION) throw strictError;
+  if (raw.ownerId !== userId) throw strictError;
+  if (!Array.isArray(raw.categories) || raw.categories.length > MAX_CATEGORIES) throw strictError;
+  if (!Array.isArray(raw.entities) || raw.entities.length > MAX_ENTITIES) throw strictError;
+  if (!Array.isArray(raw.relations) || raw.relations.length > MAX_RELATIONS) throw strictError;
+
+  const warnings: string[] = [];
+  const recordId = (item: unknown): string => {
+    const id = (item as { id?: unknown } | null)?.id;
+    return typeof id === 'string' && id ? ` (${id})` : '';
+  };
+  const drop = (kind: string, index: number, item: unknown, reason: string): void => {
+    warnings.push(`${kind}[${index}]${recordId(item)}: ${reason}`);
+  };
+
+  // ── 分类：形状校验（重复 id/名称保首条）→ 父链可达且无环 ──────────────
+  const shapedCategories: Array<{ category: OntologyCategory; index: number }> = [];
+  const shapedById = new Map<string, OntologyCategory>();
+  const categoryNames = new Set<string>(BUILTIN_ONTOLOGY_CATEGORIES.map((category) => (
+    `${category.domain}\0${category.parentId || ''}\0${category.name.toLocaleLowerCase()}`
+  )));
+  (raw.categories as unknown[]).forEach((item, index) => {
+    let category: OntologyCategory;
+    try {
+      category = validateCategory(item);
+    } catch (error) {
+      drop('category', index, item, (error as Error).message);
+      return;
+    }
+    if (shapedById.has(category.id)) {
+      drop('category', index, item, 'duplicate ontology category id');
+      return;
+    }
+    const nameKey = `${category.domain}\0${category.parentId || ''}\0${category.name.toLocaleLowerCase()}`;
+    if (categoryNames.has(nameKey)) {
+      drop('category', index, item, 'duplicate ontology category name');
+      return;
+    }
+    shapedById.set(category.id, category);
+    shapedCategories.push({ category, index });
+    categoryNames.add(nameKey);
+  });
+
+  // 父链解析：0=解析中 1=接受 2=剔除。父不可达或成环 → 该分类（连同依赖
+  // 它的后代）剔除，与 strict 的 'ontology parent category is unavailable' /
+  // 'ontology category cycle' 同口径。
+  const resolveState = new Map<string, 0 | 1 | 2>();
+  const resolveCategory = (category: OntologyCategory): boolean => {
+    const state = resolveState.get(category.id);
+    if (state === 1) return true;
+    if (state === 2 || state === 0) return false;
+    resolveState.set(category.id, 0);
+    if (!category.parentId) {
+      resolveState.set(category.id, 1);
+      return true;
+    }
+    const builtinParent = BUILTIN_CATEGORY_BY_ID.get(category.parentId);
+    if (builtinParent) {
+      const ok = builtinParent.domain === category.domain;
+      resolveState.set(category.id, ok ? 1 : 2);
+      return ok;
+    }
+    const parent = shapedById.get(category.parentId);
+    if (!parent || parent.domain !== category.domain) {
+      resolveState.set(category.id, 2);
+      return false;
+    }
+    if (!resolveCategory(parent)) {
+      resolveState.set(category.id, 2);
+      return false;
+    }
+    resolveState.set(category.id, 1);
+    return true;
+  };
+  const categories: OntologyCategory[] = [];
+  for (const { category, index } of shapedCategories) {
+    if (resolveCategory(category)) categories.push(category);
+    else drop('category', index, category, 'ontology parent category is unavailable or cyclic');
+  }
+
+  // ── 实体：分类图用「内置 + 已接受分类」，悬空 categoryId / 形状坏 / 重复 id 剔除 ──
+  const categoryMap = new Map<string, OntologyCategory>([
+    ...BUILTIN_ONTOLOGY_CATEGORIES.map((category) => [category.id, category] as const),
+    ...categories.map((category) => [category.id, category] as const),
+  ]);
+  const entities: OntologyEntity[] = [];
+  const entityIds = new Set<string>();
+  (raw.entities as unknown[]).forEach((item, index) => {
+    let entity: OntologyEntity;
+    try {
+      entity = validateEntity(item, categoryMap);
+    } catch (error) {
+      drop('entity', index, item, (error as Error).message);
+      return;
+    }
+    if (entityIds.has(entity.id)) {
+      drop('entity', index, item, 'duplicate ontology entity id');
+      return;
+    }
+    entityIds.add(entity.id);
+    entities.push(entity);
+  });
+
+  // ── 关系：形状坏 / 端点缺失 / 重复 id / 重复三元组剔除 ──────────────────
+  const relations: OntologyRelation[] = [];
+  const relationIds = new Set<string>();
+  const relationKeys = new Set<string>();
+  (raw.relations as unknown[]).forEach((item, index) => {
+    let relation: OntologyRelation;
+    try {
+      relation = validateRelation(item);
+    } catch (error) {
+      drop('relation', index, item, (error as Error).message);
+      return;
+    }
+    if ([relation.subject, relation.object].some((endpoint) => endpoint.kind === 'entity' && !entityIds.has(endpoint.id))) {
+      drop('relation', index, item, 'ontology relation endpoint is unavailable');
+      return;
+    }
+    if (relationIds.has(relation.id)) {
+      drop('relation', index, item, 'duplicate ontology relation id');
+      return;
+    }
+    const key = JSON.stringify([relation.subject, relation.predicate.toLocaleLowerCase(), relation.object]);
+    if (relationKeys.has(key)) {
+      drop('relation', index, item, 'duplicate ontology relation');
+      return;
+    }
+    relationIds.add(relation.id);
+    relationKeys.add(key);
+    relations.push(relation);
+  });
+
+  return {
+    file: {
+      schemaVersion: ONTOLOGY_GRAPH_SCHEMA_VERSION,
+      ownerId: userId,
+      categories,
+      entities,
+      relations,
+    },
+    warnings,
+  };
 }
 
 function snapshot(state: OntologyGraphFile): OntologyGraphSnapshot {
@@ -474,6 +649,11 @@ function relationDuplicate(state: OntologyGraphFile, subject: OntologyEndpoint, 
 
 export async function readOntologyGraph(userId: string): Promise<OntologyGraphSnapshot> {
   return snapshot(await readGraphFile(userId));
+}
+
+/** A complete owner inventory cannot silently omit damaged legacy rows. */
+export async function readOntologyGraphForManagement(userId: string): Promise<OntologyGraphSnapshot> {
+  return snapshot(await readGraphFile(userId, false));
 }
 
 export async function createOntologyCategory(userId: string, input: {

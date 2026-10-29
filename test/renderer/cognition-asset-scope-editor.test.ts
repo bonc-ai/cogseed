@@ -31,14 +31,14 @@ describe('cognition asset visibility editor', () => {
     expect(visibleText).toContain('审阅助手');
     expect(visibleText).toContain('产品工作区');
     expect(visibleText).toContain('已不可用的旧智能体限制 1');
-    expect(visibleText).toContain('至少保留一个');
-    expect((html.match(/data-act="asset-scope-unrestrict"/g) || []).length).toBe(2);
+    expect(visibleText).toContain('不选择不代表解除限制');
+    expect((html.match(/data-prototype-scope-mode=/g) || []).length).toBe(2);
     expect(visibleText).not.toContain('agent-id-private');
     expect(visibleText).not.toContain('agent-id-missing');
     expect(visibleText).not.toContain('space-id-private');
-    expect(html).toMatch(/type="checkbox"[^>]*value="agent-id-private"[^>]*checked[^>]*data-scope-kind="agent"/);
-    expect(html).toMatch(/type="checkbox"[^>]*value="space-id-private"[^>]*checked[^>]*data-scope-kind="space"/);
-    expect(html).toContain('其他限制（如任务用途、文件类型）会原样保留。');
+    expect(html).toContain('<option value="agent-id-private" selected>审阅助手</option>');
+    expect(html).toContain('<option value="space-id-private" selected>产品工作区</option>');
+    expect(html).toContain('项目与用途维度保持原样');
   });
 
   it('preserves the existing policy when the Agent or workspace directory cannot be read', () => {
@@ -47,8 +47,8 @@ describe('cognition asset visibility editor', () => {
       assetScopeOptions: { status: 'error', agents: [], spaces: [], error: 'offline' },
     });
 
-    expect(html).toContain('列表暂时读取失败');
-    expect(html).toContain('本次仍可保存正文，但不会更改可见范围');
+    expect(html).toContain('对象目录尚未就绪');
+    expect(html).toContain('当前不能更改对象限制');
     expect(html).toContain('data-act="asset-scope-options-retry"');
   });
 
@@ -80,7 +80,7 @@ describe('cognition asset visibility editor', () => {
       assets: [current],
       assetScopeOptions: { status: 'ready', agents: [], spaces: [] },
       assetEditDrafts: {
-        [current.id]: { scopeSelection: { agentIds: [], workspaceIds: ['space-id-next'] } },
+        [current.id]: { baseVersion: String(current.version), baseActiveVersion: String(current.version), scopeSelection: { agentIds: [], workspaceIds: ['space-id-next'] } },
       },
     }, { name: 'overview', assetId: current.id, assetEdit: '1' }, {
       cogseed: {
@@ -109,7 +109,7 @@ describe('cognition asset visibility editor', () => {
       assets: [asset],
       assetScopeOptions: { status: 'ready', agents: [], spaces: [] },
       assetEditDrafts: {
-        [asset.id]: { scopeSelection: { agentIds: [] }, scopeUnrestrict: ['agent'] },
+        [asset.id]: { baseVersion: String(asset.version), baseActiveVersion: String(asset.version), scopeSelection: { agentIds: [] }, scopeUnrestrict: ['agent'] },
       },
     }, { name: 'overview', assetId: asset.id, assetEdit: '1' }, {
       cogseed: {

@@ -1,28 +1,13 @@
 /**
- * Tencent Meeting connector detail view — real-page integration.
- *
- * The MCP与工具 tab used to stop at a card grid: a connected connector had nothing to say about
- * what to do next, and the connection flow itself (`local_cli`) produces its authorization URL on
- * this machine, so a failed browser launch left the user with no way forward. This file drives the
- * real `modules/connectors.js` (plus the real shared primitives from `icons.js` / `ui-button.js` /
- * `ui-card.js` / `ui-status.js` / `ui-empty.js`) against a minimal DOM and pins:
- *
- *   - grid ⇄ detail entry and exit, including focus return to the originating card action;
- *   - the three-step indicator's two states, derived from the live `connected` state;
- *   - `查看会议资料` staying visible, disabled, and explained;
- *   - the `cli_missing` branch not falling through to the generic "暂不支持" copy;
- *   - the CTA landing on the automation page with the meeting-digest template pre-filled;
- *   - `connectors:authorization-url` becoming a copyable fallback.
- *
- * The DOM is hand-rolled because this repository has no jsdom dependency and the renderer is
- * classic-script only: the existing convention (see `connectors-degraded-card.test.ts`) is a `vm`
- * context. This file needs *structural* queries because the detail view is assembled from generated
- * markup, so instead of stubbing selectors it parses the markup the module produces.
+ * Connector usage popups: business transitions through the real connector page and shared
+ * controls. uiModal's DOM lifecycle is stubbed here; its keyboard/focus behavior is exercised
+ * with the production renderer, preload and IPC in connectors-electron.test.ts.
  */
 import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
+import { CONNECTOR_CATALOG } from '../../src/main/features/connectors/catalog';
 
 const root = path.resolve(__dirname, '../..');
 
@@ -40,7 +25,11 @@ class FakeNode {
   style: Record<string, string> = {};
   listeners: Record<string, Array<(event?: any) => void>> = {};
   focused = false;
-  disabled = false;
+  get disabled() { return this.hasAttribute('disabled'); }
+  set disabled(value: boolean) { if (value) this.setAttribute('disabled', ''); else this.removeAttribute('disabled'); }
+  value = '';
+  activeElement: Node | null = null;
+  scrollTop = 0;
   hidden = false;
   tabIndex = 0;
   private _html = '';
@@ -147,7 +136,10 @@ class FakeNode {
     }
   }
 
-  focus() { this.focused = true; }
+  contains(child: Node): boolean { return child === this || this.children.some(node => typeof node !== 'string' && node.contains(child)); }
+  prepend(child: Node) { child.parent = this; this.children.unshift(child); }
+  dispatchEvent(event: any) { for (const handler of this.listeners[event.type] || []) handler(event); }
+  focus() { this.focused = true; let root: Node = this; while (root.parent) root = root.parent; root.activeElement = this; }
   scrollIntoView() {}
 
   get isConnected(): boolean {
@@ -213,7 +205,7 @@ function parseNodes(html: string): Node[] {
     if (match[1] === '/') { if (stack.length > 1) stack.pop(); continue; }
     const node = new FakeNode(match[2]);
     Object.assign(node.attrs, parseAttrs(match[3]));
-    stack[stack.length - 1].children.push(node);
+    stack[stack.length - 1].appendChild(node);
     if (match[4] !== '/' && !VOID_TAGS.has(match[2])) stack.push(node);
   }
   const rest = html.slice(last);
@@ -242,9 +234,7 @@ const GRID_IDS = [
   'connectors-empty',
   'connectors-group-connected-count',
   'connectors-group-available-count',
-  'connectors-detail-view',
-  'connectors-detail-topbar',
-  'connectors-detail-body',
+  'new-chat-input',
 ];
 
 function readModule(relative: string): string {
@@ -273,6 +263,7 @@ function loadConnectorsPage(options: {
   const document = {
     readyState: 'complete',
     body: documentRoot,
+    get activeElement() { return documentRoot.activeElement; },
     documentElement: documentRoot,
     createElement: (tag: string) => new FakeNode(tag),
     getElementById: (id: string) => byId.get(id) || null,
@@ -295,6 +286,7 @@ function loadConnectorsPage(options: {
     if (channel === 'connectors.catalog') return { ok: true, catalog };
     if (channel === 'connectors.list') return { ok: true, instances };
     // Mirror the main side: disconnect drops the instance, it does not touch the provider CLI.
+    if (channel === 'connectors.set_enabled') { const inst = instances.find(row => row.id === payload.id); if (inst) inst.enabled = payload.enabled; return { ok: true }; }
     if (channel === 'connectors.remove') {
       const index = instances.findIndex((item) => item && item.id === payload.id);
       if (index < 0) return { ok: true, removed: false };
@@ -323,6 +315,9 @@ function loadConnectorsPage(options: {
   const context: any = {
     console,
     performance: { now: () => 100 },
+    Event: class { type: string; constructor(type: string) { this.type = type; } },
+    setTimeout,
+    clearTimeout,
     Promise,
     Date,
     currentUserId: 'u-tencent',
@@ -353,6 +348,7 @@ function loadConnectorsPage(options: {
         ? (entry.description_zh || entry.description_en || '')
         : (entry.description_en || entry.description_zh || '');
     },
+    setChatConnector: vi.fn(),
     formatChatUseLabel: ({ name }: { name: string }) => name,
     sanitizeSvgIconHtml: (svg: unknown) => (typeof svg === 'string' ? svg : ''),
     uiAlert: (message: string) => { alerts.push(String(message)); },
@@ -382,11 +378,26 @@ function loadConnectorsPage(options: {
     'src/renderer/modules/icons.js',
     'src/renderer/modules/ui-button.js',
     'src/renderer/modules/ui-card.js',
+    'src/renderer/modules/ui-form.js',
+    'src/renderer/modules/ui-modal.js',
+    'src/renderer/modules/ui-structure.js',
     'src/renderer/modules/ui-status.js',
     'src/renderer/modules/ui-empty.js',
   ]) {
     vm.runInContext(readModule(module), context, { filename: path.basename(module) });
   }
+  context.uiModal = ({ title, bodyHtml }: any) => {
+    const overlay = new FakeNode('div');
+    overlay.className = 'ui-modal-overlay';
+    overlay.innerHTML = `<section class="ui-modal"><header class="ui-modal__header"><h2 class="ui-modal__title">${title}</h2>${context.uiIconButton({ label: 'Close', icon: 'x', attrs: { 'data-ui-modal-close': 'true' } })}</header><div class="ui-modal__body">${bodyHtml}</div></section>`;
+    documentRoot.appendChild(overlay);
+    const dialog = overlay.querySelector('.ui-modal')!;
+    let settle!: (value: any) => void;
+    const promise = new Promise(resolve => { settle = resolve; });
+    const close = () => { overlay.remove(); settle({ reason: 'close' }); };
+    dialog.querySelector('[data-ui-modal-close]')!.addEventListener('click', close);
+    return Object.assign(promise, { overlay, dialog, close });
+  };
   vm.runInContext(readModule('src/renderer/modules/connectors.js'), context, { filename: 'connectors.js' });
 
   return {
@@ -404,6 +415,7 @@ function loadConnectorsPage(options: {
     document,
     byId,
     view: (id: string) => byId.get(id)!,
+    popup: () => documentRoot.querySelector('.connector-popup')!,
     push: (channel: string, payload: any) => pushHandlers.get(channel)?.(payload),
     emitDocumentKeydown: (event: Record<string, unknown>) => {
       document.__emitDocument('keydown', event);
@@ -424,362 +436,401 @@ function connectedInstance(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function openDetail(page: ReturnType<typeof loadConnectorsPage>) {
+async function openPopup(page: ReturnType<typeof loadConnectorsPage>, id = 'tencent-meeting') {
   await page.context.loadConnectors();
-  const card = page.view('connectors-grid-connected').querySelector('.connector-card[data-id="tencent-meeting"]')
-    || page.view('connectors-grid-available').querySelector('.connector-card[data-id="tencent-meeting"]');
-  const button = card!.querySelector('[data-act="open-detail"]')!;
+  const card = page.view('connectors-grid-connected').querySelector(`.connector-card[data-id="${id}"]`)
+    || page.view('connectors-grid-available').querySelector(`.connector-card[data-id="${id}"]`);
+  const button = card!.querySelector('[data-act="open-popup"]')!;
   button.click();
   return { card: card!, button };
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
-describe('connector detail view — Tencent Meeting (registry CONN-PV-001)', () => {
-  it('enters from the card action, leaves on the back button, and returns focus to the card', async () => {
-    const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    const { button } = await openDetail(page);
-
-    expect(page.view('connectors-grid-view').style.display).toBe('none');
-    expect(page.view('connectors-detail-view').style.display).toBe('');
-    // Entry moves focus into the detail so the keyboard is never stranded on a hidden grid.
-    const backControl = page.view('connectors-detail-topbar').querySelector('[data-connectors-detail-back]');
-    expect(backControl?.focused).toBe(true);
-    expect(button.focused).toBe(false);
-
-    const body = page.view('connectors-detail-body');
-    expect(body.textContent).toContain('腾讯会议');
-    expect(body.textContent).toContain('连接账号，读取有权访问的会议转写。');
-
-    page.view('connectors-detail-topbar').querySelector('[data-connectors-detail-back]')!.click();
-
-    expect(page.view('connectors-grid-view').style.display).toBe('');
-    expect(page.view('connectors-detail-view').style.display).toBe('none');
-    expect(page.view('connectors-detail-body').innerHTML).toBe('');
-    // The grid repaint rebuilds the card, so focus lands on the same control on the new node.
-    const refreshed = page.view('connectors-grid-connected')
-      .querySelector('.connector-card[data-id="tencent-meeting"]')
-      ?.querySelector('[data-act="open-detail"]');
-    expect(refreshed?.focused).toBe(true);
-  });
-
-  it('leaves on Escape (IME-safe) and ignores composition keydown', async () => {
-    const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(page);
-
-    page.emitDocumentKeydown({ key: 'Escape', isComposing: true, keyCode: 0, target: null });
-    page.emitDocumentKeydown({ key: 'Escape', isComposing: false, keyCode: 229, target: null });
-    expect(page.view('connectors-detail-view').style.display).toBe('');
-
-    page.emitDocumentKeydown({ key: 'Escape', isComposing: false, keyCode: 0, target: null });
-    expect(page.view('connectors-detail-view').style.display).toBe('none');
-    expect(page.view('connectors-grid-view').style.display).toBe('');
-  });
-
-  it('leaves Escape alone once the MCP pane is no longer the visible surface', async () => {
-    const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(page);
-
-    // Switching the MCP sub-view to 插件 hides the pane; the selection survives, but Escape now
-    // belongs to the surface that replaced it.
-    page.view('connections-pane-mcp').hidden = true;
-    page.emitDocumentKeydown({ key: 'Escape', isComposing: false, keyCode: 0, target: null });
-    expect(page.view('connectors-detail-view').style.display).toBe('');
-
-    page.view('connections-pane-mcp').hidden = false;
-    page.emitDocumentKeydown({ key: 'Escape', isComposing: false, keyCode: 0, target: null });
-    expect(page.view('connectors-detail-view').style.display).toBe('none');
-  });
-
-  it('keeps an open shared modal in charge of its own Escape', async () => {
-    const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(page);
-
-    const overlay = new FakeNode('div');
-    overlay.attrs.class = 'ui-modal-overlay';
-    const inside = new FakeNode('button');
-    overlay.appendChild(inside);
-    page.emitDocumentKeydown({ key: 'Escape', isComposing: false, keyCode: 0, target: inside });
-
-    expect(page.view('connectors-detail-view').style.display).toBe('');
-  });
-
-  it('renders the three-step indicator from live state, without a new persisted field', async () => {
-    const disconnected = loadConnectorsPage({ instances: [] });
-    await openDetail(disconnected);
-    const before = disconnected.view('connectors-detail-body').querySelectorAll('.connectors-detail-step');
-    expect(before).toHaveLength(3);
-    expect(before[0].textContent).toContain('connectors.tencent.step.before');
-    expect(before[0].textContent).toContain('connectors.tencent.step.done');
-    expect(before[1].textContent).toContain('connectors.tencent.step.authorize');
-    expect(before[2].textContent).toContain('connectors.tencent.step.connected');
-    expect(before[1].getAttribute('aria-current')).toBe('step');
-    expect(before.map((step) => step.className)).toEqual([
-      'connectors-detail-step is-done',
-      'connectors-detail-step is-current',
-      'connectors-detail-step is-todo',
-    ]);
-    expect(disconnected.view('connectors-detail-body').querySelector('.connectors-detail-steps')!.getAttribute('aria-label'))
-      .toBe('connectors.tencent.steps.aria');
-
-    const connected = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(connected);
-    const after = connected.view('connectors-detail-body').querySelectorAll('.connectors-detail-step');
-    expect(after.map((step) => step.className)).toEqual([
-      'connectors-detail-step is-done',
-      'connectors-detail-step is-done',
-      'connectors-detail-step is-current',
-    ]);
-    expect(after[2].getAttribute('aria-current')).toBe('step');
-    expect(after[0].getAttribute('aria-current')).toBeNull();
-  });
-
-  it('shows the connected status card, the automation CTA and its note', async () => {
-    const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(page);
-    const body = page.view('connectors-detail-body');
-
-    expect(body.textContent).toContain('connectors.tencent.connected.title');
-    expect(body.textContent).toContain('connectors.tencent.connected.desc');
-    expect(body.textContent).toContain('connectors.tencent.connected.note');
-    const cta = body.querySelector('[data-act="create-automation"]');
-    expect(cta).not.toBeNull();
-    expect(cta!.className).toContain('ui-button--primary');
-    expect(body.textContent).toContain('connectors.tencent.status.title');
-    expect(body.textContent).toContain('connectors.tencent.status.scope');
-    expect(body.querySelector('.ui-status-pill')?.textContent).toContain('connectors.tencent.status.connected');
-    // Both panels go through the shared card shell rather than page-local markup.
-    expect(body.querySelectorAll('.ui-resource-card.connectors-detail-panel')).toHaveLength(2);
-  });
-
-  it('describes a degraded or errored connector honestly instead of as not connected yet', async () => {
-    // Same invariant the degraded card enforces: an installed-but-unreachable connector must not
-    // tell the user to do the thing they already did.
-    const degraded = loadConnectorsPage({
-      instances: [connectedInstance({
-        status: {
-          kind: 'degraded',
-          message: 'refresh HTTP 503',
-          at: Date.now(),
-          last_verified_at: Date.now() - 60 * 60 * 1000,
-        },
-      })],
-    });
-    await openDetail(degraded);
-    const body = degraded.view('connectors-detail-body');
-    expect(body.textContent).toContain('connectors.status.unverified');
-    expect(body.textContent).not.toContain('connectors.tencent.connected.title');
-    expect(body.textContent).not.toContain('connectors.tencent.pending.title');
-    expect(body.querySelector('[data-act="retry-degraded"]')).not.toBeNull();
-    expect(body.querySelector('[data-act="create-automation"]')).toBeNull();
-    expect(body.querySelector('.ui-status-pill--attention')).not.toBeNull();
-
-    const errored = loadConnectorsPage({
-      instances: [connectedInstance({
-        status: { kind: 'error', message: 'spawn ENOENT', at: Date.now() },
-      })],
-    });
-    await openDetail(errored);
-    const erroredBody = errored.view('connectors-detail-body');
-    expect(erroredBody.textContent).toContain('connectors.status.error');
-    expect(erroredBody.textContent).not.toContain('connectors.tencent.pending.title');
-    expect(erroredBody.querySelector('[data-act="disconnect"]')).not.toBeNull();
-    expect(erroredBody.querySelector('.ui-status-pill--critical')).not.toBeNull();
-  });
-
-  it('renders 查看会议资料 as a disabled control with a visible reason', async () => {
-    const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(page);
-    const body = page.view('connectors-detail-body');
-
-    const link = body.querySelector('[data-act="view-materials"]');
-    expect(link).not.toBeNull();
-    expect(link!.hasAttribute('disabled')).toBe(true);
-    expect(link!.getAttribute('aria-disabled')).toBe('true');
-    expect(body.textContent).toContain('connectors.tencent.status.view_materials');
-    expect(body.textContent).toContain('connectors.tencent.status.view_materials_soon');
-    // Not hidden, and not a navigation control that could go nowhere.
-    expect(page.invokedChannels).not.toContain('meeting.materials');
-    expect(page.setView).not.toHaveBeenCalled();
-
-    link!.click();
-    expect(page.setView).not.toHaveBeenCalled();
-    expect(page.invokedChannels.filter((channel) => channel !== 'connectors.catalog' && channel !== 'connectors.list'))
-      .toEqual([]);
-  });
-
-  it('reports the missing local CLI instead of the generic unsupported message', async () => {
-    const cliMissing = {
-      ...TENCENT_ENTRY,
-      availability: 'visible_disabled',
-      disabled_reason: 'cli_missing',
-    };
-    const page = loadConnectorsPage({ catalog: [cliMissing], instances: [] });
+describe('connected connector cards — unified live status', () => {
+  it('leads available cards with enterprise integrations while preserving name order and connected grouping', async () => {
+    const featuredIds = ['email-163', 'email-qq', 'email-enterprise', 'tencent-survey', 'tencent-meeting',
+      'tencent-docs', 'feishu', 'dingtalk', 'wecom', 'wps'];
+    const catalog = CONNECTOR_CATALOG.filter(entry => [...featuredIds, 'github', 'airtable', 'tencent-meeting'].includes(entry.id));
+    const byName = (a: any, b: any) => a.display_name.localeCompare(b.display_name, undefined, { sensitivity: 'base', numeric: true });
+    const page = loadConnectorsPage({ catalog: [...catalog].reverse() });
     await page.context.loadConnectors();
+    const cardIds = (grid: string) => page.view(grid).querySelectorAll('.connector-card').map(card => card.dataset.id);
+    expect(cardIds('connectors-grid-available')).toEqual([
+      ...catalog.filter(entry => featuredIds.includes(entry.id)).sort(byName).map(entry => entry.id),
+      ...catalog.filter(entry => !featuredIds.includes(entry.id)).sort(byName).map(entry => entry.id),
+    ]);
 
-    const card = page.view('connectors-grid-available')
-      .querySelector('.connector-card[data-id="tencent-meeting"]')!;
-    expect(card.querySelector('.connector-card-cli-missing')!.textContent)
-      .toBe('connectors.toast.cli_missing');
-    expect(card.innerHTML).not.toContain('connectors.toast.unsupported');
-
-    await page.context._runConnect(cliMissing);
-    expect(page.toasts.map((toast) => toast.message)).toEqual(['connectors.toast.cli_missing']);
-
-    const { button } = await openDetail(page);
-    expect(button).not.toBeNull();
-    const body = page.view('connectors-detail-body');
-    expect(body.textContent).toContain('connectors.tencent.cli_missing.title');
-    expect(body.textContent).toContain('connectors.tencent.cli_missing.desc');
-    expect(body.querySelector('[data-act="create-automation"]')).toBeNull();
-    expect(body.querySelector('[data-act="connect"]')!.hasAttribute('disabled')).toBe(true);
+    const connectedPage = loadConnectorsPage({
+      catalog,
+      instances: ['github', 'feishu', 'tencent-docs'].map(id => connectedInstance({ id })),
+    });
+    await connectedPage.context.loadConnectors();
+    expect(connectedPage.view('connectors-grid-connected').querySelectorAll('.connector-card').map(card => card.dataset.id))
+      .toEqual(catalog.filter(entry => ['github', 'feishu', 'tencent-docs'].includes(entry.id)).sort(byName).map(entry => entry.id));
+    const availableIds = connectedPage.view('connectors-grid-available').querySelectorAll('.connector-card').map(card => card.dataset.id);
+    expect(availableIds).not.toContain('feishu');
+    expect(availableIds).not.toContain('tencent-docs');
+    expect(availableIds.slice(-1)).toEqual(['airtable']);
   });
 
-  it('still routes the remote-config unsupported case through the generic toast', async () => {
-    const unsupported = {
-      ...TENCENT_ENTRY,
-      availability: 'visible_disabled',
-      disabled_reason: 'unsupported',
-    };
-    const page = loadConnectorsPage({ catalog: [unsupported], instances: [] });
+  it('shows live status, Use and a popup entry for all ten enterprise cards', async () => {
+    const ids = ['email-163', 'email-enterprise', 'email-qq', 'tencent-meeting', 'tencent-survey',
+      'tencent-docs', 'feishu', 'dingtalk', 'wecom', 'wps'];
+    const catalog = CONNECTOR_CATALOG.filter(entry => ids.includes(entry.id));
+    const page = loadConnectorsPage({
+      catalog,
+      instances: catalog.map(entry => connectedInstance({
+        id: entry.id,
+        display_name: entry.display_name,
+        email_settings: entry.auth_mode === 'credentials' ? { address: `${entry.id}@example.com` } : undefined,
+      })),
+    });
     await page.context.loadConnectors();
-    await page.context._runConnect(unsupported);
-    expect(page.toasts.map((toast) => toast.message)).toEqual(['connectors.toast.unsupported']);
+    const cards = page.view('connectors-grid-connected').querySelectorAll('.connector-card');
+    expect(cards).toHaveLength(ids.length);
+    for (const card of cards) {
+      const account = catalog.find(entry => entry.id === card.dataset.id)?.auth_mode === 'credentials'
+        ? ` · ${card.dataset.id}@example.com` : '';
+      expect(card.querySelector('.connector-card-account')?.textContent).toBe(`connectors.group.connected${account}`);
+      expect(card.querySelector('.ui-status-dot--success .ui-status-dot__mark')).not.toBeNull();
+      const entry = catalog.find(entry => entry.id === card.dataset.id)!;
+      if (entry.icon_name?.startsWith('connector-')) {
+        const image = card.querySelector('.connector-card-icon img');
+        expect(image?.getAttribute('src')).toMatch(/\.\.\/resources\/icons\/connectors\//);
+      } else expect(card.querySelector('.connector-card-icon svg')).not.toBeNull();
+      expect(card.querySelector('[data-act="use-connector"]')).not.toBeNull();
+      expect(card.querySelector('[data-act="open-popup"]')).not.toBeNull();
+    }
+    const meeting = cards.find(card => card.dataset.id === 'tencent-meeting')!;
+    expect(meeting.querySelector('.connector-card-account')?.textContent).toBe('connectors.group.connected');
+    meeting.querySelector('[data-act="use-connector"]')!.click();
+    expect(page.setView).toHaveBeenCalledWith('new-chat');
+    expect(page.context.setChatConnector).toHaveBeenCalledWith('new-chat', 'tencent-meeting', '腾讯会议');
+    expect(page.view('connectors-grid-view').style.display).not.toBe('none');
   });
 
-  it('sends 创建会议自动化 to the automation page with the meeting-digest template', async () => {
-    const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(page);
+  it('shows a supplied OAuth account after the status and treats a blank account as absent', async () => {
+    for (const account of ['meeting@example.com', '   ']) {
+      const page = loadConnectorsPage({ instances: [connectedInstance({ oauth_grant: { account_label: account } })] });
+      await page.context.loadConnectors();
+      const line = page.document.querySelector('.connector-card-account')!;
+      const text = account.trim() ? 'connectors.group.connected · meeting@example.com' : 'connectors.group.connected';
+      expect(line.textContent).toBe(text);
+      expect(line.getAttribute('title')).toBe(text);
+    }
+  });
 
-    page.view('connectors-detail-body').querySelector('[data-act="create-automation"]')!.click();
+  it.each(['degraded', 'error', 'disconnected'])('does not show a green account line for %s even with a cached account label', async kind => {
+    const page = loadConnectorsPage({ instances: [connectedInstance({
+      status: { kind, message: kind === 'disconnected' ? '' : 'unavailable' },
+      oauth_grant: { account_label: 'cached@example.com' },
+    })] });
+    await page.context.loadConnectors();
+    const card = page.document.querySelector('.connector-card[data-id="tencent-meeting"]')!;
+    expect(card.querySelector('.connector-card-account')).toBeNull();
+    expect(card.querySelector('[data-act="use-connector"]')).toBeNull();
+    expect(card.querySelector('[data-act="open-popup"]')).not.toBeNull();
+  });
+});
+
+describe('Tencent Meeting usage popup (CONN-PV-003)', () => {
+  it('keeps the grid visible, restores focus on close, and can reopen from the card', async () => {
+    const page = loadConnectorsPage({ instances: [connectedInstance()] });
+    await openPopup(page);
+    expect(page.view('connectors-grid-view').style.display).toBe('');
+    expect(page.popup().textContent).toContain('腾讯会议');
+    expect(page.popup().textContent).toContain(TENCENT_ENTRY.description_zh);
+    expect(page.invokedChannels).not.toContain('connectors.start_oauth');
+    await page.context.loadConnectors(); // card rerender while the popup is open
+    page.popup().querySelector('[data-ui-modal-close]')!.click();
     await sleep();
-
-    expect(page.setView).toHaveBeenCalledWith('auto');
-    expect(page.loadRendererFeature).toHaveBeenCalledWith('auto');
-    expect(page.applyAutoTemplate).toHaveBeenCalledWith('meeting_digest');
-    // `_autoApplyTemplate` opens the dialog itself — calling both would open it twice.
-    expect(page.openAutoTaskDialog).not.toHaveBeenCalled();
+    expect(page.popup()).toBeNull();
+    const button = page.document.querySelector('[data-act="open-popup"]')!;
+    expect(button.focused).toBe(true);
+    button.click();
+    expect(page.popup()).not.toBeNull();
   });
 
-  it('turns connectors:authorization-url into a copyable fallback', async () => {
-    const page = loadConnectorsPage({ instances: [] });
-    await openDetail(page);
+  it.each(['query', 'summary', 'schedule'])('prefills %s and selects the connector without sending', async key => {
+    const page = loadConnectorsPage({ instances: [connectedInstance()] });
+    await openPopup(page);
+    page.popup().querySelector(`[data-example="${key}"]`)!.click();
+    expect(page.popup()).toBeNull();
+    expect(page.view('new-chat-input').value).toBe('connectors.tencent.examples.' + key);
+    expect(page.context.setChatConnector).toHaveBeenCalledWith('new-chat', 'tencent-meeting', '腾讯会议');
+    expect(page.setView).toHaveBeenCalledWith('new-chat');
+    expect(page.invokedChannels.some(channel => /send|chat|dispatch/.test(channel))).toBe(false);
+  });
 
-    page.push('connectors:authorization-url', {
-      catalog_id: 'tencent-meeting',
-      url: 'https://meeting.tencent.com/auth?code=abc',
-    });
+  it('starts a blank conversation from the primary action', async () => {
+    const page = loadConnectorsPage({ instances: [connectedInstance()] });
+    page.view('new-chat-input').value = 'previous text';
+    await openPopup(page);
+    page.popup().querySelector('[data-act="use-connector"]')!.click();
+    expect(page.view('new-chat-input').value).toBe('');
+    expect(page.popup()).toBeNull();
+  });
 
-    const body = page.view('connectors-detail-body');
-    expect(body.textContent).toContain('connectors.tencent.auth_url.label');
-    expect(body.textContent).toContain('https://meeting.tencent.com/auth?code=abc');
+  it('toggles enable without disconnecting and updates the examples and primary action', async () => {
+    const page = loadConnectorsPage({ instances: [connectedInstance()] });
+    await openPopup(page);
+    page.popup().querySelector('[data-act="toggle-enabled"]')!.click();
+    await sleep();
+    expect(page.invokedChannels).toContain('connectors.set_enabled');
+    expect(page.invokedChannels).not.toContain('connectors.remove');
+    expect(page.popup().querySelector('[role="switch"]')!.getAttribute('aria-checked')).toBe('false');
+    expect(page.popup().querySelector('[data-act="use-connector"]')!.disabled).toBe(true);
+    expect(page.popup().querySelector('[data-act="example"]')!.disabled).toBe(true);
+    expect(page.popup().textContent).toContain('connectors.popup.disabled');
+    page.popup().querySelector('[data-act="toggle-enabled"]')!.click();
+    await sleep();
+    expect(page.popup().querySelector('[data-act="example"]')!.disabled).toBe(false);
+  });
 
-    body.querySelector('[data-act="copy-auth-url"]')!.click();
+  it('previews examples when disconnected and only connects on an explicit action', async () => {
+    const page = loadConnectorsPage();
+    await openPopup(page);
+    expect(page.popup().querySelectorAll('[data-act="example"]')).toHaveLength(3);
+    expect(page.popup().querySelector('[data-act="example"]')!.disabled).toBe(true);
+    expect(page.popup().querySelector('[role="switch"]')).toBeNull();
+    expect(page.invokedChannels).not.toContain('connectors.start_oauth');
+    page.popup().querySelector('[data-act="connect"]')!.click();
+    await sleep();
+    expect(page.invokedChannels).toContain('connectors.start_oauth');
+  });
+
+  it('keeps the connection enabled after a toggle failure and reports it without a nested dialog', async () => {
+    const instance = connectedInstance();
+    const page = loadConnectorsPage({ invoke: async channel => {
+      if (channel === 'connectors.catalog') return { ok: true, catalog: [TENCENT_ENTRY] };
+      if (channel === 'connectors.list') return { ok: true, instances: [instance] };
+      return { ok: false, error: 'offline' };
+    } });
+    await openPopup(page);
+    page.popup().querySelector('[data-act="toggle-enabled"]')!.click();
+    await sleep();
+    expect(page.popup().querySelector('[role="switch"]')!.getAttribute('aria-checked')).toBe('true');
+    expect(page.popup().querySelector('[data-act="example"]')!.disabled).toBe(false);
+    expect(page.toasts).toContainEqual({ message: 'offline', variant: 'error' });
+    expect(page.alerts).toEqual([]);
+  });
+
+  it('shows only supplied account metadata and keeps it as text', async () => {
+    const page = loadConnectorsPage({ instances: [connectedInstance({ oauth_grant: { account_label: '<fake@example.com>' } })] });
+    await openPopup(page);
+    expect(page.popup().querySelector('.connector-popup-status')!.textContent).toContain('&lt;fake@example.com&gt;');
+    expect(page.popup().querySelector('fake')).toBeNull();
+  });
+
+  it.each(['degraded', 'error'])('shows a recovery action for %s without enabling examples', async kind => {
+    const page = loadConnectorsPage({ instances: [connectedInstance({ status: { kind, message: 'offline' } })] });
+    await openPopup(page);
+    expect(page.popup().textContent).toContain('offline');
+    expect(page.popup().querySelector('[data-act="example"]')!.disabled).toBe(true);
+    expect(page.popup().querySelector(kind === 'degraded' ? '[data-act="retry-degraded"]' : '[data-act="connect"]')).not.toBeNull();
+  });
+
+  it('keeps CLI setup collapsed, with install recovery available', async () => {
+    const entry = { ...TENCENT_ENTRY, availability: 'visible_disabled', disabled_reason: 'cli_missing', runtime_installable: true,
+      setup: { install_command: 'install cli', steps_zh: ['install'], steps_en: ['install'] } };
+    const page = loadConnectorsPage({ catalog: [entry] });
+    await openPopup(page);
+    expect(page.popup().querySelector('.ui-accordion__item')!.hasAttribute('open')).toBe(false);
+    expect(page.popup().textContent).toContain('connectors.runtime.install_connect');
+    expect(page.popup().querySelector('[data-act="connect"]')!.disabled).toBe(false);
+  });
+
+  it('opens authorization recovery in the popup, copies its URL and cancels the attempt', async () => {
+    const page = loadConnectorsPage();
+    await page.context.loadConnectors();
+    page.push('connectors:authorization-url', { catalog_id: 'tencent-meeting', url: 'https://meeting.tencent.com/auth?code=abc' });
+    expect(page.popup().textContent).toContain('connectors.popup.authorizing.title');
+    page.popup().querySelector('[data-act="copy-auth-url"]')!.click();
     await sleep();
     expect(page.clipboard.writeText).toHaveBeenCalledWith('https://meeting.tencent.com/auth?code=abc');
-    expect(page.toasts.map((toast) => toast.message)).toContain('connectors.tencent.auth_url.copied');
+    page.popup().querySelector('[data-act="cancel-authorization"]')!.click();
+    await sleep();
+    expect(page.invokedChannels).toContain('connectors.cancel_oauth');
+    page.push('connectors:oauth-result', { catalog_id: 'tencent-meeting', attempt_id: 'attempt-1', result: 'failure', code: 'user_cancelled' });
+    expect(page.popup().querySelector('[data-act="copy-auth-url"]')).toBeNull();
+    expect(page.popup().querySelector('[data-act="connect"]')).not.toBeNull();
   });
 
-  it('opens the detail view for the authorization URL when only the grid is showing', async () => {
-    const page = loadConnectorsPage({ instances: [] });
-    await page.context.loadConnectors();
-
-    page.push('connectors:authorization-url', {
-      catalog_id: 'tencent-meeting',
-      url: 'https://meeting.tencent.com/auth?code=grid',
-    });
-
-    expect(page.view('connectors-detail-view').style.display).toBe('');
-    expect(page.view('connectors-detail-body').textContent)
-      .toContain('https://meeting.tencent.com/auth?code=grid');
-  });
-
-  it('disconnects through connectors.remove only, and repaints the detail as not connected', async () => {
+  it.each([true, false])('confirms disconnect and reopens with the resulting state (confirm=%s)', async answer => {
     const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(page);
-
-    page.view('connectors-detail-body').querySelector('[data-act="disconnect"]')!.click();
+    page.confirmAnswer.value = answer;
+    await openPopup(page);
+    page.popup().querySelector('[data-act="more"]')!.click();
+    expect(page.popup().querySelector('[data-ui-modal-popover]')!.hidden).toBe(false);
+    page.popup().querySelector('[data-act="disconnect"]')!.click();
     await sleep();
-    await sleep();
-
     expect(page.confirmations).toHaveLength(1);
-    expect(page.invokedChannels).toContain('connectors.remove');
-    // A disconnect is our instance being dropped — never a provider CLI logout.
-    expect(page.invokedChannels.filter((channel) => /logout|signout|auth\./i.test(channel))).toEqual([]);
-    expect(page.view('connectors-detail-view').style.display).toBe('');
-    expect(page.view('connectors-detail-body').textContent)
-      .toContain('connectors.tencent.pending.title');
+    expect(page.invokedChannels.includes('connectors.remove')).toBe(answer);
+    expect(page.popup().querySelector(answer ? '[data-act="connect"]' : '[data-act="use-connector"]')).not.toBeNull();
+  });
+});
+
+
+const NEW_POPUP_PROVIDERS = [
+  ['email-163', 'email'], ['email-enterprise', 'email'], ['email-qq', 'email'],
+  ['wps', 'wps'], ['wecom', 'wecom'], ['tencent-docs', 'tencent_docs'],
+  ['tencent-survey', 'survey'], ['dingtalk', 'dingtalk'], ['feishu', 'feishu'],
+];
+
+describe('enterprise connector usage popups', () => {
+  it.each(NEW_POPUP_PROVIDERS)('previews %s while disconnected without starting authorization', async (id, profile) => {
+    const entry = CONNECTOR_CATALOG.find(row => row.id === id)!;
+    const page = loadConnectorsPage({ catalog: [entry] });
+    await openPopup(page, id);
+    expect(page.popup().querySelectorAll('[data-act="example"]')).toHaveLength(3);
+    expect(page.popup().querySelector('[data-act="example"]')!.textContent).toContain('connectors.popup.' + profile + '.examples.query');
+    expect(page.popup().querySelector('[data-act="example"]')!.disabled).toBe(true);
+    expect(page.popup().querySelector('[data-act="connect"]')!.textContent).toContain('connectors.action.connect');
+    expect(page.popup().querySelector('[data-act="use-connector"]')).toBeNull();
+    expect(page.popup().textContent).not.toContain('connectors.tencent.connected.note');
+    expect(page.invokedChannels.filter(channel => channel === 'connectors.start_oauth' || channel === 'connectors.prepare_runtime')).toEqual([]);
+    if (entry.auth_mode === 'credentials') expect(page.popup().querySelector('.ui-modal__title')!.textContent).toBe('connectors.email.' + id);
+    page.popup().querySelector('[data-ui-modal-close]')!.click();
+    await sleep();
+    expect(page.popup()).toBeNull();
   });
 
-  it('discloses the connector help text through the shared alert, not a page-local overlay', async () => {
-    const page = loadConnectorsPage({ instances: [connectedInstance()] });
-    await openDetail(page);
-
-    const help = page.view('connectors-detail-topbar').querySelector('[data-connectors-detail-help]')!;
-    expect(help.getAttribute('aria-label')).toBe('connectors.tencent.help_label');
-    expect(help.getAttribute('title')).toBe('connectors.tencent.help');
-    expect(help.querySelector('svg')?.getAttribute('class')).toContain('is-info');
-
-    help.click();
-    expect(page.alerts).toEqual(['connectors.tencent.help']);
-    expect(page.view('connectors-detail-view').querySelectorAll('.ui-modal-overlay')).toHaveLength(0);
+  it.each(NEW_POPUP_PROVIDERS)('uses %s with its own example and connection', async (id, profile) => {
+    const entry = CONNECTOR_CATALOG.find(row => row.id === id)!;
+    const page = loadConnectorsPage({ catalog: [entry], instances: [connectedInstance({ id, email_settings: { address: 'someone@example.com' } })] });
+    await openPopup(page, id);
+    expect(page.popup().querySelector('.connector-popup-status')!.textContent).toContain('someone@example.com');
+    page.popup().querySelector('[data-example="query"]')!.click();
+    expect(page.popup()).toBeNull();
+    expect(page.view('new-chat-input').value).toBe('connectors.popup.' + profile + '.examples.query');
+    expect(page.context.setChatConnector.mock.calls[0][1]).toBe(id);
+    expect(page.invokedChannels).not.toContain('connectors.start_oauth');
   });
 
-  it('adds no raw controls and no literal layer declarations with the detail view', () => {
-    const source = readModule('src/renderer/modules/connectors.js');
-    expect(source.match(/<(?:button|input|textarea|select)\b/gi)).toHaveLength(2);
-    expect(source).not.toMatch(/z-index\s*:/i);
-    expect(source).toContain('uiCard({');
-    expect(source).toContain('uiStatusPill({');
-    expect(source).toContain("uiIconHtml('check-circle'");
+  it.each(['feishu', 'dingtalk', 'wecom'])('offers installation from the disconnected %s popup', async id => {
+    const entry = { ...CONNECTOR_CATALOG.find(row => row.id === id)!, availability: 'visible_disabled', disabled_reason: 'cli_missing', runtime_installable: true };
+    const page = loadConnectorsPage({ catalog: [entry] });
+    await openPopup(page, id);
+    const connect = page.popup().querySelector('[data-act="connect"]')!;
+    expect(connect.textContent).toContain('connectors.runtime.install_connect');
+    expect(connect.disabled).toBe(false);
+    connect.click();
+    await sleep();
+    expect(page.invokedChannels).toContain('connectors.prepare_runtime');
+    expect(page.invokedChannels).not.toContain('connectors.start_oauth');
   });
 
-  it('relaxes the shared card width cap with enough specificity to survive stylesheet order', () => {
-    // `ui-components.css` is linked after `style.css`, and `.ui-resource-card` caps width at
-    // `--card-width-max` (400px). A single-class page rule would lose to it and render the status
-    // panel as a narrow card, so the width relaxation has to stay page-scoped with a child
-    // selector — the same shape `.connectors-grid > .connector-card` already uses.
-    const css = readModule('src/renderer/style.css');
-    expect(css).toMatch(/\.connectors-detail-column > \.connectors-detail-panel\s*{[^}]*max-width:\s*100%;/s);
-    expect(readModule('src/renderer/index.html')).toMatch(/style\.css[\s\S]*ui-components\.css/);
+  it('keeps browser authorization visible after acceptance, even without a URL event', async () => {
+    const entry = CONNECTOR_CATALOG.find(row => row.id === 'wps')!;
+    const page = loadConnectorsPage({ invoke: async channel => {
+      if (channel === 'connectors.catalog') return { ok: true, catalog: [entry] };
+      if (channel === 'connectors.list') return { ok: true, instances: [] };
+      if (channel === 'connectors.start_oauth') return { ok: true, started: true, attempt_id: 'wps-auth' };
+      return { ok: true };
+    } });
+    await openPopup(page, entry.id);
+    page.popup().querySelector('[data-act="connect"]')!.click();
+    await sleep();
+    expect(page.popup().textContent).toContain('connectors.popup.authorizing.title');
+    expect(page.popup().querySelector('[data-act="cancel-authorization"]')).not.toBeNull();
+    expect(page.popup().querySelector('[data-act="connect"]')).toBeNull();
+    page.push('connectors:oauth-result', { catalog_id: entry.id, attempt_id: 'wps-auth', result: 'failure', code: 'user_cancelled' });
+    await sleep();
+    expect(page.popup().querySelector('[data-act="cancel-authorization"]')).toBeNull();
+    expect(page.popup().querySelector('[data-act="connect"]')).not.toBeNull();
   });
 
-  it('does not restyle shared components or declare literal values from page CSS', () => {
-    const css = readModule('src/renderer/style.css');
-    const block = css.slice(
-      css.indexOf('Connector detail view (registry CONN-PV-001)'),
-      css.indexOf('Connect / configure modal'),
-    );
-    expect(block.length).toBeGreaterThan(0);
-    // Comments name the shared shells on purpose; the selectors must not touch them.
-    const selectors = block.replace(/\/\*[\s\S]*?\*\//g, '');
-    expect(selectors).not.toMatch(/\.ui-/);
-    expect(selectors).not.toMatch(/z-index\s*:/);
-    expect(selectors).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-    expect(selectors).not.toMatch(/font-size:\s*[\d.]+px/);
-    expect(selectors).not.toMatch(/border-radius:\s*[\d.]+px/);
+  it.each(['email-163', 'email-qq', 'tencent-docs'])('hands %s connection off to one credential modal and returns on cancel', async id => {
+    const entry = CONNECTOR_CATALOG.find(row => row.id === id)!;
+    const page = loadConnectorsPage({ catalog: [entry] });
+    await openPopup(page, id);
+    page.popup().querySelector('[data-act="connect"]')!.click();
+    await sleep();
+    expect(page.popup()).toBeNull();
+    expect(page.document.querySelectorAll('.ui-modal')).toHaveLength(1);
+    const modal = page.document.querySelector('.ui-modal')!;
+    expect(modal.querySelector(id === 'tencent-docs' ? '#connector-token' : '#email-password')!.getAttribute('type')).toBe('password');
+    modal.querySelector('[data-ui-modal-close]')!.click();
+    await sleep();
+    expect(page.document.querySelectorAll('.ui-modal')).toHaveLength(1);
+    expect(page.popup().querySelector('[data-act="connect"]')).not.toBeNull();
+    expect(page.invokedChannels).not.toContain('connectors.connect_email');
+    expect(page.invokedChannels).not.toContain('connectors.connect_interactive_token');
+  });
+});
+
+describe('managed connector preparation on the real connectors page', () => {
+  function missing(id: string) {
+    return { ...CONNECTOR_CATALOG.find(e => e.id === id)!, availability: 'visible_disabled', disabled_reason: 'cli_missing', runtime_installable: true };
+  }
+
+  it.each(['feishu', 'dingtalk', 'wecom'])('prepares %s with progress before starting authorization', async (id) => {
+    const entry = missing(id);
+    let ready = false;
+    let finish!: (result: unknown) => void;
+    const preparation = new Promise(resolve => { finish = resolve; });
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'connectors.catalog') return { ok: true, catalog: [ready ? { ...entry, availability: 'enabled', disabled_reason: undefined, runtime_installable: undefined } : entry] };
+      if (channel === 'connectors.list') return { ok: true, instances: [] };
+      if (channel === 'connectors.prepare_runtime') return preparation;
+      if (channel === 'connectors.start_oauth') return { ok: true, started: true, attempt_id: 'auth-1' };
+      return { ok: true };
+    });
+    const page = loadConnectorsPage({ invoke });
+    await page.context.loadConnectors();
+    const grid = () => page.view('connectors-grid-available');
+    expect(grid().textContent).toContain('connectors.runtime.install_connect');
+    expect(grid().textContent).not.toContain('connectors.tencent.runtime_unavailable');
+    const connecting = page.context._runConnect(entry);
+    await page.context._runConnect(entry);
+    expect(invoke.mock.calls.filter(([c]) => c === 'connectors.prepare_runtime')).toHaveLength(1);
+    expect(invoke.mock.calls.some(([c]) => c === 'connectors.start_oauth')).toBe(false);
+    const cancel = grid().querySelector('[data-act="cancel-runtime"]')!;
+    cancel.focus();
+    page.push('connectors:runtime-progress', { user_id: 'u-tencent', catalog_id: id, phase: 'downloading', percent: 42 });
+    expect(grid().textContent).toContain('42%');
+    expect(grid().querySelector('[data-act="cancel-runtime"]')).toBe(cancel);
+    expect(cancel.focused).toBe(true);
+    ready = true;
+    finish({ ok: true, ready: true });
+    await connecting;
+    expect(invoke.mock.calls.filter(([c]) => c === 'connectors.start_oauth')).toHaveLength(1);
   });
 
-  it('declares the meeting-digest template and exposes the pre-fill seam', () => {
-    const auto = readModule('src/renderer/modules/auto.js');
-    expect(auto).toContain("{ id: 'meeting_digest'");
-    expect(auto).toContain('window.applyAutoTemplate = _autoApplyTemplate;');
-    const templates = auto.slice(auto.indexOf('const _AUTO_TEMPLATES'), auto.indexOf('];', auto.indexOf('const _AUTO_TEMPLATES')));
-    expect(templates.indexOf("'meeting_prep'")).toBeLessThan(templates.indexOf("'meeting_digest'"));
-    // Assert the entry's *values*, not its whitespace: pinning the exact source line made the test
-    // fail on a purely cosmetic column-alignment edit, which is a false alarm rather than a
-    // regression. The post-meeting hour and the distinct icon are what the contract actually says.
-    const digestLine = templates
-      .split('\n')
-      .find((line) => line.includes("id: 'meeting_digest'"));
-    expect(digestLine, 'meeting_digest entry exists in _AUTO_TEMPLATES').toBeTruthy();
-    expect(digestLine).toMatch(/icon:\s*'clipboard-list'/);
-    expect(digestLine).toMatch(/schedule:\s*\{\s*type:\s*'daily',\s*hour:\s*19,\s*minute:\s*0\s*\}/);
-    for (const lang of ['en', 'ja', 'pt', 'zh']) {
-      const locale = JSON.parse(readModule(`src/renderer/locales/${lang}.json`));
-      for (const suffix of ['name', 'desc', 'title', 'seed']) {
-        expect(locale[`auto.tpl.meeting_digest.${suffix}`], `${lang} ${suffix}`).toBeTruthy();
-      }
-    }
+  it.each(['connector_runtime_integrity_failed', 'connector_runtime_cancelled', 'connector_runtime_download_failed'])('does not authorize after %s and exposes a retry', async (code) => {
+    const entry = missing('wecom');
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'connectors.catalog') return { ok: true, catalog: [entry] };
+      if (channel === 'connectors.list') return { ok: true, instances: [] };
+      if (channel === 'connectors.prepare_runtime') return { ok: false, code };
+      return { ok: true };
+    });
+    const page = loadConnectorsPage({ invoke });
+    await page.context.loadConnectors();
+    await page.context._runConnect(entry);
+    expect(invoke.mock.calls.some(([c]) => c === 'connectors.start_oauth')).toBe(false);
+    expect(page.view('connectors-grid-available').textContent).toContain('connectors.runtime.retry');
+    await page.context._runConnect(entry);
+    expect(invoke.mock.calls.filter(([c]) => c === 'connectors.prepare_runtime')).toHaveLength(2);
+  });
+
+  it('does not continue authorization under an account selected during the download', async () => {
+    const entry = missing('feishu');
+    let finish!: (result: unknown) => void;
+    const preparation = new Promise(resolve => { finish = resolve; });
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'connectors.catalog') return { ok: true, catalog: [entry] };
+      if (channel === 'connectors.list') return { ok: true, instances: [] };
+      if (channel === 'connectors.prepare_runtime') return preparation;
+      return { ok: true };
+    });
+    const page = loadConnectorsPage({ invoke });
+    await page.context.loadConnectors();
+    const connecting = page.context._runConnect(entry);
+    page.context.currentUserId = 'another-user';
+    finish({ ok: true, ready: true });
+    await connecting;
+    expect(invoke.mock.calls.some(([c]) => c === 'connectors.start_oauth')).toBe(false);
   });
 });

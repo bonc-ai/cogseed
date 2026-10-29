@@ -15,7 +15,9 @@
  *        - `text`      → human-facing summary (rendered with an "imported"
  *                        banner by the renderer via `system_kind`-less content)
  *        - `model_text`→ the same brief phrased as durable context so the model
- *                        picks up where the previous agent left off.
+ *                        picks up where the previous agent left off, plus the
+ *                        user's CURRENT REQUEST (the continuation target;
+ *                        the brief is material for it).
  *      `from` is the commander actor so it reads as an assistant-side brief,
  *      not a user turn.
  *
@@ -36,6 +38,7 @@ import { appendJsonlAtomic, genId12, nowIso, safeId } from '../../storage';
 import { canonicalizePath, isSystemTmpDir } from '../../util/path-sandbox';
 import { createLogger } from '../../logger';
 import type { ExtractionResult } from './extractor';
+import { buildSeedModelText, importSourceLabel } from './task-context';
 
 const log = createLogger('session-import:materialize');
 
@@ -84,16 +87,6 @@ function titleFromText(text: string | undefined): string {
   const trimmed = text?.trim() || '';
   if (!trimmed || RECOMMENDED_PLUGINS_PREFIX.test(trimmed)) return '';
   return trimmed.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 40) || '';
-}
-
-/** Build a short title from the summary head or the picker hint. */
-/** Human-friendly source name for import banners (never i18n-ed — user content). */
-function sourceDisplayName(source: MaterializeInput['source']): string {
-  if (source === 'claude') return 'Claude Code';
-  if (source === 'codex') return 'Codex';
-  if (source === 'workbuddy') return 'WorkBuddy';
-  if (source === 'opencode') return 'OpenCode';
-  return source;
 }
 
 /**
@@ -145,10 +138,11 @@ function buildTitle(input: MaterializeInput): string {
 }
 
 /** Compose the seed message body. Human text gets an "imported / distilled"
- *  banner; model_text carries the same brief as durable pickup context. */
+ *  banner; model_text carries the brief as durable pickup context, plus the
+ *  user's current request as the explicit continuation target. */
 function buildSeed(input: MaterializeInput): { text: string; modelText: string } {
   const summary = input.extraction.sessionSummary.trim();
-  const src = sourceDisplayName(input.source);
+  const src = importSourceLabel(input.source);
   // 后台提炼（B+）：materialize 先落占位 seed，提炼完成后由后台任务原地更新。
   const pending = input.extraction.reason === 'extraction_pending';
   const banner = pending
@@ -157,9 +151,11 @@ function buildSeed(input: MaterializeInput): { text: string; modelText: string }
       ? `[从 ${src} 导入 · 未能自动提炼，以下为原始开头]`
       : `[从 ${src} 导入 · 已提炼]`;
   const text = `${banner}\n\n${summary}`;
-  const modelText =
-    `以下是用户从 ${src} 导入的一段历史会话的提炼简报。` +
-    `请把它当作已发生的上下文，在此基础上继续协助用户，不要重复已完成的工作：\n\n${summary}`;
+  const modelText = buildSeedModelText({
+    sourceName: src,
+    summary,
+    currentRequest: input.extraction.currentRequest,
+  });
   return { text, modelText };
 }
 
@@ -255,6 +251,7 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
         conversationId: conv.conversation_id,
         projectId: conv.project_id ?? null,
         sessionSummary: input.extraction.sessionSummary,
+        currentRequest: input.extraction.currentRequest,
         title: conv.title,
       });
     } catch (snapErr) {

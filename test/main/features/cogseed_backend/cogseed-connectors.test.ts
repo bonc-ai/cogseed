@@ -102,6 +102,7 @@ describe('CogSeed-owned Connector adapter', () => {
       hostToolClient: {
         async call(call: { name: string }) {
           if (call.name === 'action_approval_request') return { content: JSON.stringify({ approved: true, request_id: 'approval-connector', code: 'E_ACTION_APPROVAL_DENIED' }) };
+          if (call.name === 'desktop_connector_list_tools') return { content: JSON.stringify([{ connector_id: 'cogseed-connector-search', tool_name: 'search' }]) };
           return { content: JSON.stringify({ ok: true }) };
         },
       } as any,

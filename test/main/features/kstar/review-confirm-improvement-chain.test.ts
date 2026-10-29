@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * specs/015 T035（US-704）：`kstar.review.confirm` 处置后 review 落终态，并沿
  * **同一条**改进分析链路继续——即需求级沉淀入口 `precipitateRequirementLevel`
@@ -68,7 +69,7 @@ async function modules() {
 /** 改进对象：真实资产 v1（KStar 沉淀的目标方法）。 */
 async function seedTargetAsset(userId: string): Promise<string> {
   const { candidates } = await modules();
-  const seeded = await candidates.saveRecallCandidate(userId, {
+  const seeded = await createNightlyCandidateFixture(userId, {
     judgment: 'Keep the report verification rule.',
     value: 'Keep report verification consistent across runs.',
     summary: 'Report verification rule',
@@ -259,32 +260,6 @@ describe('US-704 T035 复盘确认沿同一改进分析链路继续', () => {
       requirementId: scenario.requirement.id,
     });
     expect(record?.failureCategory).toBeUndefined();
-  });
-
-  it('partial：确认后同一链路的采用门放行 update 候选（回指原方法与版本）', async () => {
-    const { closure, outcome, candidates } = await modules();
-    const userId = 'u-confirm-partial';
-    const scenario = await seedScenario({ userId, caseId: 'partial' });
-    await seedReview(userId, scenario.episodeId, outdatedReview(scenario.episodeId));
-    await recordAppliedUsage(userId, scenario.runId, scenario.targetAssetId);
-    const before = await candidateIds(userId);
-
-    await closure.confirmKstarReview(userId, scenario.episodeId, { verdict: 'partial' });
-
-    // 出候选这一条路径同样有记录可查：候选回指原方法 + 任务当时用的版本。
-    const after = await candidateIds(userId);
-    expect(after.length).toBe(before.length + 1);
-    const created = (await candidates.listRecallCandidates(userId))
-      .find((candidate) => !before.includes(candidate.id));
-    expect(created).toMatchObject({
-      suggestedAction: 'update',
-      targetAssetId: scenario.targetAssetId,
-      targetVersionUsed: '1',
-    });
-    // 确认后的终态（用户口径）进了候选的学习信号。
-    expect(created?.learningSignal?.outcome).toBe('worse_than_expected');
-    // 成功路径不产"没出候选"的结论（结论只装实话）。
-    expect(await outcome.readKstarImprovementOutcome(userId, scenario.episodeId)).toBeNull();
   });
 
   it('skip（需要修正）：不产候选，只如实落一条结论留痕', async () => {

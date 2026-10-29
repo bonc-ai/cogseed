@@ -373,8 +373,24 @@ function getNewChatSpaceId() {
   return _newChatSpaceId;
 }
 
+/**
+ * Public: 本次新会话已经消费掉记住的空间选择，恢复“默认工作区”。
+ *
+ * 选择器的语义是“记住给**下一个**新会话”（见文件头注释），但持久化实现
+ * 会一直保留，导致之后每个普通新会话都被静默绑进同一个空间（空间专属
+ * Agent、工作区、权限上下文随之而来）。创建成功后清空即可保持“下一个”
+ * 语义，又不会把后续普通会话串进空间；用户要再建空间会话时重新选一次。
+ */
+function clearNewChatSpaceId() {
+  if (!_newChatSpaceId) return;
+  _newChatSpaceId = '';
+  _saveNewChatSpaceId();
+  _updateAllChips();
+}
+
 if (typeof window !== 'undefined') {
   window.getNewChatSpaceId = getNewChatSpaceId;
+  window.clearNewChatSpaceId = clearNewChatSpaceId;
   window.refreshWorkspaceChip = refreshWorkspaceChip;
   window.initUserWorkspace = initUserWorkspace;
   if (typeof window.registerComposerPopover === 'function') {
@@ -408,5 +424,5 @@ if (typeof window !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && typeof module.exports === 'object') {
-  module.exports = { _mountWorkspaceChipInBar };
+  module.exports = { _mountWorkspaceChipInBar, getNewChatSpaceId, clearNewChatSpaceId };
 }

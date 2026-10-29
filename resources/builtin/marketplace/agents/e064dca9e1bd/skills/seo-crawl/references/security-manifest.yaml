@@ -1,0 +1,118 @@
+manifest_version: 1.1.1
+security_ontology:
+  id: cogseed.security.skill
+  version: 1.1.1
+skill:
+  id: skill.cogseed.seo.crawl
+  name: seo-crawl
+  version: 1.0.0
+  description: 'Fetch a URL and extract on-page SEO/GEO fields as structured JSON
+    (title/description/canonical/heading hierarchy/structured data/hreflang/image
+    alt/internal+external links/robots), SSRF-guarded and system-proxy aware; For:
+    ''grab this page''s SEO fields'', ''pull on-page data for dia'
+  environment: production
+  artifact_manifest_ref: artifact.yaml
+  skill_spec_ref: references/skill-spec.yaml
+  business_ontology_ref: references/business-ontology.yaml
+ownership:
+  human_owner: wujiayu
+  organization: CogSeed
+  role: Skill Owner
+  technical_owner: null
+provenance:
+  source_type: internal
+  source_uri: https://github.com/bonc-ai/cogseed-internal
+  author: CogSeed
+  checksum: DEFERRED_UNTIL_FREEZE
+  signature: null
+permissions:
+  required:
+  - id: net.read.public
+    resource: network.public
+    actions:
+    - READ
+    scope: public-web
+    reason: Fetch the target public URL for diagnostics.
+  prohibited:
+  - admin.*
+  - filesystem.write
+resources:
+  allowed:
+  - id: network.public
+    type: network
+    access: read
+    host: '*'
+  denied:
+  - production://*
+actions:
+  allowed:
+  - id: fetch.public
+    effect: read
+    target: public-url
+    recoverable: true
+    expected_result: Read-only HTTP response.
+    permission_id: net.read.public
+  prohibited:
+  - DELETE
+  - TRANSFER_FUNDS
+data_security:
+  input_classification:
+  - PUBLIC
+  output_classification:
+  - PUBLIC
+  external_transmission: true
+  pii_allowed: false
+  secrets_allowed: false
+  retention_days: 0
+network:
+  enabled: true
+  allowlist:
+  - http://*
+  - https://*
+  deny_private_network: true
+  allow_dynamic_download: false
+runtime_boundary:
+  runtime_contracts_ref: schemas.json#/runtime_contracts
+  direct_resource_access: false
+  access_via_gateway_only: true
+  binding_resolved_by: agent_layer
+  audit_emitted_by: runtime
+risk:
+  risk_level: null
+  trust_level: null
+  risk_reasons: []
+  maximum_impact: null
+  calculated_risk_level: null
+  effective_risk_level: null
+  calculation_rule_version: null
+  calculation_factors: null
+  triggered_rule_ids: []
+approval:
+  required: true
+  mode: security_review
+  required_for_actions:
+  - public-web-read
+  approver_roles:
+  - security
+audit:
+  enabled: true
+  events:
+  - result
+  include_input: false
+  include_output: false
+  include_tool_calls: false
+  include_policy_decision: false
+  retention_days: 30
+rollback:
+  supported: true
+  type: disable_skill
+  procedure: Disable the skill via Hub content disable; the parent Agent version stops
+    distributing it.
+  maximum_recovery_time_minutes: 5
+dependencies:
+  packages: []
+  external_tools: []
+tests:
+  evals_ref: evals/evals.json
+  validation_contract_ref: references/validation-contract.yaml
+  minimum_test_cases: 1

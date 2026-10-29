@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -210,5 +211,139 @@ describe('builtin_packages › seedBuiltinPackagesForUser', () => {
     });
     expect(result.installed).toEqual(['pkg-a']);
     expect(runPackageInstall).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The shipped package content itself, not the seeder logic: these read the real
+// resources/builtin-packages tree that a release bundles, and run its runtime
+// bundles directly so a Windows regression is caught by the Windows CI job.
+describe('builtin_packages › bundled EduSeed package', () => {
+  const pkgDir = path.join(__dirname, '../../../resources/builtin-packages/eduseed-course-client');
+  const skills = ['eduseed-student-aar', 'eduseed-student-review', 'eduseed-student-submit', 'eduseed-teacher-publish'];
+  const runtimeSources = () => skills.map((skill) => fs.readFileSync(
+    path.join(pkgDir, 'skills', skill, 'scripts', 'runtime.js'), 'utf8',
+  ));
+  const runtimePath = path.join(pkgDir, 'skills', 'eduseed-student-submit', 'scripts', 'runtime.js');
+
+  const runRuntime = (command: string, payload: unknown, env: Record<string, string | undefined> = {}): Record<string, unknown> => {
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      EDUSEED_MOCK: '1',
+      EDUSEED_STUDENT_ID: 'S-PKG',
+      EDUSEED_ROLE: 'student',
+      ...env,
+    };
+    // `undefined` means "unset in the child". HOME matters: the test runner
+    // redirects it to a temp dir, while Windows never sets it at all.
+    for (const [key, value] of Object.entries(env)) if (value === undefined) delete childEnv[key];
+    const res = spawnSync(process.execPath, [runtimePath, command, JSON.stringify(payload)], {
+      encoding: 'utf8',
+      env: childEnv,
+    });
+    const line = (res.stdout ?? '').split('\n').find((l) => l.startsWith('{"ok"'));
+    expect(line, `runtime produced no JSON result (stderr: ${res.stderr})`).toBeTruthy();
+    return JSON.parse(line as string) as Record<string, unknown>;
+  };
+
+  it('ships one byte-identical runtime across the four skills', () => {
+    // All four skills run the same esbuild bundle; a partial rebuild would ship
+    // divergent runtimes for the same plugin version.
+    expect(new Set(runtimeSources()).size).toBe(1);
+  });
+
+  it('keeps the KSTAR record directory on the platform home', () => {
+    // Windows defines USERPROFILE, not HOME. Building the record directory from
+    // `process.env.HOME ?? ""` collapsed it to a CWD-relative `.eduseed` path, so
+    // records landed wherever the skill ran and vanished when that directory
+    // changed. On Windows this test is the regression guard; elsewhere HOME is
+    // what both the old and new code read, so it only pins the contract.
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'eduseed-home-'));
+    const env: Record<string, string | undefined> = process.platform === 'win32'
+      ? { HOME: undefined, USERPROFILE: fakeHome }
+      : { HOME: fakeHome };
+    try {
+      const result = runRuntime('submit-and-track', {
+        challengeId: 'ch-mock-c03',
+        projectTitle: 'T',
+        githubRepoUrl: 'https://github.com/x/y',
+        aarText: 'a',
+        selfEvaluationText: 'self',
+      }, env);
+      expect(result.ok).toBe(true);
+      const episodes = path.join(fakeHome, '.eduseed', 'kstar', 'S-PKG');
+      const written = fs.existsSync(episodes) ? fs.readdirSync(episodes) : [];
+      expect(written.length).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(fakeHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('matches required-deliverable path patterns with the platform separator', () => {
+    // path.relative() yields "src\index.js" on Windows while challenge
+    // required_deliverables are authored "src/**", so nothing containing a
+    // separator matched and submissions were blocked with "缺少交付物".
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'eduseed-deliverables-'));
+    fs.mkdirSync(path.join(workdir, 'src', 'deep'), { recursive: true });
+    for (const file of ['README.md', 'reflection.md', path.join('src', 'index.js'), path.join('src', 'deep', 'helper.js')]) {
+      fs.writeFileSync(path.join(workdir, file), 'x\n');
+    }
+    try {
+      const report = runRuntime('check-deliverables', {
+        workdir,
+        requiredDeliverables: 'README.md, src/**, reflection.md',
+      }, {});
+      expect(report.missing).toEqual([]);
+      expect(report.found).toEqual(['README.md', 'src/**', 'reflection.md']);
+    } finally {
+      fs.rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('runs the documented-offline commands with no credentials at all', () => {
+    // SKILL.md marks check-deliverables and prepare-submission as 离线, but
+    // loadConfig ran before the license-exempt check, so a fresh install with no
+    // platform configuration could not use them: they died with ConfigError
+    // instead of returning the local report.
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'eduseed-offline-'));
+    fs.mkdirSync(path.join(workdir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workdir, 'README.md'), 'x\n');
+    fs.writeFileSync(path.join(workdir, 'src', 'index.js'), 'x\n');
+    const bare = { EDUSEED_MOCK: undefined, EDUSEED_STUDENT_ID: undefined, EDUSEED_ROLE: undefined };
+    try {
+      const checked = runRuntime('check-deliverables', {
+        workdir,
+        requiredDeliverables: 'README.md, src/**',
+      }, bare);
+      expect(checked.ok).toBe(true);
+      expect(checked.found).toEqual(['README.md', 'src/**']);
+
+      const prepared = runRuntime('prepare-submission', {
+        workdir,
+        requiredDeliverables: 'README.md',
+        challengeId: 'ch-mock-c03',
+        projectTitle: 'T',
+        githubRepoUrl: 'https://github.com/x/y',
+      }, bare);
+      expect(prepared.ok).toBe(true);
+    } finally {
+      fs.rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('keeps manifest, package.json and the seed manifest on one version', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(pkgDir, 'manifest.json'), 'utf8')) as { version: string };
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')) as { version: string };
+    const builtin = JSON.parse(fs.readFileSync(
+      path.join(__dirname, '../../../resources/builtin-packages/_builtin.json'), 'utf8',
+    )) as { packages: Array<{ name: string; source_version: string }> };
+    const entry = builtin.packages.find((p) => p.name === 'eduseed-course-client');
+    // source_version drives re-seeding on upgrade, so a stale value silently
+    // leaves existing installs on the old bundle.
+    expect(entry?.source_version).toBe(manifest.version);
+    expect(pkg.version).toBe(manifest.version);
+    // The bundle reports its own version for the update check; a constant that
+    // lags the manifest makes it re-offer an update that is already installed.
+    const version = runRuntime('plugin-version', {}, {});
+    expect(version.current_version).toBe(manifest.version);
   });
 });

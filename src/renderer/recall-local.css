@@ -3,6 +3,8 @@
 /* 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06），
    .skills-cognition-header* 的手写标题 / eyebrow / 副标题 / 操作已删除。 */
 #cognition-page-header .ui-page-header { width: 100%; box-sizing: border-box; }
+#ca-root .ca-page-header .ui-page-header__title { flex: 0 0 auto; max-width: 45%; }
+#ca-root .ca-page-header .ui-page-header__meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .skills-cognition-tabs { display: block; flex: none; min-width: 0; padding: 0 var(--space-6); overflow-x: hidden; overflow-y: visible; border-bottom: 1px solid var(--line-default); background: var(--surface-card); }
 .skills-cognition-tabs-row { display: flex; min-width: 0; align-items: stretch; gap: var(--space-3); }
 .skills-cognition-tabs-row .skills-cognition-tab-group { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }

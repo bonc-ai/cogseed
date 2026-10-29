@@ -27,11 +27,18 @@ const forwardedArgs = withDefaultWorkerLimit(process.argv.slice(2));
 // twice: `--require` for the Vitest main process and NODE_OPTIONS so forked
 // workers and helper node processes inherit it too. Loading twice is a no-op.
 const sourcemapGuard = resolve(here, 'test-env', 'convert-source-map-guard.cjs');
-const nodeOptions = [process.env.NODE_OPTIONS, `--require=${sourcemapGuard}`]
-  .filter(Boolean)
-  .join(' ');
+// 信号退出护栏：vitest 回收 worker 时发 SIGTERM/SIGINT，Node 默认处理走
+// `process.exit()` → C++ 静态析构（worker 里已加载 onnxruntime/tokenizers）抛异常
+// → std::terminate → abort，每次全量跑留下十几份假「Electron 崩溃」报告。护栏把
+// 已被要求终止的进程直接升级成 SIGKILL（无析构、无报告）。见该文件头注释。
+const signalGuard = resolve(here, 'test-env', 'child-signal-guard.cjs');
+const nodeOptions = [
+  process.env.NODE_OPTIONS,
+  `--require=${sourcemapGuard}`,
+  `--require=${signalGuard}`,
+].filter(Boolean).join(' ');
 
-const child = spawn(electronBin, ['--require', sourcemapGuard, vitestBin, ...forwardedArgs], {
+const child = spawn(electronBin, ['--require', sourcemapGuard, '--require', signalGuard, vitestBin, ...forwardedArgs], {
   stdio: 'inherit',
   env: {
     ...process.env,

@@ -37,6 +37,18 @@
     return `<span class="${escapeText(classes)}"${renderAttrs(value.attrs)}>${escapeText(label)}</span>`;
   }
 
+  /**
+   * Trailing count slot for filter chips (`全部 12`).
+   *
+   * `0` is a real count and must render; only `null`/`undefined`/`''` mean "this
+   * chip has no count". The value is escaped like every other text node so a
+   * caller cannot turn a label into markup.
+   */
+  function chipCountText(count) {
+    if (count == null || count === '') return '';
+    return escapeText(count);
+  }
+
   function uiChip(options) {
     const value = options || {};
     const label = String(value.label || '').trim();
@@ -45,7 +57,8 @@
     const icon = value.icon && typeof root.uiIconHtml === 'function'
       ? root.uiIconHtml(value.icon, 'ui-chip__icon')
       : '';
-    return `<button type="button" class="${escapeText(classes)}" aria-pressed="${value.selected ? 'true' : 'false'}"${value.disabled ? ' disabled' : ''}${renderAttrs(value.attrs)}>${icon}<span class="ui-chip__label">${escapeText(label)}</span></button>`;
+    const count = chipCountText(value.count);
+    return `<button type="button" class="${escapeText(classes)}" aria-pressed="${value.selected ? 'true' : 'false'}"${value.disabled ? ' disabled' : ''}${renderAttrs(value.attrs)}>${icon}<span class="ui-chip__label">${escapeText(label)}</span>${count ? `<span class="ui-chip__count">${count}</span>` : ''}</button>`;
   }
 
   function uiBadge(options) {

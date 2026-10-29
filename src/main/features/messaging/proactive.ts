@@ -194,7 +194,7 @@ async function resolveSelfTarget(
 export async function sendToSelf(
   uid: string,
   input: { instance_id?: string; target: string; text: string; scene?: TouchpointRouteScene },
-  opts: { cid: string; sourceKey: string; signal?: AbortSignal | null },
+  opts: { cid: string; sourceKey: string; signal?: AbortSignal | null; beforeDispatch?: () => Promise<void> },
 ): Promise<ProactiveSendResult> {
   if (input.target !== 'self') {
     return error('E_MESSAGING_TARGET_UNAVAILABLE', 'target must be "self"');
@@ -233,6 +233,7 @@ export async function sendToSelf(
       recipientId: ownerExternalUserId,
       text,
       sourceKey: opts.sourceKey,
+      ...(opts.beforeDispatch ? { beforeDispatch: opts.beforeDispatch } : {}),
       signal: opts.signal ?? null,
     });
     return {
@@ -262,7 +263,7 @@ export async function sendToSelf(
 export async function sendFileToSelf(
   uid: string,
   input: { instance_id?: string; file_path: string; file_name?: string; scene?: TouchpointRouteScene },
-  opts: { cid: string; sourceKey: string; signal?: AbortSignal | null },
+  opts: { cid: string; sourceKey: string; signal?: AbortSignal | null; beforeDispatch?: () => Promise<void> },
 ): Promise<ProactiveSendResult> {
   const filePath = typeof input.file_path === 'string' && input.file_path.trim() ? input.file_path.trim() : '';
   if (!filePath) {
@@ -300,6 +301,7 @@ export async function sendFileToSelf(
       filePath,
       fileName,
       sourceKey: opts.sourceKey,
+      ...(opts.beforeDispatch ? { beforeDispatch: opts.beforeDispatch } : {}),
       signal: opts.signal ?? null,
     });
     return {

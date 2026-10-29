@@ -100,7 +100,9 @@ export interface P3394ConversationRuntimeDeps {
 }
 
 export const P3394_CONVERSATION_DEFAULTS = {
-  replyTimeoutMs: 5 * 60 * 1000,
+  // Aligned with outbound-hub's default: gateway agent timeout (8 min) + margin,
+  // so a promotion at the deadline never competes with the hub giving up.
+  replyTimeoutMs: 12 * 60 * 1000,
 } as const;
 
 function hashString(value: string, seed: number): number {
@@ -201,6 +203,13 @@ export class P3394ConversationRuntimeAdapter implements P3394RuntimeAdapter {
 
   /** 出站会话绑定：p3394_send 从当前对话发起时，把 session 显式绑定到
    *  该对话——对端的回复路由回同一个对话（不新建 [P3394] peer 独立对话）。 */
+  /** Public read-only half of the session→conversation binding: background
+   *  phase 2 uses it to resolve the conversation without creating a second
+   *  P3394-specific one for a user-visible turn. */
+  conversationIdForSession(sessionId: string): string {
+    return this.cidFor(sessionId);
+  }
+
   bindSession(sessionId: string, cid: string): void {
     if (!sessionId || !cid) return;
     this.sessionCidMap.set(sessionId, cid);

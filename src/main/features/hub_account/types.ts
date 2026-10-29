@@ -140,3 +140,6 @@ export interface HubDeletionResult {
   revoked_consents: number;
   message: string;
 }
+
+/** Self-profile PATCH /api/v1/account/me; identity comes only from the session. */
+export interface HubUpdateProfileRequest { display_name: string }

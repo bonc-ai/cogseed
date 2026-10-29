@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "id": "smoke-ui-controls-accessibility",
+      "kind": "smoke",
+      "input": "A synthetic task that exercises ui-controls-accessibility.",
+      "expected": "Follows SKILL.md; deterministic output; no network or filesystem side effects."
+    }
+  ]
+}

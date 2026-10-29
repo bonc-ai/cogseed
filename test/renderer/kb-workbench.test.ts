@@ -803,7 +803,10 @@ describe('KB workbench (S1 skeleton)', () => {
     // 2026-09-21：模块不再自带降级模板，改为缺原语即抛错（仍是共享 seam，且不会静默绕过）
     expect(source).toContain("_requirePrimitive('uiIconButton')");
     expect(source).toContain("window.matchMedia('(max-width: 1100px)')");
-    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.kb-wb\.right-panel-open \.kb-wb-right/);
+    // Drawer mode follows the KB view's own width (shell rail/sidebar change it).
+    expect(css).toContain('container: kb-view / inline-size;');
+    expect(source).toContain('width <= 999');
+    expect(css).toMatch(/@container kb-view \(max-width: 999px\)[\s\S]*?\.kb-wb\.right-panel-open \.kb-wb-right/);
     expect(css).toContain('width: min(420px, calc(100% - 44px));');
   });
 

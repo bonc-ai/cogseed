@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 
 import { createConfig } from '../../../../src/core-agent/src/config';
 import {
+  maxToolLoopsForActorTurn,
   maxToolLoopsForActorKind,
+  LIGHT_TASK_MAX_TOOL_LOOPS,
   COMMANDER_MAX_TOOL_LOOPS,
   AGENT_MAX_TOOL_LOOPS,
 } from '../../../../src/main/features/group_chat/actor-budgets';
@@ -25,5 +27,17 @@ describe('actor-budgets › maxToolLoopsForActorKind', () => {
     expect(createConfig().agent.maxToolLoops).toBe(100);
     expect(maxToolLoopsForActorKind('worker')).toBeUndefined();
     expect(maxToolLoopsForActorKind('user')).toBeUndefined();
+  });
+
+  it('uses a small budget only when a turn is explicitly classified lightweight', () => {
+    expect(LIGHT_TASK_MAX_TOOL_LOOPS).toBe(24);
+    expect(maxToolLoopsForActorTurn('commander', { taskClass: 'light' })).toBe(LIGHT_TASK_MAX_TOOL_LOOPS);
+    expect(maxToolLoopsForActorTurn('agent', { taskClass: 'light' })).toBe(LIGHT_TASK_MAX_TOOL_LOOPS);
+  });
+
+  it('keeps existing budgets when a turn class is unknown or standard', () => {
+    expect(maxToolLoopsForActorTurn('commander')).toBe(COMMANDER_MAX_TOOL_LOOPS);
+    expect(maxToolLoopsForActorTurn('agent', { taskClass: 'unknown' })).toBe(AGENT_MAX_TOOL_LOOPS);
+    expect(maxToolLoopsForActorTurn('worker', { taskClass: 'standard' })).toBeUndefined();
   });
 });

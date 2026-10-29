@@ -155,6 +155,22 @@
   line-height: var(--line-height-body);
 }
 
+/* 本地检查面板下方的一句说明（本机结果仅供参考，报告 HUB-3）。此前用了未定义的类名，
+   会渲染成一行没有任何间距/颜色的正文。 */
+.hubc-note {
+  max-width: 560px;
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-meta);
+  line-height: var(--line-height-body);
+}
+
+/* 行内「撤回被拒」角标（报告 HUB-8）：挂在标题后，不挤占元信息行。 */
+.hubc-row__name .ui-badge {
+  margin-left: var(--space-2);
+  vertical-align: middle;
+}
+
 .hubc-alert {
   margin: 0;
   padding: var(--space-2) var(--space-3);
@@ -520,3 +536,15 @@
   .hubc-file-list { border-right: 0; border-bottom: 1px solid var(--line-hairline); }
   .hubc-steps { flex-wrap: wrap; }
 }
+
+/* Agent preview: lines that may hold a local path or a secret are highlighted, never rewritten. */
+.hubc-file-content pre mark.hubc-hint-line {
+  display: block;
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface));
+  color: inherit;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 70%, var(--surface));
+}
+.hubc-hint-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.hubc-hint-file > .ui-button { margin-bottom: var(--space-1); }
+.hubc-hint-kind { color: var(--status-warning-text); font-weight: 600; }
+.hubc-hint-where { color: var(--text-muted); }

@@ -9,6 +9,9 @@ export interface RecordRecallMessageFeedbackInput {
   cid: string;
   messageId: string;
   feedback: RecallMessageFeedback;
+  /** 定向到具体资产：只对这条消息里该资产的引用记账（流水、contradicted
+   *  收据、暂停建议三环同口径收窄），不再连带同消息的其他引用。 */
+  assetId?: string;
 }
 
 export interface RecordRecallMessageFeedbackResult {
@@ -26,7 +29,7 @@ function isCitation(value: unknown): value is RecallMessageCitation {
     && typeof citation.title === 'string'
     && citation.title.trim().length > 0
     && citation.title.length <= 160
-    && (citation.type === 'personal' || citation.type === 'rule' || citation.type === 'template' || citation.type === 'skill_method' || citation.type === 'fact')
+    && (citation.type === 'cognition' || citation.type === 'personal' || citation.type === 'rule' || citation.type === 'template' || citation.type === 'skill_method' || citation.type === 'fact')
     && typeof citation.version === 'string'
     && citation.version.trim().length > 0
     && citation.version.length <= 40
@@ -35,7 +38,14 @@ function isCitation(value: unknown): value is RecallMessageCitation {
     && citation.scope.length <= 500
     && typeof citation.projection_id === 'string'
     && safeId(citation.projection_id)
-    && (citation.match_method === 'semantic' || citation.match_method === 'manual')
+    && (
+      citation.match_method === 'semantic'
+      || citation.match_method === 'ontology'
+      || citation.match_method === 'semantic_ontology'
+      || citation.match_method === 'recency_fallback'
+      || citation.match_method === 'manual'
+      || citation.match_method === 'standing_preference'
+    )
     && (citation.match_score === undefined
       || (typeof citation.match_score === 'number'
         && Number.isFinite(citation.match_score)
@@ -49,6 +59,7 @@ export async function recordRecallMessageFeedback(
 ): Promise<RecordRecallMessageFeedbackResult> {
   if (!safeId(input.cid) || !safeId(input.messageId)) throw new Error('invalid Recall feedback message');
   if (input.feedback !== 'positive' && input.feedback !== 'negative') throw new Error('invalid Recall feedback value');
+  if (input.assetId !== undefined && !safeId(input.assetId)) throw new Error('invalid Recall feedback asset');
 
   const messages = await readJsonl<GroupMessage>(conversationMessageReadFile(userId, input.cid), 100_000);
   const message = [...messages].reverse().find((item) => item?.id === input.messageId);
@@ -60,14 +71,26 @@ export async function recordRecallMessageFeedback(
   if (message.recall_citations.length > 12 || !message.recall_citations.every(isCitation)) {
     throw new Error('assistant message contains malformed Recall citations');
   }
+  // 反馈范围（2026-10-03 待办#2）：定向反馈只作用于目标资产的引用；未定向
+  // 时保留整条消息的旧口径（全部引用）。定向到不在引用里的资产直接拒绝，
+  // 不静默记到别的资产上。
+  const targets = input.assetId
+    ? message.recall_citations.filter((citation) => citation.asset_id === input.assetId)
+    : message.recall_citations;
+  if (input.assetId && !targets.length) {
+    throw new Error('Recall feedback asset is not cited by this message');
+  }
 
+  const { queueNightlyFeedback } = await import('./nightly-feedback');
   const outcome = `feedback_${input.feedback}`;
   const taskRunId = typeof message.turn_id === 'string' && safeId(message.turn_id)
     ? message.turn_id
     : message.id;
   const existing = await listRecallUsage(userId);
   const records: RecallUsageRecord[] = [];
-  for (const citation of message.recall_citations) {
+  for (const citation of targets) {
+    await queueNightlyFeedback(userId, { conversationId: input.cid, messageId: input.messageId, assetId: citation.asset_id,
+      assetVersion: citation.version, taskRunId, feedback: input.feedback });
     const duplicate = existing.some((record) => (
       record.messageId === message.id
       && record.assetId === citation.asset_id
@@ -96,7 +119,7 @@ export async function recordRecallMessageFeedback(
       const { listInjectionReceipts } = await import('./injection-receipt');
       const { recordAssetUsageReceipt } = await import('./asset-usage-receipt');
       const injections = await listInjectionReceipts(userId, taskRunId);
-      for (const citation of message.recall_citations) {
+      for (const citation of targets) {
         const injection = injections.find((receipt) => (
           receipt.assetId === citation.asset_id
           && receipt.assetVersion === citation.version
@@ -123,13 +146,14 @@ export async function recordRecallMessageFeedback(
     try {
       const allUsage = await listRecallUsage(userId);
       const { recommendAbilityAssetAction } = await import('./asset-service');
-      for (const citation of message.recall_citations) {
+      for (const citation of targets) {
         const negatives = allUsage.filter((record) => (
-          record.assetId === citation.asset_id && record.outcome === 'feedback_negative'
+          record.assetId === citation.asset_id && record.assetVersion === citation.version && record.outcome === 'feedback_negative'
         )).length;
         if (negatives < 2) continue;
         await recommendAbilityAssetAction(userId, citation.asset_id, {
           action: 'pause',
+          expectedVersion: citation.version,
           reason: `累计 ${negatives} 次用户负反馈（「需改进」），建议暂停注入并复核内容`,
           actor: 'system',
         }).catch(() => undefined);
@@ -140,7 +164,7 @@ export async function recordRecallMessageFeedback(
   }
   return {
     feedback: input.feedback,
-    citationCount: message.recall_citations.length,
+    citationCount: targets.length,
     recordedCount: records.length,
     records,
   };

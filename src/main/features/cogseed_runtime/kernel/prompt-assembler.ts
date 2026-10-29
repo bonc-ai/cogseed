@@ -170,6 +170,18 @@ export function assembleRuntimePrompt(input: {
     userSections.push('## Runtime memory', safeText(input.memorySummary));
   }
 
+  // These roots come from the host's validated request, not user prose or
+  // imported files. File tools require absolute paths, so hiding the actual
+  // execution directory leaves the worker guessing locations it cannot use.
+  if (input.request.workingDir || input.request.readOnlyRoots.length || input.request.writableRoots.length) {
+    userSections.push('## Runtime execution scope', [
+      `Working directory: ${JSON.stringify(input.request.workingDir ?? null)}`,
+      `Readable roots: ${JSON.stringify(input.request.readOnlyRoots)}`,
+      `Writable roots: ${JSON.stringify(input.request.writableRoots)}`,
+      'Use absolute paths inside these roots for file tools. Do not scan other directories to find application files.',
+    ].join('\n'));
+  }
+
   const user = userSections.join('\n\n');
 
   return {

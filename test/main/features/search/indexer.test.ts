@@ -146,6 +146,34 @@ describe('search/indexer › reconcileContextsIndex', () => {
     expect(Object.keys(entry.idx.files)).toEqual(['visible.md']);
   });
 
+  it('keeps po render-copy docs across reconcile (P-r1-99)', async () => {
+    // po/store.ts syncGroupRender writes `.personal_ontology_groups/<id>.md`
+    // and upserts it into the context index. The walk whitelists that one
+    // dot-dir so reconcile sees the source; before the whitelist every
+    // boot-time reconcile judged those docs "source gone" and dropped them,
+    // silently killing ontology-value search.
+    writeContext('.personal_ontology_groups/g1.md', '# 学生');
+    writeContext('.personal_ontology_groups/.history/old.json', '{}');  // inner dot-dir stays hidden
+    const ix = await loadIndexer();
+    ix.upsertContext(TEST_UID, '.personal_ontology_groups/g1.md');
+    const paths = await import('../../../../src/main/paths');
+    const idxPath = paths.userContextsIndexPath(TEST_UID);
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const pending = await ix.getEntry(idxPath, 'context');
+      if (pending.idx.files['.personal_ontology_groups/g1.md']) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Boot path: reconcile walks the tree — the doc must survive, and the
+    // inner dot-dir must stay invisible.
+    const r = await ix.reconcileContextsIndex();
+    expect(r.deleted).toBe(0);
+    const entry = await ix.getEntry(idxPath, 'context');
+    expect(Object.keys(entry.idx.files)).toEqual(['.personal_ontology_groups/g1.md']);
+    expect(entry.idx.docs['.personal_ontology_groups/g1.md']).toBeDefined();
+  });
+
   it('does not delete context docs from a cancelled partial scan', async () => {
     writeContext('a.md', '# A');
     writeContext('b.md', '# B');

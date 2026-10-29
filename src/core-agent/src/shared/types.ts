@@ -9,6 +9,19 @@ export type ImageContent = {
   /** Base64-encoded image data or URL. */
   data: string;
   mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  /** Producing `tool_use` id when this image came from a tool result. Absent for
+   *  user attachments, whose vision path is separate. Attribution is what lets the
+   *  host externalize exactly the tool images when a request is over budget
+   *  (see `shared/tool-result-images.ts`) instead of guessing by position. */
+  toolUseId?: string;
+  /** Display name of the produced image, when the tool knows one. */
+  name?: string;
+  /** Read-only path the model may read with file tools once the image is
+   *  externalized to a text handle. */
+  readonlyPath?: string;
+  /** Set once this occurrence has been replaced by its text handle in a request.
+   *  The mark makes the decision replay-stable rather than re-derived per request. */
+  offloaded?: boolean;
 };
 
 export type ToolUseContent = {

@@ -17,11 +17,8 @@ import {
   applyAlignment,
   collectAllCanonicalNames,
   type CanonicalName,
-  buildCandidateInput,
-  candidateIdFor,
   collectCanonicalNames,
   conceptKeyOf,
-  contributeCandidates,
   groupByConcept,
   linkOntologyRefs,
   suggestAlignments,
@@ -226,39 +223,18 @@ describe('挂 ontologyRef（只改一个字段）', () => {
   });
 });
 
-describe('反哺候选池（幂等）', () => {
-  it('幂等键只依赖折叠后的纠错对', () => {
-    expect(candidateIdFor('coxy', 'Cogseed')).toBe(candidateIdFor('COXY', 'Ｃｏｇｓｅｅｄ'));
-    expect(candidateIdFor('coxy', 'Cogseed')).not.toBe(candidateIdFor('coxy', 'CogSeed2'));
-  });
-
-  it('载荷如实带频次与来源，不吹置信度', () => {
-    const input = buildCandidateInput(
-      { wrong: 'coxy', correct: 'Cogseed', kind: 'term', freq: 6 },
-      { docIds: ['d1'], runIds: ['r1', 'd1'] },
-    );
-    expect(input.candidate_id).toBe(candidateIdFor('coxy', 'Cogseed'));
-    expect(input.kind).toBe('rule');
-    expect(input.confidence).toBe('medium');
-    expect(input.memory_scope).toBe('user');
-    expect(input.summary).toContain('coxy → Cogseed');
-    expect(input.summary).toContain('6');
-    expect(input.diff_summary).toContain('d1');
-  });
-
-  it('低于阈值的词条不投递；重复投递只留一条（candidate_id 去重）', async () => {
-    const frequent = seed('coxy', 'Cogseed').entry!;
-    seed('rare', 'RareWord');
-    // 频次只由"真实替换"累积（upsert 不刷频次；同一 run 内去重），故三次不同 run
-    for (const runId of ['r1', 'r2', 'r3']) recordReplacement(uid, [frequent.id], { docId: 'd1', runId });
-    const entries = loadGlossary(uid).entries;
-    expect(entries.find((e) => e.id === frequent.id)!.freq).toBeGreaterThanOrEqual(3);
-    const first = await contributeCandidates(uid, entries);
-    expect(first).toBe(1);
-    const second = await contributeCandidates(uid, entries);
-    expect(second).toBe(1); // 再次调用仍"投了"，但池内不重复
-    const { candidate_updates } = await listCandidates(uid);
-    expect(candidate_updates.filter((c) => c.candidate_id === candidateIdFor('coxy', 'Cogseed'))).toHaveLength(1);
+describe('纠错词表不再派生旧认知候选', () => {
+  it('高频真实纠错仍保留词表原文与频次，旧candidate写入函数不再导出', async () => {
+    const entry = seed('coxy', 'Cogseed').entry!;
+    for (const runId of ['r1', 'r2', 'r3']) recordReplacement(uid, [entry.id], { docId: 'd1', runId });
+    const before = loadGlossary(uid).entries;
+    const bridge = await import('../../../src/main/features/transcript_ontology_bridge');
+    for (const name of ['candidateIdFor', 'buildCandidateInput', 'contributeCandidates']) expect(bridge).not.toHaveProperty(name);
+    await syncOntology(uid);
+    const after = loadGlossary(uid).entries;
+    expect(after).toEqual(before);
+    expect(after[0].replacedIn).toHaveLength(3);
+    expect((await listCandidates(uid)).candidate_updates).toEqual([]);
   });
 });
 
@@ -298,28 +274,30 @@ describe('syncOntology 组合动作', () => {
   it('本体/记忆为空：仍出概念组，linked/canonicalNames 如实为 0', async () => {
     seed('coxy', 'Cogseed');
     seed('coseed', 'Cogseed');
-    const result = await syncOntology(uid, { contribute: false });
+    const result = await syncOntology(uid);
     expect(result.groups).toHaveLength(1);
     expect(result.groups[0].entryCount).toBe(2);
     expect(result.linked).toBe(0);
     expect(result.canonicalNames).toBe(0);
     expect(result.alignments).toEqual([]);
     expect(result.missing).toEqual([]);
-    expect(result.contributed).toBe(0);
+    expect(result).not.toHaveProperty('contributed');
+    expect((await listCandidates(uid)).candidate_updates).toEqual([]);
   });
 
   it('有本体时：挂引用 + 出对齐/待补建议，一次调用全给面板', async () => {
     const entry = seed('kstar', 'K star').entry!;
     for (const runId of ['r1', 'r2', 'r3']) recordReplacement(uid, [entry.id], { docId: 'd1', runId });
     writeTemplateGroup('g_team', { 产品名: ['KSTAR', 'SpeakerA'] });
-    const result = await syncOntology(uid, { minFreq: 3 });
+    const result = await syncOntology(uid);
     // 字段名本身也是一种规范名（`产品名`）+ 两个字段值
     // 只有两个字段值入册（`产品名` 字段名不入册）
     expect(result.canonicalNames).toBe(2);
     expect(result.linked).toBe(1);
     expect(result.alignments.map((a) => (a as { suggestedCorrect: string }).suggestedCorrect)).toEqual(['KSTAR']);
     expect(result.missing.map((m) => (m as { correct: string }).correct)).toEqual(['SpeakerA']);
-    expect(result.contributed).toBe(1);
+    expect(result).not.toHaveProperty('contributed');
+    expect((await listCandidates(uid)).candidate_updates).toEqual([]);
     expect(loadGlossary(uid).entries[0].ontologyRef).toEqual({ groupId: 'g_team', fieldId: '产品名' });
   });
 });

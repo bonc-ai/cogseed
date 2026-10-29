@@ -162,6 +162,17 @@ describe('chat_attachments › uploadAttachment', () => {
     }
   });
 
+  it('accepts ZIP archives without trying to extract them during upload', async () => {
+    const m = await loadMod();
+    const archive = Buffer.from('PK\x03\x04not-a-real-archive-but-upload-is-opaque');
+    const r = await m.uploadAttachment(UID, CID, 'bundle.zip', archive);
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.info.kind).toBe('archive');
+    expect(fs.readFileSync(path.join(attDir(), 'bundle.zip'))).toEqual(archive);
+  });
+
   it('rejects videos exceeding the 200MB cap', async () => {
     const m = await loadMod();
     // Allocate just over the cap — Buffer.alloc is cheap (sparse zero bytes).
@@ -294,6 +305,77 @@ describe('chat_attachments › uploadAttachment', () => {
 
     expect(r.ok).toBe(false);
     expect(fs.existsSync(path.join(attDir(), 'bad.txt'))).toBe(false);
+  });
+
+  it('recursively collects supported files from a folder without following hidden items, links, or node_modules', async () => {
+    const m = await loadMod();
+    const source = path.join(tmpDir, 'folder-import');
+    fs.mkdirSync(path.join(source, 'docs'), { recursive: true });
+    fs.mkdirSync(path.join(source, 'node_modules', 'dep'), { recursive: true });
+    fs.mkdirSync(path.join(source, '.hidden'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'readme.md'), '# hi');
+    fs.writeFileSync(path.join(source, 'docs', 'sheet.xlsx'), 'fake');
+    fs.writeFileSync(path.join(source, 'docs', 'skip.exe'), 'no');
+    fs.writeFileSync(path.join(source, 'node_modules', 'dep', 'ignored.txt'), 'no');
+    fs.writeFileSync(path.join(source, '.hidden', 'secret.txt'), 'no');
+    fs.symlinkSync(path.join(source, 'readme.md'), path.join(source, 'linked.txt'));
+
+    const files = await m.collectImportableAttachmentFilesFromDir(source);
+
+    // `rel` 是相对选中目录的展示/诊断路径，由 path.join 拼出，因此带平台分隔符
+    // （Windows 上是 `docs\sheet.xlsx`）。断言前归一成 `/`，否则这条只在 Windows 挂。
+    expect(files.map((f) => f.rel.replace(/\\/g, '/'))).toEqual(['docs/sheet.xlsx', 'readme.md']);
+  });
+});
+
+describe('chat_attachments › importFolderAttachment', () => {
+  it('copies a folder as one snapshot attachment while preserving its visible hierarchy', async () => {
+    const m = await loadMod();
+    const source = path.join(tmpDir, 'demo-project');
+    fs.mkdirSync(path.join(source, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(source, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(source, 'node_modules', 'dep'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'src', 'main.ts'), 'export const answer = 42;');
+    fs.writeFileSync(path.join(source, 'README.md'), '# Demo');
+    fs.writeFileSync(path.join(source, '.git', 'config'), 'hidden');
+    fs.writeFileSync(path.join(source, 'node_modules', 'dep', 'index.js'), 'ignored');
+    fs.symlinkSync(path.join(source, 'README.md'), path.join(source, 'linked.md'));
+
+    const result = await m.importFolderAttachment(UID, CID, source);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.info.kind).toBe('folder');
+    expect(result.info.displayName).toBe('demo-project');
+    expect(result.info.fileCount).toBe(2);
+    const id = result.info.name.split(':')[1];
+    const snapshot = path.join(attDir(), 'folders', id);
+    expect(fs.readFileSync(path.join(snapshot, 'src', 'main.ts'), 'utf8')).toContain('answer');
+    expect(fs.existsSync(path.join(snapshot, '.git'))).toBe(false);
+    expect(fs.existsSync(path.join(snapshot, 'node_modules'))).toBe(false);
+    expect(fs.existsSync(path.join(snapshot, 'linked.md'))).toBe(false);
+    expect(m.listAttachments(UID, CID)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: result.info.name, kind: 'folder', displayName: 'demo-project' }),
+    ]));
+
+    const manifest = await m.buildAttachmentManifest(UID, CID, [result.info.name]);
+    expect(manifest.manifest).toContain('<folder name="demo-project"');
+    expect(manifest.manifest).toContain(`path="${snapshot}"`);
+    expect(manifest.metadata).toEqual({ hasAttachments: true, attachmentTypes: ['folder'] });
+  });
+
+  it('removes a folder snapshot as one attachment', async () => {
+    const m = await loadMod();
+    const source = path.join(tmpDir, 'remove-me');
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, 'notes.txt'), 'hello');
+    const uploaded = await m.importFolderAttachment(UID, CID, source);
+    expect(uploaded.ok).toBe(true);
+    if (!uploaded.ok) return;
+
+    expect(m.deleteAttachment(UID, CID, uploaded.info.name).ok).toBe(true);
+    expect(m.listAttachments(UID, CID)).toEqual([]);
+    expect(fs.existsSync(attDir())).toBe(false);
   });
 });
 
@@ -434,6 +516,26 @@ describe('chat_attachments › adoptDraftAttachments', () => {
     expect(fs.existsSync(path.join(cloudAttDir(CID), 'kept.txt'))).toBe(true);
     expect(fs.existsSync(path.join(cloudAttDir(CID), 'new.txt'))).toBe(true);
     expect(fs.existsSync(draftAttDir(DRAFT))).toBe(false);
+  });
+
+  it('moves folder snapshots with the draft attachment pool', async () => {
+    const m = await loadMod();
+    const source = path.join(tmpDir, 'draft-folder');
+    fs.mkdirSync(path.join(source, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'src', 'entry.ts'), 'export {};');
+    const folder = await m.importFolderAttachment(UID, DRAFT, source);
+    expect(folder.ok).toBe(true);
+    if (!folder.ok) return;
+
+    const adopted = await m.adoptDraftAttachments(UID, DRAFT, CID);
+
+    expect(adopted.ok).toBe(true);
+    expect(m.listAttachments(UID, CID)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: folder.info.name, kind: 'folder' }),
+    ]));
+    const resolved = m.resolveAttachmentAbsPath(UID, CID, folder.info.name);
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(fs.readFileSync(path.join(resolved.absPath, 'src', 'entry.ts'), 'utf8')).toContain('export');
   });
 
   it('migrates legacy cloud draft attachments back to local storage on access', async () => {
@@ -916,6 +1018,16 @@ describe('chat_attachments › buildAttachmentManifest', () => {
     expect(r.images).toEqual([]);
     expect(r.skipped).toEqual([]);
     expect(r.metadata).toEqual({ hasAttachments: true, attachmentTypes: ['audio'] });
+  });
+
+  it('surfaces ZIP archives by path without treating their bytes as model text', async () => {
+    const m = await loadMod();
+    await m.uploadAttachment(UID, CID, 'source.zip', Buffer.from('PK\x03\x04fake'));
+    const r = await m.buildAttachmentManifest(UID, CID, ['source.zip']);
+
+    expect(r.manifest).toMatch(/<file[^>]*name="source\.zip"[^>]*kind="archive"[^>]*model_readable="false"/);
+    expect(r.manifest).toContain('ZIP archives are opaque input');
+    expect(r.metadata).toEqual({ hasAttachments: true, attachmentTypes: ['archive'] });
   });
 
   it('packs images into images[] as real-time compressed JPEG AND lists them in the manifest with attached="inline"', async () => {

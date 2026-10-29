@@ -77,12 +77,11 @@ export const AgentConfigSchema = z.object({
 export const MetacognitionConfigSchema = z.object({
   /** Whether metacognitive self-improvement is enabled. */
   enabled: z.boolean().default(true),
-  /** Minimum weighted signal score to trigger reflection (0–1 scale). */
-  reflectThreshold: z.number().min(0).max(2).default(0.7),
   /** Character limit for COMPETENCE.md (agent self-assessment). */
   competenceCharLimit: z.number().int().positive().default(3000),
-  /** Character limit for LEARNING_STRATEGIES.md. */
-  strategiesCharLimit: z.number().int().positive().default(2500),
+  // P-r1-45：strategiesCharLimit（default 2500）已删——全仓零消费，且与真实
+  // 门（main/features/metacognition.ts 的 STRATEGIES_CHAR_LIMIT=4000）双源
+  // 分裂；core-agent 配置不再声明这个没人读的上限。
 });
 
 /** Evolution (self-improvement) configuration schema. */

@@ -1,0 +1,24 @@
+skill_spec:
+  skill_id: cognition-editor
+  name: cognition-editor
+  version: 1.1.0
+  skill_class: EndUseSkill
+  level: L5
+  risk_route: Full
+  form: interpreted
+  promotion_ceiling: staged
+  production_release_allowed: false
+  independent_review: pending
+mutation_surface_policy:
+  mutable_surface: [guide_wording, examples, eval_fixtures]
+  protected_surface: [host_authorization, source_admission, atomic_commit, immutable_receipts, human_confirmation]
+nine_elements:
+  trigger_semantics: ../SKILL.md
+  business_context_mapping: ontology-mapping.md
+  executable_workflow: ../SKILL.md
+  tool_resource_binding: ../agents/openai.yaml
+  validation_contract: validation-contract.md
+  eval_replay_regression: ../evals/evals.json
+  failure_attribution: failure-modes.md
+  evolution_hook: kstar-evolution.md
+  governance_boundaries: governance-boundaries.md

@@ -556,3 +556,14 @@ describe('conversation activity elapsed clock', () => {
     expect(meta.textContent).not.toContain('tools');
   });
 });
+
+
+it('ignores request-level aggregate finals after actor-owned messages have settled', () => {
+  let writes = 0;
+  const ctx: any = { _streamingSetFinal: () => { writes++; } };
+  vm.createContext(ctx);
+  vm.runInContext(extractFunctionUntil('_handleStreamEvent', '_normaliseTurnId'), ctx);
+  const agentBubble = new FakePlaceholder({ fromActor: 'agent-a', finalized: '1' });
+  ctx._handleStreamEvent('cid', agentBubble, { type: 'final', text: 'Commander result and internal metadata' }, { actorIdentity: true });
+  expect(writes).toBe(0);
+});

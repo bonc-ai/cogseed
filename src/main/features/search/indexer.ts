@@ -22,6 +22,7 @@ import { Mutex } from 'async-mutex';
 import {
   userContextsDir, userChatsDir, projectChatsDir,
   projectChatIndexFile, userContextsIndexPath, userChatsIndexPath,
+  ONTOLOGY_GROUPS_DIR_NAME,
 } from '../../paths';
 import { conversationMessageReadFile, listProjectIds } from '../../util/project-layout';
 import { getActiveUserId } from '../users';
@@ -268,7 +269,13 @@ async function _scanContexts(
       continue;
     }
     for (const entry of items) {
-      if (CTX_IGNORE.has(entry.name) || entry.name.startsWith('.')) continue;
+      // Dot entries stay invisible — except the po render-copy dir, which IS
+      // indexed (upsertContext from po/store.ts). Without the whitelist,
+      // reconcile judges those docs "source gone" and drops them on every
+      // boot, silently killing ontology-value search (P-r1-99).
+      if (CTX_IGNORE.has(entry.name)
+        || (entry.name.startsWith('.')
+          && !(entry.isDirectory() && entry.name === ONTOLOGY_GROUPS_DIR_NAME))) continue;
       const rel = current.rel ? `${current.rel}/${entry.name}` : entry.name;
       const full = path.join(current.dir, entry.name);
       if (entry.isDirectory()) stack.push({ dir: full, rel });

@@ -17,7 +17,7 @@
   --cs-radius:6px;
   position:fixed; inset:0; z-index:var(--z-tour);
   display:none;
-  grid-template-rows:54px minmax(0,1fr);
+  grid-template-rows:var(--layout-titlebar-height) minmax(0,1fr);
   color:var(--cs-ink);
   font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;
   font-size:14px; line-height:1.55; letter-spacing:.005em;
@@ -37,16 +37,18 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding button:not(.ui-button){font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
 #cs-onboarding h1,#cs-onboarding h2,#cs-onboarding h3,#cs-onboarding h4,#cs-onboarding p{margin:0}
 
-/* ── persistent top-left brand (icon first, then wordmark) ── */
-#cs-onboarding .cs-ob-brand{position:absolute;top:16px;left:22px;z-index:var(--z-raised);
-  display:flex;align-items:center;gap:8px;pointer-events:none}
-#cs-onboarding .cs-ob-brand img{width:28px;height:28px;border-radius:8px}
+/* Persistent window header. Keep it outside the scrolling panels so narrow
+ * layouts and later steps cannot scroll content into the native controls.
+ * macOS uses the same traffic-light gutter as the collapsed app shell. */
+#cs-onboarding .cs-ob-brand{position:relative;z-index:var(--z-raised);
+  height:var(--layout-titlebar-height);padding-inline:var(--space-4);
+  display:flex;align-items:center;gap:var(--space-2);user-select:none}
+.is-macos #cs-onboarding .cs-ob-brand{padding-inline-start:104px;-webkit-app-region:drag}
+#cs-onboarding .cs-ob-brand img{width:28px;height:28px;border-radius:8px;-webkit-user-drag:none}
 #cs-onboarding .cs-ob-brand b{font-size:14px;letter-spacing:-0.01em;color:var(--cs-ink);font-weight:600}
 
-/* ── body: single fullwidth column (no left rail in the three-step flow) ──
- * No topbar in the first-run shell: the single fullwidth child must span
- * both grid rows so .cs-content fills the whole viewport height. */
-#cs-onboarding .cs-main-fullwidth{grid-row:1 / -1;min-height:0;display:grid;grid-template-rows:minmax(0,1fr)}
+/* Single fullwidth body below the persistent header (no left rail). */
+#cs-onboarding .cs-main-fullwidth{grid-row:2;min-height:0;display:grid;grid-template-rows:minmax(0,1fr)}
 
 /* ── content panels ── */
 #cs-onboarding .cs-content{min-width:0;min-height:0;height:100%;overflow:auto;padding:52px clamp(28px,6vw,96px) 80px}
@@ -77,7 +79,7 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .status.green{background:var(--cs-forest-weak);color:var(--cs-forest-deep)}
 #cs-onboarding .status.red{background:#FBE9E5;color:#B23B2A}
 
-#cs-onboarding .first-run-shell{min-height:calc(100vh - 44px);display:grid;grid-template-columns:minmax(0,1.04fr) minmax(420px,.96fr);max-width:1180px;margin:0 auto}
+#cs-onboarding .first-run-shell{min-height:calc(100vh - var(--layout-titlebar-height));display:grid;grid-template-columns:minmax(0,1.04fr) minmax(420px,.96fr);max-width:1180px;margin:0 auto}
 #cs-onboarding .first-run-story{padding:78px 68px 54px 42px;display:flex;flex-direction:column;justify-content:center}
 #cs-onboarding .first-run-brand{display:flex;align-items:center;gap:10px;color:var(--cs-forest-deep);font-size: var(--font-size-1);font-weight:800}
 #cs-onboarding .first-run-brand img{width:34px;height:34px;border-radius:8px}

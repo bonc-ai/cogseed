@@ -170,6 +170,16 @@ async function finishClosure(
         episodeId: episode.id,
         error: (error as Error).message,
       });
+      // 回执写路径允许跳过无关撕裂行，但 KSTAR 证据读口仍保持整流严格；
+      // 读不出来就必须在 capture 阶段留痕，不能只在日志里降级。
+      await recordKstarFailure(userId, {
+        stage: 'capture',
+        errorCode: 'asset_usage_persistence_failed',
+        errorMessage: 'KSTAR attribution receipts were unreadable; terminal result was preserved.',
+        operationKey: `usage-${episode.id}`,
+        ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+        episodeId: episode.id,
+      }).catch(() => undefined);
     }
   }
   let storedReview: KstarReviewRecord | null = null;

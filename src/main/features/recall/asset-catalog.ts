@@ -1,4 +1,5 @@
 import type { RecallAbilityAssetRecord } from './candidate-service';
+import { abilityAssetActiveVersion } from './asset-service';
 import { listRecallUsage } from './usage-service';
 
 /**
@@ -68,7 +69,7 @@ export function formatCatalogEntry(
     type,
     catalogScopeLabel(asset.scope),
     maturity,
-    `v${asset.activeVersion || asset.version || '1'}`,
+    `v${abilityAssetActiveVersion(asset)}`,
     stat && stat.count ? `用${stat.count}次` : '没用过',
   ].join('·');
   const applies = (asset.applicableWhen || [])[0];
@@ -148,7 +149,7 @@ export async function loadAssetAdoptionStats(userId: string): Promise<Map<string
   const receipts = await listAssetUsageReceipts(userId);
   const taskRunIds = [...new Set(receipts.map((row) => String(row.taskRunId || '')).filter(Boolean))];
   if (!taskRunIds.length) return stats;
-  const applied = await listAppliedUsageReceipts(userId, { taskRunIds });
+  const applied = await listAppliedUsageReceipts(userId, { taskRunIds }, receipts);
   const createdAtById = new Map(receipts.map((row) => [row.id, String(row.createdAt || '')]));
   for (const receipt of applied) {
     const id = String(receipt.assetId || '');

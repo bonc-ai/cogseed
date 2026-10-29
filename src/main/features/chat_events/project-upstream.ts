@@ -1,3 +1,4 @@
+import { createHiddenMetadataFilter, stripHiddenMetadata } from '../../util/hidden-metadata';
 // ─── 上游 StreamEvent → chat.* 结构化事件投影器 ────────────────────────────
 //
 // core-agent 的 event-mapper 早已产出结构化工具事件（stream:'tool' 的
@@ -41,6 +42,7 @@ export interface ChatEventProjectorState {
    *  洪泛挤占 process 300 上限，工具记录被顶掉（真机 19:50 事故）。
    *  openReasoningItemId 非空 = 有未截断的聚合段在攒；被工具/正文/
    *  终态截断时整段落盘。 */
+  textFilter: ReturnType<typeof createHiddenMetadataFilter>;
   openReasoningText: string;
   openReasoningItemId: string | null;
 }
@@ -60,6 +62,7 @@ export function createChatEventProjectorState(input: {
     textItemId: null,
     seq: 0,
     toolStarts: new Map(),
+    textFilter: createHiddenMetadataFilter(),
     openReasoningText: '',
     openReasoningItemId: null,
   };
@@ -208,13 +211,14 @@ export function projectUpstreamEvent(
 
   if (etype === 'delta' && typeof event.text === 'string' && event.text) {
     if (!state.textItemId) state.textItemId = nextItemId(state, 'text');
-    out.push(textItem(state, state.textItemId, 'inProgress', event.text));
+    const visible = state.textFilter.push(event.text);
+    if (visible) out.push(textItem(state, state.textItemId, 'inProgress', visible));
   } else if (etype === 'text-segment' && event.text) {
     // 持久化专用合成事件（bus LLM 主路径 flushTextSegmentForPersist）：
     // 中间正文段（被后续工具/思考 item 截断的段落）以 completed 终态整段
     // 落盘。实时链路永不产生此形状；最终段不落盘（=消息正文），渲染层
     // 重放只渲染 completed 文本段，与正文不重复。
-    out.push(textItem(state, nextItemId(state, 'text'), 'completed', event.text));
+    out.push(textItem(state, nextItemId(state, 'text'), 'completed', stripHiddenMetadata(event.text)));
   } else if (etype === 'progress' && typeof event.text === 'string' && event.text) {
     // 聚合到当前思考段（连续 progress 续写同一 itemId；分段到达的思考
     // 流与老一次性叙述同路径）。落盘由截断点统一冲刷（工具/正文/终态）。

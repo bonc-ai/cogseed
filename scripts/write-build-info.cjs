@@ -5,8 +5,7 @@
  *
  * Besides channel/commit/dirty/builtAt this bakes the **service origin** the
  * package should talk to. The source tree cannot carry one (open-source
- * publication removed non-owned domains — see the #5 blocker in
- * `docs/release-scan-remediation-20260923.md`), and a double-clicked `.app`
+ * publication uses deployment-neutral placeholders), and a double-clicked `.app`
  * inherits no environment, so package time is the only place the real value
  * can enter a release build.
  *

@@ -1,7 +1,7 @@
 /**
- * family.ts — 判族引擎（2026-09-19 合并实施·清单 #2）。
+ * family.ts — 按本体分组、经验来源和语义相似度聚合相关资产。
  *
- * 目标（子安口径）：相关内容归成一条完整信息，不零散。族＝大类：面板按族
+ * 相关内容归入同一族；面板按族
  * 聚合资产成「关于我 / 关于周报 / …」的分组视图。
  *
  * 族键优先级（静态部分，本模块）：
@@ -9,7 +9,7 @@
  *   ② KStar 同轮次溯源（learningProvenance.episodeId）——同一轮任务沉淀的
  *      经验天然同族；
  *   ③ 语义聚类（FAMILY_SEMANTIC_THRESHOLD ≥ 0.60，跨资产 embedding 相似）
- *      ——没挂组、没溯源的存量资产，在入库扫描时补判（下一轮接线）。
+ *      ——没挂组、没溯源的资产使用语义聚类补判。
  *
  * 族的载体是 relations 的 same_family（asset-relations.ts）：不新建顶级字段，
  * 挂在既有关系容器里，版本快照与归一化校验全部免费复用。
@@ -238,8 +238,13 @@ export async function renameAssetFamily(
 ): Promise<string[]> {
   const trimmed = String(name || '').trim().slice(0, 40);
   const { listAbilityAssets } = await import('./asset-service');
+  // 终态过滤：purged/deleted/revoked 一律排除。revoked 是终态墓碑
+  // （单笔通道对其拒绝改写），族改名是批量直写通道，不能成为绕过终态守卫的
+  // 后门——此前 revoked 被连带改 familyName 且刷新 updatedAt，污染列表排序。
+  // 与 deleted 同口径：被排除的终态成员也断开族连通性（族经过它连接的两侧
+  // 分属不同族）。
   const assets = (await listAbilityAssets(userId))
-    .filter((asset) => asset.status !== 'purged' && asset.status !== 'deleted');
+    .filter((asset) => asset.status !== 'purged' && asset.status !== 'deleted' && asset.status !== 'revoked');
   const byId = new Map(assets.map((asset) => [asset.id, asset]));
   const parent = new Map(assets.map((asset) => [asset.id, asset.id]));
   const find = (id: string): string => {

@@ -79,11 +79,11 @@ describe('builtin-resource-gate', () => {
       .toContainEqual(expect.objectContaining({ id: '8d2f4b7c9a10', name: 'paper-repro' }));
     expect(manifest.inventory.marketplace_skills)
       .toContainEqual(expect.objectContaining({ id: 'e7f5c0e6f1be' }));
+    expect(manifest.inventory.marketplace_skills)
+      .toContainEqual(expect.objectContaining({ id: 'c09e11d17a01', name: 'cognition-editor' }));
     expect(manifest.inventory.marketplace_agents)
       .toContainEqual(expect.objectContaining({
         id: '78900d8758bc',
-        // DeepResearcher 1.0.35（8c96c727）把 icon 从 search 换成 bolt、
-        // updated_at 推进到 08-17——断言跟随真实内容，不写死过期元数据。
         icon: 'bolt',
         color: 'sky',
         updated_at: '2026-08-17T00:00:00',
@@ -91,29 +91,9 @@ describe('builtin-resource-gate', () => {
       }));
   });
 
-  /**
-   * Guards the one failure mode no other layer catches: files disappear AND the
-   * manifest is regenerated, so every hash is internally consistent and nothing
-   * looks wrong.
-   *
-   * Measured on a copy of `resources/builtin` with the manifest regenerated after
-   * the deletion:
-   *   - delete a required system SKILL.md  → caught (`missing system skill`)
-   *   - delete a whole agent directory     → caught (`inventory does not match`)
-   *   - delete one references/*.md         → NOT caught by any layer
-   *   - delete 20 skills' schemas.json     → NOT caught by any layer
-   *
-   * The old form of this test asserted a literal count, which did catch the last
-   * two — but had to be hand-edited on every content change, and was silently
-   * left stale twice (129 → 138 → … → 1275 while the tree held 1421), during
-   * which it was failing rather than guarding.
-   *
-   * So the count is compared against the committed `_manifest.json` instead. That
-   * file is a real second source: it is written by `npm run builtin:manifest` and
-   * reviewed in a diff, so dropping files without noticing means committing a
-   * manifest whose row count moved — visible in review — rather than editing a
-   * number in a test to make it pass.
-   */
+  /** Compare the complete tracked file inventory with the committed manifest.
+   * A regenerated manifest cannot conceal a missing required skill or agent;
+   * all reference and schema paths remain part of the reviewed inventory. */
   it('tracks exactly the files the committed manifest declares', () => {
     const root = path.join(process.cwd(), 'resources', 'builtin');
     const manifest = gate.createBuiltinManifest(root, { allowIgnoredJunk: true });

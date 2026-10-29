@@ -1,0 +1,10 @@
+name: ui-live-artifact
+version: 1.0.0
+entrypoint: SKILL.md
+purpose: Create or plan refreshable, auditable, data-backed HTML artifacts for UIDesigner;
+  use for live dashboards, refreshable reports, synced views, and connector data views
+  with template/data/provenance files, safe redaction, and static fallback rules.
+inputs: []
+outputs: []
+constraints:
+- Follow SKILL.md; do not exceed the declared network or filesystem access.

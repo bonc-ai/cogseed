@@ -1,0 +1,120 @@
+{
+  "description": "Agent 名称规则测试向量（草案，客户端与 Hub 各自实现，共用本文件）。规则：①字符集 ^[A-Za-z0-9_一-鿿-]+$（以客户端 agents.ts NAME_TOKEN_RE 为准，无空格）；②显示宽度 ≤ 60，宽/全角字符计 2，其余计 1（Hub nameRules.ts 同款区间）；③保留名（去空白、转小写后比较）：指挥官、总指挥、コマンダー、司令官、commander、cogseed。一个名字可能同时违反多条，reason 记第一条违反的，顺序：required → charset → reserved → width。",
+  "status": "DRAFT，待嘉宇确认字符集与保留名由谁持有",
+  "vectors": [
+    {
+      "case": "纯中文",
+      "name": "周报整理助手",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "case": "中英混合",
+      "name": "Weekly周报Helper",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "case": "下划线与连字符",
+      "name": "expense_pre-check",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "case": "宽度恰为60（30个汉字）",
+      "name": "报报报报报报报报报报报报报报报报报报报报报报报报报报报报报报",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "case": "宽度61（30汉字+1字母）",
+      "name": "报报报报报报报报报报报报报报报报报报报报报报报报报报报报报报a",
+      "valid": false,
+      "reason": "name.width"
+    },
+    {
+      "case": "纯英文60字符",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "case": "纯英文61字符",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false,
+      "reason": "name.width"
+    },
+    {
+      "case": "含空格",
+      "name": "weekly report",
+      "valid": false,
+      "reason": "name.charset"
+    },
+    {
+      "case": "首尾空白",
+      "name": " 周报助手",
+      "valid": false,
+      "reason": "name.charset"
+    },
+    {
+      "case": "含全角空格",
+      "name": "周报　助手",
+      "valid": false,
+      "reason": "name.charset"
+    },
+    {
+      "case": "平假名",
+      "name": "しゅうほう",
+      "valid": false,
+      "reason": "name.charset"
+    },
+    {
+      "case": "片假名",
+      "name": "レポート",
+      "valid": false,
+      "reason": "name.charset"
+    },
+    {
+      "case": "谚文",
+      "name": "보고서",
+      "valid": false,
+      "reason": "name.charset"
+    },
+    {
+      "case": "CJK扩展A区汉字",
+      "name": "㐀㐁",
+      "valid": false,
+      "reason": "name.charset"
+    },
+    {
+      "case": "标点",
+      "name": "周报，助手",
+      "valid": false,
+      "reason": "name.charset"
+    },
+    {
+      "case": "空字符串",
+      "name": "",
+      "valid": false,
+      "reason": "name.required"
+    },
+    {
+      "case": "保留名 指挥官",
+      "name": "指挥官",
+      "valid": false,
+      "reason": "name.reserved"
+    },
+    {
+      "case": "保留名 commander 大小写",
+      "name": "Commander",
+      "valid": false,
+      "reason": "name.reserved"
+    },
+    {
+      "case": "保留名 cogseed",
+      "name": "CogSeed",
+      "valid": false,
+      "reason": "name.reserved"
+    }
+  ]
+}

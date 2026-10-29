@@ -167,6 +167,11 @@ export type TransportTemplate =
       url: string;
       /** HTTP header name for the bearer (defaults to `Authorization: Bearer <token>`). */
       oauth_header_key?: string;
+      /** Scheme prefixed to the token. Defaults to `Bearer`; set to `''` for a provider that wants
+       *  the raw credential in the header. Tencent Docs is the case in hand — its configuration
+       *  guide specifies `"Authorization": "<token>"` and the published `qqdocs` client sends the
+       *  token unprefixed, so a `Bearer ` prefix authenticates as nothing. */
+      oauth_header_scheme?: string;
     };
 
 // ── Auth ────────────────────────────────────────────────────────────────
@@ -210,6 +215,21 @@ export type TransportTemplate =
 //      2. Availability is machine-dependent: the card must render as unavailable (not
 //         "connectable, then fails") when the CLI is missing — hence
 //         `unavailable_reason: 'cli_not_installed'`.
+//
+//  - 'interactive_token' — The provider publishes neither an MCP-spec OAuth authorization
+//    server nor a CLI: it hands the user a credential through its own console or a custom
+//    (non-RFC-6749) interactive flow. CogSeed collects that credential, materializes the
+//    transport template with it, and stores the result inside the same per-instance
+//    `secrets_enc` blob every other credential lives in — so the token never leaves this
+//    device and there is no grant to refresh (`applyTemplate` is fed a bare `access_token`).
+//    Re-authorization means re-supplying the credential, which replaces the stored transport.
+//
+//    Why this stays inside the public-connector boundary (see
+//    `test/main/features/connectors/open-source-boundary.test.ts`): the credential is issued by
+//    the provider to the user themselves. CogSeed holds no client secret, pre-registers
+//    nothing, and meters nothing, and the user can revoke the credential in the provider's own
+//    console. Same class as `local_cli`, except the token transits CogSeed's encrypted local
+//    store instead of the provider's own keychain.
 
 export interface OAuthConfig {
   /** Server-bridge only: matches the Server's `biz/connectors/oauth/<provider>.py` module name
@@ -265,21 +285,60 @@ export type CatalogCategory =
   | 'search'
   | 'data';
 
-export type AuthMode = 'server_bridge' | 'mcp_dcr' | 'local_cli';
+// credentials: UI-owned password/app-password, encrypted per user and instance.
+// provider_device: provider-owned init/poll protocol, no application secret or DCR registration.
+export type AuthMode = 'server_bridge' | 'mcp_dcr' | 'local_cli' | 'credentials' | 'provider_device' | 'interactive_token';
+
+/** How an `interactive_token` entry obtains its credential.
+ *
+ *  Two variants ship, each with a provider that needs it — a variant with no user is dead contract
+ *  surface and does not belong here:
+ *
+ *   - `paste`        — the provider issues the token in its own console and the user pastes it.
+ *   - `browser_poll` — the provider runs a bespoke (non-RFC-6749) consent flow: the client opens a
+ *                      consent URL carrying a `code` it generated, the user approves in a browser,
+ *                      and the client polls an exchange endpoint with that same `code` until a token
+ *                      appears. `dsh-wps` documents exactly this shape for WPS SkillHub.
+ *
+ *  The credential always lands in the instance's encrypted `secrets_enc` blob — see the
+ *  `// ── Auth ──` section above for why that stays inside the public-connector boundary. */
+export type InteractiveTokenAuth =
+  | {
+      kind: 'paste';
+      /** Where the user obtains the credential. Rendered as the "获取令牌" help link in the connect
+       *  dialog so the user is never asked for a token without being told where it comes from. */
+      token_url?: string;
+    }
+  | {
+      kind: 'browser_poll';
+      /** Consent page, opened with `?auth_code=<generated>`. */
+      authorize_url: string;
+      /** POSTed `{ code }` on the poll until it answers with a token. */
+      exchange_url: string;
+      /** Poll cadence. WPS's own client uses 1s. */
+      poll_interval_ms?: number;
+      /** Give up after this long (WPS's own client uses 5 minutes). */
+      timeout_ms?: number;
+      /** JSON field holding the token in the exchange response. Defaults to `access_token`, then
+       *  `token`, then `data.access_token` — providers in this family are inconsistent. */
+      token_field?: string;
+    };
 
 export interface CatalogEntry {
   /** Stable id; doubles as the installed instance id (one install per catalog entry in Phase 0).
    *  Lowercase, [a-z0-9_-]+; used as the `<inst>__<tool>` prefix. */
   id: string;
   display_name: string;
-  /** Inline SVG markup for the brand logo. Required on every shipped catalog entry — the
-   *  renderer draws this on a white rounded square. Keep the inner SVG `width` / `height`
-   *  either absent or `100%` so CSS-set 40×40 card box governs the rendered size.
+  /** Inline SVG markup for the brand logo (or use `icon_name` for a shared Renderer icon).
+   *  Use a square viewBox and omit fixed width/height so card CSS controls the rendered size:
+   *  a 32×32 slot with 6px padding (20×20 artwork; Sentry uses 4px padding).
    *
    *  Optional only so `_entryFromInstance` (orphan-instance fallback when the catalog entry
    *  was removed but the install still exists) can omit it; the orphan path renders the
    *  display_name initials on a neutral gray placeholder. */
   icon_svg?: string;
+  /** Shared Renderer icon for app-owned connector entries. */
+  icon_name?: string;
   category: CatalogCategory;
   description_zh: string;
   description_en: string;
@@ -289,6 +348,9 @@ export interface CatalogEntry {
    *  and for `'local_cli'` (the adapter child owns the credential, so there is nothing to
    *  pre-register and no grant to obtain). */
   oauth?: OAuthConfig;
+  /** Required when `auth_mode === 'interactive_token'`: how the user supplies the credential.
+   *  Absent for every other mode (OAuth modes fetch their own grant; `local_cli` owns one). */
+  interactive_auth?: InteractiveTokenAuth;
   /** OAuth scopes that must be present in the provider's returned grant for the connector to
    *  function. Google lets users uncheck individual requested permissions on the consent screen;
    *  when that happens the token exchange still succeeds but downstream APIs fail with 403s.
@@ -298,6 +360,28 @@ export interface CatalogEntry {
    *  catalogued but not yet installable (we don't have an MCP server target for it yet).
    *  Renderer surfaces a disabled "敬请期待" state. */
   transport_template: TransportTemplate | null;
+  /** How the user gets this connector working, shown in the detail panel before/while connecting.
+   *
+   *  Product content, in the same spirit as `description_zh` / `description_en`: an enterprise user
+   *  who has never seen a vendor CLI cannot be asked to guess `npm install -g @larksuite/cli`, and a
+   *  connector that only says "缺少 CLI" or opens a bare token box is a dead end. Entries that omit
+   *  this fall back to the generic chrome text, so nothing regresses. */
+  setup?: {
+    /** Command the user runs themselves when the CLI is missing (`local_cli`). Rendered verbatim
+     *  with a copy button — never executed by us. */
+    install_command?: string;
+    /** Ordered, imperative steps for the whole onboarding. Keep each step to one action. */
+    steps_zh: string[];
+    steps_en: string[];
+    /** Where the credential comes from, or the provider's own docs. Opened in the browser. */
+    docs_url?: string;
+    /** Short label for `docs_url`; defaults to a generic "查看官方文档". */
+    docs_label_zh?: string;
+    docs_label_en?: string;
+    /** One-line explanation of what happens to the credential, shown next to the steps. */
+    credential_note_zh?: string;
+    credential_note_en?: string;
+  };
   /** Set when `transport_template` is null to explain why; renderer surfaces in the badge. */
   unavailable_reason?: 'oauth_pending' | 'cli_not_installed';
   /** Remote-config gate. `visible_disabled` keeps the card visible but blocks OAuth/tool use. */
@@ -306,6 +390,8 @@ export interface CatalogEntry {
    *  `cli_missing` = this machine does not have the `local_cli` connector's CLI installed, which
    *  the user can fix themselves, so the card must say so instead of the generic message. */
   disabled_reason?: 'unsupported' | 'cli_missing';
+  runtime_installable?: boolean;
+  runtime_progress?: { phase: 'downloading' | 'verifying' | 'installing'; percent?: number };
   /** When set, this catalog entry is a **UI-only bundle**: one OAuth flow provisions N member
    *  ConnectorInstances (one per listed catalog id). The bundle entry itself does NOT produce a
    *  ConnectorInstance and has `transport_template: null` — the model sees the members as

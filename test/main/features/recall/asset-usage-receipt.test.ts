@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -20,6 +21,36 @@ afterEach(() => {
 });
 
 describe('asset usage receipts', () => {
+  it('迟到回执不复活已清资产：墓碑已落（级联未完窗口）时锁内拒绝', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    const { writeRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    // 注入发生在 purge 前：注入回执行仍在盘上。
+    const injection = await injections.recordInjectionReceipt('user-late', {
+      taskRunId: 'run-late', projectionId: 'proj-late', assetId: 'aa-late', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-late',
+    });
+    // 等价构造「setStatus 已落墓碑、级联尚未摘除注入行」的窗口：直接写
+    // purged 墓碑。迟到回执走到流锁内时必须复核终态并拒绝。
+    const now = new Date().toISOString();
+    await writeRecallJsonRecord('user-late', 'ability-assets', 'aa-late', {
+      schemaVersion: 2, ownerId: 'user-late', id: 'aa-late', candidateId: 'cand-aa-late',
+      reviewDecisionId: 'rd_probeaa_late1', title: '', statement: '', evidenceRefs: [],
+      scope: '', status: 'purged', lifecycleStatus: 'user_confirmed_unverified',
+      version: '1', createdAt: now, updatedAt: now,
+    } as never);
+
+    await expect(usage.recordAssetUsageReceipt('user-late', {
+      taskRunId: 'run-late', projectionId: 'proj-late', assetId: 'aa-late', assetVersion: '1',
+      injectionReceiptId: injection.id,
+      status: 'applied', evidenceKind: 'tool_call',
+      evidenceRefs: [{ kind: 'execution_evaluation' as const, id: 'kse-run-late' }],
+      boundary: 'real',
+    })).rejects.toThrow(/has been purged/);
+    // 回执流保持为空：已清使用痕迹没有回填复活。
+    expect(await usage.listAssetUsageReceipts('user-late')).toEqual([]);
+  });
+
   it('persists a normalized evidence-bound applied receipt idempotently', async () => {
     const injections = await import('../../../../src/main/features/recall/injection-receipt');
     const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
@@ -98,7 +129,7 @@ describe('asset usage receipts', () => {
     expect(fs.readFileSync(jsonl, 'utf8').trim().split('\n')).toHaveLength(2);
   });
 
-  it('negative feedback overrides an earlier applied receipt; reads return the latest per id (2026-09-14)', async () => {
+  it('negative feedback overrides an earlier applied receipt; reads return the latest per id ', async () => {
     // KSTAR 收账先写 applied，用户随后点踩写 contradicted——此前被同键幂等
     // 去重静默吞掉（「点踩进治理」失效）；现在 contradicted 可覆盖，读取侧
     // 同 id 取末条，消费方不双计。
@@ -234,7 +265,7 @@ describe('asset usage receipts', () => {
     })).rejects.toThrow('invalid injection receipt reference');
   });
 
-  it('画像通道正式资产镜像计入使用统计，onto-* 文件遗留仅留回执（修2）', async () => {
+  it('画像通道正式资产镜像计入使用统计，onto-* 文件遗留仅留回执', async () => {
     const injections = await import('../../../../src/main/features/recall/injection-receipt');
     const { listRecallUsage } = await import('../../../../src/main/features/recall/usage-service');
     await injections.recordProfileMemoryInjection('user-a', [
@@ -257,5 +288,226 @@ describe('asset usage receipts', () => {
       boundary: 'real',
       outcome: 'injected',
     });
+  });
+});
+
+
+const outputHash = createHash('sha256').update('persisted final output').digest('hex');
+const taskHash = createHash('sha256').update('original task').digest('hex');
+async function outputObservation() {
+  const injections = await import('../../../../src/main/features/recall/injection-receipt');
+  const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+  const store = await import('../../../../src/main/features/recall/store');
+  const injection = await injections.recordInjectionReceipt('user-a', {
+    taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1',
+    boundary: 'real', status: 'injected', messageId: 'message-a',
+  });
+  const base = {
+    taskRunId: 'run-a', projectionId: 'proj-a', assetId: 'asset-a', assetVersion: '1', injectionReceiptId: injection.id,
+    evidenceKind: 'final_output' as const, boundary: 'real' as const,
+    evidenceRefs: [{ kind: 'message' as const, id: 'message-a' }],
+  };
+  const proofId = `coc-${createHash('sha256').update(JSON.stringify(['run-a', 'message-a', outputHash, taskHash])).digest('hex').slice(0, 24)}`;
+  const proof = { schemaVersion: 1, ownerId: 'user-a', id: proofId, taskRunId: 'run-a', messageId: 'message-a',
+    outputHash, taskHash, method: 'model_assisted', modelCompleted: true,
+    checks: [{ assetId: 'asset-a', version: '1', status: 'not_complied', outputEvidence: { start: 0, end: 5 } }],
+    createdAt: new Date().toISOString() };
+  const report = { ...base, status: 'applied' as const, observationMethod: 'agent_reported' as const, messageId: 'message-a', outputHash };
+  const checked = { ...base, status: 'usage_unknown' as const, observationMethod: 'model_assisted' as const,
+    messageId: 'message-a', outputHash, outputCheckReceiptId: proofId };
+  return { usage, store, base, proof, report, checked };
+}
+
+describe('persisted-result observation precedence', () => {
+  it('replaces a failed agent report with a completed independent unknown and rejects delayed reports', async () => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    const failedReport = { ...report, status: 'usage_unknown' as const, reportFailure: 'quote_not_found' as const };
+    await usage.recordAssetUsageReceipt('user-a', failedReport);
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, { ...proof,
+      checks: [{ assetId: 'asset-a', version: '1', status: 'unknown' }] });
+    const independent = await usage.recordAssetUsageReceipt('user-a', checked);
+    expect(independent).toMatchObject({ status: 'usage_unknown', observationMethod: 'model_assisted', outputCheckReceiptId: proof.id });
+    expect(independent.reportFailure).toBeUndefined();
+    expect(await usage.recordAssetUsageReceipt('user-a', failedReport)).toEqual(independent);
+    expect(await usage.recordAssetUsageReceipt('user-a', report)).toEqual(independent);
+    expect(await usage.listAppliedUsageReceipts('user-a', { taskRunIds: ['run-a'] })).toEqual([]);
+  });
+  it.each([
+    { status: 'unknown' },
+    { status: 'not_applicable', taskEvidence: { start: 0, end: 8 } },
+  ])('withdraws same-output self-reported adoption for a completed %j without claiming no use', async finding => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    const completed = { ...proof, checks: [{ assetId: 'asset-a', version: '1', ...finding }] };
+    await usage.recordAssetUsageReceipt('user-a', report);
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, completed);
+    // Persisted proofs contain task hashes/coordinates, never invented task text.
+    expect(completed).not.toHaveProperty('task');
+    expect(completed.checks[0]).not.toHaveProperty('outputEvidence');
+    const attempts = await Promise.all(Array.from({ length: 4 }, () => usage.recordAssetUsageReceipt('user-a', checked)));
+    expect(attempts.every(receipt => receipt.status === 'usage_unknown')).toBe(true);
+    const corrected = attempts[0];
+    expect(corrected).toMatchObject({ observationMethod: 'model_assisted', outputCheckReceiptId: proof.id });
+    expect(corrected.status).not.toBe('contradicted');
+    expect(await usage.listAppliedUsageReceipts('user-a', { taskRunIds: ['run-a'] })).toEqual([]);
+    expect(await usage.recordAssetUsageReceipt('user-a', report)).toEqual(corrected);
+    expect(await usage.listAssetUsageReceipts('user-a')).toEqual([corrected]);
+    const jsonl = path.join(root, 'user-a', 'cloud', 'recall', 'jsonl', 'asset-usage-receipts', 'events.jsonl');
+    expect(fs.readFileSync(jsonl, 'utf8').trim().split('\n')).toHaveLength(2);
+    const { listValidationRecords } = await import('../../../../src/main/features/recall/validation-service');
+    const { listEffectivenessProofs } = await import('../../../../src/main/features/recall/proof-service');
+    expect(await listValidationRecords('user-a')).toEqual([]);
+    expect(await listEffectivenessProofs('user-a')).toEqual([]);
+    expect(await store.readRecallJsonRecord('user-a', 'output-checks', proof.id)).toEqual(completed);
+  });
+
+  it.each([
+    { status: 'unknown' },
+    { status: 'not_applicable', taskEvidence: { start: 0, end: 8 } },
+  ])('never uses a failed provider check as evidence against a self-report: %j', async finding => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    const claimed = await usage.recordAssetUsageReceipt('user-a', report);
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, {
+      ...proof, modelCompleted: false, checks: [{ assetId: 'asset-a', version: '1', ...finding }],
+    });
+    await expect(usage.recordAssetUsageReceipt('user-a', checked)).rejects.toThrow('does not match observation');
+    expect(await usage.listAssetUsageReceipts('user-a')).toEqual([claimed]);
+  });
+
+  it.each([
+    { status: 'unknown' },
+    { status: 'not_applicable', taskEvidence: { start: 0, end: 8 } },
+  ])('does not relabel legacy provenance or user contradiction from %j', async finding => {
+    const { usage, store, base, proof, checked } = await outputObservation();
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, {
+      ...proof, checks: [{ assetId: 'asset-a', version: '1', ...finding }],
+    });
+    const legacy = await usage.recordAssetUsageReceipt('user-a', { ...base, status: 'applied' });
+    expect(await usage.recordAssetUsageReceipt('user-a', checked)).toEqual(legacy);
+    const negative = await usage.recordAssetUsageReceipt('user-a', { ...base, status: 'contradicted' });
+    expect(await usage.recordAssetUsageReceipt('user-a', checked)).toEqual(negative);
+  });
+
+  it('does not promote a completed unknown proof to applied or replace user/legacy decisions', async () => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, {
+      ...proof, checks: [{ assetId: 'asset-a', version: '1', status: 'unknown' }],
+    });
+    const unknown = await usage.recordAssetUsageReceipt('user-a', checked);
+    await expect(usage.recordAssetUsageReceipt('user-a', { ...checked, status: 'applied' }))
+      .rejects.toThrow('does not match observation');
+    // Even a later rewritten checker result cannot erase the completed unknown.
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, {
+      ...proof, checks: [{ assetId: 'asset-a', version: '1', status: 'complied', outputEvidence: { start: 0, end: 5 } }],
+    });
+    expect(await usage.recordAssetUsageReceipt('user-a', { ...checked, status: 'applied' })).toEqual(unknown);
+    expect(await usage.recordAssetUsageReceipt('user-a', report)).toEqual(unknown);
+    const negative = await usage.recordAssetUsageReceipt('user-a', { ...report, observationMethod: undefined,
+      outputHash: undefined, messageId: undefined, status: 'contradicted' });
+    expect(await usage.recordAssetUsageReceipt('user-a', { ...checked, status: 'applied' })).toEqual(negative);
+    expect(await usage.listAppliedUsageReceipts('user-a', { taskRunIds: ['run-a'] })).toEqual([]);
+  });
+
+  it.each([
+    { status: 'not_applicable' },
+    { status: 'not_applicable', taskEvidence: null },
+    { status: 'not_applicable', taskEvidence: [] },
+    { status: 'not_applicable', taskEvidence: { start: 0, end: 0 } },
+    { status: 'not_applicable', taskEvidence: { start: -1, end: 5 } },
+    { status: 'not_applicable', taskEvidence: { start: 0.5, end: 5 } },
+    { status: 'not_applicable', taskEvidence: { start: 0, end: Number.MAX_SAFE_INTEGER + 1 } },
+    { status: 'not_applicable', taskEvidence: { start: '0', end: 5 } },
+    { status: 'not_applicable', taskEvidence: { start: 0, end: 5, quote: 'unverified raw task' } },
+    { status: 'unknown', outputEvidence: { start: 0, end: 5, quote: 'unverified raw output' } },
+    { status: 'unknown', taskEvidence: { start: 5, end: 0 } },
+    { status: 'unknown', outputEvidence: null },
+    { status: 'unknown', extra: 'caller-provided claim' },
+  ])('rejects malformed applicability/unknown proof instead of correcting adoption: %j', async finding => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    const claimed = await usage.recordAssetUsageReceipt('user-a', report);
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, {
+      ...proof, checks: [{ assetId: 'asset-a', version: '1', ...finding }],
+    });
+    await expect(usage.recordAssetUsageReceipt('user-a', checked)).rejects.toThrow('does not match observation');
+    expect(await usage.listAssetUsageReceipts('user-a')).toEqual([claimed]);
+  });
+
+  it('rejects ambiguous unknown rows and preserves claims tied to a different output', async () => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, {
+      ...proof, checks: Array.from({ length: 2 }, () => ({ assetId: 'asset-a', version: '1', status: 'unknown' })),
+    });
+    const claimed = await usage.recordAssetUsageReceipt('user-a', { ...report, outputHash: '0'.repeat(64) });
+    await expect(usage.recordAssetUsageReceipt('user-a', checked)).rejects.toThrow('does not match observation');
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, {
+      ...proof, checks: [{ assetId: 'asset-a', version: '1', status: 'unknown' }],
+    });
+    expect(await usage.recordAssetUsageReceipt('user-a', checked)).toEqual(claimed);
+  });
+
+  it('corrects self-reported adoption and removes it from the authoritative applied count', async () => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    await usage.recordAssetUsageReceipt('user-a', report);
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, proof);
+    const corrected = await usage.recordAssetUsageReceipt('user-a', checked);
+    expect(corrected).toMatchObject({ status: 'usage_unknown', observationMethod: 'model_assisted', outputCheckReceiptId: proof.id });
+    expect(await usage.listAppliedUsageReceipts('user-a', { taskRunIds: ['run-a'] })).toEqual([]);
+    const views = await usage.listAssetUsageReceiptViews('user-a', 'asset-a');
+    expect(views).toEqual([expect.objectContaining({ observationMethod: 'model_assisted', status: 'usage_unknown' })]);
+    expect(JSON.stringify(views)).not.toContain(outputHash);
+    expect(views[0]).not.toHaveProperty('outputCheckReceiptId');
+    await usage.recordAssetUsageReceipt('user-a', report);
+    await usage.recordAssetUsageReceipt('user-a', checked);
+    expect(await usage.listAssetUsageReceipts('user-a')).toEqual([corrected]);
+  });
+
+  it('holds the independent finding even if the delayed report arrives after checking', async () => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, proof);
+    await usage.recordAssetUsageReceipt('user-a', checked);
+    expect(await usage.recordAssetUsageReceipt('user-a', report)).toMatchObject({ status: 'usage_unknown', observationMethod: 'model_assisted' });
+  });
+
+  it('preserves user contradiction and legacy applied receipts without guessing their source', async () => {
+    const { usage, store, base, proof, report, checked } = await outputObservation();
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, proof);
+    await usage.recordAssetUsageReceipt('user-a', { ...base, status: 'applied', reason: 'Model-reported adoption' });
+    expect(await usage.recordAssetUsageReceipt('user-a', checked)).toMatchObject({ status: 'applied' });
+    await usage.recordAssetUsageReceipt('user-a', { ...base, status: 'contradicted' });
+    expect(await usage.recordAssetUsageReceipt('user-a', checked)).toMatchObject({ status: 'contradicted' });
+    expect(await usage.recordAssetUsageReceipt('user-a', report)).toMatchObject({ status: 'contradicted' });
+  });
+
+  it('requires persisted proof before a caller label can change adoption', async () => {
+    const { usage, report, checked } = await outputObservation();
+    await usage.recordAssetUsageReceipt('user-a', report);
+    await expect(usage.recordAssetUsageReceipt('user-a', checked)).rejects.toThrow('does not match observation');
+    expect((await usage.listAssetUsageReceipts('user-a'))[0].status).toBe('applied');
+  });
+
+  it.each([
+    { modelCompleted: false }, { method: 'agent_reported' }, { taskRunId: 'other-run' }, { messageId: 'other-message' },
+    { outputHash: '0'.repeat(64) }, { taskHash: '0'.repeat(64) },
+    { checks: [{ assetId: 'other-asset', version: '1', status: 'not_complied', outputEvidence: { start: 0, end: 5 } }] },
+    { checks: [{ assetId: 'asset-a', version: '2', status: 'not_complied', outputEvidence: { start: 0, end: 5 } }] },
+    { checks: [{ assetId: 'asset-a', version: '1', status: 'complied', outputEvidence: { start: 0, end: 5 } }] },
+    { checks: [{ assetId: 'asset-a', version: '1', status: 'not_complied', outputEvidence: { start: 5, end: 0 } }] },
+    { checks: [{ assetId: 'asset-a', version: '1', status: 'not_complied' }] },
+  ])('rejects incomplete or mismatched checker proof: %j', async overrides => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    await usage.recordAssetUsageReceipt('user-a', report);
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, { ...proof, ...overrides });
+    await expect(usage.recordAssetUsageReceipt('user-a', checked)).rejects.toThrow('does not match observation');
+    expect((await usage.listAssetUsageReceipts('user-a'))[0].status).toBe('applied');
+  });
+
+  it('requires matching message/hash in self-report and final-message evidence', async () => {
+    const { usage, store, proof, report, checked } = await outputObservation();
+    await store.writeRecallJsonRecord('user-a', 'output-checks', proof.id, proof);
+    await usage.recordAssetUsageReceipt('user-a', { ...report, outputHash: '0'.repeat(64) });
+    expect(await usage.recordAssetUsageReceipt('user-a', checked)).toMatchObject({ status: 'applied' });
+    await expect(usage.recordAssetUsageReceipt('user-a', { ...checked, evidenceRefs: [{ kind: 'message', id: 'other-message' }] }))
+      .rejects.toThrow('needs its final message evidence');
+    await expect(usage.recordAssetUsageReceipt('user-a', { ...checked, messageId: 'other-message', evidenceRefs: [{ kind: 'message', id: 'other-message' }] }))
+      .rejects.toThrow('does not match final output observation');
   });
 });

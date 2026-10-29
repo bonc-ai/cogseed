@@ -48,7 +48,7 @@ export const MAX_MEETING_ASSET_REFS = 100;
 const MAX_TITLE_CHARS = 120;
 
 export type MeetingRefVia = 'attach' | 'conclusion' | 'action_draft';
-export type MeetingAssetType = 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
+export type MeetingAssetType = 'cognition' | 'personal' | 'rule' | 'template' | 'skill_method' | 'fact';
 
 /**
  * 会议侧引用包错误（失败一律码化 + 归因，见 `contracts/tool-contract.md` §5；
@@ -184,7 +184,7 @@ async function admitAsset(uid: string, assetId: string): Promise<RecallAbilityAs
   }, {
     // 用户主动挂载（不是静默默认注入）：成熟度与适用条件不作硬门槛，
     // 权限与状态门照过——与 buildExplicitAssetView 的语义一致。
-    silentDefaultInjection: false,
+    operation: 'explicit_use',
   });
   if (!gate.eligible && gate.reasons.length) {
     throw new MeetingRefError(

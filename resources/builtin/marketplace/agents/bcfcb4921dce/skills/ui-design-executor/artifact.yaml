@@ -1,0 +1,29 @@
+api_version: cogseed.security/v1
+kind: SkillArtifact
+metadata:
+  id: skill.cogseed.ui.design.executor
+  name: ui-design-executor
+  version: 1.0.0
+  description: UIDesigner's compact default executor for ordinary single-page, component,
+    screenshot-redesign, and in-repo UI work; complete the design, HTML or explicit-format
+    artifact, relevant states, fast validation, and delivery with minimal skill loading
+    and tool loops.
+  owner: cogseed
+spec:
+  entrypoint: SKILL.md
+  implementation:
+    language: javascript
+    scripts:
+    - scripts/validate-html-artifact.mjs
+  security:
+    ontology: cogseed.security.skill@1.1.1
+    manifest_ref: references/security-manifest.yaml
+  contracts:
+    schemas: schemas.json
+    skill_spec: references/skill-spec.yaml
+    validation_contract: references/validation-contract.yaml
+  tests:
+    evals: evals/evals.json
+  lifecycle:
+    status: production
+    rollback_ref: null

@@ -1,0 +1,7 @@
+{
+  "name": "报销预检助手",
+  "description_zh": "核对报销材料并给出预检清单。",
+  "workflow": "1. 读材料。2. 调用 Hub Skill 提取。3. 调用随包 Skill 核对。",
+  "category": "office",
+  "skill_list": ["a3f09c21b7e4", "my-ocr-helper"]
+}

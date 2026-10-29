@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
 import * as os from 'node:os';
+import * as path from 'node:path';
 import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
 
 type InvokeFn = (event: unknown, req: { channel: string; payload?: unknown }) => Promise<any>;
@@ -37,6 +39,9 @@ beforeEach(async () => {
   const ipc = await import('../../../src/main/ipc/index');
   ipc.register();
 });
+afterEach(() => {
+  vi.resetModules();
+});
 
 function call(channel: string, payload: unknown = {}) {
   if (!invokeHandler) throw new Error('invoke handler not registered');
@@ -44,31 +49,25 @@ function call(channel: string, payload: unknown = {}) {
 }
 
 describe('ipc › personal ontology templates', () => {
-  it('re-exposes single-item candidate channels for backflow confirmation while keeping batch channels retired', async () => {
-    // 2026-09-20 本体分组迁入：回流候选的确认端需要 list/confirm/reject 三个
-    // 单条通道——旧候选审核面板退役时的「全禁」约束随之收窄（防的是面板复活，
-    // 不是防回流确认这个窄入口）。批量与 onboarding 通道保持退役。
-    const liveChannels = [
-      'personalOntology.candidates.list',
-      'personalOntology.candidates.confirm',
-      'personalOntology.candidates.reject',
-    ];
-    for (const channel of liveChannels) {
-      const res = await call(channel);
-      expect(res).not.toEqual({ ok: false, error: `unknown channel: ${channel}` });
+  it('旧候选列表保留只读，完整合法输入也不能恢复确认或转移通道', async () => {
+    const live = await call('personalOntology.candidates.list');
+    expect(live).not.toEqual({ ok: false, error: 'unknown channel: personalOntology.candidates.list' });
+    const po = await import('../../../src/main/features/personal_ontology_candidates');
+    const old = await po.addCandidate(TEST_UID, { candidate_id: 'legacy-po-ipc', kind: 'relation', confidence: 'high',
+      summary: '项目负责人', memory_scope: 'shared', memory_text: '项目负责人需核对来源。', source_memory_refs: ['legacy-memory-1'] });
+    expect(old.ok).toBe(true);
+    const before = fs.readFileSync(po.candidatesMdPath(TEST_UID), 'utf8');
+    const payload = { candidateId: 'legacy-po-ipc', candidate_id: 'legacy-po-ipc', candidateIds: ['legacy-po-ipc'],
+      toGlobalMemory: true, toGroupIds: ['group-one'], targetField: '负责人', projectId: 'project-one' };
+    for (const channel of ['personalOntology.candidates.transferToRecall', 'recall.candidates.importPersonalOntology',
+      'personalOntology.candidates.confirm', 'personalOntology.candidates.reject',
+      'personalOntology.candidates.confirmBatch', 'personalOntology.candidates.rejectBatch', 'personalOntology.candidates.addFromOnboarding']) {
+      await expect(call(channel, payload)).resolves.toEqual({ ok: false, error: `unknown channel: ${channel}` });
+      expect(fs.readFileSync(po.candidatesMdPath(TEST_UID), 'utf8')).toBe(before);
     }
-
-    const retiredChannels = [
-      'personalOntology.candidates.confirmBatch',
-      'personalOntology.candidates.rejectBatch',
-      'personalOntology.candidates.addFromOnboarding',
-    ];
-    for (const channel of retiredChannels) {
-      await expect(call(channel)).resolves.toEqual({
-        ok: false,
-        error: `unknown channel: ${channel}`,
-      });
-    }
+    expect((await po.listCandidates(TEST_UID)).candidate_updates.some(row => row.candidate_id === 'legacy-po-ipc')).toBe(true);
+    const recall = await import('../../../src/main/features/recall/candidate-service');
+    expect((await recall.listRecallCandidates(TEST_UID)).some(row => row.captureKey?.startsWith('po-candidate-'))).toBe(false);
   });
 
   it('preserves template restore and archive options across IPC', async () => {

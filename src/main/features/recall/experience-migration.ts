@@ -1,8 +1,7 @@
 /**
- * experience-migration.ts — 存量 KSTAR 经验类资产迁入经验目录（specs/016 T015，
- * 契约 E7/E8，data-model §4/§7；US-801 AC2 / FR-002 / SC-002）。
+ * experience-migration.ts — 存量 KSTAR 经验类资产迁入经验目录。
  *
- * 判据（research D5，唯一硬标记）：`asset.learningProvenance` 存在且
+ * 判据：`asset.learningProvenance` 存在且
  * `status ∈ {active, paused, archived}`；capture 线（自动抽取，无 provenance）与
  * `preference_scan` 线（只带 learningSignal 徽章）天然落选，各落一个稳定跳过码。
  *
@@ -14,11 +13,13 @@
  *      （`listContextProjections` 会 clamp 条数，存量超过就漏冻结）；
  *   ② 写经验条目（`createExperience`，确定性 id `exp-mig-<assetId>` 保证重跑幂等）；
  *   ③ **经验确认写成功之后**才迁出资产库：物理删主记录 JSON + 清版本流
- *      （E7 口径「移出 ability-assets 记录面 + 清版本流」；不用 `purgeAbilityAsset`
- *      ——它的级联段会把冻结副本从投影里摘掉，直接违背 SC-002 不断链）；
+ *      不用 `purgeAbilityAsset`，避免其级联清除投影中的冻结副本；
  *   ④ 台账记 `assetId ↔ experienceId`（`experience-migrations` 集合，`exm-` 前缀）。
  * 任一步失败 → 该条记 `failed` 并**保持资产原状**（无半迁：经验没写成前不动
  * 资产记录；冻结副本是投影侧的幂等加法，写失败即中止、写成功也无害）。
+ * 例外（迁出锁内终态复核）：③ 发现资产在窗口期内已被删除（保留期
+ * 内）时，经验条目未写的记 `skipped`(terminal_status)、已写的记 `failed`，
+ * 两种分叉都不物理删除已删资产。
  *
  * 与资产域的关系：本文件**只读调用** asset-service 的列举/读取原语；迁出用的
  * 物理删除是「同形操作」（store 没有删 JSON 记录的原语，这里按同一把文件锁
@@ -44,14 +45,29 @@ import {
   type ExperienceVerification,
 } from './experience-service';
 import type { KstarLearningProvenance } from '../kstar/types';
-import { scopeForTask, experienceTypeOf } from '../kstar/extraction-service';
-import { readKstarEpisode } from '../kstar/episode-store';
-import { readKstarReview } from '../kstar/review-service';
-import { userFacingSummary } from '../kstar/task-level-precipitation';
+import { scopeForTask, experienceTypeOf } from './experience-taxonomy';
+// 2026-10-08 U09：KSTAR 读取走动态导入——KSTAR 缺失/损坏时经验迁移仍可
+// 运行（复盘信息按不可用降级，不阻断认知主流程）。
+async function kstarReaders() {
+  try {
+    const [episodes, reviews, summaries] = await Promise.all([
+      import('../kstar/episode-store'),
+      import('../kstar/review-service'),
+      import('../kstar/task-level-precipitation'),
+    ]);
+    return {
+      readEpisode: episodes.readKstarEpisode.bind(episodes),
+      readReview: reviews.readKstarReview.bind(reviews),
+      summarize: summaries.userFacingSummary.bind(summaries),
+    };
+  } catch {
+    return null;
+  }
+}
 
 /** 迁移台账集合（data-model §7：`<uid>/cloud/recall/records/experience-migrations/`）。 */
 export const EXPERIENCE_MIGRATION_COLLECTION = 'experience-migrations';
-/** run 单批上限（契约 E7：显式传 assetIds，≤200，禁止隐式一键全迁）。 */
+/** run 单批上限（显式传 assetIds，≤200，禁止隐式全量迁移）。 */
 export const EXPERIENCE_MIGRATION_MAX_ASSETS = 200;
 
 /** 跳过理由码（稳定，界面按码翻人话；不回滚改文案导致历史台账不可读）。 */
@@ -124,7 +140,7 @@ export interface ExperienceMigrationStatusSummary {
 
 // ── 判据（唯一分叉点，preview/run 共用）────────────────────────────────────
 
-/** 可迁移状态集：deleted/purged/revoked 不迁——删除是用户意图（research D5）。 */
+/** 可迁移状态集：deleted/purged/revoked 不迁——删除是用户意图。 */
 const MIGRATABLE_STATUSES = new Set<RecallAbilityAssetRecord['status']>(['active', 'paused', 'archived']);
 
 function migrationVerdict(asset: RecallAbilityAssetRecord): ExperienceMigrationSkipReason | null {
@@ -132,7 +148,7 @@ function migrationVerdict(asset: RecallAbilityAssetRecord): ExperienceMigrationS
     return 'terminal_status';
   }
   if (!asset.learningProvenance) {
-    // capture 线与 preference_scan 线都无 provenance（D5 反例），但各自可辨：
+    // capture 线与 preference_scan 线都无 provenance，但各自可辨：
     // 给出更具体的码，界面能如实说清「为什么这条不迁」。
     if (asset.learningSignal?.source === 'preference_scan') return 'preference_scan_line';
     if (asset.lifecycleStatus === 'automatically_extracted_unverified') return 'capture_line';
@@ -144,7 +160,7 @@ function migrationVerdict(asset: RecallAbilityAssetRecord): ExperienceMigrationS
   return null;
 }
 
-/** 资产反推经验类型（research D3 的逆向映射，与沉淀线 `experienceKindFor` 同源）：
+/** 资产反推经验类型（与沉淀线 `experienceKindFor` 同源）：
  *  归因为 *_gap → gap；skill_method → workflow；其余 → lesson。 */
 function kindForAsset(asset: RecallAbilityAssetRecord): 'lesson' | 'workflow' | 'gap' {
   const attribution = asset.learningProvenance?.attribution;
@@ -155,13 +171,13 @@ function kindForAsset(asset: RecallAbilityAssetRecord): 'lesson' | 'workflow' | 
   return asset.type === 'skill_method' ? 'workflow' : 'lesson';
 }
 
-// ── preview（E7，只读）──────────────────────────────────────────────────────
+// ── preview（只读）──────────────────────────────────────────────────────
 
 export async function previewExperienceMigration(userId: string): Promise<ExperienceMigrationPreview> {
   if (!safeId(userId)) throw new Error('invalid experience migration user');
   const { listAbilityAssets } = await import('./asset-service');
   const assets = await listAbilityAssets(userId);
-  // frozenProjections = 引用它的已确认投影数（E7；全量扫描，与删除冻结同一口径）。
+  // frozenProjections = 引用它的已确认投影数（全量扫描，与删除冻结同一口径）。
   const projections = await listAllConfirmedProjections(userId);
   const items: ExperienceMigrationPreviewItem[] = [];
   const reasonCounts = new Map<ExperienceMigrationSkipReason, number>();
@@ -193,7 +209,7 @@ export async function previewExperienceMigration(userId: string): Promise<Experi
   };
 }
 
-// ── run（E7，写；顺序：冻结 → 写经验 → 迁出 → 台账）─────────────────────────
+// ── run（写；顺序：冻结 → 写经验 → 迁出 → 台账）─────────────────────────
 
 /** 版本流快照缺失时的 live 兜底（照 asset-service.snapshot() 的同形构造）：
  *  投影钉住的正是当前在用版时，live 内容就是那一版的原文。 */
@@ -212,7 +228,7 @@ function liveSnapshotOf(asset: RecallAbilityAssetRecord): AbilityAssetVersionRec
     ...(asset.derivedFrom ? { derivedFrom: asset.derivedFrom } : {}),
     ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
     ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
-    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
+    // sensitivity 不进版本快照（snapshot() 同形——版本流不版本化敏感性）。
     ...(asset.sourceSessionIds?.length ? { sourceSessionIds: asset.sourceSessionIds } : {}),
     status: asset.status,
     maturity: asset.maturity,
@@ -222,7 +238,7 @@ function liveSnapshotOf(asset: RecallAbilityAssetRecord): AbilityAssetVersionRec
 
 /**
  * ① 冻结：把该资产在每个已确认投影里钉住的版本内容副本写进
- * `assetVersionSnapshots`（含可选 `evidenceRefs`——T015 写、T016 读的加法式字段）。
+ * `assetVersionSnapshots`（含可选 `evidenceRefs`，写入后供注入读取）。
  *
  * 形态照抄 `deleteAbilityAssetVersion`：逐投影 `updateRecallJsonRecord` 幂等合并
  * （同版本已冻则原样返回不写）；**任一投影写失败抛出**，调用方把该资产记
@@ -272,13 +288,14 @@ async function writeExperienceForAsset(
   provenance: KstarLearningProvenance,
 ): Promise<ExperienceRecord> {
   const kind = kindForAsset(asset);
-  const body = String(asset.statement || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
+  const body = String(asset.statement || '').replace(/\s+/g, ' ').trim();
   // 溯源 episode best-effort：读得到就用真实 userGoal/status；读不到用资产标题
   // 兜底（如实：这条经验学自哪个任务，标题就是当时的内容核心），不编造。
   let taskGoal = '';
   let taskStatus = 'unknown';
   try {
-    const episode = await readKstarEpisode(userId, provenance.episodeId);
+    const readers = await kstarReaders();
+    const episode = readers ? await readers.readEpisode(userId, provenance.episodeId).catch(() => undefined) : undefined;
     taskGoal = String(episode?.t.userGoal || '');
     taskStatus = String(episode?.r.status || 'unknown') || 'unknown';
   } catch {
@@ -293,7 +310,8 @@ async function writeExperienceForAsset(
     confidence: asset.learningSignal?.confidence ?? 0,
   };
   try {
-    const review = await readKstarReview(userId, provenance.episodeId);
+    const readers2 = await kstarReaders();
+    const review = readers2 ? await readers2.readReview(userId, provenance.episodeId).catch(() => undefined) : undefined;
     if (review) {
       verification = {
         state: review.reviewState || 'unknown',
@@ -314,7 +332,7 @@ async function writeExperienceForAsset(
       taskStatus,
     },
     experienceType: experienceTypeOf(kind),
-    title: userFacingSummary(kind, asset.scope, body),
+    title: (await kstarReaders())?.summarize(kind, asset.scope, body) ?? asset.title ?? '',
     body,
     ...(asset.learningSignal?.expectedResult ? { expected: asset.learningSignal.expectedResult } : {}),
     ...(asset.learningSignal?.actualResult ? { actual: asset.learningSignal.actualResult } : {}),
@@ -333,18 +351,40 @@ async function writeExperienceForAsset(
   });
 }
 
+/** 锁内复核信号：迁出窗口内资产已进终态（deleted/purged/revoked）。
+ *  调用方据「经验条目是否已写出」分叉：未写 → 记 skipped（terminal_status，
+ *  资产原状保留）；已写 → 记 failed（半迁如实可见，资产仍保留可恢复）。 */
+class AssetTerminalDuringMigrationError extends Error {
+  constructor(readonly status: string) {
+    super(`asset entered terminal status (${status}) during experience migration`);
+    this.name = 'AssetTerminalDuringMigrationError';
+  }
+}
+
 /** ③ 迁出资产库：物理删主记录（同一把文件锁，与 update 原语互斥）+ 清版本流。
  *  不清审计流（只有动作名与时间戳，是历史可考的最小项）；**绝不**碰投影里的
- *  冻结副本（那是 SC-002 的载体）。ENOENT 容忍：迁出可重入。 */
+ *  冻结副本，保留已确认投影的内容。ENOENT 容忍：迁出可重入。
+ *
+ *  锁内终态复核：判据（migrationVerdict）到物理迁出之间隔着冻结+写
+ *  经验两段多次 await，窗口期内资产可能已被用户删除（deleted 保留期内应可
+ *  restore）。删除主记录前在同一把记录锁内重读复核终态——已删资产不迁出，
+ *  保留期承诺不被物理删除打破。 */
 async function removeAssetRecordAndVersions(userId: string, assetId: string): Promise<void> {
   const recordPath = recallJsonRecordPath(userId, 'ability-assets', assetId);
   await fileEditLock(recordPath).runExclusive(async () => {
+    const current = await readRecallJsonRecord(userId, 'ability-assets', assetId).catch(() => undefined);
+    if (current) {
+      const status = String((current as unknown as { status?: unknown }).status || '');
+      if (status === 'deleted' || status === 'purged' || status === 'revoked') {
+        throw new AssetTerminalDuringMigrationError(status);
+      }
+    }
     await fs.rm(recordPath, { force: true });
   });
   await removeRecallJsonlStream(userId, 'ability-asset-versions', assetId);
 }
 
-// ── 台账（E8）──────────────────────────────────────────────────────────────
+// ── 台账──────────────────────────────────────────────────────────────
 
 function migrationsDirectory(userId: string): string {
   return path.dirname(recallJsonRecordPath(userId, EXPERIENCE_MIGRATION_COLLECTION, 'placeholder'));
@@ -370,7 +410,7 @@ async function listMigrationRecords(userId: string): Promise<ExperienceMigration
     .sort((left, right) => String(right.startedAt).localeCompare(String(left.startedAt)) || String(right.id).localeCompare(String(left.id)));
 }
 
-/** 最近一次迁移（E8）：从未跑过 → `{ok:true, migrationId:null}`（契约原文）。 */
+/** 最近一次迁移：从未跑过 → `{ok:true, migrationId:null}`。 */
 export async function latestExperienceMigrationStatus(
   userId: string,
 ): Promise<{ ok: true; migrationId: null } | ({ ok: true } & ExperienceMigrationStatusSummary)> {
@@ -403,7 +443,7 @@ export async function runExperienceMigration(
   assetIds: string[],
 ): Promise<ExperienceMigrationRunResult> {
   if (!safeId(userId)) throw new Error('invalid experience migration user');
-  // 显式批量边界（契约 E7）：必须传数组、非空、≤200、逐条合法——禁止隐式全迁。
+  // 显式批量边界：必须传数组、非空、≤200、逐条合法——禁止隐式全迁。
   if (
     !Array.isArray(assetIds) || assetIds.length === 0 || assetIds.length > EXPERIENCE_MIGRATION_MAX_ASSETS
     || assetIds.some((id) => typeof id !== 'string' || !safeId(id))
@@ -477,10 +517,29 @@ export async function runExperienceMigration(
         record.failed.push({ assetId, reason: 'experience_write_failed', error: (error as Error).message });
         continue;
       }
-      // ③ 迁出资产库（主记录 + 版本流）。
+      // ③ 迁出资产库（主记录 + 版本流）。锁内复核发现资产已进终态
+      // （保留期内被删）时按写入状态分叉——经验条目**未写**的记 skipped（terminal_
+      // status，资产原状保留、restore 通道完好）；经验条目**已写出**的记
+      // failed（半迁如实可见，资产同样保留，复用既有 asset_removal_failed
+      // 码不加新界面码）。两种分叉都不物理删除已删资产。注：现执行序 ②恒先
+      // 于③，复核触发时经验必已写出——「未写」分支是防御位（执行序被调整或
+      // ②部分失败重排时保持口径正确）。
       try {
         await removeAssetRecordAndVersions(userId, assetId);
       } catch (error) {
+        if (error instanceof AssetTerminalDuringMigrationError) {
+          if (experienceId) {
+            record.failed.push({
+              assetId,
+              experienceId,
+              reason: 'asset_removal_failed',
+              error: `asset entered terminal status (${error.status}) after the experience entry was written; asset kept in place`,
+            });
+          } else {
+            record.skipped.push({ assetId, reason: 'terminal_status' });
+          }
+          continue;
+        }
         record.failed.push({ assetId, experienceId, reason: 'asset_removal_failed', error: (error as Error).message });
         continue;
       }

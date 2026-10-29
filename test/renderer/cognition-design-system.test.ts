@@ -48,6 +48,9 @@ describe('cognition design-system integration', () => {
     expect(page).toContain('ui-empty-state');
     expect(page).toContain('ui-button');
     expect(capture).toContain('ui-modal ui-modal--md');
+    expect(capture).toContain('role="dialog"');
+    expect(capture).toContain('aria-labelledby="cognition-capture-title"');
+    expect(capture).toContain('id="cognition-capture-title"');
     expect(capture).toContain('ui-modal__header');
     expect(capture).toContain('ui-modal__body');
     expect(capture).toContain('ui-modal__footer');

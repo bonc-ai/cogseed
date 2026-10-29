@@ -3,8 +3,8 @@ publiccodeYmlVersion: "0.2"
 name: CogSeed
 url: "https://github.com/bonc-ai/cogseed"
 landingURL: "https://github.com/bonc-ai/cogseed"
-softwareVersion: "1.3.0"
-releaseDate: "2026-10-09"
+softwareVersion: "1.4.0"
+releaseDate: "2026-10-28"
 logo: "assets/cogseed-icon.png"
 monochromeLogo: "assets/cogseed-icon.png"
 

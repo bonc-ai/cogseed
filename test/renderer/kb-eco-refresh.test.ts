@@ -29,9 +29,10 @@ describe('KB ecosystem navigation refresh', () => {
       'kb-workbench': fakeElement(),
       'kb-notes': fakeElement(),
       'kb-discover': fakeElement(),
-      'kb-eco-compact': fakeElement(),
+      'sidebar-kb-nav': fakeElement(),
     };
-    elements['kb-view'].querySelectorAll = vi.fn((selector: string) => selector === '[data-kb-eco]' ? buttons : []);
+    // Navigation renders into the shell sidebar host (specs/008), not the page.
+    elements['sidebar-kb-nav'].querySelectorAll = vi.fn((selector: string) => selector === '[data-kb-eco]' ? buttons : []);
     const renderKbWorkbench = vi.fn();
     const renderKbDiscover = vi.fn();
     const context: any = {
@@ -61,10 +62,10 @@ describe('KB ecosystem navigation refresh', () => {
     expect(renderKbDiscover).toHaveBeenCalledOnce();
     expect(renderKbWorkbench).toHaveBeenCalledOnce();
     expect(elements['kb-workbench'].hidden).toBe(false);
-    expect(context.window.uiIconButton).toHaveBeenCalledWith(expect.objectContaining({ icon: 'panel-list' }));
     expect(context.window.uiBadge).toHaveBeenCalledWith(expect.objectContaining({ className: 'kb-eco-tab-soon' }));
-    expect(source).not.toContain('class="ui-icon-button kb-eco-compact"');
-    expect(elements['kb-eco-compact'].setAttribute).toHaveBeenCalledWith('aria-pressed', 'false');
+    expect(elements['sidebar-kb-nav'].innerHTML).toContain('data-kb-eco="discover"');
+    expect(elements['kb-view'].innerHTML).not.toContain('data-kb-eco=');
+    expect(source).not.toContain('kb-eco-compact');
   });
 });
 
@@ -139,7 +140,7 @@ describe('KB ecosystem language switch', () => {
     };
   }
 
-  it('i18n-change 后导航标签、徽标与紧凑按钮换到新语言；且绝不重建 innerHTML', () => {
+  it('i18n-change 后导航标签与徽标换到新语言；且绝不重建 innerHTML', () => {
     const dict: Record<string, string> = {
       'kb.eco.nav_kb': '知识库', 'kb.eco.nav_notes': '笔记', 'kb.eco.nav_discover': '发现',
       'kb.eco.hide_labels': '仅显示图标', 'kb.eco.coming_soon': '待开发',
@@ -158,12 +159,10 @@ describe('KB ecosystem language switch', () => {
     const labelNodeBefore = byKey('kb')._labelNode;
     env.fire();
 
-    expect(byKey('kb').title).toBe('Knowledge Base');
     expect(byKey('kb').attrs['aria-label']).toBe('Knowledge Base');
     expect(byKey('kb')._labelNode.textContent).toBe('Knowledge Base');
     expect(byKey('discover')._labelNode.textContent).toBe('Discover');
     expect(byKey('discover')._badgeNode.textContent).toBe('Coming soon');
-    expect(env.compact.title).toBe('Show icons only');
     // 重建 innerHTML = 丢掉 kb-notes 编辑器里的草稿：重标签期间一次都不许写
     expect(env.innerWrites()).toBe(writesAfterRender);
     // 文本节点必须还是原来那个（在原地改文字），不是被新节点替换

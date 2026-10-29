@@ -133,9 +133,10 @@ describe('recall candidate pool renders from capability, not raw status', () => 
   });
 
   it('never renders decision actions for terminal candidates', () => {
-    // 已处理（confirmed/rejected/ignored）只出现在处理记录折叠区，无决策按钮。
-    expect(viewsSource).toContain("['confirmed', 'rejected', 'ignored']");
-    expect(viewsSource).toContain('fold-processed');
+    // 已处理（confirmed/integrated/rejected/ignored/expired/superseded）只出现在
+    // 处理记录折叠区，无决策按钮。
+    expect(viewsSource).toContain("['confirmed', 'integrated', 'rejected', 'ignored', 'expired', 'superseded']");
+    expect(viewsSource).toContain('ca-activity-processing');
   });
 
   it('treats a candidate without capabilities as read-only instead of guessing', () => {
@@ -145,10 +146,9 @@ describe('recall candidate pool renders from capability, not raw status', () => 
     // 「稍后处理 / 拒绝」，正是它要防的死按钮。真实渲染结果（含"缺失"这一分支）
     // 由 recall-asset-rating-gate.test.ts 用真实现驱动断言。
     expect(viewsSource).toContain('const caps = candidate.capabilities || {}');
-    expect(viewsSource).toContain('const canEdit = !!caps.canEdit');
-    expect(viewsSource).toContain('const canPromote = !!caps.canPromote');
-    expect(viewsSource).toContain('const canDefer = !!caps.canDefer');
-    expect(viewsSource).toContain('const canReject = !!caps.canReject');
+    expect(viewsSource).toContain('!!caps.canEdit');
+    expect(viewsSource).toContain('!!caps.canPromote');
+    expect(viewsSource).toContain('!!caps.canReject');
   });
 });
 
@@ -172,9 +172,9 @@ describe('recall candidate detail renders from capability', () => {
     expect(viewsSource).toContain('cognition.candidate_evidence_all_unavailable');
   });
 
-  it('选中之后立刻画成 chip——用户看到的就是保存后的样子', () => {
-    expect(viewsSource).toContain('ca-chip');
-    expect(viewsSource).toContain('data-act="cand-type"');
+  it('选中后的类型渲染为详情属性——用户看到的就是保存后的样子', () => {
+    // 类型不再用 chip 交互，值直接渲染为详情根节点的 data-cand-type。
+    expect(viewsSource).toContain('data-cand-type="');
   });
 
   it('已被引用的来源不再出现在可选列表里，避免选出重复证据', () => {
@@ -202,7 +202,7 @@ describe('recall candidate detail renders from capability', () => {
   });
 
   it('keeps the save-only entry away from read-only candidates', () => {
-    expect(viewsSource).toContain('const canPromote = !!caps.canPromote');
+    expect(viewsSource).toContain('!!caps.canPromote');
   });
 
   it('says why a failed candidate failed instead of showing a dead button', () => {
@@ -217,9 +217,10 @@ describe('confirmed candidate exits into the formal asset version chain', () => 
   });
 
   it('offers no asset entry when the candidate never produced one', () => {
-    expect(coreSource).toContain('(result && result.asset && result.asset.id) || (result && result.assetId)');
+    expect(coreSource).toContain("String(result?.asset?.id || '') !== assetId");
     expect(coreSource).toContain("router.go({ name: 'overview', assetId: promotedAssetId })");
-    expect(coreSource).toContain("router.go({ name: 'review' })");
+    // 没有产出资产时不再主动跳回 review，而是就地重读（缺候选时退回全量 reload）。
+    expect(coreSource).toContain('await NS.reload();');
   });
 });
 
@@ -237,7 +238,7 @@ describe('governance page carries the asset revision entry', () => {
   });
 
   it('refuses to open a blank form when the authoritative record is missing', () => {
-    expect(viewsSource).toContain('assetDetail(asset, route)');
+    expect(viewsSource).toContain('function assetDetail(asset, route, options = {})');
     expect(viewsSource).not.toContain('blank form');
   });
 

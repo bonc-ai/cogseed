@@ -63,7 +63,27 @@ describe("Session", () => {
     expect(msgs).toHaveLength(2);
     expect(msgs[0].content[0]).toMatchObject({ type: "tool_result", toolUseId: "tool-img" });
     expect(msgs[1].role).toBe("user");
-    expect(msgs[1].content[0]).toEqual({ type: "image", data: "aGVsbG8=", mediaType: "image/jpeg" });
+    // C1/R-09：图片带上产出它的 tool_use id（分批/重放都不再靠位置关联）。
+    expect(msgs[1].content[0]).toEqual({
+      type: "image", data: "aGVsbG8=", mediaType: "image/jpeg", toolUseId: "tool-img",
+    });
+  });
+
+  it("carries name and read-only path onto the attributed tool image", () => {
+    const session = new Session();
+    session.addToolResult("tool-img", "Image loaded.", [
+      { data: "aGVsbG8=", mediaType: "image/png", name: "shot.png", readonlyPath: "/w/shot.png" },
+    ]);
+
+    const blocks = session.getMessages()[1].content;
+    expect(blocks[0]).toEqual({
+      type: "image",
+      data: "aGVsbG8=",
+      mediaType: "image/png",
+      toolUseId: "tool-img",
+      name: "shot.png",
+      readonlyPath: "/w/shot.png",
+    });
   });
 
   it("keeps pending images in the model view until the assistant has seen them", () => {
@@ -95,13 +115,13 @@ describe("Session", () => {
 
     let modelMessages = session.getMessagesForModel();
     expect(modelMessages).toHaveLength(3);
-    expect(modelMessages[2].content[0]).toEqual({ type: "image", data: "frame-bytes", mediaType: "image/jpeg" });
+    expect(modelMessages[2].content[0]).toEqual({ type: "image", data: "frame-bytes", mediaType: "image/jpeg", toolUseId: "call-read" });
 
     session.addAssistantMessage([{ type: "tool_use", id: "call-next", name: "bash", input: { command: "echo ok" } }]);
     modelMessages = session.getMessagesForModel();
 
     expect(session.getMessages()).toHaveLength(4);
-    expect(session.getMessages()[2].content[0]).toEqual({ type: "image", data: "frame-bytes", mediaType: "image/jpeg" });
+    expect(session.getMessages()[2].content[0]).toEqual({ type: "image", data: "frame-bytes", mediaType: "image/jpeg", toolUseId: "call-read" });
     expect(modelMessages).toHaveLength(3);
     expect(modelMessages.flatMap((m) => m.content).some((c) => c.type === "image")).toBe(false);
     expect(modelMessages[1].content[0]).toMatchObject({

@@ -369,6 +369,45 @@ describe('memory › clearMemory', () => {
   });
 });
 
+// ── detachCognitionMemoryEntry kind 口径（F-r1-13 回归）────────────
+
+describe('memory › detachCognitionMemoryEntry kind 口径', () => {
+  it('只剥 cognition_asset 来源，不误删同 sourceId 的 role_template 存量记忆', async () => {
+    const mem = await loadMemory();
+    const paths = await import('../../../src/main/paths');
+    const records = await import('../../../src/main/features/memory-records');
+    // 2026-09-22 前模板记忆住在 MEMORY.md（memory.ts 迁移期双源读取至今）：
+    // 底层序列化构造同文件混存+撞名的存量形态（写入 API 的全局 sourceId
+    // 查重产不出该形态，但 load 不拒绝）。
+    const file = paths.userMemoryFile('u1');
+    const roleText = '模板带进来的工作习惯。';
+    const cogText = '认知资产投影的结论。';
+    const mk = (recordId: string, text: string, kind: 'role_template' | 'cognition_asset') => ({
+      recordId,
+      text,
+      contentSha256: records.memoryContentHash(text),
+      independent: false,
+      sources: [{ kind, sourceId: 'shared_1' }],
+    });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      records.serializeMemoryRecords([
+        mk('mem_0000000000000001', roleText, 'role_template'),
+        mk('mem_0000000000000002', cogText, 'cognition_asset'),
+      ]),
+      'utf8',
+    );
+
+    const result = mem.detachCognitionMemoryEntry('u1', 'shared_1');
+
+    expect(result).toMatchObject({ ok: true, detachedCognitionSourceIds: ['shared_1'] });
+    const kept = records.loadMemoryRecords(file);
+    expect(kept.map((record) => record.text)).toEqual([roleText]);
+    expect(kept[0].sources).toEqual([{ kind: 'role_template', sourceId: 'shared_1' }]);
+  });
+});
+
 // ── formatForSystemPrompt ──────────────────────────────────────
 
 describe('memory › formatForSystemPrompt', () => {
@@ -915,5 +954,36 @@ describe('memory › role-template tags survive edits', () => {
     await mem.removeEntry('u1', 'user', '会主动核查');
     expect(mem.countRoleTemplateMemoryEntries('u1', 'student')).toBe(1);
     expect(mem.countRoleTemplateMemoryEntries('u1', 'scholar')).toBe(1);
+  });
+});
+
+// ── P-r1-43：写路径 userId 入口校验（与 cognition 侧 assertUserId 同口径）──
+
+describe('memory › P-r1-43 write-path userId validation', () => {
+  it.each(['bad/id', 'space id', '', 'x'.repeat(81)])('addEntry 拒绝非法 userId %j', async (badId) => {
+    const mem = await loadMemory();
+    expect(() => mem.addEntry(badId, 'memory', 'text')).toThrow('invalid memory user id');
+    expect(() => mem.addEntry(badId, 'user', 'text')).toThrow('invalid memory user id');
+  });
+
+  it.each(['bad/id', 'x'.repeat(81)])('replaceEntry / removeEntry / clearMemory 拒绝非法 userId %j', async (badId) => {
+    const mem = await loadMemory();
+    expect(() => mem.replaceEntry(badId, 'memory', 'old', 'new')).toThrow('invalid memory user id');
+    expect(() => mem.removeEntry(badId, 'memory', 'old')).toThrow('invalid memory user id');
+    expect(() => mem.clearMemory(badId, 'memory')).toThrow('invalid memory user id');
+  });
+
+  it('角色模板与投影 ensure/detach 低层写口同样校验', async () => {
+    const mem = await loadMemory();
+    expect(() => mem.addRoleTemplateMemoryEntry('bad/id', 'user', 'student', 'text')).toThrow('invalid memory user id');
+    expect(() => mem.removeRoleTemplateMemoryFromLive('bad/id', 'student')).toThrow('invalid memory user id');
+    expect(() => mem.ensureCognitionMemoryEntry('bad/id', 'src1', 'text')).toThrow('invalid memory user id');
+    expect(() => mem.detachCognitionMemoryEntry('bad/id', 'src1')).toThrow('invalid memory user id');
+    expect(() => mem.ensurePersonalProfileEntry('bad/id', 'src1', 'text')).toThrow('invalid memory user id');
+  });
+
+  it('合法 userId 的写路径不受影响', async () => {
+    const mem = await loadMemory();
+    expect(mem.addEntry('u1', 'memory', '合法用户的记忆').ok).toBe(true);
   });
 });

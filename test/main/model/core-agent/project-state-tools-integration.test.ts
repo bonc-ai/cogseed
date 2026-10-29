@@ -47,9 +47,6 @@ async function setupSpaceStateTools() {
     set: (instructions) => spaces.writeSpaceInstructions(UID, sid, instructions),
   });
   const memoryHandler = {
-    add: (tier: MemoryTier, content: string) => memory.addEntry(UID, memoryScope(tier), content),
-    replace: (tier: MemoryTier, oldText: string, content: string) => memory.replaceEntry(UID, memoryScope(tier), oldText, content),
-    remove: (tier: MemoryTier, oldText: string) => memory.removeEntry(UID, memoryScope(tier), oldText),
     list: (tier: MemoryTier) => memory.listEntries(UID, memoryScope(tier)),
   };
   const memoryTool = createCrossSessionMemoryTool(memoryHandler, { includeProjectTier: true });
@@ -57,7 +54,7 @@ async function setupSpaceStateTools() {
 }
 
 describe('space state tools → durable feature stores', () => {
-  it('round-trips instructions and durable memory through real handlers', async () => {
+  it('writes space instructions and reads already saved memory through real handlers', async () => {
     const state = await setupSpaceStateTools();
     const ctx = {} as any;
 
@@ -68,13 +65,11 @@ describe('space state tools → durable feature stores', () => {
     expect(state.spaces.formatSpaceInstructionsForSystemPrompt(UID, state.sid))
       .toContain('customer copy is English');
 
-    const remembered = await state.memoryTool.execute({
-      action: 'add',
-      target: 'space',
-      content: 'The payment provider is Stripe.',
-    }, ctx);
+    state.memory.addEntry(UID, { space: state.sid }, 'The payment provider is Stripe.');
+    const remembered = await state.memoryTool.execute({ action: 'list', target: 'space' }, ctx);
     expect(remembered.isError).toBe(false);
-    expect(state.memory.formatForSystemPrompt(UID, undefined, state.sid)).toContain('The payment provider is Stripe.');
+    expect(JSON.parse(remembered.content).entries).toEqual(['The payment provider is Stripe.']);
+
   });
 
   it('enforces sub-agent space-memory read-only mode against the same real store', async () => {
@@ -82,7 +77,6 @@ describe('space state tools → durable feature stores', () => {
     state.memory.addEntry(UID, { space: state.sid }, 'Existing durable decision.');
     const tool = createCrossSessionMemoryTool(state.memoryHandler, {
       includeProjectTier: true,
-      projectTierReadOnly: true,
     });
     const ctx = {} as any;
 

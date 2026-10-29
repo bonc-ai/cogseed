@@ -808,7 +808,7 @@ export async function seedBuiltinMarketplaceForUser(
     await writeInstalls(uid, manifest);
   }
   if (result.seeded_agents || result.seeded_skills) {
-    _invalidateMarketplaceListings();
+    await _invalidateMarketplaceListings(uid);
   }
   return result;
 }
@@ -868,7 +868,12 @@ async function _resolveAgentInstall(uid: string, row: AgentInstall): Promise<Age
     default_install?: boolean;
     status?: string;
     state?: string;
-  }>('/marketplace/agents/detail', { id: catalog.id });
+  }>('/marketplace/agents/detail',
+    // Hub 要求 content_id + version（B-05），旧版只认 id：两者都带。
+    typeof catalog.version === 'string' && catalog.version
+      ? { id: catalog.id, content_id: catalog.id, version: catalog.version }
+      : { id: catalog.id },
+  );
   return {
     id: catalog.id,
     version: normalizeInstallVersion(detail.version || catalog.version),
@@ -998,19 +1003,22 @@ export async function resolveBuiltinMarketplaceInstalls(
 
   if (changed) {
     await writeInstalls(uid, manifest);
-    _invalidateMarketplaceListings();
+    await _invalidateMarketplaceListings(uid);
   }
   return result;
 }
 
-function _invalidateMarketplaceListings(): void {
+async function _invalidateMarketplaceListings(userId: string): Promise<void> {
+  // 撒种/安装是「为某一个用户写入内置内容」，失效就必须落到那个用户身上——
+  // 旧的全局 clear 会牵连其它用户的缓存，而且调用方在它跑完前就返回了。
+  // 动态 import 避免与 agents/skills 形成静态环。
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    (require('./agents') as { clearAgentListCache?: () => void }).clearAgentListCache?.();
+    const agents = await import('./agents');
+    agents.invalidateAgentListCacheForUser(userId);
   } catch { /* optional */ }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    (require('./skills') as { clearSkillListCache?: () => void }).clearSkillListCache?.();
+    const skills = await import('./skills');
+    skills.clearSkillListCacheForUser(userId);
   } catch { /* optional */ }
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require

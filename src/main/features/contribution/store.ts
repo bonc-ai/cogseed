@@ -12,6 +12,8 @@ interface ContributionStore {
   last_success_at: string | null;
   items: Record<string, unknown>;
   skill_ids: Record<string, string>;
+  /** 本机 Agent id → 提交用 UUID；旧文件没有该字段，读取时按空处理（向后兼容）。 */
+  agent_ids?: Record<string, string>;
   retries: Record<string, unknown>;
 }
 
@@ -115,6 +117,18 @@ export function localSkillUuid(userId: string, accountId: string, skillId: strin
   if (existing) return existing;
   const next = randomUUID();
   current.skill_ids[skillId] = next;
+  writeContributionStore(userId, accountId, current);
+  return next;
+}
+
+/** 为本机自建 Agent 生成并持久化提交用 UUID（替换键成分，对应 `local_skill_id`）。 */
+export function localAgentUuid(userId: string, accountId: string, agentId: string): string {
+  const current = readContributionStore(userId, accountId);
+  const ids = current.agent_ids ?? {};
+  const existing = ids[agentId];
+  if (existing) return existing;
+  const next = randomUUID();
+  current.agent_ids = { ...ids, [agentId]: next };
   writeContributionStore(userId, accountId, current);
   return next;
 }

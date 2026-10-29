@@ -21,6 +21,7 @@ import { userLocalRoot } from '../../paths';
 import { conversationMessageFile } from '../../util/project-layout';
 import { nowIso, rewriteJsonlLine } from '../../storage';
 import { extractSession, type ExtractionResult } from './extractor';
+import { buildSeedModelText, importSourceLabel } from './task-context';
 import { generateWelcomeMessage, type WelcomeMessageData } from './welcome-message';
 import type { NormalizedTranscript } from './transcript-normalize';
 import type { GroupMessage } from '../group_chat/visibility';
@@ -214,14 +215,16 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
     try {
       const msgFile = conversationMessageFile(userId, cid, projectId);
       await rewriteJsonlLine<GroupMessage>(msgFile, seedMsgIndex, (current) => {
-        const src = input.source;
+        const src = importSourceLabel(input.source);
         const summary = extraction.sessionSummary.trim();
         return {
           ...current,
           text: `[从 ${src} 导入 · 已提炼]\n\n${summary}`,
-          model_text:
-            `以下是用户从 ${src} 导入的一段历史会话的提炼简报。` +
-            `请把它当作已发生的上下文，在此基础上继续协助用户，不要重复已完成的工作：\n\n${summary}`,
+          model_text: buildSeedModelText({
+            sourceName: src,
+            summary,
+            currentRequest: extraction.currentRequest,
+          }),
         };
       });
     } catch (seedErr) {
@@ -241,6 +244,7 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
       conversationId: cid,
       projectId,
       sessionSummary: extraction.sessionSummary,
+      currentRequest: extraction.currentRequest,
       title: input.title,
     });
   } catch (snapErr) {
@@ -250,24 +254,8 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
     });
   }
 
-  // ③ Route cognitions to Recall (the asset side of the extraction).
-  // Dynamic import to avoid a cycle (asset-router imports this module).
-  let cognitions = { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
-  try {
-    const { routeCognitions } = await import('./asset-router');
-    cognitions = await routeCognitions(
-      userId,
-      input.source,
-      input.sourceId,
-      cid,
-      extraction.candidates,
-    );
-  } catch (routeErr) {
-    log.warn('background extraction: cognition routing failed', {
-      cid,
-      error: (routeErr as Error)?.message || String(routeErr),
-    });
-  }
+  // Import extraction prepares continuation context; it never writes cognition candidates.
+  const cognitions = { personal: 0, fact: 0, rule: 0, template: 0, skill_method: 0 };
 
   // ④ Build the welcome payload the renderer swaps into the conversation.
   let welcome: WelcomeMessageData | undefined;
@@ -276,6 +264,7 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
       userId,
       conversationId: cid,
       sessionSummary: extraction.sessionSummary,
+      currentRequest: extraction.currentRequest,
     });
   } catch (welcomeErr) {
     log.warn('background extraction: welcome generation failed', {

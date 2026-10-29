@@ -43,21 +43,13 @@ export interface P3394BridgeExecutorDeps {
   sessions?: P3394BridgeSessionManager;
   tasks?: P3394BridgeTaskManager;
   kstar?: P3394BridgeKstarCloseHook;
-  /** Outbound reply matcher: called when an inbound envelope may be a peer's reply. */
-  outboundHub?: { tryResolveReply(envelope: P3394Envelope): boolean };
-  /** KSTAR episode sink: called once per task terminal state (guide §5.4). */
-  recordEpisode?: (episode: {
-    session_id: string;
-    task_id: string;
-    goal: string;
-    agent_id: string;
-    status: 'completed' | 'failed' | 'cancelled';
-    result?: string;
-    actions: Array<{ sequence: number; kind: string; at: string; text?: string; error?: string }>;
-    created_at?: string;
-    /** Learn-What 候选（N-17）：只建议，不自动写回任何认知资产。 */
-    proposed_updates?: unknown[];
-  }) => void;
+  /** Outbound reply matcher: called when an inbound envelope may be a peer's reply.
+   *  `deliverBackgroundResult` is the decision-2 phase-2 channel: a terminal
+   *  `background.finished` must never match a reply waiter. */
+  outboundHub?: {
+    tryResolveReply(envelope: P3394Envelope): boolean;
+    deliverBackgroundResult?(envelope: P3394Envelope): boolean;
+  };
   /** Sink for streamed runtime events (channel reply / caller hook). */
   onEvent?: (sessionId: string, event: P3394RuntimeEvent) => void | Promise<void>;
   /** §11 result auto-reply: when the peer speaks first and its envelope
@@ -97,8 +89,7 @@ export class P3394BridgeExecutor {
   readonly tasks: P3394BridgeTaskManager;
   readonly kstar: P3394BridgeKstarCloseHook;
   private readonly onEvent: ((sessionId: string, event: P3394RuntimeEvent) => void | Promise<void>) | undefined;
-  private readonly outboundHub: { tryResolveReply(envelope: P3394Envelope): boolean } | undefined;
-  private readonly recordEpisode: P3394BridgeExecutorDeps['recordEpisode'];
+  private readonly outboundHub: P3394BridgeExecutorDeps['outboundHub'];
   private readonly autoReply: P3394AutoReplyOptions;
   private readonly selfIdentity: P3394EnvelopeParticipant;
   private readonly now: () => string;
@@ -121,48 +112,12 @@ export class P3394BridgeExecutor {
     this.tasks = deps.tasks ?? new P3394BridgeTaskManager(deps.now);
     this.kstar = deps.kstar ?? new P3394BridgeKstarCloseHook(deps.now);
     this.outboundHub = deps.outboundHub;
-    this.recordEpisode = deps.recordEpisode;
     this.onEvent = deps.onEvent;
     this.autoReply = deps.autoReply ?? {};
     this.selfIdentity = deps.selfIdentity ?? { agent_id: 'cogseed', alias: 'CogSeed', channel_instance_id: 'cogseed-app' };
     this.now = deps.now ?? (() => new Date().toISOString());
     this.maxArtifactAutoReplyBytes = deps.maxArtifactAutoReplyBytes ?? P3394_CHANNEL_LIMITS.maxArtifactAutoReplyBytes;
     this.maxArtifactAutoRepliesPerSession = deps.maxArtifactAutoRepliesPerSession ?? P3394_CHANNEL_LIMITS.maxArtifactAutoRepliesPerSession;
-  }
-
-  /**
-   * N-17: Learn-What 候选（guide §5.4「每个完成的 Work Session 形成 KSTAR
-   * Episode → AAR → Learn-What」）。从终态动作轨迹机械生成结构化建议：
-   * 只建议、绝不自动写回任何认知资产（proposed_updates 的既有纪律）。
-   * 输出给主 KStar 沉淀链作为额外证据（见 task-level-precipitation 的
-   * p3394 桥接）。任何一步降级都返回 []，不让建议生成拖垮终态。
-   */
-  private proposedUpdatesFor(
-    goal: string,
-    status: 'completed' | 'failed' | 'cancelled',
-    result: string | undefined,
-    actions: Array<{ sequence: number; kind: string; at: string; text?: string; error?: string }>,
-  ): unknown[] {
-    try {
-      const summary = String(goal || '').replace(/\s+/g, ' ').trim().slice(0, 300);
-      if (!summary) return [];
-      const actionKinds = [...new Set(actions.map((action) => action.kind).filter(Boolean))].slice(0, 20);
-      const outcome =
-        status === 'completed' ? '任务完成'
-          : status === 'failed' ? '任务失败' : '任务取消';
-      return [{
-        type: 'p3394_work_session',
-        goal: summary,
-        outcome,
-        ...(result ? { resultSummary: String(result).replace(/\s+/g, ' ').trim().slice(0, 300) } : {}),
-        ...(actionKinds.length ? { actionKinds } : {}),
-        // 机械摘要，人工评审前的占位结论——与 kstar-episodes.buildAar 同源。
-        review: '该会话被记录为外部智能体协作样本；沉淀与否由主 KStar 评审决定，本钩子不自动写回。',
-        source: 'p3394_bridge',
-      }];
-    } catch {
-      return [];
-    }
   }
 
   /**
@@ -219,6 +174,22 @@ export class P3394BridgeExecutor {
       });
       const replay = buildApprovedReplay(approved);
       return this.runApprovedReplay(replay);
+    }
+    // 决策 2 两段式：`background.finished` 是终态通知，走独立通道（按 job_id
+    // 幂等、落对应会话），绝不参与 reply waiter 匹配——否则会被当成普通
+    // 对端回复错配给同一 session 上的新请求。`accepted` 仍由 tryResolveReply
+    // 处理（它只解析出 kind:'background' 后立即 resolve）。
+    if (envelope.extensions && envelope.extensions.background !== undefined) {
+      const consumedBackground = this.outboundHub?.deliverBackgroundResult?.(envelope) ?? false;
+      if (consumedBackground) {
+        this.bridge.audit.append({
+          event: 'inbound.background.consumed',
+          actor_id: envelope.sender.agent_id,
+          status: 'accepted',
+          metadata: { session_id: envelope.session_id, reply_to: envelope.reply_to },
+        });
+        return { ok: true, receipt: sent.receipt, executed: false };
+      }
     }
     // A peer's reply may resolve a waiting outbound call; it still flows
     // into the conversation below so the exchange stays visible in the UI.
@@ -281,13 +252,7 @@ export class P3394BridgeExecutor {
     // Fire-and-forward: the runtime stream is drained in the background and
     // pushed to the onEvent sink; the receipt returns immediately.
     const forward = (async () => {
-      const actions: Array<{ sequence: number; kind: string; at: string; text?: string; error?: string }> = [];
-      let sequence = 0;
       let lastDelta = '';
-      const pushAction = (kind: string, extra: { text?: string; error?: string } = {}) => {
-        sequence += 1;
-        actions.push({ sequence, kind, at: this.now(), ...extra });
-      };
       try {
         await this.runtime.openSession({ session_id: envelope.session_id, agent_id: recipientAgentId });
         await this.runtime.deliver(envelope);
@@ -306,7 +271,6 @@ export class P3394BridgeExecutor {
           if (event.kind === 'delta' && event.data && typeof event.data.text === 'string') {
             lastDelta = event.data.text;
           }
-          pushAction(event.kind, event.data && typeof event.data.error === 'string' ? { error: event.data.error, text: lastDelta } : { text: lastDelta });
           // Task/session state advancement (SDK design §7.1): started → working,
           // input_required → waiting, further events → back to working/active.
           if (event.kind === 'started') {
@@ -320,16 +284,6 @@ export class P3394BridgeExecutor {
           }
           if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
             this.tasks.settle(p3394TaskId, event.kind);
-            // KSTAR 闭环：每个任务终态产出一份 episode（goal/动作轨迹/结果/AAR）。
-            this.recordEpisode?.({
-              session_id: envelope.session_id,
-              task_id: p3394TaskId,
-              goal,
-              agent_id: recipientAgentId,
-              status: event.kind,
-              result: lastDelta.slice(0, 24_000) || undefined,
-              actions,
-            });
             // §11 结果自动回发：对端先开口 → CogSeed 回答自动送回（若对端
             // 声明了 reply_endpoint）。失败也回发 error 信封。
             if (event.kind === 'completed' && lastDelta.trim()) {
@@ -352,15 +306,6 @@ export class P3394BridgeExecutor {
         if (this.onEvent) {
           await this.onEvent(envelope.session_id, { sequence: 0, task_id: p3394TaskId, kind: 'failed', data: { error: message } });
         }
-        this.recordEpisode?.({
-          session_id: envelope.session_id,
-          task_id: p3394TaskId,
-          goal,
-          agent_id: recipientAgentId,
-          status: 'failed',
-          result: lastDelta.slice(0, 24_000) || undefined,
-          actions: [...actions, { sequence: sequence + 1, kind: 'failed', at: this.now(), error: message }],
-        });
       } finally {
         this.forwards.delete(p3394TaskId);
       }
@@ -516,13 +461,6 @@ export class P3394BridgeExecutor {
   async resumeForward(taskId: string, sessionId: string, afterSequence = 0): Promise<void> {
     const resume = (async () => {
       this.sessions.activate(sessionId);
-      const actions: Array<{ sequence: number; kind: string; at: string; text?: string; error?: string }> = [];
-      let sequence = 0;
-      let lastDelta = '';
-      const pushAction = (kind: string, extra: { text?: string; error?: string } = {}) => {
-        sequence += 1;
-        actions.push({ sequence, kind, at: this.now(), ...extra });
-      };
       for await (const event of this.runtime.stream(taskId, afterSequence)) {
         try {
           await this.onEvent?.(sessionId, event);
@@ -531,32 +469,11 @@ export class P3394BridgeExecutor {
           this.sessions.toWaiting(sessionId);
           throw error;
         }
-        if (event.kind === 'delta' && event.data && typeof event.data.text === 'string') {
-          lastDelta = event.data.text;
-        }
-        pushAction(event.kind, event.data && typeof event.data.error === 'string' ? { error: event.data.error, text: lastDelta } : { text: lastDelta });
         if (event.kind === 'started') {
           this.tasks.start(taskId);
         }
         if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
           this.tasks.settle(taskId, event.kind);
-          // 恢复闭环同样产出 KSTAR episode（R-06/S-05）：恢复完成的
-          // 任务不重新 deliver，但终态仍进入 episode 落盘。
-          try {
-            const session = this.sessions.require(sessionId);
-            this.recordEpisode?.({
-              session_id: sessionId,
-              task_id: taskId,
-              goal: session.goal,
-              agent_id: session.agent_id,
-              status: event.kind,
-              result: lastDelta.slice(0, 24_000) || undefined,
-              actions,
-              proposed_updates: this.proposedUpdatesFor(session.goal, event.kind, lastDelta.slice(0, 24_000) || undefined, actions),
-            });
-          } catch {
-            // Session may have been closed concurrently; episode is best-effort.
-          }
         }
       }
     })();

@@ -14,9 +14,8 @@
  * `run.sh`, so they inherit no environment: before it existed, release builds
  * resolved to the placeholder origin and account, marketplace, and update
  * checks all failed silently. The source tree cannot carry a real origin
- * (open-source publication removed non-owned domains — see the #5 blocker in
- * `docs/release-scan-remediation-20260923.md`), so the value must arrive at
- * package time.
+ * (open-source publication removed non-owned domains), so the value must
+ * arrive at package time.
  */
 
 import { resolveBuildIdentity } from '../util/build-identity';

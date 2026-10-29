@@ -14,6 +14,9 @@ import type { ActorKind } from './state';
  */
 export const COMMANDER_MAX_TOOL_LOOPS = 120;
 export const AGENT_MAX_TOOL_LOOPS = 100;
+export const LIGHT_TASK_MAX_TOOL_LOOPS = 24;
+
+export type ActorTaskClass = 'light' | 'standard' | 'unknown';
 
 /**
  * Per-turn tool-round budget for a dispatched actor, or `undefined` to let
@@ -24,4 +27,12 @@ export function maxToolLoopsForActorKind(kind: ActorKind): number | undefined {
   if (kind === 'commander') return COMMANDER_MAX_TOOL_LOOPS;
   if (kind === 'agent') return AGENT_MAX_TOOL_LOOPS;
   return undefined; // 'worker' (ephemeral) / 'user' → schema default
+}
+
+export function maxToolLoopsForActorTurn(
+  kind: ActorKind,
+  context: { taskClass?: ActorTaskClass } = {},
+): number | undefined {
+  if (context.taskClass === 'light') return LIGHT_TASK_MAX_TOOL_LOOPS;
+  return maxToolLoopsForActorKind(kind);
 }

@@ -20,7 +20,7 @@
   const officeExts = new Set(['.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm']);
   const libraryExts = new Set([...textExts, ...imageExts, ...officeExts, '.pdf']);
   const chatExts = new Set([
-    ...chatTextExts, ...imageExts, ...videoExts, ...audioExts, ...officeExts, '.pdf',
+    ...chatTextExts, ...imageExts, ...videoExts, ...audioExts, ...officeExts, '.pdf', '.zip',
   ]);
 
   function extensionOf(name) {

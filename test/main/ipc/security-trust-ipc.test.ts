@@ -25,8 +25,8 @@ let invokeHandler: InvokeFn | null = null;
 const UID = 'uTrustIpc';
 
 const marketplaceMock = vi.hoisted(() => ({
-  installMarketplaceSkill: vi.fn(async () => ({ ok: true, id: 'skill-contract' })),
-  installMarketplaceAgent: vi.fn(async () => ({ ok: true, id: 'agent-contract' })),
+  installMarketplaceSkillForUser: vi.fn(async () => ({ ok: true, id: 'skill-contract' })),
+  installMarketplaceAgentForUser: vi.fn(async () => ({ ok: true, id: 'agent-contract' })),
 }));
 
 const skillReverifyMock = vi.hoisted(() => ({
@@ -49,8 +49,8 @@ vi.mock('../../../src/main/logger', () => ({
 }));
 vi.mock('../../../src/main/features/marketplace', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/features/marketplace')>()),
-  installMarketplaceSkill: marketplaceMock.installMarketplaceSkill,
-  installMarketplaceAgent: marketplaceMock.installMarketplaceAgent,
+  installMarketplaceSkillForUser: marketplaceMock.installMarketplaceSkillForUser,
+  installMarketplaceAgentForUser: marketplaceMock.installMarketplaceAgentForUser,
 }));
 vi.mock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/features/skill_reverify')>()),
@@ -80,28 +80,28 @@ describe('ipc › skill security surface contract', () => {
   it('forwards the confirmed security override from installSkill to the install gate', async () => {
     const r = await call('marketplace.installSkill', { ...INSTALL_PAYLOAD, acceptSecurityRisk: true });
     expect(r.ok).toBe(true);
-    expect(marketplaceMock.installMarketplaceSkill).toHaveBeenCalledTimes(1);
-    const [, , opts] = marketplaceMock.installMarketplaceSkill.mock.calls[0] as unknown[];
+    expect(marketplaceMock.installMarketplaceSkillForUser).toHaveBeenCalledTimes(1);
+    const [, , , opts] = marketplaceMock.installMarketplaceSkillForUser.mock.calls[0] as unknown[];
     expect(opts).toMatchObject({ acceptSecurityRisk: true });
   });
 
   it('forwards the confirmed security override from installAgent to the install gate', async () => {
     const r = await call('marketplace.installAgent', { ...INSTALL_PAYLOAD, acceptSecurityRisk: true });
     expect(r.ok).toBe(true);
-    expect(marketplaceMock.installMarketplaceAgent).toHaveBeenCalledTimes(1);
-    const [, , opts] = marketplaceMock.installMarketplaceAgent.mock.calls[0] as unknown[];
+    expect(marketplaceMock.installMarketplaceAgentForUser).toHaveBeenCalledTimes(1);
+    const [, , , opts] = marketplaceMock.installMarketplaceAgentForUser.mock.calls[0] as unknown[];
     expect(opts).toMatchObject({ acceptSecurityRisk: true });
   });
 
   it('passes an explicit false when the renderer did not consent', async () => {
     await call('marketplace.installSkill', { ...INSTALL_PAYLOAD });
-    const [, , opts] = marketplaceMock.installMarketplaceSkill.mock.calls[0] as unknown[];
+    const [, , , opts] = marketplaceMock.installMarketplaceSkillForUser.mock.calls[0] as unknown[];
     expect(opts).toMatchObject({ acceptSecurityRisk: false });
   });
 
   it('keeps forwarding force and name alongside the consent flag', async () => {
     await call('marketplace.installSkill', { ...INSTALL_PAYLOAD, force: true, acceptSecurityRisk: true });
-    const [, , opts] = marketplaceMock.installMarketplaceSkill.mock.calls[0] as unknown[];
+    const [, , , opts] = marketplaceMock.installMarketplaceSkillForUser.mock.calls[0] as unknown[];
     expect(opts).toMatchObject({ force: true, name: 'Contract Skill', acceptSecurityRisk: true });
   });
 
@@ -124,7 +124,7 @@ describe('ipc › skill security surface contract', () => {
   });
 
   it('propagates the security-blocked verdict fields to the renderer', async () => {
-    marketplaceMock.installMarketplaceSkill.mockRejectedValueOnce(
+    marketplaceMock.installMarketplaceSkillForUser.mockRejectedValueOnce(
       Object.assign(new Error('Security scan rejected skill Contract Skill (no_credential_path_read)'), {
         securityBlocked: true,
         securityUnavailable: false,
@@ -153,7 +153,7 @@ describe('ipc › skill security surface contract', () => {
   });
 
   it('propagates the security-unavailable verdict fields to the renderer', async () => {
-    marketplaceMock.installMarketplaceSkill.mockRejectedValueOnce(
+    marketplaceMock.installMarketplaceSkillForUser.mockRejectedValueOnce(
       Object.assign(new Error('Security check unavailable for skill Contract Skill (spawn_failed)'), {
         securityBlocked: false,
         securityUnavailable: true,

@@ -6,6 +6,8 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../../src/main/features/recall/asset-service', () => ({
+  abilityAssetActiveVersion: (asset: { activeVersion?: string; version?: string }) =>
+    String(asset.activeVersion || asset.version || '1'),
   listAbilityAssets: async () => {
     state.calls += 1;
     return [

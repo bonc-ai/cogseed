@@ -1,7 +1,7 @@
 /**
- * P3394 runtime variant paths (bridge state, session store, KSTAR episodes).
+ * P3394 runtime variant paths (bridge state, session store).
  *
- * Shared by app-wiring / session-store / kstar-episodes so every piece of the
+ * Shared by app-wiring / session-store so every piece of the
  * bridge lands in the same per-variant directory. The variant name comes from
  * the app launcher (--cogseed-runtime-variant) or the classic env fallback.
  */

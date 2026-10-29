@@ -82,13 +82,56 @@ describe('P3394 wake approval placement', () => {
     expect(mountSource).not.toContain('document.querySelector(selector)');
   });
 
-  it('removes composer wake cards after an approval decision instead of leaving stale completed cards', () => {
+  it('settles the composer wake card with its outcome instead of removing it silently', () => {
     const start = conversationSource.indexOf('async function _resolveWakeRequest');
-    const end = conversationSource.indexOf('\nfunction _mountMarketplaceInstallRequests', start);
+    const end = conversationSource.indexOf('\n// ── 外接智能体', start);
     const resolveSource = conversationSource.slice(start, end);
 
+    // 需求口径（2026-10-14 需求方）：批准后卡片退场（授权已生效，回执交给工人气泡上
+    // 的运行指示）；拒绝保留定格回执（没有别的信号能说明这次拒绝）。
+    expect(resolveSource).toContain("if (decision === 'approve')");
     expect(resolveSource).toContain('card.remove()');
     expect(resolveSource).toContain('_pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }))');
-    expect(resolveSource).not.toContain('_renderWakeRequestCard(card, data.request');
+    expect(resolveSource).toContain('_renderWakeRequestCard(card, settled, cid)');
+    expect(resolveSource).toContain("status: decision === 'approve' ? 'approved' : 'rejected'");
+  });
+
+  it('reports the real reason and retires a card whose request no longer exists', () => {
+    const probeStart = conversationSource.indexOf('async function _wakeRequestStillPending');
+    const probeEnd = conversationSource.indexOf('\nasync function _resolveWakeRequest', probeStart);
+    const probeSource = conversationSource.slice(probeStart, probeEnd);
+    const start = conversationSource.indexOf('async function _resolveWakeRequest');
+    const end = conversationSource.indexOf('\n// ── 外接智能体', start);
+    const resolveSource = conversationSource.slice(start, end);
+
+    // 真机 2026-10-21：卡片来自消息快照，后台已经没有这条请求；通用「处理失败」
+    // 既没有说明原因，也让卡片继续挂着反复失败。
+    expect(probeStart).toBeGreaterThan(-1);
+    expect(probeSource).toContain('/wake-requests');
+    expect(probeSource).toContain("String(candidate?.status || 'pending') === 'pending'");
+    // 读不到就保留卡片：宁可让用户再点一次，也不能藏掉一条可能仍有效的审批。
+    expect(probeSource).toContain('return true;');
+
+    expect(resolveSource).toContain('_wakeRequestStillPending(cid, request.id)');
+    expect(resolveSource).toContain('p3394.wake.failed_reason');
+    expect(resolveSource).toContain('p3394.wake.stale');
+    expect(resolveSource).toContain('_hydratePendingWakeRequests(cid)');
+    expect(resolveSource).not.toContain("uiAlert(t('p3394.wake.failed'))");
+  });
+
+  it('ships every wake decision message in all renderer locales', () => {
+    for (const locale of ['zh', 'en', 'ja', 'pt']) {
+      const messages = JSON.parse(readFileSync(
+        resolve(__dirname, `../../src/renderer/locales/${locale}.json`),
+        'utf8',
+      )) as Record<string, string>;
+      for (const key of ['p3394.wake.failed_reason', 'p3394.wake.stale', 'p3394.wake.stale_reason']) {
+        expect(messages[key], `${locale}: ${key}`).toBeTruthy();
+      }
+      // The reason-bearing variants must interpolate, or the alert loses the cause
+      // again.
+      expect(messages['p3394.wake.failed_reason']).toContain('{reason}');
+      expect(messages['p3394.wake.stale_reason']).toContain('{reason}');
+    }
   });
 });

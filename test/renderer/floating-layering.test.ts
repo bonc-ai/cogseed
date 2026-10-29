@@ -52,9 +52,10 @@ describe('floating layer ordering', () => {
 
   it('removes the collapsed rail while keeping the shell recovery entry', () => {
     const shellCss = readShellCss();
-    expect(shellCss).toMatch(/body\.sidebar-collapsed \.sidebar\s*\{[^}]*width:\s*0 !important/);
-    expect(shellCss).toMatch(/body\.sidebar-collapsed \.sidebar > \*\s*\{[^}]*display:\s*none/);
-    expect(shellCss).toContain('html.is-macos .shell-sidebar-hidden .app-shell-tools');
+    // 折叠态现在区分「peek 预览」：主块带 :not(.sidebar-peek) 限定，语义不变。
+    expect(shellCss).toMatch(/body\.sidebar-collapsed(?::not\(\.sidebar-peek\))? \.sidebar\s*\{[^}]*width:\s*0 !important/);
+    expect(shellCss).toMatch(/body\.sidebar-collapsed(?::not\(\.sidebar-peek\))? \.sidebar > \*\s*\{[^}]*display:\s*none/);
+    expect(shellCss).toMatch(/body\.shell-sidebar-hidden \.ui-page-header__shell,\s*body\.shell-no-sidebar \.ui-page-header__shell\s*\{[^}]*display:\s*flex/);
   });
 
   it('keeps open and active state styles for the footer user menu', () => {

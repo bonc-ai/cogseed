@@ -16,6 +16,12 @@ function _agentsTrackError(action, data) {
 }
 
 let _agentsCache = null;
+// S4（specs/009-agent-skill-pages）：智能体页的子视图（home = 首页三组，mine = 我的智能体）。
+let _agentsSubView = 'home';
+// 「已安装的智能体」状态筛选：'' 全部 / 'update' 有更新 / 'off' 已停用。
+let _agentsInstalledFilter = '';
+let _agentsCatalogWired = false;
+let _agentsSearchComposing = false;
 // Startup holds a deliberately small identity cache for chat mentions and
 // avatars. The Agents tab upgrades it to the complete listing on first entry.
 let _agentsCacheIsSummary = false;
@@ -115,15 +121,33 @@ async function _loadExternalCliProviders() {
   return _externalCliProviders;
 }
 
+/** 「外接」tab 字段在选卡片之前置灰但不隐藏，弹窗高度不随选择变化（2026-10-20）。 */
+function _setExternalFieldsIdle(idle) {
+  const fields = document.getElementById('agent-ext-fields');
+  if (!fields) return;
+  fields.classList.toggle('is-idle', idle);
+  for (const el of fields.querySelectorAll('input, textarea')) el.disabled = idle;
+  if (idle) _renderExternalCliProviderSelect(null);
+}
+
 function _renderExternalCliProviderSelect(cli, selectedId = '') {
   const row = document.getElementById('agent-ext-provider-row');
   const mount = document.getElementById('agent-modal-ext-provider-select');
   if (!row || !mount) return;
   const providers = filterCliProviders(cli, _externalCliProviders);
   const compatibleSelected = normalizeCliProviderSelection(cli, selectedId, _externalCliProviders);
-  row.hidden = !(cli === 'claude' || cli === 'codex');
-  if (row.hidden) {
-    _externalCliProviderSelect?.setValue('');
+  // 只有 Claude Code / Codex 能选供应商；其他的（或还没选）这一行照常占位、置灰并说明，
+  // 不显示 / 隐藏，免得弹窗高度跳动。
+  const supported = cli === 'claude' || cli === 'codex';
+  if (!supported) {
+    const label = cli ? t('agent_modal.ext_provider_na') : t('agent_modal.ext_provider_none');
+    if (!_externalCliProviderSelect) {
+      _externalCliProviderSelect = _aiSelectMount(mount, { options: [{ value: '', label }], value: '', placeholder: label });
+    } else {
+      _externalCliProviderSelect.setOptions([{ value: '', label }], { value: '' });
+    }
+    const trigger = mount.querySelector('.ai-select-trigger');
+    if (trigger) trigger.disabled = true;
     return;
   }
   const options = [
@@ -142,6 +166,8 @@ function _renderExternalCliProviderSelect(cli, selectedId = '') {
   } else {
     _externalCliProviderSelect.setOptions(options, { value: compatibleSelected });
   }
+  const freshTrigger = mount.querySelector('.ai-select-trigger');
+  if (freshTrigger) freshTrigger.disabled = false;
 }
 
 function _getExternalCliProviderValue(cli) {
@@ -177,8 +203,33 @@ function _agentCardMetaHtml(a, lang) {
   return parts.join('');
 }
 
+/** "Update failed, you can keep using vX" — shown when a newer version of an installed marketplace
+ *  agent could not be applied. The installed version is untouched and still usable. */
+function _agentUpdateFailureText(a) {
+  const f = a && a.update_failure && typeof a.update_failure === 'object' ? a.update_failure : null;
+  if (!f) return null;
+  const reasonKey = `agents.update_failed_reason.${String(f.reason || 'unknown')}`;
+  const reason = t(reasonKey);
+  const keep = String(a.version || '').trim();
+  return {
+    chip: t('agents.update_failed_chip'),
+    hint: t(keep ? 'agents.update_failed_hint' : 'agents.update_failed_hint_no_version')
+      .replace('{target}', String(f.target_version || ''))
+      .replace('{version}', keep)
+      .replace('{reason}', reason && reason !== reasonKey ? reason : t('agents.update_failed_reason.unknown')),
+  };
+}
+
 function _agentPlatformStatusChipsHtml(a) {
-  return '';
+  // Community contributions are marked so users can tell them from official content at a glance.
+  const community = a && a.author_tier === 'community'
+    ? `<span class="agent-card-chip is-community">${escapeHtml(t('agents.community_chip'))}</span>`
+    : '';
+  const failed = _agentUpdateFailureText(a);
+  const updateFailed = failed
+    ? `<span class="agent-card-chip is-deps-warning" title="${escapeHtml(failed.hint)}">${escapeHtml(failed.chip)}</span>`
+    : '';
+  return community + updateFailed;
 }
 
 function _agentLabel(key, zh, en, ja) {
@@ -366,6 +417,8 @@ function _agentKnownSkillRows() {
   if (Array.isArray(_agentSkillNameRows)) rows.push(..._agentSkillNameRows);
   if (typeof _skillsCache !== 'undefined' && Array.isArray(_skillsCache)) rows.push(..._skillsCache);
   if (typeof _openSkillsCache !== 'undefined' && Array.isArray(_openSkillsCache)) rows.push(..._openSkillsCache);
+  // 还没装的 Hub 技能只在平台目录里有名字（未安装智能体的详情要用）。
+  if (typeof catalogRows === 'function') rows.push(...catalogRows('skill'));
   return rows;
 }
 
@@ -374,7 +427,7 @@ function _agentSkillNameForId(skillId) {
   if (!id) return '';
   const row = _agentKnownSkillRows().find((s) => {
     if (!s || typeof s !== 'object') return false;
-    return String(s.id || '') === id || String(s.skill_id || '') === id;
+    return String(s.id || '') === id || String(s.skill_id || '') === id || String(s.content_id || '') === id;
   });
   const name = normalizeDisplayText(row && (row.name || row.display_name || row.title));
   return name || id;
@@ -712,7 +765,15 @@ function _ensureAgentsSearchControl() {
   }
   if (!input || input.dataset.agentsSearchBound === 'true') return;
   input.dataset.agentsSearchBound = 'true';
-  input.addEventListener('input', () => {
+  input.addEventListener('compositionstart', () => { _agentsSearchComposing = true; });
+  input.addEventListener('compositionend', () => {
+    _agentsSearchComposing = false;
+    _agentsSearchQuery = input.value || '';
+    if (_agentsCache) renderAgentsList(_agentsCache);
+  });
+  input.addEventListener('input', (e) => {
+    // 输入法合成过程中不过滤（spec FR-029），合成结束由 compositionend 统一触发。
+    if (_agentsSearchComposing || (e && e.isComposing)) return;
     _agentsSearchQuery = input.value || '';
     if (_agentsCache) renderAgentsList(_agentsCache);
   });
@@ -741,19 +802,420 @@ function _renderAgentsEmptyState(emptyEl, noMatch) {
   });
 }
 
+
+// ─── S4：首页 / 我的 子视图、平台目录与统一详情弹窗 ───────────────────────
+// 首页 = 主智能体 / 外接智能体 / 平台（本机已安装的平台内容在前，目录里还没装的在后，
+// 不标来源）；我的 = 只放用户自建的。平台目录与弹窗在 `marketplace` 懒加载包的
+// catalog.js（registry S4-PV-001）。
+
+function _agentsEnsureCatalog() {
+  if (_agentsCatalogWired) return;
+  const load = typeof window.loadRendererFeature === 'function' ? window.loadRendererFeature : null;
+  if (!load) return;
+  _agentsCatalogWired = true;
+  Promise.resolve(load('marketplace')).then(() => {
+    if (typeof catalogOnChange === 'function') {
+      catalogOnChange((kind) => { if (kind === 'agent' && _agentsCache) renderAgentsList(_agentsCache); });
+    }
+    if (typeof catalogLoad === 'function') catalogLoad('agent');
+  }).catch((err) => {
+    _agentsCatalogWired = false;
+    _agentsLog.warn('agent catalog load failed', { error: (err && err.message) || String(err) });
+  });
+}
+
+/** 平台组目录部分：没装的 + 本次进页后刚装的（留在原位，spec FR-002）。 */
+function _agentsCatalogLayout(platformInstalled) {
+  const empty = { tail: [], kept: new Map(), notInstalled: [] };
+  if (typeof catalogSplitPlatform !== 'function' || typeof catalogRows !== 'function') return empty;
+  // 未登录：平台组只显示已安装的（spec FR-023）。
+  if (typeof catalogStatus === 'function' && catalogStatus('agent').signedOut) return empty;
+  const keep = typeof catalogJustInstalledIds === 'function' ? catalogJustInstalledIds('agent') : null;
+  return catalogSplitPlatform(platformInstalled, catalogRows('agent'), (a) => a && a.agent_id, keep);
+}
+
+function _isAgentPlatformInstalled(a) {
+  return !!a && !_isCommanderAgent(a) && !_isExternalCliAgent(a) && _agentSource(a.source) === 'marketplace';
+}
+
+/** 已安装的智能体（spec FR-014～016）：只列从平台安装的（含原随包内容）。
+ *  一行头部（返回 · 状态筛选 · 搜索）、整宽列表、需要处理的排前面，卸载收在「⋯」里。 */
+function _agentInstalledRow(a, lang) {
+  const depState = a.dependency_state && typeof a.dependency_state === 'object' ? a.dependency_state : null;
+  const updateRow = _agentCatalogUpdateRow(a);
+  const depsBlocked = !!depState && depState.status === 'deps_blocked';
+  const pills = [];
+  if (updateRow) pills.push({ label: t('catalog.update_chip'), tone: 'attention' });
+  if (a.hub_disabled) pills.push({ label: t('agents.hub_disabled_chip'), tone: 'attention' });
+  if (depsBlocked) pills.push({ label: t('agents.deps_blocked_chip'), tone: 'attention' });
+  return {
+    id: a.agent_id,
+    name: a.name || a.agent_id,
+    desc: _agentSummary(a, lang),
+    enabled: a.enabled !== false,
+    updateVersion: updateRow ? String(updateRow.version || '') || '?' : '',
+    hubDisabled: !!a.hub_disabled,
+    blocked: !!a.hub_disabled || depsBlocked,
+    pills,
+    avatarHtml: renderAvatarHtml(a.icon, a.color, { size: 32, seed: a.agent_id, extraClass: 'agent-card-avatar' }),
+  };
+}
+
+function _renderAgentsInstalledView(list, { gridEl, emptyEl, chipsHost }) {
+  gridEl.classList.add('is-sectioned');
+  const lang = getLang();
+  const ready = typeof catalogInstalledGridHtml === 'function';
+  const allRows = ready ? catalogInstalledSort(list.map((a) => _agentInstalledRow(a, lang))) : [];
+  const summary = ready ? catalogInstalledSummary(allRows) : { total: list.length, off: 0, update: 0 };
+  if (_agentsInstalledFilter && !summary[_agentsInstalledFilter]) _agentsInstalledFilter = '';
+  if (chipsHost) chipsHost.innerHTML = ready ? catalogInstalledCrumbHtml('agent', { 'data-agents-subview': 'home' }) : '';
+  const host = document.getElementById('agents-catalog-actions');
+  if (host) host.innerHTML = ready && summary.total ? catalogInstalledFilterHtml(summary, _agentsInstalledFilter) : '';
+  if (typeof hydrateUiIcons === 'function') { if (chipsHost) hydrateUiIcons(chipsHost); }
+  host?.querySelectorAll('[data-catalog-filter]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      _agentsInstalledFilter = btn.dataset.catalogFilter || '';
+      if (_agentsCache) renderAgentsList(_agentsCache);
+    });
+  });
+  const query = _agentsSearchQuery.trim().toLocaleLowerCase();
+  const rows = (ready ? catalogInstalledFilter(allRows, _agentsInstalledFilter) : [])
+    .filter((r) => !query || `${r.name} ${r.desc}`.toLocaleLowerCase().includes(query));
+  if (!rows.length) {
+    gridEl.innerHTML = summary.total && ready ? catalogInstalledSummaryHtml('agent', summary) : '';
+    if (emptyEl) {
+      const narrowed = Boolean(query) || Boolean(_agentsInstalledFilter);
+      emptyEl.innerHTML = typeof window.uiEmptyState === 'function'
+        ? window.uiEmptyState(narrowed
+          ? { kind: 'quiet', title: t('catalog.installed_no_match') }
+          : { kind: 'explained', title: t('catalog.installed_empty_agents'), hint: t('catalog.installed_empty_hint_agents') })
+        : '';
+      emptyEl.style.display = '';
+    }
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  gridEl.innerHTML = catalogInstalledSummaryHtml('agent', summary) + catalogInstalledGridHtml(rows, 'agent');
+  if (typeof hydrateUiIcons === 'function') hydrateUiIcons(gridEl);
+  for (const rowEl of gridEl.querySelectorAll('[data-catalog-row]')) {
+    const id = rowEl.dataset.catalogRow;
+    const row = rows.find((r) => r.id === id);
+    rowEl.addEventListener('click', (e) => {
+      const actionEl = e.target.closest('[data-catalog-row-action]');
+      const action = actionEl && actionEl.dataset.catalogRowAction;
+      if (action === 'toggle') {
+        e.stopPropagation();
+        if (row && row.hubDisabled) return;
+        void _flipAgentEnabled(id, !(row && row.enabled));
+        return;
+      }
+      if (action === 'more') {
+        e.stopPropagation();
+        const items = [{ id: 'detail', label: t('catalog.menu_detail') }];
+        if (row && row.updateVersion) items.push({ id: 'update', label: t('catalog.menu_update', { version: row.updateVersion }) });
+        items.push({ id: 'uninstall', label: t('catalog.uninstall'), danger: true });
+        catalogOpenRowMenu(actionEl, items, (pick) => {
+          if (pick === 'detail') _openAgentCatalogPopup(id);
+          else if (pick === 'update') {
+            const a = (_agentsCache || []).find((x) => x && x.agent_id === id);
+            const updateRow = a ? _agentCatalogUpdateRow(a) : null;
+            if (updateRow) void _installCatalogAgent(updateRow, { update: true });
+          } else if (pick === 'uninstall') void catalogUninstall('agent', id);
+        });
+        return;
+      }
+      _openAgentCatalogPopup(id);
+    });
+  }
+}
+
+function _isAgentCustomOwned(a) {
+  return !!a && !_isCommanderAgent(a) && !_isExternalCliAgent(a) && _agentSource(a.source) !== 'marketplace';
+}
+
+function _setAgentsSubView(view) {
+  _agentsSubView = view === 'mine' || view === 'installed' ? view : 'home';
+  if (typeof catalogResetJustInstalled === 'function') catalogResetJustInstalled();
+  _agentsInstalledFilter = '';
+  if (typeof catalogCloseRowMenu === 'function') catalogCloseRowMenu();
+  _agentsSearchQuery = '';
+  _agentsActiveCategory = '';
+  const input = document.getElementById('agents-search-input');
+  if (input) input.value = '';
+  if (_agentsCache) renderAgentsList(_agentsCache);
+}
+
+function _renderAgentsChrome(customCount, installedCount) {
+  const mine = _agentsSubView === 'mine';
+  const installed = _agentsSubView === 'installed';
+  for (const id of ['create-agent-btn', 'agents-mine-btn']) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !mine;
+  }
+  const more = document.getElementById('agents-more-btn');
+  if (more) more.hidden = true;
+  const gridView = document.getElementById('agents-grid-view');
+  if (gridView) gridView.dataset.catalogView = _agentsSubView;
+  const host = document.getElementById('agents-catalog-actions');
+  if (host && typeof uiButton === 'function') {
+    // 已安装页：这里由 `_renderAgentsInstalledView` 放状态筛选。
+    host.innerHTML = _agentsSubView !== 'home' ? '' : uiButton({
+      label: t('catalog.my_agents', { n: customCount }), role: 'secondary', size: 'sm',
+      attrs: { 'data-agents-subview': 'mine' },
+    }) + uiButton({
+      label: t('catalog.installed_agents', { n: installedCount }), role: 'secondary', size: 'sm',
+      attrs: { 'data-agents-subview': 'installed' },
+    });
+  }
+  // 「我的」用独立返回行；已安装页的返回放进工具栏同一行（一行头部）。
+  const back = document.getElementById('agents-subview-back');
+  if (back && typeof uiButton === 'function') {
+    back.hidden = !mine;
+    back.innerHTML = mine ? `${uiButton({
+      label: t('catalog.back_agents'), role: 'ghost', size: 'sm', icon: 'chevron-left',
+      attrs: { 'data-agents-subview': 'home' },
+    })}<span class="catalog-subview-sep" aria-hidden="true">/</span><span>${escapeHtml(t('catalog.mine_agents_title'))}</span>` : '';
+    if (typeof hydrateUiIcons === 'function') hydrateUiIcons(back);
+  }
+  if (installed && gridView) gridView.dataset.catalogView = 'installed';
+  const view = document.getElementById('agents-grid-view');
+  if (view && view.dataset.catalogSubviewBound !== 'true') {
+    view.dataset.catalogSubviewBound = 'true';
+    view.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-agents-subview]');
+      if (!btn) return;
+      e.preventDefault();
+      _setAgentsSubView(btn.dataset.agentsSubview);
+    });
+  }
+}
+
+function _catalogAgentCardHtml(row, lang) {
+  const installing = typeof catalogIsInstalling === 'function' && catalogIsInstalling('agent', row.id);
+  const failed = !installing && typeof catalogInstallFailure === 'function' && catalogInstallFailure('agent', row.id);
+  const appUpdate = typeof _mpItemAppUpdateRequired === 'function' && _mpItemAppUpdateRequired(row);
+  const name = row.name || row.id;
+  const desc = String(pickDesc(row, lang) || '').trim();
+  const avatarHtml = renderAvatarHtml(row.icon, row.color, { size: 32, seed: row.id, extraClass: 'agent-card-avatar' });
+  const metaHtml = _agentCardMetaHtml(row, lang);
+  const installBtn = uiButton({
+    label: installing ? t('catalog.installing') : appUpdate ? t('marketplace.state_app_update_required') : failed ? t('catalog.retry') : t('catalog.install'),
+    role: 'primary', size: 'sm', className: 'agent-card-use', loading: installing, disabled: installing || appUpdate,
+    attrs: { 'data-catalog-install': true },
+  });
+  const failedChip = failed
+    ? `<span class="agent-card-chip is-deps-warning" title="${escapeHtml(failed)}">${escapeHtml(t('catalog.install_failed_chip'))}</span>`
+    : '';
+  return `
+      <div class="agent-card ui-resource-card" data-catalog-id="${escapeHtml(row.id)}">
+        <button type="button" class="agent-card-open" data-agent-open aria-label="${escapeHtml(name)}"></button>
+        <div class="agent-card-header">
+          ${avatarHtml}
+          <div class="agent-card-title">
+            <span class="agent-card-name">${escapeHtml(name)}</span>
+            ${metaHtml ? `<span class="agent-card-meta">${metaHtml}</span>` : ''}
+          </div>
+        </div>
+        <div class="agent-card-desc${desc ? '' : ' is-empty'}">${escapeHtml(desc || t('agents.placeholder_unset'))}</div>
+        <div class="agent-card-actions">${failedChip}${installBtn}</div>
+      </div>
+    `;
+}
+
+/** 已安装平台智能体在 Hub 上有新版本时返回目录行（卡片「有更新」、详情「更新」）。 */
+function _agentCatalogUpdateRow(a) {
+  // 随包智能体不由 Hub 更新（2026-10-21 定），不出「有更新」。
+  if (!a || a.bundled || _agentSource(a.source) !== 'marketplace' || typeof catalogUpdateRow !== 'function') return null;
+  return catalogUpdateRow('agent', a.agent_id);
+}
+
+function _agentCatalogOrigin(a) {
+  if (_isCommanderAgent(a)) return 'commander';
+  if (_isExternalCliAgent(a)) return 'external';
+  return _agentSource(a && a.source) === 'marketplace' ? 'platform' : 'own';
+}
+
+async function _installCatalogAgent(row, opts = {}) {
+  if (!row || typeof catalogInstall !== 'function') return false;
+  const ok = await catalogInstall('agent', row, opts);
+  if (ok && typeof uiToast === 'function') {
+    uiToast(t(opts.update ? 'catalog.updated_toast' : 'catalog.installed_toast', { name: row.name || row.id }), { variant: 'success' });
+  }
+  return ok;
+}
+
+/** 统一详情弹窗（spec FR-006/007）：installed agent 传 agentId；目录里还没装的传 catalogRow。 */
+async function _openAgentCatalogPopup(agentId, catalogRow) {
+  const a = agentId
+    ? ((_agentsCache || []).find((x) => x && x.agent_id === agentId) || (_isCommanderAgent(agentId) ? _buildCommanderAgent() : null))
+    : null;
+  if (typeof openCatalogPopup !== 'function') {
+    if (a) _showAgentsDetailView(a.agent_id);
+    return;
+  }
+  // 已安装对象与目录行合并：标签/示例/能做什么/引用清单只有目录行才有，
+  // 而名称、版本、启用状态以本机安装为准（spec FR-006 详情弹窗）。
+  const row = catalogRow || (!a || typeof catalogRows !== 'function'
+    ? null
+    : (catalogRows('agent') || []).find((r) => r && String(r.id) === String(agentId)) || null);
+  const src = a
+    ? (row ? {
+      ...row,
+      ...a,
+      tags: Array.isArray(a.tags) && a.tags.length ? a.tags : row.tags,
+      examples: a.examples || row.examples,
+      does: Array.isArray(a.does) && a.does.length ? a.does : row.does,
+      skill_refs: a.skill_refs || row.skill_refs,
+    } : a)
+    : catalogRow;
+  if (!src) return;
+  const lang = getLang();
+  const id = String(src.agent_id || src.id || '');
+  const installed = !!a;
+  const bundled = !!(a && a.bundled);
+  const origin = a ? _agentCatalogOrigin(a) : 'platform';
+  const catLabel = _resolveCategoryLabel(src.category, lang) || _generalCategoryLabel(lang);
+  const version = src.version ? t('marketplace.version').replace('{version}', String(src.version)) : '';
+  // 平台内容不标来源（spec FR-002）：只写分类与版本，与参考稿一致。
+  const metaKey = origin === 'external' ? 'catalog.meta_external' : origin === 'own' ? 'catalog.meta_own' : '';
+  const meta = origin === 'commander'
+    ? t('catalog.meta_commander')
+    : [metaKey ? t(metaKey, { category: catLabel }) : catLabel, origin === 'platform' ? version : ''].filter(Boolean).join(' · ');
+  // 未安装的智能体没有 `agent.json`，技能清单只能取目录行的 `skill_refs`（B-01）；
+  // 老 Hub 没有该字段时才回退 `skill_list`。
+  const catalogSkillIds = Array.isArray(src.skill_refs)
+    ? src.skill_refs
+      .map((x) => (typeof x === 'string' ? x : (x && (x.content_id || x.id)) || ''))
+      .filter(Boolean)
+    : [];
+  const skillIds = a
+    ? _agentSkillIds(a)
+    : (catalogSkillIds.length
+      ? catalogSkillIds
+      : (Array.isArray(src.skill_list) ? src.skill_list.map(normalizeDisplayText).filter(Boolean) : []));
+  // 技能名字来自技能列表；没进过技能页时列表还没加载，「会用到的技能」会显示成 ID。先补一次。
+  if (skillIds.some((sid) => _agentSkillNameForId(sid) === sid)) {
+    await _maybeLoadAgentSkillNames(skillIds, id, { refresh: false });
+  }
+  // 未安装智能体引用的 Hub 技能多半也没装，名字只在技能目录里；没进过技能页时先取一次（有缓存）。
+  if (!a && typeof catalogLoad === 'function' && skillIds.some((sid) => _agentSkillNameForId(sid) === sid)) {
+    try { await catalogLoad('skill'); } catch (_) { /* 取不到就显示 ID，不影响打开详情 */ }
+  }
+  const depState = a && a.dependency_state && typeof a.dependency_state === 'object' ? a.dependency_state : null;
+  const reasons = depState && depState.reasons && typeof depState.reasons === 'object' ? depState.reasons : {};
+  const userOffIds = Object.keys(reasons).filter((sid) => reasons[sid] === 'user_disabled');
+  const userOffNames = userOffIds.map(_agentSkillNameForId);
+  const blockedReason = a && a.hub_disabled ? t('agents.hub_disabled_hint')
+    : userOffIds.length ? t('catalog.deps_user_disabled_hint', { names: userOffNames.join('、') })
+      : depState && depState.status === 'deps_blocked' ? t('agents.deps_blocked_hint') : '';
+  // 未安装时，「会用到的技能」还要列出随包技能与内置能力（目录行 `bundled_skills` / `builtin_refs`），
+  // 依赖才算事先可见（FR-012）：内置能力本机不具备的，装之前就标「本机不可用」。
+  const catalogAvailable = (x) => !x || !x.availability || x.availability === 'available';
+  const catalogRefAvailability = new Map((Array.isArray(src.skill_refs) ? src.skill_refs : [])
+    .filter((x) => x && typeof x === 'object')
+    .map((x) => [String(x.content_id || x.id || ''), catalogAvailable(x)]));
+  const catalogExtraSkills = a ? [] : [
+    ...(Array.isArray(src.bundled_skills) ? src.bundled_skills : []).map((x) => ({
+      name: normalizeDisplayText(x && typeof x === 'object' ? (x.name || x.id || '') : x),
+      ready: false,
+      unavailable: x && typeof x === 'object' ? !catalogAvailable(x) : false,
+    })),
+    ...(Array.isArray(src.builtin_refs) ? src.builtin_refs : []).map((x) => {
+      const ok = x && typeof x === 'object' ? catalogAvailable(x) : true;
+      const ref = String(x && typeof x === 'object' ? (x.id || x.name || '') : (x || ''));
+      return { name: ref.replace(/^builtin:/, ''), ready: ok, unavailable: !ok };
+    }),
+  ].filter((s) => s.name);
+  const updateRow = a ? _agentCatalogUpdateRow(a) : null;
+  const installing = typeof catalogIsInstalling === 'function' && catalogIsInstalling('agent', id);
+  const failed = !a && !installing && typeof catalogInstallFailure === 'function' ? catalogInstallFailure('agent', id) : '';
+  openCatalogPopup({
+    kind: 'agent',
+    origin,
+    id,
+    name: src.name || id,
+    meta,
+    description: a ? _agentSummary(a, lang) : String(pickDesc(src, lang) || '').trim(),
+    tags: Array.isArray(src.tags) ? src.tags : [],
+    does: Array.isArray(src.does) ? src.does : [],
+    examples: src.examples,
+    skills: skillIds.map((sid) => ({
+      name: _agentSkillNameForId(sid),
+      ready: installed,
+      off: reasons[sid] === 'user_disabled',
+      unavailable: !installed && catalogRefAvailability.get(sid) === false,
+    })).concat(catalogExtraSkills),
+    enableDep: userOffIds.length ? { id: userOffIds[0], name: userOffNames[0] } : null,
+    iconHtml: renderAvatarHtml(src.icon, src.color, {
+      size: 52, seed: id, extraClass: 'agent-card-avatar',
+      letter: a && _isExternalCliAgent(a) ? (a.name || '') : '',
+    }),
+    installed,
+    enabled: a ? a.enabled !== false : true,
+    contributable: a ? _isAgentContributable(a) : false,
+    bundled,
+    hubDisabled: !!(a && a.hub_disabled),
+    installing: !a && installing,
+    failed,
+    updateAvailable: !!updateRow && !installing,
+    blockedReason,
+  }, {
+    use: () => useAgent(id, 'agent_card'),
+    sendExample: async (text) => {
+      if (installed) { useAgent(id, 'agent_card', text); return true; }
+      if (!await _installCatalogAgent(catalogRow)) return false;
+      if (typeof closeCatalogPopup === 'function') closeCatalogPopup();
+      useAgent(id, 'agent_card', text);
+      return true;
+    },
+    install: () => _installCatalogAgent(catalogRow),
+    update: () => _installCatalogAgent(updateRow, { update: true }),
+    enable_dep: async () => {
+      if (!userOffIds.length || typeof _flipSkillEnabled !== 'function') return;
+      for (const sid of userOffIds) await _flipSkillEnabled(sid, true);
+      await loadAgents(true);
+    },
+    enable: () => _flipAgentEnabled(id, true),
+    disable: () => _flipAgentEnabled(id, false),
+    manage: () => _showAgentsDetailView(id),
+    contribute: () => _startAgentContribution(id, src.name || id),
+  });
+}
+
 function renderAgentsGrid(agents) {
   const emptyEl = document.getElementById('agents-empty');
   const chipsHost = document.getElementById('agents-categories');
   const gridEl = document.getElementById('agents-grid');
   if (!gridEl) return;
   _ensureAgentsSearchControl();
+  _agentsEnsureCatalog();
 
-  if (!agents.length) {
+  // S4：首页 = 主智能体 / 外接 / 平台（已安装 + 目录未安装）；我的 = 只放自建的。
+  const isMine = _agentsSubView === 'mine';
+  const customAgents = agents.filter(_isAgentCustomOwned);
+  const homeAgents = agents.filter((a) => !_isAgentCustomOwned(a));
+  const platformInstalled = homeAgents.filter(_isAgentPlatformInstalled);
+  // 随包智能体照常出现在平台组，但不进「已安装」管理页（2026-10-21 定）。
+  const managedInstalled = platformInstalled.filter((a) => !a.bundled);
+  if (_agentsSubView === 'installed') {
+    _renderAgentsChrome(customAgents.length, managedInstalled.length);
+    _renderAgentsInstalledView(managedInstalled, { gridEl, emptyEl, chipsHost });
+    return;
+  }
+  const viewAgents = isMine ? customAgents : homeAgents;
+  const catalogLayout = isMine ? null : _agentsCatalogLayout(platformInstalled);
+  const pendingRows = catalogLayout ? catalogLayout.tail : [];
+  const keptAgents = catalogLayout ? catalogLayout.kept : new Map();
+  _renderAgentsChrome(customAgents.length, managedInstalled.length);
+  agents = viewAgents;
+
+  if (!agents.length && !pendingRows.length) {
     if (chipsHost) chipsHost.innerHTML = '';
     gridEl.classList.remove('is-sectioned');
     gridEl.innerHTML = '';
     if (emptyEl) {
-      if (typeof _mpUpdateInstallingEmptyStates === 'function') _mpUpdateInstallingEmptyStates();
+      if (isMine) _renderAgentsMineEmptyState(emptyEl);
+      else if (typeof _mpUpdateInstallingEmptyStates === 'function') _mpUpdateInstallingEmptyStates();
       else _renderAgentsEmptyState(emptyEl, false);
     }
     return;
@@ -764,7 +1226,6 @@ function renderAgentsGrid(agents) {
   const useLabel = t('agents.use');
   const moreTitle = t('agents.more_actions');
   const lang = getLang();
-  const customChipLabel = t('agents.custom_group');
   const baseGroupLabel = (() => {
     const raw = t('agents.base_group');
     return (raw && raw !== 'agents.base_group') ? raw : t('agents.external_group');
@@ -793,7 +1254,7 @@ function renderAgentsGrid(agents) {
   };
   const cats = (typeof _mpCategoriesCache !== 'undefined' && _mpCategoriesCache) || [];
   const knownCodes = _knownCategoryCodes(cats);
-  const rawCodesPresent = new Set(agents.map((a) => canonicalCategoryCode(a && a.category)));
+  const rawCodesPresent = new Set([...agents, ...pendingRows].map((a) => canonicalCategoryCode(a && a.category)));
   const unknownCodes = [...rawCodesPresent].filter((c) => c && !knownCodes.has(c)).sort();
   if (unknownCodes.length && typeof _mpMaybeRefreshCategoriesForCodes === 'function') {
     _mpMaybeRefreshCategoriesForCodes(unknownCodes);
@@ -845,8 +1306,14 @@ function renderAgentsGrid(agents) {
     if (!query) return true;
     return `${a?.name || ''} ${_agentSummary(a, lang)}`.toLocaleLowerCase().includes(query);
   });
+  const filteredPending = pendingRows.filter((row) => {
+    if (_agentsActiveCategory !== '' && _effectiveCategoryCode(row && row.category, knownCodes) !== _agentsActiveCategory) return false;
+    const query = _agentsSearchQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    return `${row?.name || ''} ${pickDesc(row, lang) || ''}`.toLocaleLowerCase().includes(query);
+  });
 
-  if (!filtered.length) {
+  if (!filtered.length && !filteredPending.length) {
     gridEl.classList.remove('is-sectioned');
     gridEl.innerHTML = '';
     _renderAgentsEmptyState(emptyEl, true);
@@ -888,7 +1355,34 @@ function renderAgentsGrid(agents) {
     // Source provenance chips on the bottom row. Version/category now live
     // in the subtitle line under the card title, so marketplace only keeps
     // review status here when that UI is enabled.
-    const provenanceChips = _isAgentPlatformSource(a.source) ? _agentPlatformStatusChipsHtml(a) : '';
+    const updateChip = _agentCatalogUpdateRow(a)
+      ? `<span class="agent-card-chip is-update">${escapeHtml(t('catalog.update_chip'))}</span>`
+      : '';
+    const provenanceChips = (_isAgentPlatformSource(a.source) ? _agentPlatformStatusChipsHtml(a) : '') + updateChip;
+    const canContribute = _isAgentContributable(a) && !isMock;
+    // Dependencies Hub disabled make the agent unusable (same rule as install); a merely missing
+    // dependency only warns, because stale refs in older agents were always tolerated at runtime.
+    const depState = a.dependency_state && typeof a.dependency_state === 'object' ? a.dependency_state : null;
+    const depsBlocked = depState?.status === 'deps_blocked';
+    // 被 Hub 停用：本机不可用（`enabled` 已含此因素），卡片说明原因，不让用户以为是自己停用的
+    const hubDisabledChip = a.hub_disabled
+      ? `<span class="agent-card-chip is-deps-warning" title="${escapeHtml(t('agents.hub_disabled_hint'))}">${escapeHtml(t('agents.hub_disabled_chip'))}</span>`
+      : '';
+    // 用户自己停用的同样要在卡片上写明（FR-016），不只是变暗；Hub 停用已有专门的标签。
+    const userDisabledChip = !enabled && !a.hub_disabled
+      ? `<span class="agent-card-chip">${escapeHtml(t('component.disabled'))}</span>`
+      : '';
+    // 依赖被阻断时说清是谁停的：全是用户自己停用的技能，就别说成「被 Hub 停用」（与详情一致）。
+    const depReasons = depState && depState.reasons && typeof depState.reasons === 'object' ? depState.reasons : {};
+    const blockedIds = Object.keys(depReasons).filter((sid) => depReasons[sid] !== 'missing');
+    const userOffIds = blockedIds.filter((sid) => depReasons[sid] === 'user_disabled');
+    const depsHint = !depsBlocked ? t('agents.deps_missing_hint')
+      : (blockedIds.length && userOffIds.length === blockedIds.length)
+        ? t('catalog.deps_user_disabled_hint', { names: userOffIds.map(_agentSkillNameForId).join('、') })
+        : t('agents.deps_blocked_hint');
+    const depsChip = hubDisabledChip + userDisabledChip + (depState && depState.status !== 'ready'
+      ? `<span class="agent-card-chip is-deps-warning" title="${escapeHtml(depsHint)}">${escapeHtml(t(depsBlocked ? 'agents.deps_blocked_chip' : 'agents.deps_missing_chip'))}</span>`
+      : '');
     return `
       <div class="agent-card ui-resource-card${enabled ? '' : ' is-disabled'}" data-id="${escapeHtml(a.agent_id)}" data-source="${escapeHtml(a.source || '')}">
         <button type="button" class="agent-card-open" data-agent-open aria-label="${escapeHtml(openLabel)}"></button>
@@ -902,17 +1396,24 @@ function renderAgentsGrid(agents) {
         </div>
         <div class="${descClass}">${escapeHtml(descText)}</div>
         <div class="agent-card-actions">
-          ${cliChip}${provenanceChips}
+          ${cliChip}${provenanceChips}${depsChip}
           ${_agentDeliveryChip(deliveryCount)}
           ${_agentExplicitCountChip(_agentLabel('agents.card_memory_count', '{n} 记忆', '{n} memory', '{n} 記憶'), memoryCount)}
           ${_agentExplicitCountChip(_agentLabel('agents.card_skill_count', '{n} 技能', '{n} skills', '{n} スキル'), skillCount)}
+          ${canContribute && typeof uiButton === 'function' ? uiButton({
+            label: t('agents.contribute'),
+            role: 'secondary',
+            size: 'sm',
+            className: 'agent-card-contribute',
+            attrs: { 'data-agent-contribute': true, title: t('agents.contribute_hint'), 'aria-label': t('agents.contribute_hint') },
+          }) : ''}
           ${typeof uiButton === 'function' ? uiButton({
             label: useLabel,
             role: 'primary',
             size: 'sm',
             className: 'agent-card-use',
-            disabled: !(enabled && !isMock),
-            attrs: { 'data-agent-use': true, title: useTitle },
+            disabled: !(enabled && !isMock && !depsBlocked),
+            attrs: { 'data-agent-use': true, title: depsBlocked ? t('agents.deps_blocked_hint') : useTitle },
           }) : ''}
         </div>
       </div>
@@ -923,7 +1424,7 @@ function renderAgentsGrid(agents) {
   for (const a of filtered) {
     const source = _agentSource(a?.source);
     if (_isCommanderAgent(a)) groups.commander.push(a);
-    else if (source === 'marketplace') groups.marketplace.push(a);
+    else if (source === 'marketplace') { if (!keptAgents.has(String(a.agent_id))) groups.marketplace.push(a); }
     // 外接 CLI agent（ClaudeCode / Codex / WorkBuddy…）是「基础 Agent」：
     // 与指挥官同层（谁来承接空间任务），与自定义团队成员分开。
     else if (_isExternalCliAgent(a)) groups.base.push(a);
@@ -940,16 +1441,48 @@ function renderAgentsGrid(agents) {
       </section>
     `;
   };
-  gridEl.classList.add('is-sectioned');
-  gridEl.innerHTML = sectionHtml(commanderGroupLabel, groups.commander)
-    + sectionHtml(baseGroupLabel, groups.base)
-    + sectionHtml(customChipLabel, groups.custom)
-    + sectionHtml(marketplaceGroupLabel, groups.marketplace);
+  if (isMine) {
+    // 我的智能体：一个网格、不分组（spec FR-017）。
+    gridEl.classList.remove('is-sectioned');
+    gridEl.innerHTML = filtered.map(cardHtml).join('');
+  } else {
+    // 平台：已安装在前、目录里还没装的在后，不标来源（spec FR-002）；首次加载时骨架、没有更多时说明（FR-025）。
+    const platformCount = groups.marketplace.length + filteredPending.length;
+    const filtering = Boolean(_agentsSearchQuery.trim()) || _agentsActiveCategory !== '';
+    const tail = typeof catalogPlatformTail === 'function'
+      ? catalogPlatformTail('agent', catalogLayout.notInstalled.length, filtering) : { cards: '', note: '' };
+    const platformHtml = platformCount || tail.cards || tail.note ? `
+      <section class="agents-source-section">
+        <div class="agents-source-section-head">${escapeHtml(marketplaceGroupLabel)} · ${platformCount}</div>
+        <div class="agents-source-section-grid ui-resource-grid">
+          ${groups.marketplace.map(cardHtml).join('')}${filteredPending.map((row) => (keptAgents.has(String(row.id)) ? cardHtml(keptAgents.get(String(row.id))) : _catalogAgentCardHtml(row, lang))).join('')}${tail.cards}
+        </div>
+        ${tail.note}
+      </section>
+    ` : '';
+    gridEl.classList.add('is-sectioned');
+    gridEl.innerHTML = (typeof catalogHomeBannerHtml === 'function' ? catalogHomeBannerHtml('agent') : '')
+      + sectionHtml(commanderGroupLabel, groups.commander)
+      + sectionHtml(baseGroupLabel, groups.base)
+      + platformHtml;
+    if (typeof catalogWireBanner === 'function') catalogWireBanner(gridEl, 'agent');
+    if (typeof catalogTakeJustInstalledFlash === 'function') {
+      for (const card of gridEl.querySelectorAll('.agent-card[data-id]')) {
+        if (keptAgents.has(card.dataset.id) && catalogTakeJustInstalledFlash('agent', card.dataset.id)) card.classList.add('is-just-installed');
+      }
+    }
+  }
 
-  for (const card of gridEl.querySelectorAll('.agent-card')) {
+  for (const card of gridEl.querySelectorAll('.agent-card[data-id]')) {
     const id = card.dataset.id;
     const source = card.dataset.source;
     card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-agent-contribute]')) {
+        e.stopPropagation();
+        const agent = _agentsCache?.find((x) => x.agent_id === id);
+        void _startAgentContribution(id, agent?.name || id);
+        return;
+      }
       if (e.target.closest('[data-agent-use]')) {
         e.stopPropagation();
         if (!card.classList.contains('is-disabled')) useAgent(id, 'agent_card');
@@ -960,9 +1493,29 @@ function renderAgentsGrid(agents) {
         _toggleAgentRowMenu(e.target.closest('[data-agent-more]'), id, source);
         return;
       }
-      _showAgentsDetailView(id);
+      _openAgentCatalogPopup(id);
     });
   }
+  for (const card of gridEl.querySelectorAll('.agent-card[data-catalog-id]')) {
+    const row = filteredPending.find((x) => String(x.id) === card.dataset.catalogId);
+    if (!row) continue;
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-catalog-install]')) {
+        e.stopPropagation();
+        void _installCatalogAgent(row);
+        return;
+      }
+      _openAgentCatalogPopup('', row);
+    });
+  }
+}
+
+function _renderAgentsMineEmptyState(emptyEl) {
+  if (!emptyEl) return;
+  emptyEl.innerHTML = typeof window.uiEmptyState === 'function'
+    ? window.uiEmptyState({ kind: 'explained', title: t('catalog.mine_empty_agents'), hint: t('catalog.mine_empty_hint') })
+    : escapeHtml(t('catalog.mine_empty_agents'));
+  emptyEl.style.display = '';
 }
 
 /** Flip an agent's enabled override (used by both the ⋯ menu's toggle item
@@ -991,7 +1544,48 @@ async function _flipAgentEnabled(agentId, nextEnabled) {
 
 // ─── View switching: grid ↔ detail ─────────────────────────────────────
 
+/** Only agents the user wrote themselves can be contributed: not the commander, not external CLI
+ *  agents, not host-only built-ins, not marketplace installs. Same idea as the Skill card's rule. */
+function _isAgentContributable(a) {
+  if (!a || _agentSource(a.source) !== 'custom') return false;
+  if (_isCommanderAgent(a) || _isExternalCliAgent(a)) return false;
+  if (a.management_surface || a.reimbursement_entry_role) return false;
+  return true;
+}
+
+/** Contribution modules ship with the Skills bundle (the Mine page lives there too), so make sure
+ *  it is loaded before handing over. */
+async function _ensureContributionFeature() {
+  if (typeof window.startAgentContribution === 'function') return true;
+  if (typeof window.loadRendererFeature === 'function') await window.loadRendererFeature('skills');
+  return typeof window.startAgentContribution === 'function';
+}
+
+async function _startAgentContribution(agentId, name, targetContentId) {
+  try {
+    if (!await _ensureContributionFeature()) throw new Error('contribution unavailable');
+    await window.startAgentContribution(agentId, name, targetContentId);
+  } catch (err) {
+    await uiAlert(t('agents.contribute_start_failed'));
+  }
+}
+
+async function _openAgentContributions() {
+  try {
+    if (!await _ensureContributionFeature()) throw new Error('contribution unavailable');
+    await window.openMyContributions({ type: 'agent', returnTo: 'agents' });
+  } catch (err) {
+    await uiAlert(t('agents.contribute_start_failed'));
+  }
+}
+
+/** Candidates for "submit a new version" from My contributions. */
+window.getCustomContributionAgents = () => (_agentsCache || [])
+  .filter(_isAgentContributable)
+  .map((a) => ({ id: a.agent_id, name: a.name }));
+
 function _showAgentsGridView() {
+  if (typeof window.hideAgentContributionViews === 'function') window.hideAgentContributionViews();
   if (typeof closeExpenseWorkbench === 'function') closeExpenseWorkbench();
   const grid = document.getElementById('agents-grid-view');
   const detail = document.getElementById('agents-detail-view');
@@ -1007,11 +1601,41 @@ function _showAgentsGridView() {
   if (detailContent) detailContent.style.display = 'none';
 }
 
+/**
+ * 详情容器（含返回按钮）在「加载中 / 读不到」时必须可见。
+ *
+ * 此前 `#agents-detail-content` 一直 `display:none`，只有 `_renderAgentDetail` 才打开它：
+ * 接口慢或失败时用户只看到一片灰底，**连返回按钮都点不到**，只能靠左侧导航离开
+ * （2026-10-15 实测）。提示做成容器内的独立槽位、渲染成功时移除 —— 不能整体重写
+ * `.agents-detail-body`，`_renderAgentDetail` 靠 id 找里面那些 section。
+ */
+function _showAgentDetailNotice(message) {
+  const content = document.getElementById('agents-detail-content');
+  if (!content) return;
+  content.style.display = '';
+  const body = content.querySelector('.agents-detail-body') || content;
+  let slot = document.getElementById('agents-detail-notice');
+  if (!slot) {
+    slot = document.createElement('div');
+    slot.id = 'agents-detail-notice';
+    slot.className = 'agents-detail-empty';
+    body.prepend(slot);
+  }
+  slot.textContent = message;
+}
+
+function _clearAgentDetailNotice() {
+  const slot = document.getElementById('agents-detail-notice');
+  if (slot && slot.parentNode) slot.parentNode.removeChild(slot);
+}
+
 async function _showAgentsDetailView(agentId) {
   const grid = document.getElementById('agents-grid-view');
   const detail = document.getElementById('agents-detail-view');
   if (grid) grid.style.display = 'none';
   if (detail) detail.style.display = 'flex';
+  // 先给出可见的「正在读取」与返回按钮，再发请求。
+  _showAgentDetailNotice(t('agents.detail_loading'));
   // Detail has a target-scoped API below. Do not refresh/enrich the complete
   // Agent catalog merely to open one agent.json.
   await selectAgent(agentId);
@@ -1127,6 +1751,24 @@ async function _renderCommanderAgentDetail(editing = false) {
   _renderAgentDetail(agent, editing);
 }
 
+// 本机安装记录发生了变化（含只改状态的同步，如 Hub 停用/恢复）：重读 Agent 列表，卡片才能及时显示状态。
+// 监听放在这里而不是 marketplace.js：后者是懒加载的，没打开过市场的会话里没人听这个事件。
+// marketplace.js 已加载时由它统一刷新（Agent、Skill 与市场面板），这里不重复。
+let _agentsInstallsChangedTimer = null;
+function _initAgentsInstallsChangedWatch() {
+  if (!window.cogseed || typeof window.cogseed.onPushEvent !== 'function') return;
+  try {
+    window.cogseed.onPushEvent('marketplace:installs-changed', () => {
+      if (typeof _mpRefreshInstalledCaches === 'function') return;
+      clearTimeout(_agentsInstallsChangedTimer);
+      _agentsInstallsChangedTimer = setTimeout(() => {
+        void refreshAgentsAfterMarketplaceReconcile().catch(() => { /* ignore */ });
+      }, 400);
+    });
+  } catch { /* preload not ready; the next list load still shows the current state */ }
+}
+_initAgentsInstallsChangedWatch();
+
 async function refreshAgentsAfterMarketplaceReconcile() {
   await loadAgents(true);
   if (_agentEditing) return;
@@ -1163,7 +1805,8 @@ function _renderAgentRowMenuItems(menu, agentId, source = '') {
   if (typeof openMarketplaceUpload === 'function') {
     items.push(`<div class="agent-row-menu-item" data-action="upload-marketplace">${escapeHtml(t('marketplace.upload'))}</div>`);
   }
-  if (!isMock) items.push(`<div class="agent-row-menu-item" data-action="toggle-enabled">${escapeHtml(toggleLabel)}</div>`);
+  // 被 Hub 停用的 Agent，用户手动"启用"也不会生效，不提供这个入口，避免误导
+  if (!isMock && !a?.hub_disabled) items.push(`<div class="agent-row-menu-item" data-action="toggle-enabled">${escapeHtml(toggleLabel)}</div>`);
   if (canEditDefinition) {
     items.push(`<div class="agent-row-menu-item is-danger" data-action="delete">${escapeHtml(t('agents.delete'))}</div>`);
   }
@@ -1213,7 +1856,11 @@ async function selectAgent(agentId) {
     if (typeof closeExpenseWorkbench === 'function') closeExpenseWorkbench();
     const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`);
     const data = await res.json();
-    if (!data.ok || !data.agent) return;
+    if (!data.ok || !data.agent) {
+      // 失败也要有可见文案与返回入口，不能把用户留在灰底上（失败原因仍进 console）。
+      _showAgentDetailNotice(t('agents.detail_load_failed'));
+      return;
+    }
     data.agent.source = _agentSource(data.agent.source);
     await _maybeLoadAgentSkillNames(_agentSkillIds(data.agent), data.agent.agent_id, { refresh: false });
     _selectedAgent = { id: data.agent.agent_id, name: data.agent.name, source: data.agent.source };
@@ -1226,6 +1873,7 @@ async function selectAgent(agentId) {
     _resetAgentDetailScroll();
   } catch (e) {
     _agentsLog.error('load agent failed', e);
+    _showAgentDetailNotice(t('agents.detail_load_failed'));
   }
 }
 
@@ -1238,6 +1886,10 @@ function _renderSourceMetaHtml(item) {
   if (item.version) {
     const versionLabel = t('marketplace.version').replace('{version}', String(item.version));
     parts.push(`<span class="agents-detail-source is-version">${escapeHtml(versionLabel)}</span>`);
+  }
+  const updateFailed = _agentUpdateFailureText(item);
+  if (updateFailed) {
+    parts.push(`<span class="agents-detail-source is-update-failed" role="status" title="${escapeHtml(updateFailed.hint)}">${escapeHtml(updateFailed.hint)}</span>`);
   }
   if (_agentSource(item.source) !== 'custom') {
     const lang = (typeof getLang === 'function') ? getLang() : 'en';
@@ -1794,8 +2446,13 @@ function _inheritanceExclusionLabel(reason) {
 }
 
 function _inheritanceItemHtml(title, meta, { excludedByUser = false } = {}) {
+  // 行首必须是图标单元：`.agents-detail-list-item` 是 `18px minmax(0,1fr) auto` 三列网格，
+  // 少了这一格，`.agents-detail-list-main` 会落进 18px 的第一列，标题被逐字折行成竖排
+  // （2026-10-15 实测：9 个字的「客户投诉分类标准」渲染成 18px 宽、176px 高）。
+  // 与 `agents.js` 另外几处（记忆行、只读行）以及市场依赖行同一结构。
   return `
     <div class="agents-detail-list-item">
+      <span class="agents-detail-list-icon" aria-hidden="true">${_agentDetailListIconHtml('ability')}</span>
       <div class="agents-detail-list-main">
         <span class="agents-detail-list-text">${escapeHtml(title)}</span>
         <span class="agents-detail-list-meta${excludedByUser ? ' is-user-choice' : ''}">${escapeHtml(meta)}</span>
@@ -1891,6 +2548,8 @@ function _renderAgentDetail(agent, editing) {
   agent = { ...agent, source: _agentSource(agent.source) };
   const isCommander = _isCommanderAgent(agent);
   document.getElementById('agents-detail-content').style.display = '';
+  // 真正渲染出内容了，撤掉「正在读取 / 读不到」的占位。
+  _clearAgentDetailNotice();
 
   const nameEl = document.getElementById('agents-detail-name');
   const nameInput = document.getElementById('agents-detail-name-input');
@@ -2857,6 +3516,9 @@ function _switchAgentTab(tab) {
   panels.forEach((el) => el.classList.toggle('is-active', el.dataset.agentPanel === tab));
   const msgEl = document.getElementById('agent-form-msg');
   if (msgEl) { msgEl.textContent = ''; msgEl.className = 'form-msg'; }
+  // 外接的确认按钮叫「接入」，创建的叫「确认」。
+  const saveBtn = document.getElementById('agent-save-btn');
+  if (saveBtn) saveBtn.textContent = t(tab === 'external' ? 'agent_modal.ext_confirm' : 'common.confirm');
   // 每次切到「外接」tab 都重新扫描并展示「正在扫描本机 CLI…」。之前
   // 扫描只发生在打开弹窗时一次，用户切换 tab 看到的总是早已就绪的
   // 结果 → 感知上像「没有扫描」。移到这里后，进入外接面板必然先短暂
@@ -2864,12 +3526,8 @@ function _switchAgentTab(tab) {
   if (tab === 'external') {
     _refreshExternalCliSelector();
   }
-  setTimeout(() => {
-    const focusId = tab === 'external' ? 'agent-modal-ext-cli-select' : 'agent-name-input';
-    const el = document.getElementById(focusId);
-    // ai-select wrapper isn't focusable directly; just leave it alone.
-    if (el && typeof el.focus === 'function' && el.tagName !== 'DIV') el.focus();
-  }, 30);
+  // 外接的卡片在扫描结束后才出现，不抢焦点；创建聚焦名称。
+  if (tab !== 'external') setTimeout(() => document.getElementById('agent-name-input')?.focus(), 30);
 }
 window._switchAgentTab = _switchAgentTab;
 
@@ -2880,11 +3538,24 @@ window._switchAgentTab = _switchAgentTab;
 function _refreshExternalCliSelector() {
   _externalCliProviderSelect?.setValue('');
   const providerLoad = _loadExternalCliProviders().catch(() => []);
+  // 名称 / 简介 / 模型供应商在选卡片之前置灰（2026-10-20 改版），高度不变。
   if (typeof mountExternalCliSelect === 'function') {
     mountExternalCliSelect((cli) => {
+      _setExternalFieldsIdle(!cli);
       _applyExternalCliDefaults(cli);
       providerLoad.then(() => _renderExternalCliProviderSelect(cli, _getExternalCliProviderValue(cli)));
     }).catch(() => {});
+  }
+  const rescan = document.getElementById('agent-ext-rescan');
+  if (rescan && typeof uiButton === 'function' && !rescan.dataset.wired) {
+    rescan.dataset.wired = 'true';
+    rescan.innerHTML = uiButton({ label: t('agent_modal.ext_rescan'), role: 'ghost', size: 'sm', icon: 'refresh', attrs: { 'data-ext-rescan': true } });
+    if (typeof hydrateUiIcons === 'function') hydrateUiIcons(rescan);
+    rescan.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-ext-rescan]')) return;
+      e.preventDefault();
+      _refreshExternalCliSelector();
+    });
   }
   if (typeof _renderExternalPanelPeers === 'function') {
     void _renderExternalPanelPeers();
@@ -2901,12 +3572,13 @@ async function _renderExternalPanelPeers() {
   // 一个跳转入口，避免两处维护同一份节点管理逻辑。
   const slot = document.getElementById('agent-ext-peers');
   if (!slot) return;
+  // 2026-10-20 改版：底部一行说明 + 入口，不再占一整块。
   slot.innerHTML = `
-    <div class="agents-ext-peers-empty agents-ext-peers-moved">
-      <span>${escapeHtml(t('agents.peers.moved'))}</span>
+    <div class="agents-ext-peers-moved">
+      <span>${escapeHtml(t('agent_modal.ext_manage_note'))}</span>
       ${typeof uiButton === 'function' ? uiButton({
         label: t('agents.peers.open_dashboard'),
-        role: 'secondary',
+        role: 'ghost',
         size: 'sm',
         iconEnd: 'arrow-right',
         attrs: { id: 'agent-ext-peers-open-dashboard' },
@@ -2979,6 +3651,24 @@ function _applyExternalCliDefaults(cliType, { force = false } = {}) {
   _extActiveCli = cliType;
 }
 
+let _agentCreateModalController = null;
+
+function _getAgentCreateModalController() {
+  if (_agentCreateModalController || typeof uiModalController !== 'function') {
+    return _agentCreateModalController;
+  }
+  const overlay = document.getElementById('agent-modal');
+  const dialog = overlay?.querySelector('[role="dialog"]');
+  if (!overlay || !dialog) return null;
+  _agentCreateModalController = uiModalController({
+    overlay,
+    dialog,
+    initialFocus: '#agent-modal-tabs .is-active',
+    fallbackFocus: '#create-agent-btn',
+  });
+  return _agentCreateModalController;
+}
+
 function openAgentModal(options = {}) {
   const requestedTab = typeof options === 'string' ? options : options?.initialTab;
   const initialTab = requestedTab === 'external' ? 'external' : 'create';
@@ -3013,14 +3703,24 @@ function openAgentModal(options = {}) {
   }
   _switchAgentTab(initialTab);
 
-  modal.classList.add('open');
-  const focusId = initialTab === 'external' ? 'agent-ext-name-input' : 'agent-name-input';
-  setTimeout(() => document.getElementById(focusId)?.focus(), 50);
+  const controller = _getAgentCreateModalController();
+  if (controller) controller.open(document.activeElement);
+  else {
+    modal.hidden = false;
+    modal.classList.add('open');
+    if (initialTab !== 'external') setTimeout(() => document.getElementById('agent-name-input')?.focus(), 50);
+  }
 }
 window.openAgentModal = openAgentModal;
 
 function closeAgentModal() {
-  document.getElementById('agent-modal').classList.remove('open');
+  const modal = document.getElementById('agent-modal');
+  const controller = _getAgentCreateModalController();
+  if (controller?.isOpen()) controller.close('close');
+  else {
+    modal.classList.remove('open');
+    modal.hidden = true;
+  }
 }
 window.closeAgentModal = closeAgentModal;
 
@@ -3189,6 +3889,8 @@ async function _saveExternalAgent({ msgEl }) {
       runtime: { kind: 'p3394-gateway', cli },
       category: 'general',
     };
+    // 模型供应商（仅 Claude Code / Codex；留空用 CLI 自己的配置）——唤醒时由 p3394-wake-dispatcher 读取。
+    body.runtime = withCliProviderSelection(body.runtime, _getExternalCliProviderValue(cli));
     const res = await apiFetch('/api/agents/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3496,7 +4198,20 @@ async function clearAgentChat() {
 /**
  * Select an agent in the Commander tab and wait for the user's next message.
  */
-async function useAgent(agentId, managementOpenGesture) {
+/** 进入新任务后把示例作为第一条消息直接发出（详情弹窗里点示例，spec FR-008）。 */
+function _sendNewChatInitialMessage(text) {
+  const message = String(text || '').trim();
+  if (!message) return;
+  setTimeout(() => {
+    const input = document.getElementById('new-chat-input');
+    if (!input) return;
+    input.value = message;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    if (typeof handleNewChatSubmit === 'function') handleNewChatSubmit();
+  }, 80);
+}
+
+async function useAgent(agentId, managementOpenGesture, initialMessage) {
   if (_isAgentProfileMock(agentId)) return;
   if (_isCommanderAgent(agentId)) {
     _agentsLog.info('use commander');
@@ -3509,6 +4224,7 @@ async function useAgent(agentId, managementOpenGesture) {
     setTimeout(() => {
       document.getElementById('new-chat-input')?.focus();
     }, 50);
+    _sendNewChatInitialMessage(initialMessage);
     return;
   }
   const cachedAgent = _agentsCache?.find((a) => a.agent_id === agentId);
@@ -3573,6 +4289,7 @@ async function useAgent(agentId, managementOpenGesture) {
     setTimeout(() => {
       document.getElementById('new-chat-input')?.focus();
     }, 50);
+    _sendNewChatInitialMessage(initialMessage);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e || t('common.unknown_error'));
     await uiAlert(t('agents.launch_failed', { reason }));
@@ -3584,7 +4301,7 @@ async function useAgent(agentId, managementOpenGesture) {
   }
 }
 
-async function useSkill(skillId, skillName) {
+async function useSkill(skillId, skillName, initialMessage) {
   if (typeof _skillsCache !== 'undefined'
       && _skillsCache?.some((s) => s.id === skillId && (s.enabled === false || (s.source === 'marketplace' && HubContentStatus.isHubContentDisabled(s))))) return;
   // Open-tier skills (external packages / global folders) live in their own
@@ -3603,6 +4320,7 @@ async function useSkill(skillId, skillName) {
   }
   setChatUseSelection('new-chat', { kind: 'skill', id: skillId, name: skillName || skillId });
   setTimeout(() => document.getElementById('new-chat-input')?.focus(), 50);
+  _sendNewChatInitialMessage(initialMessage);
 }
 
 // ─── Agent picker (one-shot, works on both new-chat and conversation) ───
@@ -4068,6 +4786,26 @@ if (typeof window !== 'undefined' && typeof window.registerComposerPopover === '
   });
 }
 
+/** @ 面板打开时刷新一次联系人名册；刷新落地后按当前筛选重绘（最多重绘一次）。 */
+function _refreshRosterForPicker(target, composerMode, filterText) {
+  const contacts = window.contacts;
+  if (!contacts || typeof contacts.refresh !== 'function') return;
+  const picker = document.getElementById('agent-picker');
+  if (!picker || picker.style.display === 'none') return;
+  const rerender = () => {
+    const listEl = document.getElementById('agent-picker-list');
+    const search = document.getElementById('agent-picker-search');
+    if (!listEl || !window.composerMembers) return;
+    if (picker.dataset.composerMode !== composerMode) return;
+    listEl.replaceChildren(window.composerMembers.buildPickerList(target, composerMode, search ? search.value : filterText));
+    _bindComposerMemberRows(listEl, target, composerMode);
+    window.composerMembers.updatePickerChrome(picker, target, composerMode);
+  };
+  window.removeEventListener('contacts-changed', rerender);
+  window.addEventListener('contacts-changed', rerender, { once: true });
+  void contacts.refresh().catch(() => { /* 刷新失败保留现有行 */ });
+}
+
 function _renderAgentPickerList(filterText) {
   const listEl = document.getElementById('agent-picker-list');
   const picker = document.getElementById('agent-picker');
@@ -4084,6 +4822,9 @@ function _renderAgentPickerList(filterText) {
     listEl.replaceChildren(window.composerMembers.buildPickerList(target, composerMode, filterText));
     _bindComposerMemberRows(listEl, target, composerMode);
     window.composerMembers.updatePickerChrome(picker, target, composerMode);
+    // 在线状态会自己变（心跳 + 120s 窗口），名册缓存却停在启动那一刻：打开 @ 面板
+    // 时补一次刷新，到了再重绘，避免「刚加的联系人一直显示离线、选不了」。
+    _refreshRosterForPicker(target, composerMode, filterText);
     return;
   }
   if (picker) {
@@ -4567,11 +5308,11 @@ function _bindComposerMemberRows(listEl, target, mode) {
       const key = el.dataset.composerMember || '';
       const kind = el.dataset.memberKind || 'agent';
       const name = el.dataset.memberName || key;
-      const member = kind === 'commander' ? members.commanderMember() : { kind: 'agent', id: key, name };
+      const member = kind === 'commander' ? members.commanderMember() : { kind, id: key, name };
       const picker = document.getElementById('agent-picker');
-      if (mode === 'mentions') {
-        // 本条点名：先确保是本条有效对象（点名已有成员；选新成员时加入会话）。
-        if (!members.isMember(target, key)) members.addMember(target, member);
+      if (mode === 'mentions' || kind === 'contact') {
+        // 联系人只属于当前草稿；本地 Agent 保留原有显式增员行为。
+        if (kind !== 'contact' && !members.isMember(target, key)) members.addMember(target, member);
         const pendingAt = (_atKeyMark && _atKeyMark.inputId === members.inputIdOf(target))
           ? _atKeyMark.posAfter - 1
           : null;

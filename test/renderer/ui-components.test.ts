@@ -33,6 +33,18 @@ function loadFactories() {
 }
 
 describe('first-version renderer components', () => {
+  it('keeps compact cards to two escaped text lines and one menu trigger', () => {
+    const { uiResourceCard } = loadFactories();
+    const html = uiResourceCard({ layout: 'compact-row', title: '<邮件>', description: '<每天 09:10>', menu: { label: '更多操作' } });
+    expect(html).toContain('ui-resource-card--compact-row');
+    expect(html).toContain('&lt;邮件&gt;');
+    expect(html).toContain('&lt;每天 09:10&gt;');
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html.match(/<button /g)).toHaveLength(1);
+    expect(html).not.toContain('ui-resource-card__footer');
+    expect(() => uiResourceCard({ layout: 'compact-row', title: '标题', action: { label: '运行' } })).toThrow(/without a footer/);
+  });
+
   it('keeps Button roles and sizes enumerable while escaping product copy', () => {
     const { uiButton } = loadFactories();
 
@@ -67,18 +79,22 @@ describe('first-version renderer components', () => {
     expect(uiIconButton({ icon: 'x', label: '关闭弹窗', size: 'sm' })).toContain('ui-icon-button--sm');
   });
 
-  it('keeps shell search before collapse and exposes one recovery entry', () => {
-    const { uiSidebarTools } = loadFactories();
-    const expanded = uiSidebarTools({ collapsed: false });
-    const collapsed = uiSidebarTools({ collapsed: true });
+  it('places collapse + search in the sidebar row and expand + search in page headers', () => {
+    // specs/008-shell-rail-layout D13: both placements are real header children.
+    const { uiSidebarTools, uiShellHeaderTools, uiShellHeaderSlot, uiPageHeader } = loadFactories();
+    const sidebar = uiSidebarTools({ live: true });
+    const header = uiShellHeaderTools();
 
-    expect(expanded.indexOf('is-search')).toBeLessThan(expanded.indexOf('is-panel'));
-    expect(expanded).toContain('data-i18n-title="sidebar.search_title"');
-    expect(expanded).toContain('aria-expanded="true"');
-    expect(collapsed).not.toContain('is-search');
-    expect(collapsed).toContain('data-i18n-title="sidebar.expand_title"');
-    expect(collapsed).toContain('aria-expanded="false"');
-    expect(collapsed.match(/<button/g)).toHaveLength(1);
+    // Same [toggle][search] order as the page header slot, so the controls keep their place.
+    expect(sidebar.indexOf('id="sidebar-collapse-btn"')).toBeLessThan(sidebar.indexOf('id="sidebar-search-btn"'));
+    expect(sidebar).toContain('data-shell-action="collapse-sidebar"');
+    expect(sidebar).toContain('aria-expanded="true"');
+    expect(header.indexOf('data-shell-action="expand-sidebar"')).toBeLessThan(header.indexOf('data-shell-action="search"'));
+    expect(header).toContain('data-i18n-title="sidebar.expand_title"');
+    expect(header).not.toContain(' id=');
+    expect(uiShellHeaderSlot()).toContain('data-shell-header-slot');
+    expect(uiPageHeader({ title: '自动化' }).indexOf('data-shell-header-slot')).toBeLessThan(uiPageHeader({ title: '自动化' }).indexOf('ui-page-header__body'));
+    expect(uiPageHeader({ title: '发现', shell: false })).not.toContain('data-shell-header-slot');
   });
 
   it('renders SegmentedControl as pressed native buttons with inline counts', () => {
@@ -144,6 +160,11 @@ describe('first-version renderer components', () => {
 
     expect(uiTag({ label: '<版本>', variant: 'version' })).toContain('&lt;版本&gt;');
     expect(uiChip({ label: '已引用', selected: true })).toContain('aria-pressed="true"');
+    // 尾部计数槽：0 是真实计数，只有缺省才不渲染；计数与标签一样按文本转义。
+    expect(uiChip({ label: '全部', count: 12, selected: true })).toContain('<span class="ui-chip__count">12</span>');
+    expect(uiChip({ label: '全部', count: 0 })).toContain('<span class="ui-chip__count">0</span>');
+    expect(uiChip({ label: '全部' })).not.toContain('ui-chip__count');
+    expect(uiChip({ label: '全部', count: '<12>' })).toContain('&lt;12&gt;');
     expect(uiBadge({ label: 12, tone: 'attention' })).toContain('ui-badge--attention');
     expect(uiStatusPill({ label: '完成', tone: 'success', check: true })).toContain('ui-status-pill--success');
     expect(uiStatusDot({ label: '失败', tone: 'critical' })).toContain('role="status"');
@@ -265,6 +286,7 @@ describe('first-version renderer components', () => {
   it('owns one PageHeader action appearance and caps actions at three', () => {
     const { uiPageHeader } = loadFactories();
     const html = uiPageHeader({
+      shell: false,
       title: '自动化',
       subtitle: '旧调用方传入的副标题不再渲染。',
       meta: '3 项任务',
@@ -551,11 +573,12 @@ const modal = read('src/renderer/modules/ui-modal.js');
     expect(rendererCss).toContain('font-family: var(--font-sans);');
     expect(rendererCss).toContain('min-height: var(--control-height);');
     expect(rendererCss).toContain('max-width: var(--layout-thread-home-width);');
-    expect(rendererCss).toContain('grid-template-columns: var(--layout-settings-nav-width) minmax(0, 1fr);');
+    expect(rendererCss).toContain('grid-template-columns: minmax(0, 1fr);');
     expect(rendererCss).toContain('max-width: var(--layout-card-grid-width);');
     expect(rendererCss).toContain('border-color: var(--line-strong);');
     expect(rendererCss).toContain('box-shadow: var(--shadow-composer);');
-    expect(rendererCss).toContain('.auto-row:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }');
+    expect(read('src/renderer/ui-components.css')).toContain('.ui-resource-card--compact-row');
+    expect(read('src/renderer/modules/auto.js')).toContain("layout: 'compact-row'");
     expect(rendererCss).toContain('.skill-card.is-menu-open');
     expect(rendererCss).toContain('max-width: var(--layout-card-grid-width);');
     expect(workspaceCss).toContain('--ws-accent: var(--color-brand);');
@@ -565,7 +588,7 @@ const modal = read('src/renderer/modules/ui-modal.js');
     expect(recallCss).toContain('background: var(--surface-app);');
     expect(recallCss).toContain('border-bottom-color: var(--color-ink);');
     expect(recallCss).toContain('max-width: var(--layout-card-grid-width);');
-    expect(rendererCss).toContain('flex: 0 0 var(--layout-info-panel-width);');
+    expect(rendererCss).toContain('flex: 0 0 var(--info-panel-width, var(--layout-info-panel-width));');
     expect(rendererCss).toContain('calc((100% - var(--layout-thread-width)) / 2)');
     expect(rendererCss).toContain('#panel-conversation .chat-message.user > .chat-bubble');
   });

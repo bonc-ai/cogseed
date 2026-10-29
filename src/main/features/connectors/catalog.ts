@@ -17,10 +17,14 @@
  * owns its own login. Such entries name no `oauth_env_key` and forward nothing. See the Auth
  * section in `types.ts`.
  */
+import { EMAIL_ENTRIES } from './catalog-email';
+import { TENCENT_SURVEY_ENTRY } from './catalog-tencent-survey';
 import { GOOGLE_ENTRIES } from './catalog-google';
 import type { CatalogEntry } from './types';
 
 export const CONNECTOR_CATALOG: CatalogEntry[] = [
+  TENCENT_SURVEY_ENTRY,
+  ...EMAIL_ENTRIES,
   {
     id: 'github',
     display_name: 'GitHub',
@@ -245,13 +249,11 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
   {
     id: 'tencent-meeting',
     display_name: '腾讯会议',
-    // Self-drawn neutral mark (screen + play), not the Tencent Meeting trademark: the catalog
-    // requires a real `icon_svg` on every shipped entry, and shipping a third-party brand asset
-    // would need a licence review we have not done. Kept geometric so it still reads at 40×40.
-    icon_svg: '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="2.6" y="4.6" width="18.8" height="12.8" rx="2.6" fill="#006EFF"/><path fill="#fff" d="M9.8 8.35a.5.5 0 0 1 .76-.43l4.3 2.5a.5.5 0 0 1 0 .86l-4.3 2.5a.5.5 0 0 1-.76-.43z"/><path d="M8.4 20.4h7.2" fill="none" stroke="#006EFF" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    // User-supplied official mark, selected from the bundled logo through the shared icon seam.
+    icon_name: 'connector-tencent-meeting',
     category: 'communication',
-    description_zh: '连接账号，读取有权访问的会议转写。',
-    description_en: 'Connect an account to read meeting transcripts you have access to.',
+    description_zh: '查询会议、录制与纪要；确认后预约、修改或取消会议。',
+    description_en: 'Query meetings, recordings and minutes; schedule, update or cancel meetings after confirmation.',
     // Third auth mode — see the `// ── Auth ──` section in `types.ts`. Tencent Meeting publishes
     // no OAuth authorization server (no OAuth 2.0, no DCR, no enterprise AppID) and no hosted MCP
     // endpoint we can authorize against, so neither `server_bridge` nor `mcp_dcr` applies. The
@@ -267,10 +269,239 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
     // Machine-dependent availability is handled by `availability.ts`, which reports
     // `visible_disabled` + `disabled_reason: 'cli_missing'` when `tmeet` is not installed, so the
     // card never offers a connect action that can only fail.
+    setup: {
+      install_command: 'npm install -g @tencentcloud/tmeet',
+      steps_zh: [
+        '复制下方命令，在终端执行以安装腾讯会议官方 CLI',
+        '回到本页点击「连接」，按提示在浏览器完成登录',
+        '登录后即可读取该账号有权访问的会议转写',
+      ],
+      steps_en: [
+        'Copy the command below and run it in a terminal to install the official Tencent Meeting CLI',
+        'Come back and choose Connect and finish signing in through your browser',
+        'Once signed in, the assistant can read the transcripts that account can access',
+      ],
+      docs_url: 'https://www.npmjs.com/package/@tencentcloud/tmeet',
+      docs_label_zh: '查看腾讯会议 CLI 说明',
+      docs_label_en: 'Tencent Meeting CLI documentation',
+      credential_note_zh: '登录由腾讯会议 CLI 自己完成并保管凭据，CogSeed 不接触你的令牌。',
+      credential_note_en: 'The Tencent Meeting CLI performs the login and holds the credential; CogSeed never sees your token.',
+    },
     transport_template: {
       kind: 'stdio',
       command: '${COGSEED_NODE}',
       args: ['${COGSEED_PC_DIR}/bin/tencent-meeting-mcp-server.cjs'],
+    },
+  },
+  {
+    id: 'tencent-docs',
+    display_name: '腾讯文档',
+    // User-supplied official mark, selected from the bundled resource through uiIconHtml.
+    icon_name: 'connector-tencent-docs',
+    category: 'productivity',
+    description_zh: '接入腾讯文档官方 MCP：创建与读取智能文档、表格、幻灯片、流程图，并搜索空间内容。',
+    description_en: 'Connect the official Tencent Docs MCP to create and read smart docs, sheets, slides and flowcharts, and to search your space.',
+    // Fourth auth mode — see the `// ── Auth ──` section in `types.ts`. Tencent Docs publishes an
+    // official remote MCP endpoint, but the credential is a user-issued token from the Tencent
+    // Cloud console: there is no MCP-spec OAuth authorization server to run DCR against, no CLI to
+    // wrap, and — deliberately — nothing for CogSeed Server to pre-register. `interactive_token`
+    // exists for exactly this shape.
+    auth_mode: 'interactive_token',
+    interactive_auth: {
+      kind: 'paste',
+      token_url: 'https://developer.cloud.tencent.com/mcp/server/11803',
+    },
+    // Deliberately absent: `oauth` (nothing is pre-registered) and `required_oauth_scopes` (the
+    // console decides what the token may do). The token is materialized into this template at
+    // connect time and stored inside the instance's encrypted `secrets_enc` blob.
+    setup: {
+      // The token comes from Tencent's own MCP console, so the flow is: open it, copy, paste here.
+      // Kept to three short steps: the connect dialog opens the page only when the user asks, so
+      // step 1 names the dialog button ("打开令牌页面") rather than describing the page.
+      steps_zh: [
+        '点击「打开令牌页面」，用腾讯文档 App 扫码登录',
+        '只看令牌部分，复制「第三段」里的 Token（第一段的无效）',
+        '回到这里粘贴，点击「连接」',
+      ],
+      steps_en: [
+        'Click "Open the token page" and sign in by scanning the QR code with the Tencent Docs app',
+        'Ignore the install instructions and copy the token from the THIRD block (the first one will not work)',
+        'Come back here, paste it and click Connect',
+      ],
+      // The exact page the vendor's own configuration guide tells users to visit
+      // (developer.cloud.tencent.com/mcp/server/11803 → "访问 … 获取你的个人 Token"). Verified to
+      // answer 200 as a real HTML page. `docs.qq.com/openapi/mcp` is only the JSON-RPC endpoint, so
+      // linking that (or the Tencent Cloud developer docs, as an earlier revision did) left the user
+      // with nowhere to actually get a token.
+      docs_url: 'https://docs.qq.com/open/auth/mcp.html',
+      docs_label_zh: '打开令牌页面',
+      docs_label_en: 'Open the token page',
+      credential_note_zh: '令牌仅加密保存在本机，不会上传，可随时在腾讯云控制台吊销。',
+      credential_note_en: 'The token is kept only in this device\'s encrypted store and can be revoked in the Tencent Cloud console at any time.',
+    },
+    transport_template: {
+      kind: 'streamable-http',
+      url: 'https://docs.qq.com/openapi/mcp',
+      oauth_header_key: 'Authorization',
+      // RAW token — no `Bearer ` prefix. The vendor guide specifies `"Authorization": "<token>"`
+      // (and stresses the key must be exactly `Authorization`), and the published `qqdocs` client
+      // sends the token unprefixed. With the default prefix every request would 401. Do not
+      // "normalise" this to the default.
+      oauth_header_scheme: '',
+    },
+  },
+  {
+    id: 'feishu',
+    display_name: '飞书',
+    // User-supplied official mark, selected from the bundled resource through uiIconHtml.
+    icon_name: 'connector-feishu',
+    category: 'productivity',
+    description_zh: '连接飞书账号，读取与检索云文档、知识库、表格和日历内容。',
+    description_en: 'Connect a Feishu/Lark account to read and search docs, wiki, sheets and calendars.',
+    // `local_cli` — Feishu publishes no MCP-spec OAuth authorization server we can run DCR against
+    // (and its official MCP path expects a self-built app), but it does publish `@larksuite/cli`
+    // (MIT), an agent-oriented CLI that owns its own login and keeps the credential in its own
+    // store. Wrapping it means CogSeed never sees, stores or forwards a token — see the
+    // `// ── Auth ──` section in `types.ts`.
+    auth_mode: 'local_cli',
+    // Deliberately absent: `oauth`, `required_oauth_scopes`, `oauth_env_key`, `env_synthesizer`.
+    // The adapter is the shared CLI bridge with the `lark` dialect selected; it exposes three
+    // meta-tools (discover / inspect / run-read-only) rather than flattening the CLI's few hundred
+    // commands into the tool list — see AGENTS.md's umbrella rule.
+    setup: {
+      steps_zh: [
+        '点击「安装并连接」，客户端会自动准备连接组件',
+        '组件准备后进入授权；首次使用会先引导你完成应用配置（浏览器会打开验证页）',
+        '配置完成后按提示用飞书账号登录，再回到本页完成连接',
+      ],
+      steps_en: [
+        'Choose Install and connect; the app prepares the connector component automatically',
+        'After preparation, the first run walks you through app setup (a verification page opens in your browser)',
+        'Finish signing in with your Feishu account, then return here to complete the connection',
+      ],
+      docs_url: 'https://www.npmjs.com/package/@larksuite/cli',
+      docs_label_zh: '查看飞书 CLI 说明',
+      docs_label_en: 'Feishu CLI documentation',
+      credential_note_zh: '登录由飞书 CLI 自己完成并保管凭据，CogSeed 不接触你的令牌。',
+      credential_note_en: 'The Feishu CLI performs the login and holds the credential; CogSeed never sees your token.',
+    },
+    transport_template: {
+      kind: 'stdio',
+      command: '${COGSEED_NODE}',
+      args: ['${COGSEED_PC_DIR}/bin/cli-bridge-mcp-server.cjs', 'lark'],
+    },
+  },
+  {
+    id: 'dingtalk',
+    display_name: '钉钉',
+    // User-supplied official mark, selected from the bundled resource through uiIconHtml.
+    icon_name: 'connector-dingtalk',
+    category: 'productivity',
+    description_zh: '连接钉钉，读写文档、AI 表格、日历、待办、知识库、邮件与会议纪要。',
+    description_en: 'Connect DingTalk to read and write docs, AI tables, calendar, todos, wiki, mail and minutes.',
+    // `local_cli` — DingTalk publishes an official MCP market, but the surface we want is its
+    // agent-oriented CLI (`dingtalk-workspace-cli`, Apache-2.0): 33 products / ~1495 tools, each
+    // carrying its own safety metadata, and a device-flow login that keeps the credential in the
+    // CLI's own store. See the `// ── Auth ──` section in `types.ts`.
+    auth_mode: 'local_cli',
+    // Deliberately absent: `oauth`, `required_oauth_scopes`, `oauth_env_key`, `env_synthesizer`.
+    setup: {
+      steps_zh: [
+        '点击「安装并连接」，客户端会自动准备连接组件',
+        '组件准备后，浏览器会打开钉钉授权页，扫码并选择组织后确认；确认后连接会自动完成',
+        '若页面提示「该组织尚未开启 CLI 数据访问权限」：直接在页面里选择一位主管理员点击「立即申请」，管理员在钉钉开放平台（open-dev.dingtalk.com → 开发者设置）开启后，回到这里重新连接。',
+      ],
+      steps_en: [
+        'Choose Install and connect; the app prepares the connector component automatically',
+        'After preparation, the DingTalk authorization page opens in your browser; scan, pick your organisation and confirm — the connection completes automatically',
+        'If the page says the organisation has not enabled CLI data access, choose a primary admin and click Apply on that page; once they enable it, come back and connect again',
+      ],
+      docs_url: 'https://www.npmjs.com/package/dingtalk-workspace-cli',
+      docs_label_zh: '查看钉钉 CLI 说明',
+      docs_label_en: 'DingTalk CLI documentation',
+      credential_note_zh: '登录由钉钉 CLI 自己完成并保管凭据，CogSeed 不接触你的令牌。注意：钉钉要求组织管理员先开启「CLI 数据访问权限」，否则任何客户端（包括 WorkBuddy）都无法完成授权。',
+      credential_note_en: 'The DingTalk CLI performs the login and holds the credential; CogSeed never sees your token. Note: DingTalk requires an organisation admin to enable "CLI data access" first — without it no client (WorkBuddy included) can complete authorization.',
+    },
+    transport_template: {
+      kind: 'stdio',
+      command: '${COGSEED_NODE}',
+      args: ['${COGSEED_PC_DIR}/bin/cli-bridge-mcp-server.cjs', 'dws'],
+    },
+  },
+  {
+    id: 'wecom',
+    display_name: '企业微信',
+    // User-supplied official mark, selected from the bundled resource through uiIconHtml.
+    icon_name: 'connector-wecom',
+    category: 'communication',
+    description_zh: '连接企业微信，读写文档、智能表格、微盘、日程、待办与邮件。',
+    description_en: 'Connect WeCom to read and write docs, smart sheets, drive, calendar, todos and mail.',
+    // `local_cli` — WeCom publishes `@wecom/cli` (MIT, Rust binary) covering eleven business
+    // categories with its own QR-based onboarding, so nothing token-shaped reaches CogSeed.
+    auth_mode: 'local_cli',
+    setup: {
+      steps_zh: [
+        '点击「安装并连接」，客户端会自动准备连接组件',
+        '组件准备后，本机会生成并打开一张二维码图片',
+        '用企业微信扫码确认，连接会自动完成',
+      ],
+      steps_en: [
+        'Choose Install and connect; the app prepares the connector component automatically',
+        'After preparation, a QR image is generated and opened on this machine',
+        'Scan it with WeCom; the connection completes automatically',
+      ],
+      docs_url: 'https://www.npmjs.com/package/@wecom/cli',
+      docs_label_zh: '查看企业微信 CLI 说明',
+      docs_label_en: 'WeCom CLI documentation',
+      credential_note_zh: '扫码授权由企业微信 CLI 完成并保管凭据，CogSeed 不接触你的令牌。',
+      credential_note_en: 'The WeCom CLI performs the QR authorization and holds the credential; CogSeed never sees your token.',
+    },
+    transport_template: {
+      kind: 'stdio',
+      command: '${COGSEED_NODE}',
+      args: ['${COGSEED_PC_DIR}/bin/cli-bridge-mcp-server.cjs', 'wecom'],
+    },
+  },
+  {
+    id: 'wps',
+    display_name: 'WPS 云文档',
+    // User-supplied official mark, selected from the bundled resource through uiIconHtml.
+    icon_name: 'connector-wps',
+    category: 'productivity',
+    description_zh: '连接 WPS 个人账号，读取与检索云文档、表格和演示内容。',
+    description_en: 'Connect a personal WPS account to read and search cloud documents, sheets and slides.',
+    // `interactive_token` — WPS publishes an official remote MCP (SkillHub) but no MCP-spec OAuth
+    // authorization server: its consent flow is bespoke (consent URL carries a client-generated
+    // code; the client polls an exchange endpoint with that code until a token appears). That is
+    // exactly the `browser_poll` variant. Personal accounts only, per the official docs.
+    auth_mode: 'interactive_token',
+    interactive_auth: {
+      kind: 'browser_poll',
+      authorize_url: 'https://mcp-center.wps.cn/kdocs-auth/auth-guide',
+      exchange_url: 'https://api.wps.cn/office/v5/ai/skill_hub/wps_auth/exchange',
+      poll_interval_ms: 1000,
+      timeout_ms: 300000,
+    },
+    // Deliberately absent: `oauth` (nothing is pre-registered server-side) and
+    // `required_oauth_scopes` (the consent screen decides what the token may do).
+    setup: {
+      steps_zh: [
+        '点击「连接」，浏览器会自动打开 WPS 授权页',
+        '用 WPS 个人账号登录并同意授权',
+        '回到本页等待自动完成（最长 5 分钟，可随时取消）',
+      ],
+      steps_en: [
+        'Choose Connect — your browser opens the WPS consent page',
+        'Sign in with a personal WPS account and approve',
+        'Come back here; the app finishes automatically (5 minutes max, cancellable)',
+      ],
+      credential_note_zh: '授权在 WPS 侧完成，令牌只保存在本机加密存储中。仅支持 WPS 个人账号。',
+      credential_note_en: 'Authorization happens on the WPS side; the token stays in this device\'s encrypted store. Personal WPS accounts only.',
+    },
+    transport_template: {
+      kind: 'streamable-http',
+      url: 'https://mcp-center.wps.cn/skill_hub/mcp',
+      oauth_header_key: 'Authorization',
     },
   },
 ];

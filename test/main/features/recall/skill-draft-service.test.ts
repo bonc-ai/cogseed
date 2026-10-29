@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -165,7 +166,7 @@ afterEach(async () => {
 
 async function createAsset(type: 'rule' | 'skill_method' = 'skill_method') {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
-  const candidate = await candidates.saveRecallCandidate(UID, {
+  const candidate = await createNightlyCandidateFixture(UID, {
     // 两种类型必须用不同正文：同一句话同时落成 rule 和 skill_method 会被
     // 晋升闸门判为分类冲突（谁都不晋升），而本用例考的是 skill-draft 的类型
     // 过滤，不是分类冲突。
@@ -207,7 +208,7 @@ describe('Recall skill draft service', () => {
     expect(preview.fileCount).toBe(15);
     expect(preview.status).toBe('draft');
     if (preview.status !== 'draft') throw new Error('expected draft preview');
-    expect(preview.recallContext).toMatchObject({ assetCount: 1, relatedAssetCount: 0, sourceCount: 1 });
+    expect(preview.recallContext).toMatchObject({ assetCount: 1, relatedAssetCount: 0, sourceCount: 3 });
     expect(preview.draftHash).toMatch(/^[a-f0-9]{64}$/);
     expect(draft?.files.every((file) => file.contentHash?.match(/^[a-f0-9]{64}$/))).toBe(true);
     expect(draft?.files.map((file) => file.path)).toEqual(expect.arrayContaining([
@@ -225,21 +226,20 @@ describe('Recall skill draft service', () => {
     expect(draft?.files.find((file) => file.path === 'SKILL.md')?.content).toContain('Inspect each requirement');
     expect(draft?.files.find((file) => file.path === 'references/eval-cases.yaml')?.content).toContain('negative: 4');
     expect(draft?.generator).toMatchObject({ kind: 'model', providerId: 'anthropic', modelId: 'claude-test' });
-    const cognitionAssets = await import('../../../../src/main/features/cognition/assets-adapter');
-    await expect(cognitionAssets.listCognitionAssets(UID, { category: 'skill_method' })).resolves.toEqual([
-      expect.objectContaining({
-        id: asset.id,
-        recallSkillDraftStatus: 'draft',
-        recallSkillDraft: expect.objectContaining({
-          draftHash: preview.draftHash,
-          fileCount: 15,
-          validationOk: true,
-          mode: 'install',
-          targetSkillId: preview.skillName,
-          recallContext: { assetCount: 1, sourceCount: 1 },
-        }),
-      }),
-    ]);
+    // P-r3-1（2026-10-01 死代码真删批）：资产列表的 recallSkillDraft* 投影字段
+    // （含每 skill 3-7 次读盘副作用）已删，草稿状态改由草稿服务自己的读口钉。
+    const stored = await service.readRecallSkillDraft(UID, asset.id);
+    expect(stored).toMatchObject({
+      status: 'draft',
+      draftHash: preview.draftHash,
+      mode: 'install',
+      targetSkillId: preview.skillName,
+    });
+    // 原投影把 recallContext 换算成计数；活读口给原始形状，按长度断言等价信息。
+    expect(stored?.recallContext?.assetIds).toEqual([asset.id]);
+    expect(stored?.recallContext?.sourceRefs).toHaveLength(3);
+    expect(stored?.files).toHaveLength(15);
+    expect(stored?.validation.ok).toBe(true);
   });
 
   it('sends a traceable Recall context to an ephemeral tool-free model run', async () => {
@@ -264,9 +264,10 @@ describe('Recall skill draft service', () => {
     expect(Object.keys(input.recallContext.assets[0]).sort()).toEqual([
       'id', 'maturity', 'ontologyRefs', 'scope', 'statement', 'title', 'type', 'version',
     ]);
-    expect(input.recallContext.sourceRefs).toEqual([
+    expect(input.recallContext.sourceRefs).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'artifact_file', id: 'context-skill_method' }),
-    ]);
+    ]));
+    expect(input.recallContext.sourceRefs).toHaveLength(3);
     expect(modelMocks.runCalls[0].message).not.toContain('excerpt');
     expect(modelMocks.runCalls[0].message).not.toContain('candidateId');
     expect(modelMocks.runCalls[0].message).not.toContain('learningSignal');
@@ -282,12 +283,12 @@ describe('Recall skill draft service', () => {
     const input = JSON.parse(modelMocks.runCalls[0].message);
 
     expect(input.recallContext.assets.map((item: any) => item.id)).toEqual([method.id, relatedRule.id]);
-    expect(input.recallContext.sourceRefs).toHaveLength(2);
+    expect(input.recallContext.sourceRefs).toHaveLength(6);
     expect(preview.recallContext).toMatchObject({
       projectionId: 'proj-auto-skill-context',
       assetCount: 2,
       relatedAssetCount: 1,
-      sourceCount: 2,
+      sourceCount: 6,
     });
     await expect(service.readRecallSkillDraft(UID, method.id)).resolves.toMatchObject({
       recallContext: {
@@ -314,14 +315,8 @@ describe('Recall skill draft service', () => {
     const storedFailure = await service.readRecallSkillDraft(UID, asset.id);
     expect(JSON.stringify(storedFailure)).not.toContain('provider detail');
     expect(JSON.stringify(storedFailure)).not.toContain(modelMocks.output);
-    const cognitionAssets = await import('../../../../src/main/features/cognition/assets-adapter');
-    await expect(cognitionAssets.listCognitionAssets(UID, { category: 'skill_method' })).resolves.toEqual([
-      expect.objectContaining({
-        id: asset.id,
-        recallSkillDraftStatus: 'failed',
-        recallSkillDraftErrorCode: 'model_timeout',
-      }),
-    ]);
+    // P-r3-1：资产列表的失败投影字段已删；失败形状由上行 storedFailure 断言
+    // 与本用例开头的 failed 返回值断言共同钉住，不再经资产列表二次断言。
 
     modelMocks.errorKind = null;
     const retried = await service.prepareRecallSkillDraft(UID, asset.id);
@@ -416,10 +411,8 @@ describe('Recall skill draft service', () => {
     const installed = await skills.getCustomSkill(first.skill.id);
     expect(installed?.id).toBe(first.skill.id);
     expect(fs.existsSync(path.join(tmpDir, UID, 'cloud', 'skills', first.skill.id, 'references', 'skill-spec.yaml'))).toBe(true);
-    const cognitionAssets = await import('../../../../src/main/features/cognition/assets-adapter');
-    await expect(cognitionAssets.listCognitionAssets(UID, { category: 'skill_method' })).resolves.toEqual([
-      expect.objectContaining({ id: asset.id, generatedSkillId: first.skill.id }),
-    ]);
+    // P-r3-1：资产列表的 generatedSkillId 投影字段已删；安装归属由上文
+    // readInstalledSkillForAsset 断言钉住（它正是原投影字段的信息源）。
   });
 
   it('never coalesces or accepts a confirmation with a different draft hash', async () => {
@@ -553,17 +546,9 @@ describe('Recall skill draft service', () => {
     expect(nextDraft.assetVersion).toBe('2');
     expect(nextDraft.skillName).toBe(firstInstall.skill.id);
     expect(nextDraft.mode).toBe('upgrade');
-    const cognitionAssets = await import('../../../../src/main/features/cognition/assets-adapter');
-    await expect(cognitionAssets.listCognitionAssets(UID, { category: 'skill_method' })).resolves.toEqual([
-      expect.objectContaining({
-        id: asset.id,
-        recallSkillDraft: expect.objectContaining({
-          mode: 'upgrade',
-          targetSkillId: firstInstall.skill.id,
-          diffSummary: expect.objectContaining({ modified: expect.any(Number) }),
-        }),
-      }),
-    ]);
+    // P-r3-1：资产列表的 recallSkillDraft 投影已删；upgrade diff 改由草稿
+    // 返回值直接断言（投影的 diffSummary.modified 正是这里的 diff.modified）。
+    expect(nextDraft.diff?.modified).toEqual(expect.any(Number));
     await expect(service.decideRecallSkillDraft(UID, asset.id, nextDraft.draftHash, 'defer')).resolves.toMatchObject({
       reviewDecision: 'deferred',
     });

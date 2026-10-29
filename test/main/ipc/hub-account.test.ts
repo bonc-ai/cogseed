@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   openAuthorizeUrl: vi.fn(),
   logout: vi.fn(),
   getAccountMe: vi.fn(),
+  updateProfile: vi.fn(),
   listDevices: vi.fn(),
   revokeDevice: vi.fn(),
   listConsents: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('../../../src/main/features/hub_account', () => ({
   openAuthorizeUrl: mocks.openAuthorizeUrl,
   logout: mocks.logout,
   getAccountMe: mocks.getAccountMe,
+  updateProfile: mocks.updateProfile,
   listDevices: mocks.listDevices,
   revokeDevice: mocks.revokeDevice,
   listConsents: mocks.listConsents,
@@ -98,6 +100,7 @@ describe('Hub account IPC release gate', () => {
   it.each([
     ['hub-account.start_login', {}],
     ['hub-account.me', {}],
+    ['hub-account.update_profile', {display_name:'New'}],
     ['hub-account.devices', {}],
     ['hub-account.revoke_device', { device_id: 'd1' }],
     ['hub-account.consents', {}],
@@ -162,5 +165,19 @@ describe('Hub account IPC release gate', () => {
     const result = await invokeHandlers['hub-account.logout']({}, { userId: 'u1' });
     expect(result).toEqual({ signed_out: true });
     expect(mocks.logout).toHaveBeenCalledWith('u1');
+  });
+});
+
+describe('nickname IPC boundary', () => {
+  beforeEach(() => {vi.clearAllMocks(); mocks.enabled = true;});
+  it.each([null, {}, {display_name:'a',account_id:'spoof'}, {display_name:3}, {display_name:'\nName'}, {display_name:'x'.repeat(33)}])('rejects %j without feature writes', async body => {
+    await expect(invokeHandlers['hub-account.update_profile'](body, {userId:'u1'})).rejects.toThrow();
+    expect(mocks.updateProfile).not.toHaveBeenCalled();
+  });
+  it('returns a me-like DTO, passes only normalized profile and contextual user', async () => {
+    const me = {account:{account_id:'self',community_profile:{display_name:'<>&'}}};
+    mocks.updateProfile.mockResolvedValue(me);
+    expect(await invokeHandlers['hub-account.update_profile']({display_name:' <>& '}, {userId:'u1'})).toEqual({me});
+    expect(mocks.updateProfile).toHaveBeenCalledWith('u1', {display_name:'<>&'});
   });
 });

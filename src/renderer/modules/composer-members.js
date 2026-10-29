@@ -44,6 +44,7 @@
   function memberKeyOf(member) {
     if (!member) return '';
     if (member.kind === 'agent' && member.id) return String(member.id);
+    if (member.kind === 'contact' && member.id) return String(member.id);
     return COMMANDER_ID;
   }
 
@@ -51,6 +52,11 @@
     if (!raw || typeof raw !== 'object') return null;
     if (raw.kind === 'agent' && raw.id) {
       return { kind: 'agent', id: String(raw.id), name: String(raw.name || raw.id) };
+    }
+    // 联系人（A2A）：点名联系人＝点名其助理；身份用对方账号 id，不进入 agent 成员。
+    if (raw.kind === 'contact' && (raw.user_id || raw.id)) {
+      const id = String(raw.user_id || raw.id);
+      return { kind: 'contact', id, name: String(raw.name || id) };
     }
     if (raw.kind === 'commander' || raw.id === COMMANDER_ID) return commanderMember();
     return null;
@@ -142,7 +148,7 @@
   // ─── 纯函数：正文点名标记 ─────────────────────────────────────────────────
 
   /** 名称表：CogSeed（含内建别名）+ 当前可用 Agent，长名优先匹配。 */
-  function mentionTableFrom(agents) {
+  function mentionTableFrom(agents, contacts) {
     const table = [{
       id: COMMANDER_ID,
       name: commanderName(),
@@ -152,7 +158,18 @@
       .filter((a) => a && a.agent_id && a.name)
       .sort((a, b) => String(b.name).length - String(a.name).length);
     for (const a of sorted) {
-      table.push({ id: String(a.agent_id), name: String(a.name), aliases: [] });
+      table.push({ id: String(a.agent_id), name: String(a.name), aliases: [], kind: 'agent' });
+    }
+    // 联系人（A2A）：点名联系人＝点名其助理（D-01），令牌用对方账号 id 作为身份。
+    // 与 Agent 同名时 Agent 优先——本地成员已经排在前面的位置，后者不会覆盖。
+    const contactRows = (Array.isArray(contacts) ? contacts : [])
+      .filter((c) => c && c.user_id && c.name)
+      .sort((a, b) => String(b.name).length - String(a.name).length);
+    const taken = new Set(table.map((row) => String(row.name).toLowerCase()));
+    for (const c of contactRows) {
+      const name = String(c.name);
+      if (taken.has(name.toLowerCase())) continue;
+      table.push({ id: String(c.user_id), name, aliases: [], kind: 'contact' });
     }
     return table;
   }
@@ -304,6 +321,17 @@
     return agentList();
   }
 
+  /** 联系人（A2A）候选：由 contacts 模块注入；未加载时为空，列表不出现「联系人」
+   *  分组。点名联系人＝点名该联系人的助理（PRD D-01/FR-14）。 */
+  function candidateContactList() {
+    try {
+      if (typeof window.getComposerContactCandidates === 'function') {
+        return window.getComposerContactCandidates() || [];
+      }
+    } catch (_) { /* contacts 模块未加载 */ }
+    return [];
+  }
+
   /** 被空间作用域排除的内部 Task Agent：仍然出现在列表里并说明原因，
    *  不允许静默消失（PRD AC-04）。外接 Agent 不在此集合内——它们与主进程
    *  派发侧同口径恒可用。 */
@@ -348,7 +376,9 @@
       const start = Number(raw.start);
       const text = String(raw.text || `@${raw.name} `);
       if (!Number.isSafeInteger(start) || start < 0 || !text) continue;
-      out.push({ id: String(raw.id), name: String(raw.name), start, end: start + text.length, text });
+      out.push({ id: String(raw.id), name: String(raw.name), start, end: start + text.length, text,
+        ...(['contact', 'agent', 'commander'].includes(raw.kind) ? { kind: raw.kind } : {}),
+      });
     }
     return out.sort((a, b) => a.start - b.start || a.end - b.end);
   }
@@ -406,7 +436,7 @@
       ));
       if (activeIndex >= 0) {
         activeUsed.add(activeIndex);
-        authorized.push(candidate);
+        authorized.push({ ...candidate, kind: active[activeIndex].kind });
         continue;
       }
       if (!isHistoryUndo) continue;
@@ -420,7 +450,7 @@
       ));
       if (historyIndex < 0) continue;
       historyUsed.add(historyIndex);
-      authorized.push(candidate);
+      authorized.push({ ...candidate, kind: history[historyIndex].kind });
     }
     return setMentionSidecar(target, authorized);
   }
@@ -657,7 +687,9 @@
     const present = new Set(mentionIdsForTarget(target, text));
     _lastPresent.set(key, present);
     const baseline = new Set(_baseline.get(key) || []);
-    for (const id of present) baseline.add(id);
+    const memberIds = new Set(rawMembers(target).filter((member) => member.kind !== 'contact').map(memberKeyOf));
+    // Only selected local members can be restored by undo, not draft-only addresses.
+    for (const id of present) if (memberIds.has(id)) baseline.add(id);
     _baseline.set(key, baseline);
     return present;
   }
@@ -692,7 +724,8 @@
     }
     _lastPresent.set(key, result.present);
     const baselineNext = new Set(baseline);
-    for (const id of result.present) baselineNext.add(id);
+    const memberIds = new Set(rawMembers(target).filter((member) => member.kind !== 'contact').map(memberKeyOf));
+    for (const id of result.present) if (memberIds.has(id)) baselineNext.add(id);
     _baseline.set(key, baselineNext);
     if (changed) {
       emitChange(target, {
@@ -774,7 +807,7 @@
         const shift = token.length - replace;
         return { ...item, start: item.start + shift, end: item.end + shift };
       });
-    retained.push({ id: key, name, start: at + leading.length, text: `@${name} ` });
+    retained.push({ id: key, name, kind: normalized.kind, start: at + leading.length, text: `@${name} ` });
     setMentionSidecar(target, retained);
     const caret = at + token.length;
     setCaret(textarea, caret);
@@ -890,6 +923,26 @@
     // 已选成员但不在候选里（被空间排除 / 已停用 / 已删除）：仍保留一行可取消的
     // 选中项。否则成员在列表里彻底消失，用户既看不到也无法移除。
     const listed = new Set(rows.map((row) => String(row.key)));
+    // 联系人（A2A）：点名联系人＝点名该联系人的助理；离线按不可选处理，
+    // 与现有不可选成员的锁图标路径一致（PRD FR-14/FR-15）。
+    for (const contact of candidateContactList()) {
+      const key = contact && contact.user_id ? String(contact.user_id) : '';
+      if (!key || listed.has(key)) continue;
+      const contactName = String(contact.name || key);
+      rows.push({
+        key,
+        kind: 'contact',
+        group: 'contact',
+        name: contactName,
+        // 原型口径：在线＝「向 TA 的助理提问」，离线＝「离线」。
+        description: contact.online === false
+          ? tr('composer.members.contact_offline', '离线')
+          : tr('composer.members.contact_hint', '向 TA 的助理提问'),
+        checked: checked.has(key),
+        ...(contact.online === false ? { unavailable: true } : {}),
+      });
+      listed.add(key);
+    }
     const index = agentIndex();
     for (const member of members) {
       const key = memberKeyOf(member);
@@ -939,7 +992,7 @@
   }
 
   /** 分组顺序与原型一致：CogSeed → 外接 Agent → Task Agent（组内保持原序）。 */
-  const GROUP_RANK = { '': 0, external: 1, task: 2 };
+  const GROUP_RANK = { '': 0, external: 1, task: 2, contact: 3 };
   function orderRowsByGroup(rows) {
     return rows
       .map((row, index) => ({ row, index }))
@@ -1013,6 +1066,7 @@
     cogseed: () => tr('composer.members.group_cogseed', 'CogSeed'),
     external: () => tr('composer.members.group_external', '外接 Agent'),
     task: () => tr('composer.members.group_task', 'Task Agent'),
+    contact: () => tr('composer.members.group_contact', '联系人'),
   };
 
   function buildPickerList(target, mode, filter) {

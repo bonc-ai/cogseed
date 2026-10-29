@@ -19,33 +19,22 @@ import * as path from 'node:path';
 
 import { readAbilityAsset } from '../../../src/main/features/recall/asset-service';
 import type { RecallAbilityAssetRecord } from '../../../src/main/features/recall/candidate-service';
-import { listRecallCandidates, saveRecallCandidate } from '../../../src/main/features/recall/candidate-service';
-import { cognitionContextFileSourceId } from '../../../src/main/features/recall/source-catalog';
+import { listRecallCandidates } from '../../../src/main/features/recall/candidate-service';
 import {
   MAX_MEETING_CONCLUSION_SUMMARY,
   MeetingConclusionError,
-  buildConclusionCandidateInput,
-  conclusionCaptureKey,
   confirmMeetingConclusion,
   listMeetingConclusions,
   meetingConclusionIdFor,
   saveMeetingConclusion,
   unresolvedMeetingAnchorIds,
 } from '../../../src/main/features/meeting_conclusions';
-import type { MeetingConclusion } from '../../../src/main/features/meeting_conclusions';
 import { attachMeetingAsset } from '../../../src/main/features/meeting_refs';
 import { docKeyForDocId } from '../../../src/main/features/meeting_doc';
 import { userCloudRoot, userLocalRoot, userMeetingRefsDir } from '../../../src/main/paths';
 
 vi.mock('../../../src/main/features/recall/asset-service', () => ({
   readAbilityAsset: vi.fn(),
-}));
-
-// 【T045】零模型调用护栏:组装函数是确定性的,任何模型入口都不该被碰到。
-// 挂在这里的 spy 一旦被调用(实现错误地引入模型),下面的用例就会抓住。
-vi.mock('../../../src/main/features/transcript_llm_candidates', () => ({
-  generateReviewCandidates: vi.fn(async () => ({ candidates: [], skipped: 'no_model' })),
-  LLM_CANDIDATE_MAX_HINTS: 32,
 }));
 
 const uid = 'u_meeting_conclusions_test';
@@ -406,114 +395,23 @@ describe('T036：降级三态（条目照常可读）', () => {
   });
 });
 
-// ── T045：结论→候选的确定性组装（单一函数出口，零模型调用）──────────────────
-
-describe('T045：buildConclusionCandidateInput 确定性组装', () => {
-  /** 组装用结论（不落盘——纯函数直接吃 MeetingConclusion）。 */
-  const sample = (over: Partial<MeetingConclusion> = {}): MeetingConclusion => ({
-    id: 'mc_abc123def456',
-    docId: 'kb/meet.md',
-    summary: '确定下周发布 Cogseed 第二版',
-    transcriptRefs: [
-      { utteranceId: 'U0001', blockIndex: 0, from: 0, to: 6 },
-      { utteranceId: 'U0002', blockIndex: 1, from: 3, to: 9 },
-    ],
-    assetRefs: [],
-    status: 'confirmed',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    ...over,
-  });
-
-  it('字段齐：judgment=摘要、缺省不带 value 键、type/scope 缺省 personal、action=create', () => {
-    const input = buildConclusionCandidateInput(sample(), { docId: 'kb/meet.md', title: '站会', sourceVersion: '1770000000' });
-    expect(input.judgment).toBe('确定下周发布 Cogseed 第二版');
-    expect(Object.prototype.hasOwnProperty.call(input, 'value')).toBe(false);   // 缺省不带键（交给 saveRecallCandidate 兜底）
-    expect(input.suggestedType).toBe('personal');
-    expect(input.suggestedScope).toBe('personal');
-    expect(input.suggestedAction).toBe('create');
-  });
-
-  it('sourceRefs 恰 1 条 artifact_file/context_file，id 与 cognitionContextFileSourceId 同源', () => {
-    const input = buildConclusionCandidateInput(sample(), { docId: 'kb/meet.md', title: '站会', sourceVersion: '1770000000' });
-    expect(input.sourceRefs).toHaveLength(1);
-    const ref = input.sourceRefs[0] as Record<string, unknown>;
-    expect(ref.kind).toBe('artifact_file');
-    expect(ref.subtype).toBe('context_file');
-    // 与 source-catalog.ts:129-131 的同一出处逐字一致（不另起一套 id 算法）
-    expect(ref.id).toBe(cognitionContextFileSourceId('kb/meet.md'));
-    expect(ref.title).toBe('站会');
-    expect(ref.sourceVersion).toBe('1770000000');
-  });
-
-  it('sourceVersion 缺省不写键（不编造版本）；title 缺省从 docId 派生文件名', () => {
-    const input = buildConclusionCandidateInput(sample(), { docId: 'kb/deep/nested.md' });
-    expect(Object.prototype.hasOwnProperty.call(input.sourceRefs[0], 'sourceVersion')).toBe(false);
-    expect((input.sourceRefs[0] as Record<string, unknown>).title).toBe('nested.md');
-  });
-
-  it('evidenceRefs 每锚点一条：title 定位描述含 utteranceId、excerpt=摘要 ≤240、不含转写正文', () => {
-    const input = buildConclusionCandidateInput(sample(), { docId: 'kb/meet.md', title: '站会' });
-    expect(input.evidenceRefs).toHaveLength(2);
-    const titles = input.evidenceRefs.map((r) => (r as Record<string, unknown>).title);
-    expect(titles[0]).toContain('U0001');
-    expect(titles[1]).toContain('U0002');
-    for (const ref of input.evidenceRefs as Array<Record<string, unknown>>) {
-      expect(ref.id).toBe(cognitionContextFileSourceId('kb/meet.md'));
-      const excerpt = String(ref.excerpt ?? '');
-      expect(excerpt).toBe('确定下周发布 Cogseed 第二版');
-      expect(Array.from(excerpt).length).toBeLessThanOrEqual(240);
+describe('会议结论候选写入入口退役', () => {
+  it('不再导出组装、幂等键或沉淀写口', async () => {
+    const service = await import('../../../src/main/features/meeting_conclusions');
+    for (const name of ['buildConclusionCandidateInput', 'conclusionCaptureKey', 'precipitateMeetingConclusion']) {
+      expect(service).not.toHaveProperty(name);
     }
-    // 双引用纪律：组装输出整体不含转写正文（原文/块头都不进候选）
-    const serialized = JSON.stringify(input);
-    expect(serialized).not.toContain('定价策略需要再跟进一次');
-    expect(serialized).not.toContain('子安 09:30');
   });
 
-  it('无锚点 ⇒ evidenceRefs 空数组（候选将落 weak_observation——如实行为，不是缺陷）', () => {
-    const input = buildConclusionCandidateInput(sample({ transcriptRefs: [] }), { docId: 'kb/meet.md' });
-    expect(input.evidenceRefs).toEqual([]);
-    expect(input.sourceRefs).toHaveLength(1);                                   // 文档来源仍在
-  });
-
-  it('captureKey 稳定且形态 mtg-<hex>：同输入同值；docId/conclusionId 变 ⇒ 变', () => {
-    const first = buildConclusionCandidateInput(sample(), { docId: 'kb/meet.md' });
-    const second = buildConclusionCandidateInput(sample(), { docId: 'kb/meet.md', title: '另一个标题' });
-    expect(second.captureKey).toBe(first.captureKey);                           // 组装稳定（标题不参与键）
-    expect(first.captureKey).toBe(conclusionCaptureKey('kb/meet.md', 'mc_abc123def456'));
-    expect(first.captureKey).toMatch(/^mtg-[0-9a-f]+$/);
-    expect(conclusionCaptureKey('kb/other.md', 'mc_abc123def456')).not.toBe(first.captureKey);
-    expect(conclusionCaptureKey('kb/meet.md', 'mc_other')).not.toBe(first.captureKey);
-  });
-
-  it('origin 不在组装输出；经既有 saveRecallCandidate 落盘后派生为 capture（并读回候选）', async () => {
-    const input = buildConclusionCandidateInput(sample(), { docId: 'kb/meet.md', title: '站会' });
-    expect(Object.prototype.hasOwnProperty.call(input, 'origin')).toBe(false);  // 不传 origin（纪律：由既有函数派生）
-    const candidate = await saveRecallCandidate(uid, input);
-    expect(candidate.captureKey).toBe(input.captureKey);
-    expect(candidate.origin).toBe('capture');                                   // deriveCandidateOrigin 依 captureKey 派生
-    const listed = await listRecallCandidates(uid);
-    expect(listed.filter((c) => c.captureKey === input.captureKey)).toHaveLength(1);
-  });
-
-  it('overrides 生效：judgment/value/suggestedType/suggestedScope/applicableWhen 透传；空 value 不带键', () => {
-    const input = buildConclusionCandidateInput(sample(), { docId: 'kb/meet.md' }, {
-      judgment: '自定义判断',
-      value: '   ',
-      suggestedType: 'rule',
-      suggestedScope: 'project',
-      applicableWhen: ['周会结论'],
-    });
-    expect(input.judgment).toBe('自定义判断');
-    expect(Object.prototype.hasOwnProperty.call(input, 'value')).toBe(false);   // 纯空白 value 不带键
-    expect(input.suggestedType).toBe('rule');
-    expect(input.suggestedScope).toBe('project');
-    expect(input.applicableWhen).toEqual(['周会结论']);
-  });
-
-  it('零模型调用（spy 计数 0）：组装是纯同步函数，不触任何模型入口', async () => {
-    const { generateReviewCandidates } = await import('../../../src/main/features/transcript_llm_candidates');
-    buildConclusionCandidateInput(sample(), { docId: 'kb/meet.md' });
-    expect(generateReviewCandidates).not.toHaveBeenCalled();
+  it('历史沉淀记录仍可读取和确认，不重新创建候选', async () => {
+    const docId = 'kb/retired-precipitated.md';
+    const saved = saveMeetingConclusion(uid, docId, { summary: '保留已完成的历史结论' });
+    const file = path.join(userMeetingRefsDir(uid), `${docKeyForDocId(docId)}.json`);
+    const body = JSON.parse(fs.readFileSync(file, 'utf8'));
+    Object.assign(body.conclusions[0], { status: 'precipitated', candidateId: 'historical-candidate', precipitatedAt: '2026-09-25T00:00:00.000Z' });
+    fs.writeFileSync(file, JSON.stringify(body));
+    expect(listMeetingConclusions(uid, docId)[0]).toMatchObject({ status: 'precipitated', candidateId: 'historical-candidate' });
+    expect(confirmMeetingConclusion(uid, docId, saved.id)).toMatchObject({ status: 'precipitated', candidateId: 'historical-candidate' });
+    expect(await listRecallCandidates(uid)).toEqual([]);
   });
 });

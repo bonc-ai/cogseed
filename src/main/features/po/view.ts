@@ -101,6 +101,28 @@ export function renderGroupMarkdown(group: PoGroup): string {
   return group.kind === 'template' ? renderTemplateGroupMarkdown(group) : renderUserGroupMarkdown(group);
 }
 
+/**
+ * 渲染副本专用出口：restricted 值的正文以固定占位符替代，
+ * 其余标记（来源/项目/时间锚/核实/规则分类/@restricted/@asset）原样保留——
+ * 副本因此继续进 kb 检索索引与 transcript 术语桥，但不携带受限正文。
+ *
+ * 仅 store.syncGroupRender 写盘用这条出口；编辑器原文视图（readGroupContent）、
+ * 历史预览与模板卸载归档（重装恢复要按原文重建值）仍走 renderGroupMarkdown，
+ * 本人授权视图与读路径不变。占位符是机器副本（kb/术语桥/调试打开）里的定界
+ * 文本，不作为 UI 文案消费，因此不进四语 locales。
+ */
+export const RESTRICTED_VALUE_PLACEHOLDER = '[受限值]';
+
+/** 渲染写盘用的副本文本：restricted 值占位化（无受限值时与原文渲染逐字节一致）。 */
+export function renderGroupMarkdownCopy(group: PoGroup): string {
+  if (!group.values.some((v) => v.restricted)) return renderGroupMarkdown(group);
+  const redacted: PoGroup = {
+    ...group,
+    values: group.values.map((v) => (v.restricted ? { ...v, text: RESTRICTED_VALUE_PLACEHOLDER } : v)),
+  };
+  return renderGroupMarkdown(redacted);
+}
+
 /** PoGroup → 旧 GroupMeta（台账行视图；template_name 由 IPC 层照旧运行时附加）。 */
 export function poGroupToMeta(group: PoGroup): GroupMeta {
   return {

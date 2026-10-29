@@ -59,13 +59,6 @@ export interface KstarRequirementPrmReview {
   evidenceRefs: CognitionSourceRef[];
 }
 
-export interface KstarPendingTaskStart {
-  userMessageId: string;
-  text: string;
-  workspaceId?: string;
-  reason: 'topic_switch';
-}
-
 export interface KstarTaskRecord extends KstarJsonRecord {
   schemaVersion: 1;
   conversationId: string;
@@ -133,9 +126,39 @@ export interface KstarProjectionDecisionMarker {
   createdAt: string;
 }
 
+/**
+ * Routing-decision kinds — the single source of truth.
+ *
+ * The type below is derived from this array and `normalizeRoutingDecisions`
+ * filters against it, so a kind can no longer exist in the type while being
+ * dropped by the store. That divergence is exactly how `answer_confirmation`
+ * silently failed to persist when it was added: the array is checked on both
+ * write and read.
+ *
+ * `trivial` and `dispatch_auto` were removed rather than kept as legacy: no
+ * commit in this repository's history ever wrote them, so no persisted record
+ * can contain them. (`obviously_trivial` below is the live gate, named after
+ * `isObviouslyTrivial`; it is not a revival of that dead `trivial` string.)
+ *
+ * The two silent gates were added last: `obviously_trivial` short-circuited
+ * with no record and no log at all, and `routing_unavailable` (no configured
+ * model) was logged but never persisted. Without them the gate distribution
+ * was not countable — only the gates that happened to log could be seen.
+ */
+export const KSTAR_ROUTING_KINDS = [
+  'closing_intent',
+  'obviously_trivial',
+  'answer_confirmation',
+  'model_judged',
+  'routing_failed',
+  'routing_unavailable',
+] as const;
+
+export type KstarRoutingKind = (typeof KSTAR_ROUTING_KINDS)[number];
+
 export interface KstarRoutingDecision {
   at: string;
-  kind: 'closing_intent' | 'trivial' | 'model_judged' | 'dispatch_auto';
+  kind: KstarRoutingKind;
   isTask: boolean;
   continuation?: boolean;
   reason?: string;
@@ -149,7 +172,6 @@ export interface KstarConversationTaskStateRecord extends KstarJsonRecord {
   currentRequirementId?: string;
   requirementJustClosed?: string;
   taskComplete: boolean;
-  pendingTaskStart?: KstarPendingTaskStart;
   /** ISO timestamp of the scheduled auto-close (静默窗口到期)。任务终态后
    *  写入；用户新消息到达即清除；重启后由 recoverPendingAutoClosures 恢复。 */
   pendingAutoCloseAt?: string;

@@ -48,6 +48,10 @@ import {
   buildPackageCommandEnv,
   runPackageProcessForTest,
 } from './packages';
+import { platformApiBase, validatePlatformServerUrl } from './plugin_platform_url';
+import { selectedServices } from './service_origins';
+import { readPluginOAuth } from './plugin_oauth_store';
+import { resolvePluginCredential, getPluginAuthStatus } from './plugin_oauth_flow';
 
 const log = createLogger('plugin-ui');
 
@@ -284,34 +288,12 @@ export interface SaveConfigResult {
   identity?: { resolved: boolean; role?: string; person_id?: string; error?: string };
 }
 
-/** Validate a platform base URL for outbound calls with the api key:
- *  http(s) only, hostname required, no embedded credentials (userinfo), no
- *  fragments/query. Rejects URL shapes that could exfiltrate the key or
- *  smuggle credentials. */
-function validatePlatformServerUrl(raw: string): string | null {
-  const value = raw.trim();
-  if (!value || value.length > 2048) return null;
-  let u: URL;
-  try { u = new URL(value); } catch { return null; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-  if (!u.hostname || u.username || u.password) return null;
-  if (u.search || u.hash) return null;
-  return u.origin;
-}
-
 /** API 基址（2026-09-15 修复）：平台挂载在子路径（/edu）下时，
  *  API 调用必须保留路径——validatePlatformServerUrl 返回 origin 会丢掉
- *  /edu，导致 whoami 404 →「无法识别身份」。校验语义与基址语义分离。 */
-function platformApiBase(raw: string): string | null {
-  const value = raw.trim();
-  if (!value || value.length > 2048) return null;
-  let u: URL;
-  try { u = new URL(value); } catch { return null; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-  if (!u.hostname || u.username || u.password) return null;
-  if (u.search || u.hash) return null;
-  return u.origin + u.pathname.replace(/\/+$/, '');
-}
+ *  /edu，导致 whoami 404 →「无法识别身份」。校验语义与基址语义分离。
+ *
+ *  2026-09-20：两个函数移入 `plugin_platform_url.ts`（模块 A 的 OAuth 端点
+ *  需要同一套基址语义，不能再各写一份）。此处保留导入名不变。 */
 
 /** 凭 API Key 从平台反查身份（`GET /api/agent/whoami`，身份由平台按 key
  *  绑定，不可伪造）。返回 null 表示平台返回了无法识别的身份。 */
@@ -497,38 +479,76 @@ export interface PluginUiInfoResult {
     cohort?: string;
     course_id?: string;
   };
+  /**
+   * 平台授权状态（模块 A）。**只含掩码与非敏感字段**：
+   * 令牌明文既不出现在这里，也不经任何 IPC 到 renderer。
+   */
+  auth: {
+    state: 'A' | 'B' | 'C' | 'D' | 'F';
+    method: 'oauth' | 'legacy' | 'none';
+    authorized: boolean;
+    masked_access: string;
+    expires_in_seconds: number;
+    needs_refresh: boolean;
+    person_id: string;
+    role: string;
+    server_url: string;
+    needs_reauth: boolean;
+    corrupt: boolean;
+    last_error_code: string;
+    has_platform_url: boolean;
+    /** 本地是否还有 Hub 登录会话（界面据此避免说"已登录"这种假话）。 */
+    hub_signed_in: boolean;
+  };
 }
 
 /** get-info: package facts + manifest summary + masked config status.
- *  附带平台版本公告的最新版本（凭已存 key 查询，5 分钟缓存；失败静默省略）。 */
+ *  附带平台版本公告的最新版本（凭已存 key 查询，5 分钟缓存；失败静默省略）。
+ *
+ *  公告是**附带信息**，永远不许挡住这份返回值。详情页拿到 info 才渲染
+ *  「课程平台连接」与「对话可用命令」，而这次查询最长要等 8 秒（AbortSignal.timeout），
+ *  平台不通时还要每次重来 —— 表现就是"页面先短一截，几秒后突然长出来"。
+ *  所以这里**只读缓存**（旧值也用），刷新一律在后台，下一次调用才看到新结果。 */
 const _versionAnnounceCache = new Map<string, { ts: number; latest?: string; min?: string }>();
 const VERSION_ANNOUNCE_TTL_MS = 5 * 60 * 1000;
+// 失败也记一笔退避：否则平台不通时，每打开一次详情页（还包括每个插件的授权检查）
+// 都会重发一个 8 秒超时的请求。
+const VERSION_ANNOUNCE_RETRY_MS = 60 * 1000;
+const _versionAnnounceInflight = new Map<string, Promise<void>>();
 
-async function fetchVersionAnnouncement(serverUrl: string, apiKey: string): Promise<{ latest?: string; min?: string }> {
-  const base = platformApiBase(serverUrl);
-  if (!base) return {};
-  const cacheKey = `${base}`;
-  const cached = _versionAnnounceCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < VERSION_ANNOUNCE_TTL_MS) return cached;
-  const out: { latest?: string; min?: string } = {};
-  try {
-    const res = await fetch(`${base}/api/plugin/version`, {
-      headers: { 'x-api-key': apiKey, accept: 'application/json' },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (res.ok) {
-      const data = (await res.json().catch(() => null)) as {
-        latest_version?: unknown; min_version?: unknown;
-      } | null;
+/** 后台刷新公告。新鲜、退避中或已有请求在飞行中时什么都不做；失败只记退避，不写假数据。 */
+function refreshVersionAnnouncement(base: string, apiKey: string): void {
+  const cached = _versionAnnounceCache.get(base);
+  const age = cached ? Date.now() - cached.ts : Number.POSITIVE_INFINITY;
+  const fresh = !!cached && age < VERSION_ANNOUNCE_TTL_MS;
+  // 上一次问过但平台没给出任何版本（含失败）：按退避算，别连点就重发。
+  const backingOff = !!cached && !cached.latest && !cached.min && age < VERSION_ANNOUNCE_RETRY_MS;
+  if (fresh || backingOff || _versionAnnounceInflight.has(base)) return;
+  const task = (async () => {
+    try {
+      const res = await fetch(`${base}/api/plugin/version`, {
+        headers: { 'x-api-key': apiKey, accept: 'application/json' },
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = res.ok
+        ? (await res.json().catch(() => null)) as { latest_version?: unknown; min_version?: unknown } | null
+        : null;
       const norm = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().replace(/^v/, '') : '');
-      out.latest = norm(data?.latest_version) || undefined;
-      out.min = norm(data?.min_version) || undefined;
-      if (out.latest) _versionAnnounceCache.set(cacheKey, { ts: Date.now(), ...out });
+      const latest = norm(data?.latest_version) || undefined;
+      const min = norm(data?.min_version) || undefined;
+      _versionAnnounceCache.set(base, {
+        ts: Date.now(),
+        ...(latest ? { latest } : {}),
+        ...(min ? { min } : {}),
+      });
+    } catch {
+      /* 离线/平台不可达：静默。留一条空记录当 60 秒退避，别每次打开都重发 */
+      _versionAnnounceCache.set(base, { ts: Date.now() });
+    } finally {
+      _versionAnnounceInflight.delete(base);
     }
-  } catch {
-    /* 离线/平台不可达：静默省略版本信息，不打断界面 */
-  }
-  return out;
+  })();
+  _versionAnnounceInflight.set(base, task);
 }
 
 export async function pluginUiInfo(uid: string, name: string): Promise<{ ok: boolean; info?: PluginUiInfoResult; error?: string }> {
@@ -538,9 +558,10 @@ export async function pluginUiInfo(uid: string, name: string): Promise<{ ok: boo
   const manifest = readPackageManifest(uid, name);
   const config = readPluginRuntimeConfig(uid, name);
   const uiInfo = resolvePluginUiInfo(uid, name);
-  const announce = (config.api_key && config.server_url)
-    ? await fetchVersionAnnouncement(config.server_url, config.api_key)
-    : {};
+  // 只读缓存 + 后台刷新：详情页不再为了版本公告等一次网络往返（见上方注释）。
+  const announceBase = (config.api_key && config.server_url) ? platformApiBase(config.server_url) : null;
+  if (announceBase && config.api_key) refreshVersionAnnouncement(announceBase, config.api_key);
+  const announce: { latest?: string; min?: string } = (announceBase && _versionAnnounceCache.get(announceBase)) || {};
   const info: PluginUiInfoResult = {
     name: pkg.name,
     ...(manifest?.name?.zh || manifest?.name?.en ? { display_name: manifest.name.zh || manifest.name.en } : {}),
@@ -563,7 +584,39 @@ export async function pluginUiInfo(uid: string, name: string): Promise<{ ok: boo
       ...(config.student_id ? { student_id: config.student_id } : {}),
       ...(config.cohort ? { cohort: config.cohort } : {}),
       ...(config.course_id ? { course_id: config.course_id } : {}),
+      // 当前实际连的是生产还是本地（features/service_origins.ts 的启动探测结果）。
+      // 渲染层据此显示一行「当前连接」——避免"静默换环境"，出问题时能一眼看出连的哪台。
+      ...(() => {
+        const sel = selectedServices();
+        return sel
+          ? {
+              resolved: {
+                hub: { base: sel.hub.base, source: sel.hub.source },
+                platform: { base: sel.platform.base, source: sel.platform.source },
+              },
+            }
+          : {};
+      })(),
     },
+    auth: (() => {
+      const s = getPluginAuthStatus(uid, name, { apiKey: config.api_key, serverUrl: config.server_url });
+      return {
+        state: s.state,
+        method: s.method,
+        authorized: s.authorized,
+        masked_access: s.maskedAccess,
+        expires_in_seconds: s.expiresInSeconds,
+        needs_refresh: s.needsRefresh,
+        person_id: s.personId,
+        role: s.role,
+        server_url: s.serverUrl,
+        needs_reauth: s.needsReauth,
+        corrupt: s.corrupt,
+        last_error_code: s.lastErrorCode,
+        has_platform_url: s.hasPlatformUrl,
+        hub_signed_in: s.hubSignedIn,
+      };
+    })(),
   };
   return { ok: true, info };
 }
@@ -573,6 +626,12 @@ export interface PluginRuntimeInvoke {
   stdout?: string;
   result?: unknown;
   error?: string;
+  /**
+   * 凭据不可用时的原因分类（模块 A）。界面据此决定给「重新连接」还是「重试」——
+   * 只回码，不回任何令牌相关内容。
+   */
+  auth_reason?: string;
+  needs_reauth?: boolean;
 }
 
 function lastJsonLine(stdout: string): { parsed: unknown; raw: string } | null {
@@ -623,8 +682,12 @@ export async function invokePluginRuntime(
   }
 
   const config = readPluginRuntimeConfig(uid, name);
-  if (!config.api_key) return { ok: false, error: 'plugin not configured (missing api key)' };
-
+  // 🔴 凭据解析（模块 A）：授权令牌优先，手工 API Key 兜底。
+  //    刷新发生在**这里**（注入前），插件进程只会看到一个有效令牌——
+  //    这也是"插件零改动"能成立的原因（环境变量名 EDUSEED_API_KEY 不变）。
+  //
+  //    放在 run-skill 之前、script 存在性检查之后是有意的：既避免无谓的
+  //    网络刷新，又保证"命令真要跑了"才去动令牌。
   let pcDir = PC_ROOT;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
@@ -634,22 +697,64 @@ export async function invokePluginRuntime(
   const script = path.join(pcDir, 'bin', 'run-skill.cjs');
   if (!fs.existsSync(script)) return { ok: false, error: 'run-skill.cjs not found' };
 
+  const credential = await resolvePluginCredential(uid, name, {
+    apiKey: config.api_key,
+    serverUrl: config.server_url,
+  });
+  if (credential.ok === false) {
+    // 不静默失败：把原因与"要不要重新连接"一并回给界面（契约 §4）。
+    log.warn('plugin credential unavailable', {
+      package_name: name,
+      reason: credential.reason,
+      needs_reauth: credential.needsReauth,
+    });
+    return {
+      ok: false,
+      error: credential.message,
+      auth_reason: credential.reason,
+      needs_reauth: credential.needsReauth,
+    };
+  }
+
   const env = buildPackageCommandEnv(uid, pcDir);
   // Platform credentials injected from main only (renderer/iframe never see
   // the key). EDUSEED_* names are exported for the plugin runtime to read.
+  //
+  // 🔴 身份字段（学生号/角色）优先取**授权**里的绑定，其次才是手工配置：
+  //    授权路径下平台已按登录身份确定 person_id，手工配置里的旧学号可能
+  //    是别人的（换人用同一台机器就会串号）。
+  const bindingPersonId = readPluginOAuth(uid, name).record.tokens?.binding?.person_id;
+  const bindingRole = readPluginOAuth(uid, name).record.tokens?.binding?.role;
   const injected: Record<string, string> = {
-    EDUSEED_SERVER_URL: config.server_url || 'http://localhost:3000',
-    EDUSEED_API_KEY: config.api_key,
+    EDUSEED_SERVER_URL: credential.serverUrl || config.server_url || 'http://localhost:3000',
+    EDUSEED_API_KEY: credential.apiKey,
   };
-  if (config.student_id) {
-    injected.EDUSEED_STUDENT_ID = config.student_id;
+  const studentId = bindingPersonId || config.student_id;
+  const role = bindingRole || config.role;
+  if (studentId) {
+    injected.EDUSEED_STUDENT_ID = studentId;
   }
-  if (config.role) {
-    injected.EDUSEED_ROLE = config.role;
+  if (role) {
+    injected.EDUSEED_ROLE = role;
   }
   if (config.cohort) injected.EDUSEED_COHORT = config.cohort;
   if (config.course_id) injected.EDUSEED_COURSE_ID = config.course_id;
   Object.assign(env, injected);
+
+  // 🔴 输出脱敏（安全审计 2026-09-21）：凭据是经**子进程环境变量**交给第三方插件脚本的，
+  //    脚本（或它 spawn 的任何 shell/python）只要把它打印出来，令牌就会原样进入 stdout，
+  //    再经下面几个 return 回流到渲染层 / tool result / 对话记录
+  //    （对话记录会同步到 cloud、也可能发给模型服务）。
+  //    run-skill.cjs 已在**流层面**脱敏；这里再兜一层，覆盖
+  //    `stdio: 'inherit'` 的孙进程直接写 fd（绕过 JS 层 write）的情况。
+  const secretValues = [credential.apiKey, config.api_key].filter(
+    (s): s is string => typeof s === 'string' && s.length >= 8,
+  );
+  const redact = (text: string): string => {
+    let out = text ?? '';
+    for (const s of secretValues) out = out.split(s).join('***REDACTED***');
+    return out;
+  };
 
   const args = [script, skill, 'runtime', '--', command];
   if (argsJson) args.push(argsJson);
@@ -661,16 +766,16 @@ export async function invokePluginRuntime(
     timeoutMs: RUNTIME_COMMAND_TIMEOUT_MS,
     maxOutputBytes: RUNTIME_COMMAND_MAX_OUTPUT_BYTES,
   });
-  if (result.error) return { ok: false, stdout: result.stdout, error: result.error };
+  if (result.error) return { ok: false, stdout: redact(result.stdout), error: redact(result.error) };
   if (result.code === 0) {
     const parsed = lastJsonLine(result.stdout);
-    return { ok: true, stdout: result.stdout, result: parsed ? parsed.parsed : null };
+    return { ok: true, stdout: redact(result.stdout), result: parsed ? parsed.parsed : null };
   }
   const parsedErr = lastJsonLine(result.stderr || result.stdout);
   const error = parsedErr && typeof parsedErr.parsed === 'object'
     ? String((parsedErr.parsed as Record<string, unknown>).error || parsedErr.raw)
     : (result.stderr.trim() || `run-skill exited ${result.code}`);
-  return { ok: false, stdout: result.stdout, error: error.slice(0, 4096) };
+  return { ok: false, stdout: redact(result.stdout), error: redact(error).slice(0, 4096) };
 }
 
 /**

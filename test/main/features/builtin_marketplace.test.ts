@@ -14,12 +14,16 @@ const postJsonMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../../src/main/features/marketplace', () => ({
   postJson: postJsonMock,
+  // 兼容性门禁会读当前应用版本；mock 掉整个模块后必须补上，否则解析链路
+  // 在 vitest 里拿到 undefined 而把每一次解析都记成 failed。
+  currentAppVersion: () => '1.4.0',
 }));
 
 let tmpDir: string;
 let prevWs: string | undefined;
 let prevBuiltin: string | undefined;
 const TEST_AGENT_ID = '111111111111';
+const CREATOR_AGENT_ID = '287ce6012204';
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-builtin-marketplace-'));
@@ -91,6 +95,83 @@ function writeResourceSeedManifest(dir: string, kind: 'agent' | 'skill', id: str
 }
 
 describe('builtin marketplace seed', () => {
+  it('runs the Agent 创建师 scenario from builtin seed through a direct creation container', async () => {
+    const users = await import('../../../src/main/features/users');
+    const agents = await import('../../../src/main/features/agents');
+    const builder = await import('../../../src/main/features/group_chat/agent-builder');
+    const packaged = JSON.parse(fs.readFileSync(
+      path.resolve(process.cwd(), 'resources/builtin/marketplace/agents/287ce6012204/agent.json'),
+      'utf8',
+    )) as Record<string, unknown>;
+    writeBuiltinAgent(CREATOR_AGENT_ID, packaged);
+
+    const seed = await import('../../../src/main/features/builtin_marketplace');
+    await seed.seedBuiltinMarketplaceForUser('u1');
+    users.activateUser('u1');
+
+    const creator = (await agents.listAgents()).find((agent) => agent.agent_id === CREATOR_AGENT_ID);
+    expect(creator).toMatchObject({
+      agent_id: CREATOR_AGENT_ID,
+      name: 'Agent 创建师',
+      source: 'marketplace',
+      enabled: true,
+    });
+    expect(creator?.workflow).toContain('治理创建');
+
+    const createFromBlocks = vi.fn(async () => ({ agent_id: 'new-agent-1', name: '报销审核' }));
+    const result = await builder.applyAgentBuilderContainers({
+      uid: 'u1',
+      cid: 'creator-scenario',
+      agentId: CREATOR_AGENT_ID,
+      workingText: [
+        '配置单已确认。',
+        '<agent>',
+        '<name>报销审核</name>',
+        '<workflow>读取报销材料并输出审核结论。</workflow>',
+        '<mode>direct</mode>',
+        '</agent>',
+      ].join('\n'),
+    }, { createFromBlocks });
+
+    expect(createFromBlocks).toHaveBeenCalledTimes(1);
+    expect(result.created).toEqual([{ agent_id: 'new-agent-1', name: '报销审核' }]);
+    expect(result.rejected).toEqual([]);
+    expect(result.cleanText).toBe('配置单已确认。');
+  });
+
+  it('invalidates the persisted agent catalog when refreshing an existing builtin agent', async () => {
+    const users = await import('../../../src/main/features/users');
+    const agents = await import('../../../src/main/features/agents');
+    writeBuiltinAgent(TEST_AGENT_ID, {
+      name: 'Writer',
+      description: 'Writes things',
+      category: 'general',
+      workflow: 'Write old.',
+      version: '1.0.0',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+
+    const seed = await import('../../../src/main/features/builtin_marketplace');
+    await seed.seedBuiltinMarketplaceForUser('u1');
+    users.activateUser('u1');
+    expect((await agents.listAgents()).find((agent) => agent.agent_id === TEST_AGENT_ID)?.workflow).toBe('Write old.');
+
+    writeBuiltinAgent(TEST_AGENT_ID, {
+      name: 'Writer',
+      description: 'Writes things',
+      category: 'general',
+      workflow: 'Write revised.',
+      version: '1.0.0',
+      updated_at: '2026-01-02T00:00:00Z',
+    });
+    await expect(seed.seedBuiltinMarketplaceForUser('u1')).resolves.toMatchObject({
+      seeded_agents: 1,
+      manifest_agents: 0,
+    });
+
+    expect((await agents.listAgents()).find((agent) => agent.agent_id === TEST_AGENT_ID)?.workflow).toBe('Write revised.');
+  });
+
   it('seeds agents and skills without requiring marketplace versions', async () => {
     writeBuiltinAgent(TEST_AGENT_ID, {
       name: 'Writer',

@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "id": "smoke-ui-live-artifact",
+      "kind": "smoke",
+      "input": "A synthetic task that exercises ui-live-artifact.",
+      "expected": "Follows SKILL.md; deterministic output; no network or filesystem side effects."
+    }
+  ]
+}

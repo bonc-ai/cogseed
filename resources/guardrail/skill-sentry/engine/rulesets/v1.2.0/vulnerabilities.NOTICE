@@ -1,0 +1,25 @@
+Vulnerability advisory data
+===========================
+
+`vulnerabilities.jsonl` in this ruleset is derived from the OSV.dev aggregated
+database (https://osv.dev). Upstream sources include:
+
+- GitHub Advisory Database (CC-BY 4.0)
+  https://github.com/github/advisory-database
+- PyPI Advisory Database (CC-BY 4.0)
+  https://github.com/pypa/advisory-database
+- Python Software Foundation advisory database (CC-BY 4.0)
+  https://github.com/psf/advisory-database
+- OpenSSF Malicious Packages (Apache-2.0)
+  https://github.com/ossf/malicious-packages
+- NVD CVEs converted to OSV by the OSV.dev project
+
+Advisory identifiers, affected version ranges, severity buckets and one-line
+summaries are reproduced and transformed. Duplicate records pointing at the
+same advisory are merged, summaries are truncated to 180 characters, and only
+a subset of packages is included. This file is therefore a transformed subset,
+not a verbatim copy, of any upstream database.
+
+Regenerate with `tools/refresh_vulnerability_db.py`. If an upstream source
+changes its license, update this notice and `THIRD_PARTY_NOTICES.md` in the
+same change.

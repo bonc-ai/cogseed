@@ -1,8 +1,7 @@
 /* ============================================================================
  * 认知资产 · 样式（cognition-assets.css）
  *
- * 全部规则收在 .ca-app 作用域内——不复用、不覆盖旧 skills-cognition-* 样式，
- * 新旧两代 UI 可以互不干扰地并存，回滚时删掉这个文件即可。
+ * 页面样式限定在认知资产容器内，避免影响其他面板。
  * 设计语言：浅绿主色 + 白卡片 + 轻边框，信息层级用字号/字重表达，不用重色块。
  * ========================================================================== */
 
@@ -42,7 +41,6 @@
 /* ── 页头（标题行已移除：侧栏已高亮「认知资产」，独立标题是冗余；
      刷新按钮并入 tab 行右侧） ─────────────────────────────── */
 
-/* ── 四个主标签 ───────────────────────────────────────────── */
 /* ── 页头 tab（紧凑横排：标题 + 一句说明，下划线选中态） ───────────── */
 .ca-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--ca-line); }.ca-tab {
   display: flex; align-items: baseline; gap: 6px; padding: 7px 13px 8px;
@@ -58,17 +56,11 @@
 /* min-height:0 必须保留：flex item 默认 min-height:auto，会拒绝收缩到内容高度以下，
    滚动条就永远不会出现。 */
 .ca-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 20px; }
-/* 绘制边界隔离：面板内容整体是 innerHTML 全量重建，重绘瞬间曾出现旧帧
-   残留（警告条与字段行视觉重叠——实测 DOM 几何无重叠，属合成残影）。
-   contain 让容器内的重绘独立提交、内容不得画出边界，降低残影概率。 */
-.ca-scroll { contain: paint; }/* 候选详情：决策按钮与「证据引用」同行（整组右端、垂直居中），不再独占
-   卡片底部一行。 */
-/* 候选确认表单收尾：证据整行、动作靠右独占一行（虚线分隔）——此前横排
-   flex 让三个动作按钮浮在证据引用旁边（2026-09-21 子安真机抓出）。 */
+/* 将重绘限制在滚动容器内，避免内容重建时绘制到边界外。 */
+.ca-scroll { contain: paint; }
+/* 候选确认表单收尾：证据整行，动作靠右独占一行。 */
 .ca-detail-foot { display: flex; flex-direction: column; gap: 12px; }
-/* 复盘展开块在 ca-detail-foot 内整行独占（2026-09-17 修：横排 flex 的
-   第三个项会横向撑破卡片、与证据字段叠字——截图实测块宽 1658 > 容器
-   1242）；元信息行内允许换行，长"实际发生"文本不再把行撑出界。 */
+/* 复盘展开块独占整行；元信息允许换行，避免长文本撑破卡片。 */
 .ca-detail-foot .ca-episode-detail { flex: 1 1 100%; min-width: 0; }
 
 /* ── 标签片 ───────────────────────────────────────────────── */
@@ -85,9 +77,9 @@
 .ca-app .ca-chip.ca-chip-opt { border: 1px solid var(--ca-line); background: var(--color-white); color: var(--ca-ink2); cursor: pointer; padding: 3.5px 13px; }
 .ca-app .ca-chip.ca-chip-opt:hover { border-color: var(--ca-ink2); color: var(--ca-ink); }
 .ca-app .ca-chip.ca-chip-opt.is-green { background: var(--ca-green-bg); border-color: var(--ca-green-line); color: var(--color-ca-green-text-deep); font-weight: 600; }
-/* 候选确认卡（2026-09-21 重构）：章行 + 完整标题（可换行，至多 3 行）+
+/* 候选确认卡：章行 + 完整标题（可换行，至多 3 行）+
    小节标签置顶的分区版式——不再用左标签栅格把标题截成一行。
-   整理任务详情卡（2026-09-29 版式统一）共用同一标题位：会话标题从页头
+   整理任务详情卡共用同一标题位：会话标题从页头
    降为卡内 h2，与建议详情同构。 */
 #ca-root .ca-candidate-detail .cand-head { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
 #ca-root .ca-candidate-detail .cand-title,
@@ -160,7 +152,7 @@
 .ca-more-toggle:hover { color: var(--ca-ink); }
 .ca-more { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 /* display:flex 会盖过 UA 的 [hidden]{display:none}（ID 级特异性）——不补这条，
-   「更多操作」的危险操作面板默认就全展开（2026-09-28 真机走查抓出）。 */
+   「更多操作」的危险操作面板默认就全展开。 */
 .ca-more[hidden] { display: none; }
 .ca-more-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--ca-line); border-radius: 8px; background: var(--color-ca-paper); }
 .ca-more-copy { flex: 1 1 auto; min-width: 0; }
@@ -194,9 +186,7 @@
 
 /* ── 窄窗 ─────────────────────────────────────────────────── */
 
-/* 树干副行(关于我 N)在 v4 树里由 .ca-trunk-sub 承载,此规则随方块树退役。 */
-
-/* 个人本体独立界面（2026-09-14）：点树干进入后本体独占内容区、撑满高度；
+/* 个人本体独立界面：点树干进入后本体独占内容区、撑满高度；
    !hidden 条件避免与既有 [hidden]{display:none} 规则打架。 */
 #panel-recall .recall-personal-ontology-section.is-standalone:not([hidden]) {
   display: flex; flex-direction: column; flex: 1 1 auto;
@@ -211,7 +201,7 @@
 #ca-root[hidden] { display: none; }
 
 /* ── 个人本体页：把 index.html 里的 .personal-onto-* 结构映射到原型
-       .onto-page/.onto-sidebar/.onto-main 的视觉（2026-09-21 移植）。
+       .onto-page/.onto-sidebar/.onto-main 的视觉。
        本体 section 是 index.html 的常驻节点（往返两块面板都用它），所以这里
        只加 #ca-root 作用域的样式，不动它的标记与 id。────────────── */
 #ca-root .personal-onto-layout {
@@ -303,14 +293,11 @@
 #ca-root .personal-onto-filter-row { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
 .ca-setcard .ca-subnav { margin-bottom: 8px; }
 
-/* tab 行紧凑模式（窄窗口自适应）：标题折行时收紧 padding，由 app.js 测量后
-   切换（2026-09-15 起副标题已删，只剩标题折行一种触发）。 */
-.ca-tabs.is-compact .ca-tab { padding: 8px 11px 9px; }
-
 /* 夜间自动沉淀条状卡：左说明 / 中时间 / 右开关。 */
 .ca-setting-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px; }
 .ca-setting-copy { flex: 1 1 240px; min-width: 0; }
-.ca-setting-time { display: inline-flex; align-items: center; gap: 8px; color: var(--ca-ink2); font-size: var(--font-size-2); }
+.ca-setting-time { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; color: var(--ca-ink2); font-size: var(--font-size-2); }
+.ca-setting-time > span { white-space: nowrap; }
 .ca-setting-time input[type="time"] {
   border: 1px solid var(--ca-line); border-radius: 8px; padding: 5px 8px;
   background: var(--ca-card); color: var(--ca-ink); font-family: inherit; font-size: var(--font-size-3);
@@ -342,7 +329,7 @@
 }
 @keyframes ca-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* ── 整理详情：对话上下文时间线（2026-09-15 详情页改造） ─────────────
+/* ── 整理详情：对话上下文时间线 ─────────────
    展示口径=本次整理实际读到的消息；user=绿点、assistant=灰点。 */
 .ca-tl { margin-top: 4px; }
 .ca-tl-row { display: flex; gap: 10px; padding: 10px 2px; border-top: 1px solid var(--ca-line); }
@@ -370,14 +357,14 @@
 .ca-step.is-current { color: var(--color-ca-green-text); border-color: var(--ca-green-line); background: var(--ca-green-bg); font-weight: 600; }
 .ca-step-arrow { color: var(--ca-ink2); font-size: var(--font-size-1); font-style: normal; }
 
-/* 整理详情：整合卡（2026-09-15 重排，非拼接）——状态 chip + 元信息流 +
+/* 整理详情：整合卡——状态 chip + 元信息流 +
    动作按钮收进一行卡头，腾出的空间让待确认表单成为主体。 */
 .ca-capture-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .ca-capture-head > .ca-chip { flex: 0 0 auto; }
 .ca-pending-embed { margin-top: 12px; }
 .ca-pending-block + .ca-pending-block { border-top: 1px dashed var(--ca-line); margin-top: 14px; padding-top: 14px; }
 
-/* 已沉淀资产区（2026-09-15 并入整合卡）：直接展示沉淀正文，浅底内容块
+/* 已沉淀资产区：直接展示沉淀正文，浅底内容块
    区分层级；「查看资产」降为项内次级入口。 */
 .ca-deposit { margin-top: 14px; }
 .ca-deposit-item { border: 1px solid var(--ca-line); border-radius: var(--radius-item); background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
@@ -386,17 +373,16 @@
 .ca-deposit-head b { font-size: var(--font-size-3); }
 .ca-deposit-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 
-/* 整理结果：未保存候选的完整内容块（2026-09-15——不保存后仍能看到
-   当时整理出的具体内容）；与已沉淀资产块同一视觉语言。 */
+/* 未保存候选仍展示当时整理出的完整内容，与已沉淀资产块使用相同版式。 */
 .ca-result-item { border: 1px solid var(--ca-line); border-radius: var(--radius-item); background: var(--color-ca-paper); padding: 12px 14px; margin-top: 8px; }
 .ca-result-item + .ca-result-item { margin-top: 8px; }
-/* 待确认内容块可点（2026-09-29）：整块直达该条的确认页。 */
+/* 待确认内容块可点：整块直达该条的确认页。 */
 .ca-result-item.is-clickable { cursor: pointer; }
 .ca-result-item.is-clickable:hover { border-color: var(--ca-green-line); }
 .ca-result-title { display: block; margin: 0 0 4px; font-size: var(--font-size-3); line-height: 1.5; }
 .ca-result-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-/* ── 响应式适配（2026-09-15）───────────────────────────────────
+/* ── 响应式适配───────────────────────────────────
    模块此前无断点：窄窗口下 kv 三列互挤、工具栏与行内按钮溢出。
    两档断点：
    980px —— 中等窗口：统计栅格 3→2 列、hero 统计换行；
@@ -430,21 +416,9 @@
   margin: 0;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * HTML 原型 v7 视觉移植（2026-09-21）
- *
- * 验收标准是 design/认知资产-完整界面-可上线原型-v7-20260920.html：下面把
- * 原型 <style> 的规则逐条搬过来，只做三处机械改动——
- *   1. 统一加 #ca-root 前缀。原型类名（.card/.row/.tag…）是页面级通用名，
- *      与全局样式表同名，限定作用域才能互不污染；
- *   2. 颜色/圆角/字号改引 tokens.css 变量（同值，或 Δ 不可辨的近值），
- *      字面量归零以过 design-token 闸门；
- *   3. 原型外壳（.shell/.dock/.tabs/.ovl/.toast）与弹窗不搬——那些由应用
- *      壳层与共享组件承担；页面高度从 calc(100vh - 46px) 改为撑满容器。
- * 层序不用 z-index：.fl-top/.fl-bottom/.drawer/.tip 都是定位元素，定位层
- * 本就画在常规流之上，彼此按 DOM 顺序（后画的在上）——与原型 z-index 5/20/60
- * 的顺序一致。守护测试冻结了本文件的 z-index 声明数（=1），别再往这里加。
- * ========================================================================== */
+/* 页面布局：通用类名限定在 #ca-root 内，视觉值复用 tokens.css。
+ * 应用外壳和弹窗由共享组件承担，页面高度沿容器的 flex 链撑满。
+ * .fl-top/.fl-bottom/.drawer/.tip 按 DOM 顺序叠放，不另设局部层级。 */
 
 #ca-root {
   /* 原型 :root 变量别名：搬运过来的规则保持原样可读，换色只改这一处。 */
@@ -482,8 +456,7 @@
 
 /* 原型 `*{margin:0;padding:0}` 的等价物：只清 margin（h1/p/按钮的 UA 外边距）。
    padding 不能清——本文件还并存旧段的裸类名规则（.cap-row/.ca-chip/…），
-   它们特异性低于这条重置，padding 被清零后整页组件全变「贴边」（2026-09-21
-   子安真机抓出：类型 chip 无内边距）。移植段组件均自带 padding，不依赖重置。 */
+   它们特异性低于这条重置，padding 被清零后整页组件全变「贴边」。移植段组件均自带 padding，不依赖重置。 */
 #ca-root .wrap *,
 #ca-root .tree-stage *,
 #ca-root .onto-page * { margin: 0; }
@@ -517,6 +490,8 @@
   display: inline-flex; align-items: center; gap: 0;
 }
 #ca-root .ca-tab:hover { color: var(--ink); }
+#ca-root .ca-tab.is-disabled,
+#ca-root .ca-tab.is-disabled:hover { color: var(--ink2); opacity: 0.45; cursor: not-allowed; }
 #ca-root .ca-tab.is-on { color: var(--ink); font-weight: 600; }
 #ca-root .ca-tab.is-on::after {
   content: ''; position: absolute; left: 11px; right: 11px; bottom: -1px; height: 2.5px;
@@ -543,6 +518,11 @@
 #ca-root .hero { margin-bottom: 20px; }
 #ca-root .hero h1 { font-size: var(--font-size-6); font-weight: 700; letter-spacing: -0.2px; }
 #ca-root .hero .sub { font-size: var(--font-size-caption); color: var(--ink2); margin-top: 3px; }
+/* 新壳页头已给出当前页签标题：三个主工作页的 hero 只保留导语，避免重复；
+   子页（经验目录等）的 hero 标题仍保留。 */
+#ca-root #ca-scroll.ca-layout-overview .ca-library-page > .hero > h1,
+#ca-root #ca-scroll.ca-layout-activity .ca-activity-page > .hero > h1,
+#ca-root #ca-scroll.ca-layout-settings .ca-settings-page > .hero > h1 { display: none; }
 #ca-root .stats { display: flex; gap: 10px; margin-top: 14px; }
 #ca-root .stat { flex: 1; background: var(--color-white); border: 1px solid var(--line); border-radius: var(--rm); padding: 11px 14px; box-shadow: var(--s1); }
 #ca-root .stat .v { font-size: var(--font-size-6); font-weight: 800; }
@@ -551,20 +531,27 @@
 #ca-root .stat .v.b { color: var(--blue); }
 #ca-root .stat .l { font-size: var(--font-size-2); color: var(--ink2); }
 
-/* 按钮：uiButton 工厂已带 .btn + .ui-button；这里给出原型的皮肤。
-   height/line-height 必须覆盖 .ui-button 的定高，否则按钮比原型矮一档。 */
-#ca-root .btn {
-  border: none; border-radius: var(--rs); font-size: var(--font-size-3); font-weight: 600;
+/* 认知资产按钮：主操作改用浅品牌底色、描边和深色文字；次要操作用白底描边，
+   不再把同一片深绿实底铺满操作区。height/line-height 仍需覆盖共享按钮定高。 */
+#ca-root .btn:where(:not(.ca-nightly-model-hit)) {
+  border: 1px solid color-mix(in srgb, var(--color-brand) 28%, var(--line)); border-radius: var(--rs); font-size: var(--font-size-3); font-weight: 650;
   padding: 7px 16px; height: auto; line-height: 1.6;
-  /* WCAG：白字于 #189a5c 仅 3.61，常态即用 deep 绿（5.39）——hover 再深一档 */
-  background: var(--green-d); color: var(--color-white); transition: all var(--duration-control);
+  background: var(--color-brand-soft); color: var(--color-accent); box-shadow: none; transition: all var(--duration-control);
 }
-#ca-root .btn:hover { background: var(--green-text-deep, var(--green-d)); filter: brightness(.92); }
+#ca-root .btn:hover { border-color: var(--color-brand); background: var(--color-surface-2); color: var(--color-accent); filter: none; }
 #ca-root .btn.g { background: var(--green-bg); color: var(--green-t); }
-#ca-root .btn.g:hover { background: var(--green-fill); }
+#ca-root .btn.g:hover { background: var(--green-fill); border-color: var(--green-line); }
 #ca-root .btn.d { background: var(--red); color: var(--color-white); }
 #ca-root .btn.o { background: var(--color-white); color: var(--ink2); border: 1px solid var(--line); }
 #ca-root .btn.o:hover { border-color: var(--ink2); color: var(--ink); }
+#ca-root .btn.ui-button--secondary:not(.o):not(.d):not(.rnm):not(.chip) { border-color: var(--line-field); background: var(--surface-card); color: var(--color-ink-2); font-weight: 500; }
+#ca-root .btn.ui-button--secondary:not(.o):not(.d):not(.rnm):not(.chip):hover { border-color: var(--color-brand); background: var(--color-surface-2); color: var(--color-accent); }
+#ca-root .btn.ui-button--primary { border-color: color-mix(in srgb, var(--color-brand) 36%, var(--line)); background: var(--color-brand-soft); color: var(--color-accent); font-weight: 650; }
+#ca-root .btn.ui-button--primary:hover { border-color: var(--color-brand); background: color-mix(in srgb, var(--color-brand) 16%, var(--color-white)); }
+#ca-root .btn.ui-button--ghost { border-color: transparent; background: transparent; color: var(--color-ink-2); font-weight: 500; }
+#ca-root .btn.ui-button--ghost:hover { border-color: transparent; background: var(--color-brand-soft); color: var(--color-accent); }
+#ca-root .btn.ui-button--danger { border-color: var(--color-danger-line); background: var(--color-danger-soft); color: var(--color-danger); }
+#ca-root .btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 #ca-root .btn.sm { padding: 4px 12px; font-size: var(--font-size-2); height: auto; }
 
 #ca-root .chip {
@@ -601,7 +588,7 @@
 #ca-root .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 #ca-root .actions-right { margin-left: auto; display: flex; gap: 8px; }
 #ca-root .content-text { font-size: var(--font-size-3); color: var(--ink2); line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
-/* 迁移条目全文折叠三行（2026-09-29 子安「看不懂」整改）：悬浮 title 看全文。 */
+/* 迁移条目全文折叠三行：悬浮 title 看全文。 */
 #ca-root .ca-mig-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; cursor: default; }
 #ca-root .field { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; align-items: start; margin-bottom: 11px; }
 #ca-root .field > span { color: var(--ink2); font-size: var(--font-size-3); text-align: right; padding-top: 8px; }
@@ -623,8 +610,7 @@
 }
 
 /* 待处理提醒行（来源异常 / 整理失败 / 治理待办）：一条卡 + 右侧处理入口。
-   specs/017 整改二：正文回正文字色（此前整句刷 amber，被真机截图定性为
-   "满页黄字读不懂"）；颜色只留给短状态章。标题=问题是什么，detail=补充，
+   正文使用正常文字色；颜色只留给短状态章。标题=问题是什么，detail=补充，
    组级 hint/effect=为什么需要你、做了会怎样。 */
 #ca-root .notice-stack { margin-bottom: 16px; }
 #ca-root .notice-row {
@@ -736,8 +722,7 @@
 #ca-root .drawer.open { transform: none; }
 #ca-root .tip {
   /* absolute：相对 .tree-stage 定位（app.js 按画布坐标计算）。不能用 fixed——
-     .ca-scroll 的 contain:paint 会把 fixed 包含块变成滚动容器，坐标整体漂移
-     （2026-09-21 子安真机抓出）。样式刻意低调：小字、灰底。 */
+     .ca-scroll 的 contain:paint 会把 fixed 包含块变成滚动容器，坐标整体漂移。样式刻意低调：小字、灰底。 */
   position: absolute; background: var(--color-ca-ink-2); color: var(--color-white); font-size: var(--font-size-1);
   border-radius: var(--radius-2); padding: 4px 9px; pointer-events: none; opacity: 0;
   transition: opacity var(--duration-control); max-width: 220px; line-height: 1.4;
@@ -843,7 +828,7 @@
 
 /* ── 整理 ─────────────────────────────────────────────────── */
 #ca-root .cap-row { display: flex; align-items: center; gap: 12px; background: var(--color-white); border: 1px solid var(--line); border-radius: var(--rm); padding: 12px 15px; margin-bottom: 7px; box-shadow: var(--s1); }
-/* 整行可点（2026-09-29 子安指令）：系统活动条目整行即详情入口。 */
+/* 整行可点：系统活动条目整行即详情入口。 */
 #ca-root .cap-row.is-clickable { cursor: pointer; transition: border-color 130ms, box-shadow 130ms; }
 #ca-root .cap-row.is-clickable:hover { border-color: var(--color-ca-line-strong); box-shadow: var(--s2); }
 #ca-root .cap-row .tw { flex: 1; min-width: 0; }
@@ -856,19 +841,6 @@
 #ca-root .step.done { background: var(--green); }
 #ca-root .step.cur { background: var(--amber-dot); }
 
-/* ── 标签系统（specs/012 T010~T013）与排序依据/权重（T020）的最小排版 ──────
- * 弹层外壳/进度条/分段控件/输入框全部走共享层（ui-modal / uiProgressBar /
- * uiSegmentedControl / uiInput 的既有皮肤），这里只补业务排布；不使用
- * var(--panel)（全库未定义）、零 z-index 字面量（层序只归 --z-*）。 */
-#ca-root .ca-tags-row { align-items: center; }
-#ca-root .ca-tag-item { display: inline-flex; align-items: center; gap: 5px; }
-#ca-root .ca-tag-candidates { display: inline-block; margin: 0; }
-#ca-root .ca-tag-candidates summary { padding: 7px 11px; }
-#ca-root .ca-tag-filter { align-items: center; }
-#ca-root .ca-batch-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: var(--rm); background: var(--color-white); padding: 9px 12px; margin-bottom: 12px; }
-#ca-root .ca-batch-bar .sp { flex: 1; height: 1px; background: var(--line); }
-#ca-root .ca-tag-progress { display: flex; align-items: center; gap: 9px; flex: 1 1 100%; }
-#ca-root .ca-tag-failures { flex: 1 1 100%; border-top: 1px dashed var(--line); padding-top: 7px; }
 /* 排序依据小节（资产详情·使用记录区）与权重卡（沉淀设置页）。 */
 #ca-root .ca-rank-rows { display: grid; gap: 4px; margin-bottom: 7px; }
 #ca-root .ca-rank-row { display: flex; align-items: baseline; gap: 10px; font-size: var(--font-size-2); }
@@ -876,8 +848,8 @@
 #ca-root .ca-rank-raw, #ca-root .ca-rank-contrib { font-variant-numeric: tabular-nums; }
 #ca-root .ca-rank-weight { color: var(--ink2); }
 #ca-root .ca-rank-warn { color: var(--ca-amber-ink); font-weight: 600; }
-/* 权重表单（specs/017 整改三）：固定两列——auto-fit 在宽卡下会把四个字段
-   拉成一排且末格留白，窄卡下又参差换行，真机截图里就是"空白/错位"。 */
+/* 权重表单：固定两列——auto-fit 在宽卡下会把四个字段
+   拉成一排且末格留白，窄卡下又参差换行，会导致空白或错位。 */
 #ca-root .ca-rank-w-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
 #ca-root .ca-rank-w-input { width: 100%; }
 #ca-root .ca-w-error { color: var(--ca-red); }
@@ -894,7 +866,7 @@
   #ca-root .wrap { padding: 16px 14px 72px; }
 }
 @media (max-width: 800px) {
-  #ca-root button { min-height: 36px; }
+  #ca-root button:where(:not(.ca-nightly-model-hit)) { min-height: 36px; }
 }
 @media (max-width: 720px) {
   /* Small panes must let section titles keep their natural width and move
@@ -920,9 +892,9 @@
   }
 }
 
-/* ───────────── 用户旅程雕刻（specs/018）新增呈现层 ───────────── */
+/* ───────────── 页面呈现层 ───────────── */
 
-/* 「其他处理」折叠（T002/T011）：行内轻量入口，把次级动作从主按钮旁收走。
+/* 「其他处理」折叠：行内轻量入口，把次级动作从主按钮旁收走。
    覆写 .details 的卡壳样式（同为 #ca-root + 单类，靠文件顺序取胜）。 */
 #ca-root .ca-other-actions { display: inline-block; border: 0; background: none; margin: 0; vertical-align: middle; }
 #ca-root .ca-other-actions > summary { list-style: none; cursor: pointer; padding: 3px 8px; font-size: var(--font-size-caption); font-weight: 500; color: var(--ink2); display: inline-flex; align-items: center; gap: 4px; border-radius: var(--rm); }
@@ -932,20 +904,20 @@
 #ca-root .ca-other-actions .dbody { border: 0; padding: 8px 0 0; }
 #ca-root .ca-other-actions .actions { justify-content: flex-start; }
 
-/* 候选卡动作行（T011 沿革）：2026-09-29 子安标注整改——「…其他处理」折叠
+/* 候选卡动作行：「…其他处理」折叠
  * 撤下后四按钮平铺右侧同一行；无 flat 类的旧调用（若有）保持原布局。 */
 #ca-root .ca-card-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 #ca-root .ca-card-actions .ca-other-actions { margin-left: auto; }
 #ca-root .ca-card-actions.ca-card-actions-flat { justify-content: flex-end; }
 
-/* ── 整理报告详情（2026-09-29 子安抓的样式整改）────────────────
+/* ── 整理报告详情────────────────
  * 条目卡片化 + 资产链接走主题绿（原裸 <a> 浏览器蓝下划线）+ 改前/改后
  * 分段小标签（原 before → after 拼一行读不出分段）。 */
 #ca-root .ca-cleanup-item {
   background: var(--color-white); border: 1px solid var(--line);
   border-radius: var(--rm); padding: 12px 15px; margin-bottom: 8px;
 }
-/* 维护大卡（2026-09-29 三块合一）：三行之间细分隔线。 */
+/* 维护大卡：三行之间细分隔线。 */
 #ca-root .ca-maint-row { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
 #ca-root .ca-maint-note { margin-top: 8px; }
 #ca-root .ca-asset-link { color: var(--green-t); text-decoration: none; }
@@ -959,15 +931,15 @@
 #ca-root .ca-diff-tag.is-before { background: var(--color-ca-chip-bg); color: var(--color-ca-ink-2); }
 #ca-root .ca-diff-tag.is-after { background: var(--color-ca-green-bg); color: var(--green-t); }
 #ca-root .ca-diff-text { min-width: 0; }
-/* 候选卡底部行（2026-09-29 子安标注）：来源（左）与动作按钮（右）同一行，
+/* 候选卡底部行：来源（左）与动作按钮（右）同一行，
  * 整体上提贴近正文。来源过长省略号截断、悬浮看全文；无来源/无动作的卡
  * 退化为单侧行。 */
 #ca-root .cand .ca-card-footer { display: flex; align-items: center; gap: 14px; margin-top: 7px; }
 #ca-root .cand .ca-card-footer .c4 { margin-top: 0; flex-shrink: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #ca-root .cand .ca-card-footer .ca-card-actions { margin-top: 0; margin-left: auto; flex-wrap: nowrap; flex-shrink: 0; }
-/* 候选卡「来源已删」警示与标题同一行（2026-09-29 第三轮定稿）：标题左、
+/* 候选卡「来源已删」警示与标题同一行：标题左、
  * 警示条靠右（chevron 之前）；放不下省略号截断，悬浮 title 看全文。
- * 视觉降级（同日子安拍板整改①）：去边框、字号降一档、常规字重——退成
+ * 视觉降级：去边框、字号降一档、常规字重——退成
  * 行内备注，不与标题抢焦点。 */
 #ca-root .cand .c1 .ca-card-warn-inline {
   margin-left: auto; flex-shrink: 1; min-width: 0; max-width: 62%;
@@ -977,22 +949,22 @@
 }
 #ca-root .cand .c1 .ca-card-warn-inline ~ .chev { margin-left: 0; }
 
-/* 导语可点数字（T010）：句中数字即锚点，chip-link 提供虚线下划线。 */
+/* 导语可点数字：句中数字即锚点，chip-link 提供虚线下划线。 */
 #ca-root .ca-jump-num { font-weight: 700; }
 
-/* 去向提示（T014）：确认后回到本页的一条成功色横条。 */
+/* 去向提示：确认后回到本页的一条成功色横条。 */
 #ca-root .ca-promoted-note .notice-row { border: 1px solid var(--green-line); }
 #ca-root .ca-promoted-note .notice-title { color: var(--green-t); font-weight: 600; }
 
-/* 资产详情三段式（specs/018 T040）：状态章行与「用过吗」汇总行。 */
+/* 资产详情三段式：状态章行与「用过吗」汇总行。 */
 #ca-root .ca-detail-facts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 #ca-root .ca-fact { display: inline-flex; align-items: center; gap: 6px; }
 #ca-root .ca-used-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 
-/* 设置页尾回链（specs/018 T070）：一句白话 + 去系统活动。 */
+/* 设置页尾回链：一句白话 + 去系统活动。 */
 #ca-root .ca-settings-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 
-/* 时间流行标题截断（迭代轮 1）：与 .row .tt 同款省略号——超长会话名
+/* 时间流行标题截断：与 .row .tt 同款省略号——超长会话名
    不再把 cap-row 撑成多行（.row .tt 早有，.cap-row .tt 漏了）。 */
 #ca-root .cap-row .tt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -1174,7 +1146,7 @@
   #ca-root .ca-layout-ontology .personal-onto-main-body { padding: 16px 14px 28px; }
 }
 
-/* 本体总览：领域入口与显式关系浏览（PO-PV-003 Proposed）。外层卡片复用
+/* 本体总览：领域入口与显式关系浏览。外层卡片复用
    uiResourceGrid/uiResourceCard；以下只负责本体业务内容的排列与密度。 */
 #ca-root .personal-onto-hub-nav-list { padding-bottom: 4px; border-bottom: 1px solid var(--line); }
 #ca-root .personal-onto-hub-nav-item {
@@ -1414,7 +1386,7 @@
   #ca-root .personal-onto-taxonomy-depth-6 { margin-left: 48px; }
 }
 
-/* ── 详情子界面整页版式（2026-09-28）──────────────────────────────
+/* ── 详情子界面整页版式──────────────────────────────
    资产/经验/整理详情与整理报告此前落在默认 .wrap（780px 居中阅读栏），
    宽窗下左右大片留白。统一改为：页头带全宽 +「主栏阅读内容 / 侧栏元信息
    与操作」内容网格 + 大数据区（折叠/台账）占满主栏；候选详情复用 review
@@ -1447,7 +1419,7 @@
 #ca-root .ca-detail-side .ca-more-row { flex-wrap: wrap; }
 #ca-root .ca-detail-side .ca-more-copy { flex: 1 1 100%; }
 #ca-root .ca-detail-side .ca-more-row .btn { margin-left: auto; }
-/* 整理详情：时间线正文限宽。结果/时间线并入主体卡内分节（2026-09-29 与
+/* 整理详情：时间线正文限宽。结果/时间线并入主体卡内分节（与
    建议详情统一为单卡文档式，不再散板双栏）：节与节之间用分隔线区隔。 */
 #ca-root .ca-detail-main .ca-tl-main { max-width: var(--layout-resource-detail-width, 880px); }
 #ca-root .ca-capture-sections { margin-top: 4px; }
@@ -1455,7 +1427,7 @@
   min-width: 0; margin-top: 16px; padding-top: 16px;
   border-top: 1px solid var(--ca-line);
 }
-/* 卡底一行（2026-09-29 子安拍板）：五步进度条靠左、操作按钮靠右；窄窗
+/* 卡底一行：五步进度条靠左、操作按钮靠右；窄窗
    放不下时按钮换行到进度条下方、仍右对齐（actions-right 的 auto 边距）。 */
 #ca-root .ca-capture-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 16px; }
 #ca-root .ca-capture-foot .ca-steps-bar { flex: 1 1 auto; min-width: 0; margin: 0; }
@@ -1469,7 +1441,7 @@
   #ca-root .ca-detail-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* 详情重构（2026-09-29）：来历独立卡与组内去重的 ×N 计数标记。 */
+/* 详情重构：来历独立卡与组内去重的 ×N 计数标记。 */
 #ca-root .ca-detail-origin { margin-top: 0; }
 #ca-root .evdup { font-weight: 600; opacity: 0.75; margin-left: 3px; }
 
@@ -1547,7 +1519,7 @@
   #ca-root .ca-asset-boundary { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 
-/* ── 个人本体 v2（2026-09-29 重构）：事实 / 规则 / 分组与模板 三页 ───────── */
+/* ── 个人本体 v2：事实 / 规则 / 分组与模板 三页 ───────── */
 
 #ca-root .po2-view,
 .recall-personal-ontology-section .po2-view {
@@ -1998,3 +1970,110 @@
 .recall-personal-ontology-section .po2-field-hint {
   font-size: 12px;
 }
+
+/* ── 关系图谱（清单/图谱双呈现）────────────────────────────────────────── */
+#ca-root .personal-onto-relgraph-mode {
+  display: flex; align-items: center; gap: 10px; margin: 10px 0 4px;
+}
+#ca-root .personal-onto-relgraph {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 0;
+}
+#ca-root .personal-onto-relgraph-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+}
+#ca-root .personal-onto-relgraph-zoom {
+  display: inline-flex; gap: 6px; flex-wrap: wrap;
+}
+#ca-root .personal-onto-relgraph-meta {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+#ca-root .personal-onto-relgraph-chips {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+#ca-root .personal-onto-relgraph-canvas {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--color-white-92);
+  overflow: hidden;
+  touch-action: none;
+}
+#ca-root .personal-onto-relgraph-svg {
+  display: block; width: 100%; height: 460px; cursor: grab;
+}
+#ca-root .personal-onto-relgraph-canvas:active {
+  cursor: grabbing;
+}
+#ca-root .personal-onto-relgraph-node {
+  cursor: default;
+}
+#ca-root .personal-onto-relgraph-node.is-clickable {
+  cursor: pointer;
+}
+#ca-root .personal-onto-relgraph-node.is-dragging {
+  cursor: grabbing;
+}
+#ca-root .personal-onto-relgraph-node.is-hover rect {
+  stroke-width: 2.2;
+}
+#ca-root .personal-onto-relgraph-node:not(.is-hover),
+#ca-root .personal-onto-relgraph-edge-group {
+  transition: opacity 0.12s ease;
+}
+#ca-root .personal-onto-relgraph-canvas:hover .personal-onto-relgraph-edge-group:not(.is-hover) {
+  opacity: 0.45;
+}
+#ca-root .personal-onto-relgraph-edge-label {
+  font-size: var(--font-size-1); font-weight: 600;
+  paint-order: stroke; stroke: var(--color-white); stroke-width: 3px; stroke-linejoin: round;
+}
+#ca-root .personal-onto-relgraph-node-label {
+  user-select: none;
+}
+#ca-root .personal-onto-relgraph-legend {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  font-size: var(--font-size-caption); color: var(--ink2);
+}
+#ca-root .personal-onto-relgraph-legend-item {
+  display: inline-flex; align-items: center; gap: 5px;
+}
+#ca-root .personal-onto-relgraph-legend-item i {
+  display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-pill); flex: none;
+}
+#ca-root .personal-onto-relgraph-legend-item i.is-bar {
+  width: 3px; height: 12px; border-radius: var(--radius-pill);
+}
+
+/* ── 待我处理 · 一行式条目────────────────
+   本体候选行与「任务还缺哪些字段」行共用：只排布内容与间距，控件走共享原语。 */
+#ca-root .ca-review-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; border-bottom: 1px solid var(--line);
+}
+#ca-root .ca-review-row:last-child { border-bottom: 0; }
+#ca-root .ca-review-row-text { flex: 1 1 auto; min-width: 0; color: var(--ink); }
+
+/* 维护设置在窄窗口中保留时间标签和动作的可读宽度。 */
+#ca-root .ca-layout-settings .rowline { flex-wrap: wrap; }
+#ca-root .ca-layout-settings .rowline > div:first-child { flex: 1 1 280px; min-width: 0; }
+#ca-root .ca-layout-settings .rowline > .right { flex: 0 1 auto; flex-wrap: wrap; }
+
+/* 变化列表以共享表格承载；条目进入独立详情，避免在列表堆放确认表单。 */
+.ca-activity-changes .ui-data-table td { padding-block:var(--space-2); cursor:pointer; }
+.ca-activity-changes .ui-data-table { table-layout:fixed; min-width:46rem; }
+.ca-activity-changes .ui-data-table th:first-child { width:50%; }
+.ca-activity-changes .ui-data-table th:nth-child(2) { width:15%; }
+.ca-activity-changes .ui-data-table th:nth-child(3) { width:17%; }
+.ca-activity-changes .ui-data-table th:nth-child(4) { width:10%; }
+.ca-activity-changes .ui-data-table th:nth-child(5) { width:8%; }
+.ca-activity-changes .ui-data-table td:not(:first-child) { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ca-activity-changes .ui-data-table td:last-child { color:var(--accent); }
+#ca-root .ca-activity-search { display:block; width:min(100%, 30rem); margin-block:var(--space-3); }
+.ca-activity-changes tr[tabindex]:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+/* Stable DOM hooks for library dialogs, review notices and renderer fixtures. */
+#ca-root .ca-app .ca-auto-review,
+#ca-root .ca-app .ca-formation-recheck,
+#ca-root .ca-app .ca-library-sources,
+#ca-root .ca-app .ca-library-versions,
+#ca-root .ca-app .ca-library-template-slots,
+#ca-root .ca-app .ca-review-history { display:block; }

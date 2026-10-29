@@ -115,15 +115,14 @@ describe('Commander KStar context', () => {
       conversationId: 'cid-a',
       task: { id: seeded.task.id, status: 'open', title: 'Current task' },
       requirement: { id: seeded.requirement.id, status: 'open' },
-      pendingProjection: { id: seeded.projection.id, status: 'preview' },
-      forecast: { id: seeded.forecast.id, selectedCandidateId: 'path-a' },
-      confirmation: { projectionId: seeded.projection.id, decision: 'approved' },
     });
     expect(context.requirement?.goalText.length).toBeLessThanOrEqual(2_000);
     expect(context.requirement?.expectedResult?.summary.length).toBeLessThanOrEqual(2_000);
     expect(context.requirement?.expectedResult?.acceptanceSignals).toHaveLength(20);
     expect(context.requirement?.expectedResult?.acceptanceSignals.every((signal) => signal.length <= 500)).toBe(true);
-    expect(context.pendingProjection?.purpose.length).toBeLessThanOrEqual(2_000);
+    expect(context.pendingProjection).toBeUndefined();
+    expect(context.forecast).toBeUndefined();
+    expect(context.confirmation).toBeUndefined();
 
     const rendered = module.renderCommanderKstarContextBlock(context);
     expect(rendered).toContain('Ordinary conversation requires no KStar write');

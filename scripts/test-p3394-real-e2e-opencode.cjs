@@ -1,88 +1,104 @@
 #!/usr/bin/env node
 /**
- * 真实 codex 端到端验证（无 mock）：真实 gateway.cjs + 真实 codex CLI
- * (ChatGPT.app app-server / exec) + 真实应用 Bridge。
- * 前置：CogSeed 运行中（8444）+ ChatGPT.app 已装 codex。
+ * Real OpenCode acceptance through the running app's managed persistent gateway.
+ * Start CogSeed and connect OpenCode first. No replacement gateway is registered
+ * and the app's gateway is left running. Two turns verify final delivery,
+ * streaming and conversation continuity. Optional COGSEED_E2E_OPENCODE_MODEL
+ * selects a provider/model; otherwise the CLI's configured default is used.
  */
 'use strict';
-const { spawn } = require('node:child_process');
 const http = require('node:http');
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const crypto = require('node:crypto');
-const { resolveE2eBin, readCogseedBridgeToken } = require('./p3394-e2e-common.cjs');
-
-const COGSEED_ENDPOINT = 'http://127.0.0.1:8444';
-const COGSEED_TOKEN = readCogseedBridgeToken();
-const opencodeBin = resolveE2eBin('opencode', { envKey: 'COGSEED_E2E_OPENCODE_BIN', macDefault: '/opt/homebrew/bin/opencode' });
-const GATEWAY_SCRIPT = path.resolve(__dirname, '..', 'p3394-gateway', 'gateway.cjs');
+const { resolveE2eBin, cogseedStateFilePath } = require('./p3394-e2e-common.cjs');
 
 if (process.argv.includes('--list-bin')) {
-  console.log(opencodeBin || '(not found)');
-  process.exit(opencodeBin ? 0 : 1);
+  const bin = resolveE2eBin('opencode', { envKey: 'COGSEED_E2E_OPENCODE_BIN', macDefault: '/opt/homebrew/bin/opencode' });
+  console.log(bin || '(not found)');
+  process.exit(bin ? 0 : 1);
 }
-
-function freePort() { return new Promise((res) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); }); }
-function getJson(url, t = 3000) { return new Promise((res) => { const r = http.get(url, { timeout: t }, (x) => { let d = ''; x.on('data', (c) => d += c); x.on('end', () => res({ s: x.statusCode, d })); }); r.on('error', () => res({ s: 0, d: '' })); r.on('timeout', () => { r.destroy(); res({ s: 0, d: '' }); }); }); }
-function postJson(url, body, token) { return new Promise((resolve, reject) => { const u = new URL(url); const h = { 'Content-Type': 'application/json' }; if (token) h.Authorization = 'Bearer ' + token; const r = http.request(u, { method: 'POST', headers: h, timeout: 120000 }, (x) => { let d = ''; x.on('data', (c) => d += c); x.on('end', () => resolve({ s: x.statusCode, d })); }); r.on('error', reject); r.on('timeout', () => r.destroy(new Error('timeout'))); r.end(JSON.stringify(body)); }); }
 
 async function main() {
-  const gwPort = await freePort();
-  const replyPort = await freePort();
-  const results = [];
-  const mark = (n, ok, d) => { results.push(ok); console.log((ok ? '✓ ' : '✗ ') + n + (d ? ' — ' + d : '')); };
-  mark('opencode 二进制存在', !!opencodeBin, opencodeBin || '未找到，可通过 COGSEED_E2E_OPENCODE_BIN 指定');
-  if (!opencodeBin) {
-    console.error('未找到 opencode CLI。请安装 opencode，或设置 COGSEED_E2E_OPENCODE_BIN 为 opencode 绝对路径。');
-    process.exit(1);
-  }
+  const registry = JSON.parse(fs.readFileSync(cogseedStateFilePath('p3394-peers.json'), 'utf8'));
+  const peer = registry.peers.find((item) => item.identity?.agent_id === 'opencode');
+  if (!peer?.endpoints?.[0]) throw new Error('Start CogSeed and connect OpenCode before this check');
+  const endpoint = new URL(peer.endpoints[0]);
+  if (endpoint.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)) throw new Error('Expected a local managed OpenCode gateway');
+  const gatewayHeaders = peer.dial_token ? { authorization: 'Bearer ' + peer.dial_token } : {};
+  const inspected = await fetch(new URL('/p3394/models', endpoint), { headers: gatewayHeaders, signal: AbortSignal.timeout(30000) }).then((response) => response.json());
+  if (inspected.runtime !== 'opencode-persistent' || inspected.status !== 'ready') throw new Error('The managed persistent OpenCode runtime/model catalog is not ready');
+  console.log('✓ Running CogSeed managed OpenCode gateway and model catalog');
 
-  const env = { ...process.env,
-    P3394_GATEWAY_PORT: String(gwPort), P3394_GATEWAY_HOST: '127.0.0.1',
-    P3394_ADVERTISE_ENDPOINT: `http://127.0.0.1:${gwPort}`,
-    P3394_GATEWAY_HOME: path.join(os.tmpdir(), 'p3394-opencode-e2e-' + Date.now()),
-    P3394_AGENT: 'opencode', P3394_AGENT_ID: 'opencode', P3394_AGENT_ALIAS: 'OpenCode-RealE2E',
-    P3394_AGENT_CLI: opencodeBin,
-    COGSEED_ENDPOINT, COGSEED_TOKEN,
-    P3394_HEARTBEAT_MS: '5000', P3394_AGENT_TIMEOUT_MS: '180000',
-    // app-server 是托管的 codex 常驻运行时；加长 heartbeat 防超时
-  };
-  const gw = spawn(process.execPath, [GATEWAY_SCRIPT], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  let gwOut = '';
-  gw.stdout.on('data', (c) => gwOut += c);
-  gw.stderr.on('data', (c) => gwOut += c);
-
-  const deadline = Date.now() + 20000;
-  let healthy = false;
-  while (Date.now() < deadline) {
-    const r = await getJson(`http://127.0.0.1:${gwPort}/p3394/health`);
-    if (r.s === 200) { healthy = true; break; }
-    await new Promise((res) => setTimeout(res, 500));
-  }
-  mark('真实 gateway 健康', healthy, `127.0.0.1:${gwPort}`);
-
-  const replyListener = http.createServer((req, res) => {
+  const nonce = crypto.randomBytes(6).toString('hex');
+  const sessionId = 'ses-opencode-e2e-' + nonce;
+  const token = 'OC-CONTEXT-' + nonce;
+  const replyToken = crypto.randomBytes(24).toString('hex');
+  const pending = new Map();
+  let deltaCount = 0;
+  const listener = http.createServer(async (req, res) => {
+    if (req.headers.authorization !== 'Bearer ' + replyToken) { res.writeHead(401); res.end(); return; }
     let body = '';
-    req.on('data', (c) => body += c);
-    req.on('end', () => {
-      try { const e = JSON.parse(body).envelope || {}; global.reply = ((e.payload || {}).parts || []).filter((p) => p.type === 'text').map((p) => p.text).join(''); } catch {}
-      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}');
-    });
+    for await (const chunk of req) body += chunk;
+    try {
+      const envelope = JSON.parse(body).envelope;
+      const waiter = pending.get(envelope.reply_to);
+      if (waiter && envelope.session_id === sessionId && envelope.sender?.agent_id === 'opencode') {
+        if (envelope.kind === 'event' && envelope.payload?.metadata?.stream_event === 'delta') deltaCount++;
+        if (envelope.kind === 'message') waiter(envelope);
+      }
+      res.writeHead(200); res.end('{}');
+    } catch { res.writeHead(400); res.end(); }
   });
-  await new Promise((r) => replyListener.listen(replyPort, '127.0.0.1', r));
+  listener.on('error', (error) => { for (const waiter of pending.values()) waiter(null, error); });
+  await new Promise((resolve, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolve); });
 
-  const nonce = crypto.randomBytes(4).toString('hex');
-  const envelope = { spec_version: 'p3394/1.0', message_id: 'msg-opencode-' + nonce, session_id: 'ses-opencode-' + nonce, task_id: 'tsk-opencode-' + nonce, kind: 'task', performative: 'request', role: 'requester', sender: { agent_id: 'real-external-node' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'Reply with exactly: P3394-OPENCODE-E2E-OK' }] }, extensions: { reply_endpoint: `http://127.0.0.1:${replyPort}`, reply_token: 'rt' }, idempotency_key: 'idem-opencode-' + nonce };
-  const sent = await postJson(`http://127.0.0.1:${gwPort}/p3394/envelope`, { envelope });
-  mark('信封送达真实 opencode gateway', sent.s === 200, 'HTTP ' + sent.s);
-  const rd = Date.now() + 180000;
-  while (Date.now() < rd && !global.reply) await new Promise((r) => setTimeout(r, 1000));
-  mark('真实 codex 模型回复送达', !!global.reply && global.reply.includes('P3394-OPENCODE-E2E-OK'), (global.reply || '(无回复)').slice(0, 120));
+  async function turn(index, text) {
+    const id = 'msg-opencode-e2e-' + nonce + '-' + index;
+    let timer;
+    const reply = new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Real OpenCode reply timed out')), 120000);
+      pending.set(id, (envelope, error) => error ? reject(error) : resolve(envelope));
+    });
+    // Attach a rejection handler before the HTTP send, including send failures.
+    void reply.catch(() => {});
+    const envelope = {
+      spec_version: 'p3394/1.0', message_id: id, session_id: sessionId,
+      task_id: 'tsk-opencode-e2e-' + nonce + '-' + index,
+      kind: 'task', performative: 'request', role: 'requester',
+      sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }],
+      payload: { parts: [{ type: 'text', text }] },
+      extensions: {
+        reply_endpoint: 'http://127.0.0.1:' + listener.address().port, reply_token: replyToken,
+        ...(process.env.COGSEED_E2E_OPENCODE_MODEL ? { execution_prefs: { model: process.env.COGSEED_E2E_OPENCODE_MODEL } } : {}),
+      },
+      idempotency_key: 'idem-' + id,
+    };
+    try {
+      const response = await fetch(new URL('/p3394/envelope', endpoint), {
+        method: 'POST', headers: { ...gatewayHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({ envelope }), signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) throw new Error('Gateway delivery HTTP ' + response.status);
+      const received = await reply;
+      const result = received.payload.parts.filter((part) => part.type === 'text').map((part) => part.text).join('').trim();
+      if (result.startsWith('[p3394_gateway_error]')) throw new Error(result);
+      return result;
+    } finally { clearTimeout(timer); pending.delete(id); }
+  }
 
-  gw.kill('SIGTERM'); replyListener.close();
-  console.log('\n===== opencode 真实端到端 =====\n通过 ' + results.filter(Boolean).length + '/' + results.length);
-  if (gwOut.includes('p3394_gateway_error') || gwOut) console.log('(gateway 日志尾部) ' + gwOut.split('\n').filter(Boolean).slice(-3).join(' | '));
-  process.exit(results.every(Boolean) ? 0 : 1);
+  try {
+    const first = await turn(1, 'Remember this token for the next turn: ' + token + '. Reply with exactly: P3394-OPENCODE-E2E-OK');
+    if (first !== 'P3394-OPENCODE-E2E-OK') throw new Error('Unexpected first reply: ' + first.slice(0, 120));
+    console.log('✓ Real model reply: ' + first);
+    const second = await turn(2, 'What token did I ask you to remember? Reply with the token only.');
+    if (second !== token) throw new Error('Conversation continuity failed: ' + second.slice(0, 120));
+    console.log('✓ Second turn recalls the token without replaying the previous reply');
+    if (!deltaCount) throw new Error('No text delta reached the gateway callback');
+    console.log('✓ Streaming text received (' + deltaCount + ' delta events)');
+    console.log('OpenCode real acceptance: 4/4 passed');
+  } finally {
+    listener.closeAllConnections();
+    await new Promise((resolve) => listener.close(resolve));
+  }
 }
-main().catch((e) => { console.error('opencode e2e 失败:', e.message); process.exit(2); });
+main().catch((error) => { console.error('OpenCode real acceptance failed:', error.message); process.exitCode = 1; });

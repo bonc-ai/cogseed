@@ -1,3 +1,4 @@
+import { createNightlyCandidateFixture } from '../../../helpers/nightly-formation-fixture';
 /**
  * 资产管家读工具契约（specs/008 US-401 / T012–T016）。
  *
@@ -40,8 +41,9 @@ async function seedAsset(
 ) {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   _seedSeq += 1;
-  const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+  const candidate = await createNightlyCandidateFixture(TEST_UID, {
     judgment,
+    rawStatement: true,
     // 标题闸门（设计 3.2）后晋升 title 必须合规：judgment 前缀老兜底命中
     // 「与正文开头重复」，改为与正文首字不同的合规样本标题。
     summary: `管家样本${_seedSeq}`,
@@ -62,12 +64,36 @@ async function cloneAssets(
   startIndex = 0,
 ) {
   const store = await import('../../../../src/main/features/recall/store');
+  const [{ getMessagesPage }, { cognitionMessageSourceRef }] = await Promise.all([
+    import('../../../../src/main/features/chats'),
+    import('../../../../src/main/features/recall/source-locator'),
+  ]);
+  // 克隆会改写 id/candidateId，formation proof 不再成立；给复制过来的合成
+  // 消息引用补上 locator/sourceVersion，让来源可用性按真实消息解析。
+  const baseEvidenceRefs = Array.isArray(base.evidenceRefs)
+    ? base.evidenceRefs as Array<Record<string, unknown>> : [];
+  const sessions = [...new Set([
+    ...(Array.isArray(base.sourceSessionIds) ? base.sourceSessionIds as string[] : []),
+    ...baseEvidenceRefs
+      .filter(ref => ref.kind === 'conversation' && ref.subtype === 'session' && typeof ref.id === 'string')
+      .map(ref => ref.id as string),
+  ])];
+  const evidenceRefs = await Promise.all(baseEvidenceRefs.map(async (ref) => {
+    if (ref.kind !== 'conversation' || ref.subtype !== 'message' || ref.locator || ref.sourceVersion) return ref;
+    for (const cid of sessions) {
+      const page = await getMessagesPage(TEST_UID, cid, 100);
+      const message = page.history.find(row => cognitionMessageSourceRef(cid, row).id === ref.id);
+      if (message) return cognitionMessageSourceRef(cid, message);
+    }
+    throw new Error(`fixture message source not found: ${String(ref.id)}`);
+  }));
   const ids: string[] = [];
   for (let offset = 0; offset < count; offset += 1) {
     const index = startIndex + offset;
     const id = `aa-fixture${String(index).padStart(3, '0')}`;
     await store.writeRecallJsonRecord(TEST_UID, 'ability-assets', id, {
       ...base,
+      evidenceRefs,
       id,
       candidateId: `cand-fixture${index}`,
       title: `夹具资产 ${index}`,
@@ -417,7 +443,7 @@ describe('只读会话不变量（T016）', () => {
     }
   });
 
-  it('资产管家的工具面 = 3 读 + 6 写', async () => {
+  it('资产管家的工具面只保留 3 读与 6 项已保存资产管理', async () => {
     // 第 3 个读工具（list_asset_change_proposals）是 2026-09-25 真机反馈"模型拿不到
     // 待审批的内容"补的：读侧不提供任何代拍的形状（处置权在用户）。
     const { names } = await stewardTools();
@@ -426,6 +452,18 @@ describe('只读会话不变量（T016）', () => {
       'edit_ability_asset', 'merge_ability_assets', 'archive_ability_asset',
       'delete_ability_asset', 'restore_ability_asset', 'rollback_ability_asset',
     ]);
+  });
+});
+
+describe('聊天当场形成入口已删除', () => {
+  it('即使用户要求保存，也没有新候选工具或隐藏资产创建能力', async () => {
+    const { createAssetStewardTools } = await import('../../../../src/main/model/core-agent/asset-steward-tools');
+    const tools = createAssetStewardTools({ userId: TEST_UID, taskText: '请保存这份模板。', sourceMessageFromUser: true });
+    expect(tools.map(tool => tool.name)).not.toContain('propose_ability_asset');
+    const { listRecallCandidates } = await import('../../../../src/main/features/recall/candidate-service');
+    const { listAbilityAssets } = await import('../../../../src/main/features/recall/asset-service');
+    expect(await listRecallCandidates(TEST_UID)).toEqual([]);
+    expect(await listAbilityAssets(TEST_UID)).toEqual([]);
   });
 });
 
@@ -470,7 +508,41 @@ describe('写工具（US-402）', () => {
     expect(row.actor).toBe('ai');
     expect(row.reason).toBe('用户要求把这条改清楚点');
     expect(row.before).toContain('statement=');
-    expect(row.after).toContain('灰度范围');
+    // 台账摘要只留字段名与字数，不复写正文；新正文 17 字且版本升到 v2。
+    expect(row.after).toContain('statement=17 字');
+    expect(row.after).toContain('version=2');
+  });
+
+  it('仅提议模式即使正文匹配用户原话也不生效，且提议可查', async () => {
+    const asset = await seedAsset('发布前必须核对回滚方案。');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const approval = await import('../../../../src/main/features/recall/asset-approval-service');
+    const statement = '发布前必须核对回滚方案与灰度范围。';
+    const { edit } = await tools({ taskText: `请把这条改成：${statement}`, sourceMessageFromUser: true });
+    const out = await call(edit, {
+      assetId: asset.id, fields: { statement }, reason: '仅生成候选',
+      origin: 'user_instruction', mode: 'propose', expectedVersion: asset.version,
+    });
+    // 本测试无会话，卡片下发失败；留档回执仍必须准确。
+    expect(out.content).toContain('提议已留档');
+    const [proposal] = await approval.listAssetChangeProposals(TEST_UID, { assetId: asset.id });
+    expect(proposal).toMatchObject({ state: 'pending', baselineVersion: asset.version, payload: { statement } });
+    expect(out.content).toContain(proposal.id);
+    expect(await assets.readAbilityAsset(TEST_UID, asset.id)).toMatchObject({ statement: asset.statement, version: asset.version });
+  });
+
+  it('过时版本不能创建提议或绕过仅提议模式', async () => {
+    const asset = await seedAsset('并发提议基线。');
+    const approval = await import('../../../../src/main/features/recall/asset-approval-service');
+    const { edit } = await tools();
+    const out = await call(edit, {
+      assetId: asset.id, fields: { statement: '过时的改动。' }, reason: '旧版本',
+      mode: 'propose', expectedVersion: '0',
+    });
+    expect(out).toMatchObject({ isError: true });
+    expect(out.content).toContain('version conflict');
+    expect(await approval.listAssetChangeProposals(TEST_UID, { assetId: asset.id })).toEqual([]);
+    expect(await call(edit, { assetId: asset.id, fields: { title: '改名' }, reason: '候选', mode: 'propose' })).toMatchObject({ isError: true });
   });
 
   it('并发不一致：拒绝而不是静默覆盖', async () => {
@@ -565,10 +637,11 @@ describe('写工具（US-402）', () => {
       properties: { fields: { properties: Record<string, { description?: string }> } };
     }).properties.fields;
     expect(fieldsSchema.properties.title?.description).toContain('16');
-    expect(fieldsSchema.properties.title?.description).toContain('不得与正文开头重复');
+    expect(fieldsSchema.properties.title?.description).toContain('不要整句照抄正文或截断成标题');
+    expect(fieldsSchema.properties.title?.description).toContain('可以保留相同的项目名、人名和术语');
 
-    // ①与正文开头重复 ②超 16 字：都拒绝，回执带拦截规则＋schema 归因＋规范说明。
-    const overlap = await call(edit, { assetId: asset.id, fields: { title: '标题判定的重写版' }, reason: '想改标题', origin: 'ai_initiated' });
+    // ①完整照抄正文（去掉末尾标点，保证实际命中正文复制）②超 16 字：都拒绝，回执带拦截规则＋schema 归因＋规范说明。
+    const overlap = await call(edit, { assetId: asset.id, fields: { title: asset.statement.replace(/。$/, '') }, reason: '想改标题', origin: 'ai_initiated' });
     expect(overlap.isError).toBe(true);
     expect(overlap.content).toContain('invalid ability asset title');
     expect(overlap.content).toContain('schema（入参或记录形状不合法）');
@@ -586,9 +659,9 @@ describe('写工具（US-402）', () => {
     expect(rows.some((row) => row.action === 'attempt_blocked' && String(row.note).includes('invalid ability asset title'))).toBe(true);
 
     // 合规标题照常直写（分级③命名语义不变）。
-    const ok = await call(edit, { assetId: asset.id, fields: { title: '守卫基线的重命名' }, reason: '命名规范化', origin: 'ai_initiated' });
+    const ok = await call(edit, { assetId: asset.id, fields: { title: '标题守卫基线' }, reason: '命名规范化', origin: 'ai_initiated' });
     expect(ok.isError).toBeUndefined();
-    expect((await assets.readAbilityAsset(TEST_UID, asset.id)).title).toBe('守卫基线的重命名');
+    expect((await assets.readAbilityAsset(TEST_UID, asset.id)).title).toBe('标题守卫基线');
   });
 
   it('标签可写：tags 落地、category 收编为单标签、形状错归因 schema、不映射 assetType/familyName（specs/012 T022 解禁）', async () => {

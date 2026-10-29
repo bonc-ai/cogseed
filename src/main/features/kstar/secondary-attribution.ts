@@ -54,6 +54,52 @@ export function isKstarSecondaryAttribution(value: unknown): value is KstarSecon
   return typeof value === 'string' && SECONDARY_ATTRIBUTION_SET.has(value);
 }
 
+/** 提示词用的枚举清单（2026-10-02 修复：此前只写 "approved secondary cause"，
+ * 模型无从知晓枚举，猜偏一个词整份模型评审就被解析器丢弃降级）。 */
+export const SECONDARY_ATTRIBUTION_PROMPT_ENUM: string = KSTAR_SECONDARY_ATTRIBUTIONS.join('|');
+
+/** 模型输出的类目归一：小写/空白与连字符归下划线；接受无后缀前缀与常见近义
+ * （如 forecast→forecast_error、asset_not_used→asset_not_applied）。归不出返回
+ * null——只用于模型路径的丢弃判定，持久化路径仍走严格 isKstarSecondaryAttribution。 */
+const SECONDARY_ATTRIBUTION_ALIASES: Readonly<Record<string, KstarSecondaryAttribution>> = (() => {
+  const map: Record<string, KstarSecondaryAttribution> = {};
+  for (const category of KSTAR_SECONDARY_ATTRIBUTIONS) {
+    map[category] = category;
+    const stem = category.replace(/_(error|failure|omission|miss|blocked|changed|evidence)$/, '');
+    if (stem !== category && !map[stem]) map[stem] = category;
+  }
+  const extras: Array<[string, KstarSecondaryAttribution]> = [
+    ['asset_not_used', 'asset_not_applied'],
+    ['asset_unused', 'asset_not_applied'],
+    ['asset_stale', 'asset_outdated'],
+    ['asset_out_of_date', 'asset_outdated'],
+    ['asset_conflicting', 'asset_conflict'],
+    ['goal_changed', 'user_goal_changed'],
+    ['user_changed_goal', 'user_goal_changed'],
+    ['recall_failure', 'recall_miss'],
+    ['recall_missed', 'recall_miss'],
+    ['projection_missing', 'projection_omission'],
+    ['injection_failed', 'injection_failure'],
+    ['interpretation_error', 'task_interpretation_error'],
+    ['task_misread', 'task_interpretation_error'],
+    ['no_evidence', 'insufficient_evidence'],
+    ['evidence_insufficient', 'insufficient_evidence'],
+    ['denied', 'permission_blocked'],
+    ['permission_error', 'permission_blocked'],
+    ['env_failure', 'environment_failure'],
+    ['network_failure', 'environment_failure'],
+  ];
+  for (const [alias, canonical] of extras) if (!map[alias]) map[alias] = canonical;
+  return map;
+})();
+
+export function normalizeModelAttributionCategory(raw: unknown): KstarSecondaryAttribution | null {
+  if (typeof raw !== 'string') return null;
+  const key = raw.trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+  if (!key) return null;
+  return SECONDARY_ATTRIBUTION_ALIASES[key] ?? null;
+}
+
 function asDetail(value: unknown, allowedEvidenceRefs?: unknown[]): KstarAttributionDetail {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid attribution detail');
   const raw = value as Record<string, unknown>;
@@ -102,33 +148,50 @@ export function normalizeKstarAttributionDetails(
 
 /** Parse the constrained model shape. Models receive opaque `kind:id` keys,
  * while Review persists the canonical source references only after resolving
- * those keys against the Episode evidence set. */
+ * those keys against the Episode evidence set.
+ *
+ * 模型路径的容错纪律（2026-10-02 修复）：模型输出是不可信输入，单条目
+ * 类目拼偏/置信度越界/引用不实 → **丢弃该条目**，不再整批 throw——旧版一个
+ * 坏 token 就把整份模型评审（结论/归因/lesson）作废降级成机械归因。全部
+ * 条目无效时返回 undefined（评审本体保留，只是没有次级归因）。持久化路径
+ * （normalizeKstarAttributionDetails）维持严格不变。 */
 export function parseModelKstarAttributionDetails(
   value: unknown,
   episodeEvidenceRefs: CognitionSourceRef[],
-): KstarAttributionDetail[] {
-  if (!Array.isArray(value)) throw new Error('attributionDetails must be an array');
+): KstarAttributionDetail[] | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
   const refsByKey = new Map(episodeEvidenceRefs.map((ref) => [cognitionSourceRefKey(ref), ref]));
-  return normalizeKstarAttributionDetails(value.map((item) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('invalid model attribution detail');
+  const parsed: KstarAttributionDetail[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
     const raw = item as Record<string, unknown>;
+    const category = normalizeModelAttributionCategory(raw.category);
+    if (!category) continue;
+    const rawConfidence = Number(raw.confidence);
+    if (!Number.isFinite(rawConfidence)) continue;
+    const confidence = Math.min(1, Math.max(0, rawConfidence));
     const ids = raw.evidenceRefIds;
-    if (!Array.isArray(ids) || !ids.length || ids.some((id) => typeof id !== 'string' || !safeId(id.replace(/^\w+:\/\//, '').replace(/^\w+:/, '')))) {
-      throw new Error('model attribution detail evidence is required');
-    }
-    const refs = ids.map((id) => {
+    if (!Array.isArray(ids) || !ids.length) continue;
+    const refs: CognitionSourceRef[] = [];
+    let bound = true;
+    for (const id of ids) {
+      if (typeof id !== 'string') { bound = false; break; }
       const key = id.replace(/^([a-z0-9_]+):\/\//i, '$1:');
       const ref = refsByKey.get(key);
-      if (!ref) throw new Error('model attribution detail cited unknown evidence');
-      return ref;
-    });
-    return {
-      category: raw.category,
-      confidence: raw.confidence,
-      evidenceRefs: refs,
-      source: 'model',
-    };
-  }), episodeEvidenceRefs);
+      if (!ref) { bound = false; break; }
+      refs.push(ref);
+    }
+    if (!bound || !refs.length) continue;
+    const candidate = { category, confidence, evidenceRefs: refs, source: 'model' as const };
+    // 复用严格校验做最后把关（去重/数量上限），单条失败只丢该条。
+    try {
+      parsed.push(...normalizeKstarAttributionDetails([candidate], episodeEvidenceRefs));
+    } catch {
+      continue;
+    }
+    if (parsed.length >= MAX_DETAILS) break;
+  }
+  return parsed.length ? parsed : undefined;
 }
 
 export function attributionAllowsReusableLearning(review: Pick<{ attributionDetails?: KstarAttributionDetail[] }, 'attributionDetails'>): boolean {

@@ -10,6 +10,16 @@ let _openSkillsCache = [];
 let _packagesCache = [];
 let _skillsLoadInFlight = null;
 let _skillsSearchQuery = '';
+// S4（specs/009-agent-skill-pages）：技能页子视图（home = 平台，mine = 我的技能）。
+let _skillsSubView = 'home';
+// 「已安装的技能」状态筛选：'' 全部 / 'update' 有更新 / 'off' 已停用。
+let _skillsInstalledFilter = '';
+let _skillsCatalogWired = false;
+// 「我的技能」来源筛选：'' 全部 / 'custom' 自定义 / 'local' 本机已有（外部包 + 全局文件夹）。
+let _skillsMineOrigin = '';
+// 全局技能文件夹总开关（`global_skill_roots_enabled`）；null = 还没读到。
+let _skillsGlobalRootsEnabled = null;
+let _skillsSearchComposing = false;
 let _selectedSkill = null;    // { source, id }
 let _expandedGlobalSkillGroups = new Set();
 const _GLOBAL_SKILL_GROUP_MIN = 2;
@@ -361,7 +371,6 @@ function _skillsSecuritySummaryHtml(skills) {
 // right locale via `_renderSkillSections`.
 window.addEventListener('i18n-change', () => {
   refreshChatUseChips();
-  _renderCognitionPageHeader();
   if (_skillsCache) renderSkillsGrid(_skillsCache);
   if (_selectedSkill?.id && _selectedSkill?.source) {
     // Re-read the same file the user was viewing; null nodeEl preserves
@@ -433,24 +442,11 @@ async function _refreshPackagesCache() {
   }
 }
 
-// Dev-only: agent-private (`ownerAgent`) skills are hidden from the normal
-// list. In dev mode fetch them and merge into the cache (deduped by id+source)
-// so the panel can show a separate inspection section grouped by owning agent.
-// No-op in production — the IPC is dev-gated and returns nothing there.
-async function _mergeAgentPrivateSkills() {
-  if (typeof isDevMode !== 'function' || !false || !Array.isArray(_skillsCache)) return;
-  try {
-    const res = await window.cogseed.invoke('skills.listPrivate');
-    const priv = (res && res.ok && Array.isArray(res.skills)) ? res.skills : [];
-    if (!priv.length) return;
-    const key = (s) => `${s.id} ${s.source}`;
-    const seen = new Set(_skillsCache.map(key));
-    const merged = priv
-      .map((s) => ({ ...s, source: _skillSource(s.source) }))
-      .filter((s) => !seen.has(key(s)));
-    if (merged.length) _skillsCache = _skillsCache.concat(merged);
-  } catch { /* dev-only tab; ignore */ }
-}
+// P-r3-41（2026-10-01 拍板「删死函数+调用点」）：_mergeAgentPrivateSkills 已删。
+// 它的守卫 `typeof isDevMode !== 'function' || !false || ...` 中 `!false` 恒真，
+// 函数自初始导入即死代码；其调用的 `skills.listPrivate` 通道主进程从未注册
+// （渲染层对未注册通道的 invoke 只会静默拿空结果）。dev 检查区如需恢复，
+// 须同时修活守卫并在主进程注册 dev-gated 处理器——两向不可只做半截。
 
 async function loadSkills(forceRefresh) {
   if (_skillsLoadInFlight) {
@@ -484,7 +480,6 @@ async function loadSkills(forceRefresh) {
           if (byName) return byName;
           return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true, sensitivity: 'base' });
         });
-        await _mergeAgentPrivateSkills();
         renderSkillsList(_skillsCache);
       }
     } catch (e) {
@@ -528,7 +523,15 @@ function _ensureSkillsSearchControl() {
   input.placeholder = t('skills.search_placeholder');
   if (input.dataset.skillsSearchBound === 'true') return;
   input.dataset.skillsSearchBound = 'true';
-  input.addEventListener('input', () => {
+  input.addEventListener('compositionstart', () => { _skillsSearchComposing = true; });
+  input.addEventListener('compositionend', () => {
+    _skillsSearchComposing = false;
+    _skillsSearchQuery = input.value || '';
+    if (_skillsCache) renderSkillsGrid(_skillsCache);
+  });
+  input.addEventListener('input', (e) => {
+    // 输入法合成过程中不过滤（spec FR-029）。
+    if (_skillsSearchComposing || (e && e.isComposing)) return;
     _skillsSearchQuery = input.value || '';
     if (_skillsCache) renderSkillsGrid(_skillsCache);
   });
@@ -550,9 +553,390 @@ function _renderSkillsEmptyState(emptyEl, noMatch) {
   emptyEl.querySelector('[data-skills-clear-search]')?.addEventListener('click', () => {
     _skillsSearchQuery = '';
     _skillsActiveCategory = '';
+    _skillsMineOrigin = '';
     const input = document.getElementById('skills-search-input');
     if (input) input.value = '';
     if (_skillsCache) renderSkillsGrid(_skillsCache);
+  });
+}
+
+
+// ─── S4：首页（平台）/ 我的技能 子视图、平台目录与统一详情弹窗 ─────────────
+// 首页只放平台内容（已安装在前、目录里还没装的在后，不标来源）；我的技能 = 自建 +
+// 本机已有（外部包、全局文件夹）。目录与弹窗在 `marketplace` 懒加载包的 catalog.js。
+
+function _skillsEnsureCatalog() {
+  if (_skillsCatalogWired) return;
+  const load = typeof window.loadRendererFeature === 'function' ? window.loadRendererFeature : null;
+  if (!load) return;
+  _skillsCatalogWired = true;
+  Promise.resolve(load('marketplace')).then(() => {
+    if (typeof catalogOnChange === 'function') {
+      catalogOnChange((kind) => { if (kind === 'skill' && _skillsCache) renderSkillsGrid(_skillsCache); });
+    }
+    if (typeof catalogLoad === 'function') catalogLoad('skill');
+  }).catch((err) => {
+    _skillsCatalogWired = false;
+    _skillsLog.warn('skill catalog load failed', { error: (err && err.message) || String(err) });
+  });
+}
+
+function _isSkillPlatformInstalled(s) {
+  return !!s && !s.ownerAgent && _skillSource(s.source) === 'marketplace';
+}
+
+/** 引用这个技能、且当前启用的智能体名（停用 / 卸载前提示用，spec FR-027）。 */
+async function _skillDependentAgentNames(skillId) {
+  // 摘要版缓存（`summary=1`）不保证带 skill_list，此时取完整列表。
+  const full = typeof _agentsCacheIsSummary === 'undefined' || !_agentsCacheIsSummary;
+  let agents = full && typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache) ? _agentsCache : null;
+  if (!agents) {
+    try {
+      const r = await window.cogseed.invoke('agents.list');
+      agents = (r && Array.isArray(r.agents)) ? r.agents : [];
+    } catch (_) { agents = []; }
+  }
+  const id = String(skillId || '');
+  // skill_list 可能写 id，也可能是旧写法的技能名（运行时两种都认）：两样都比。
+  const skill = (_skillsCache || []).find((x) => x && x.id === id);
+  const refs = new Set([id, skill && skill.name ? String(skill.name).trim() : ''].filter(Boolean));
+  return agents
+    .filter((a) => a && a.enabled !== false && Array.isArray(a.skill_list)
+      && a.skill_list.some((x) => refs.has(String(x || '').trim())))
+    .map((a) => a.name || a.agent_id);
+}
+
+async function _confirmSkillDependents(action, skillId) {
+  const names = await _skillDependentAgentNames(skillId);
+  if (!names.length) return true;
+  if (typeof catalogConfirmDependents !== 'function' && typeof window.loadRendererFeature === 'function') {
+    try { await window.loadRendererFeature('marketplace'); } catch (_) { /* fall through */ }
+  }
+  if (typeof catalogConfirmDependents !== 'function') return true;
+  const skill = (_skillsCache || []).find((x) => x && x.id === skillId);
+  return catalogConfirmDependents(action, (skill && skill.name) || skillId, names);
+}
+
+async function _uninstallCatalogSkill(skillId) {
+  if (typeof catalogUninstall !== 'function') return false;
+  if (!await _confirmSkillDependents('uninstall', skillId)) return false;
+  const ok = await catalogUninstall('skill', skillId);
+  if (ok && typeof loadAgents === 'function') void loadAgents(true);
+  return ok;
+}
+
+/** 已安装的技能（spec FR-014～016）：只列从平台安装的（含原随包内容）。
+ *  一行头部（返回 · 状态筛选 · 搜索）、整宽列表、需要处理的排前面，卸载收在「⋯」里。 */
+function _skillInstalledRow(sk, lang) {
+  const updateRow = _skillCatalogUpdateRow(sk);
+  const hubDisabled = _isHubSkillDisabled(sk);
+  const withheld = _isSkillWithheld(sk);
+  const name = String(sk.name || sk.id || '');
+  const pills = [];
+  if (updateRow) pills.push({ label: t('catalog.update_chip'), tone: 'attention' });
+  if (hubDisabled) pills.push({ label: t('marketplace.state_disabled'), tone: 'attention' });
+  if (withheld) pills.push({ label: t('skills.security_withheld'), tone: 'attention' });
+  return {
+    id: sk.id,
+    name,
+    desc: String(pickDesc(sk, lang) || '').trim(),
+    // 与智能体一致：被 Hub 停用就算「已停用」（开关显示为关、计入「已停用」筛选）。
+    enabled: sk.enabled !== false && !hubDisabled,
+    updateVersion: updateRow ? String(updateRow.version || '') || '?' : '',
+    hubDisabled: !!hubDisabled,
+    blocked: hubDisabled || withheld,
+    pills,
+    avatarHtml: `<span class="skill-card-avatar" aria-hidden="true">${escapeHtml(Array.from(name.trim())[0] || '?')}</span>`,
+  };
+}
+
+function _renderSkillsInstalledView(list, { gridEl, emptyEl, chipsHost }) {
+  gridEl.classList.add('is-sectioned');
+  const lang = getLang();
+  const ready = typeof catalogInstalledGridHtml === 'function';
+  const allRows = ready ? catalogInstalledSort(list.map((sk) => _skillInstalledRow(sk, lang))) : [];
+  const summary = ready ? catalogInstalledSummary(allRows) : { total: list.length, off: 0, update: 0 };
+  if (_skillsInstalledFilter && !summary[_skillsInstalledFilter]) _skillsInstalledFilter = '';
+  if (chipsHost) chipsHost.innerHTML = ready ? catalogInstalledCrumbHtml('skill', { 'data-skills-subview': 'home' }) : '';
+  const host = document.getElementById('skills-catalog-actions');
+  if (host) host.innerHTML = ready && summary.total ? catalogInstalledFilterHtml(summary, _skillsInstalledFilter) : '';
+  if (typeof hydrateUiIcons === 'function' && chipsHost) hydrateUiIcons(chipsHost);
+  host?.querySelectorAll('[data-catalog-filter]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      _skillsInstalledFilter = btn.dataset.catalogFilter || '';
+      renderSkillsGrid(_skillsCache || []);
+    });
+  });
+  const query = _skillsSearchQuery.trim().toLocaleLowerCase();
+  const rows = (ready ? catalogInstalledFilter(allRows, _skillsInstalledFilter) : [])
+    .filter((r) => !query || `${r.name} ${r.desc}`.toLocaleLowerCase().includes(query));
+  // 安检汇总条（原在技能首页）：说的是装到本机的技能，放在管理它们的这一页。
+  const securityHtml = _skillsSecuritySummaryHtml(list);
+  if (!rows.length) {
+    gridEl.innerHTML = securityHtml + (summary.total && ready ? catalogInstalledSummaryHtml('skill', summary) : '');
+    _wireSkillsSecurityRecheck(gridEl);
+    if (emptyEl) {
+      const narrowed = Boolean(query) || Boolean(_skillsInstalledFilter);
+      emptyEl.innerHTML = typeof window.uiEmptyState === 'function'
+        ? window.uiEmptyState(narrowed
+          ? { kind: 'quiet', title: t('catalog.installed_no_match') }
+          : { kind: 'explained', title: t('catalog.installed_empty_skills'), hint: t('catalog.installed_empty_hint_skills') })
+        : '';
+      emptyEl.style.display = '';
+    }
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  gridEl.innerHTML = securityHtml + catalogInstalledSummaryHtml('skill', summary) + catalogInstalledGridHtml(rows, 'skill');
+  _wireSkillsSecurityRecheck(gridEl);
+  if (typeof hydrateUiIcons === 'function') hydrateUiIcons(gridEl);
+  for (const rowEl of gridEl.querySelectorAll('[data-catalog-row]')) {
+    const id = rowEl.dataset.catalogRow;
+    const row = rows.find((r) => r.id === id);
+    const source = () => ((_skillsCache || []).find((x) => x && x.id === id) || {}).source;
+    rowEl.addEventListener('click', (e) => {
+      const actionEl = e.target.closest('[data-catalog-row-action]');
+      const action = actionEl && actionEl.dataset.catalogRowAction;
+      if (action === 'toggle') {
+        e.stopPropagation();
+        if (row && row.hubDisabled) return;
+        void _flipSkillEnabled(id, !(row && row.enabled));
+        return;
+      }
+      if (action === 'more') {
+        e.stopPropagation();
+        const items = [{ id: 'detail', label: t('catalog.menu_detail') }];
+        if (row && row.updateVersion) items.push({ id: 'update', label: t('catalog.menu_update', { version: row.updateVersion }) });
+        items.push({ id: 'uninstall', label: t('catalog.uninstall'), danger: true });
+        catalogOpenRowMenu(actionEl, items, (pick) => {
+          if (pick === 'detail') _openSkillCatalogPopup(id, source());
+          else if (pick === 'update') {
+            const sk = (_skillsCache || []).find((x) => x && x.id === id);
+            const updateRow = sk ? _skillCatalogUpdateRow(sk) : null;
+            if (updateRow) void _installCatalogSkill(updateRow, { update: true });
+          } else if (pick === 'uninstall') void _uninstallCatalogSkill(id);
+        });
+        return;
+      }
+      _openSkillCatalogPopup(id, source());
+    });
+  }
+}
+
+function _skillsEnsureGlobalRootsState() {
+  if (_skillsGlobalRootsEnabled !== null || !window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+  _skillsGlobalRootsEnabled = true; // 默认开；读到真实值后重画
+  window.cogseed.invoke('skills.getGlobalRootsEnabled').then((r) => {
+    const next = !(r && r.enabled === false);
+    if (next !== _skillsGlobalRootsEnabled) {
+      _skillsGlobalRootsEnabled = next;
+      if (_skillsSubView === 'mine') renderSkillsGrid(_skillsCache || []);
+    }
+  }).catch(() => { /* 读不到按默认开 */ });
+}
+
+/** 我的技能顶部说明条：本机已有的技能从哪来 + 全局技能文件夹总开关（spec FR-020）。 */
+function _skillsLocalBarHtml() {
+  const on = _skillsGlobalRootsEnabled !== false;
+  const sw = typeof window.uiSwitch === 'function' ? window.uiSwitch({
+    label: t(on ? 'catalog.global_roots_turn_off' : 'catalog.global_roots_turn_on'),
+    checked: on,
+    attrs: { 'data-skills-global-roots': true },
+  }) : '';
+  return `<div class="catalog-local-bar">
+      <p>${escapeHtml(t('catalog.local_bar_text'))}${on ? '' : ` <strong>${escapeHtml(t('catalog.global_roots_off_note'))}</strong>`}</p>
+      <span class="catalog-local-bar__switch">${escapeHtml(t('catalog.global_roots_label'))}${sw}</span>
+    </div>`;
+}
+
+function _wireSkillsLocalBar(gridEl) {
+  const sw = gridEl.querySelector('[data-skills-global-roots]');
+  if (!sw) return;
+  sw.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const next = _skillsGlobalRootsEnabled === false;
+    sw.disabled = true;
+    try {
+      const r = await window.cogseed.invoke('skills.setGlobalRootsEnabled', { enabled: next });
+      _skillsGlobalRootsEnabled = !(r && r.enabled === false);
+      await loadSkills(true);
+    } catch (err) {
+      _skillsLog.warn('global roots toggle failed', { error: (err && err.message) || String(err) });
+      await uiAlert(t('component.toggle_failed'));
+      sw.disabled = false;
+    }
+  });
+}
+
+/** 平台组目录部分：没装的 + 本次进页后刚装的（留在原位，spec FR-002）。 */
+function _skillsCatalogLayout(platformInstalled) {
+  const empty = { tail: [], kept: new Map(), notInstalled: [] };
+  if (typeof catalogSplitPlatform !== 'function' || typeof catalogRows !== 'function') return empty;
+  // 未登录：平台组只显示已安装的（spec FR-023）。
+  if (typeof catalogStatus === 'function' && catalogStatus('skill').signedOut) return empty;
+  const keep = typeof catalogJustInstalledIds === 'function' ? catalogJustInstalledIds('skill') : null;
+  return catalogSplitPlatform(platformInstalled, catalogRows('skill'), (s) => s && s.id, keep);
+}
+
+function _setSkillsSubView(view) {
+  _skillsSubView = view === 'mine' || view === 'installed' ? view : 'home';
+  if (typeof catalogResetJustInstalled === 'function') catalogResetJustInstalled();
+  _skillsInstalledFilter = '';
+  if (typeof catalogCloseRowMenu === 'function') catalogCloseRowMenu();
+  _skillsSearchQuery = '';
+  _skillsActiveCategory = '';
+  const input = document.getElementById('skills-search-input');
+  if (input) input.value = '';
+  renderSkillsGrid(_skillsCache || []);
+}
+
+function _renderSkillsChrome(mineCount, installedCount) {
+  const mine = _skillsSubView === 'mine';
+  const create = document.getElementById('create-skill-btn');
+  if (create) create.hidden = !mine;
+  // 「我的贡献」由 hub-contributions.js 挂进工具栏，只在我的技能里出现（spec FR-019）：
+  // 由样式按 `data-catalog-view` 控制（style.css），挂载时机早晚都不会闪。
+  const more = document.getElementById('skills-more-btn');
+  if (more) more.hidden = true;
+  const gridView = document.getElementById('skills-grid-view');
+  if (gridView) gridView.dataset.catalogView = _skillsSubView;
+  const host = document.getElementById('skills-catalog-actions');
+  if (host) {
+    // 已安装页：这里由 `_renderSkillsInstalledView` 放状态筛选。
+    host.innerHTML = _skillsSubView !== 'home' ? '' : _skillUiButton({
+      label: t('catalog.my_skills', { n: mineCount }), role: 'secondary', size: 'sm',
+      attrs: { 'data-skills-subview': 'mine' },
+    }) + _skillUiButton({
+      label: t('catalog.installed_skills', { n: installedCount }), role: 'secondary', size: 'sm',
+      attrs: { 'data-skills-subview': 'installed' },
+    });
+  }
+  // 「我的」用独立返回行；已安装页的返回放进工具栏同一行（一行头部）。
+  const back = document.getElementById('skills-subview-back');
+  if (back) {
+    back.hidden = !mine;
+    back.innerHTML = mine ? `${_skillUiButton({
+      label: t('catalog.back_skills'), role: 'ghost', size: 'sm', icon: 'chevron-left',
+      attrs: { 'data-skills-subview': 'home' },
+    })}<span class="catalog-subview-sep" aria-hidden="true">/</span><span>${escapeHtml(t('catalog.mine_skills_title'))}</span>` : '';
+    if (typeof hydrateUiIcons === 'function') hydrateUiIcons(back);
+  }
+  const view = document.getElementById('skills-grid-view');
+  if (view && view.dataset.catalogSubviewBound !== 'true') {
+    view.dataset.catalogSubviewBound = 'true';
+    view.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-skills-subview]');
+      if (!btn) return;
+      e.preventDefault();
+      _setSkillsSubView(btn.dataset.skillsSubview);
+    });
+  }
+}
+
+function _catalogSkillCardHtml(row, lang) {
+  const installing = typeof catalogIsInstalling === 'function' && catalogIsInstalling('skill', row.id);
+  const failed = !installing && typeof catalogInstallFailure === 'function' && catalogInstallFailure('skill', row.id);
+  const appUpdate = typeof _mpItemAppUpdateRequired === 'function' && _mpItemAppUpdateRequired(row);
+  const name = String(row.name || row.id || '');
+  const desc = String(pickDesc(row, lang) || '').trim();
+  const installBtn = _skillUiButton({
+    label: installing ? t('catalog.installing') : appUpdate ? t('marketplace.state_app_update_required') : failed ? t('catalog.retry') : t('catalog.install'),
+    role: 'primary', size: 'sm', className: 'skill-card-use', loading: installing, disabled: installing || appUpdate,
+    attrs: { 'data-catalog-install': true },
+  });
+  const failedChip = failed
+    ? `<span class="skill-card-chip is-deps-warning" title="${escapeHtml(failed)}">${escapeHtml(t('catalog.install_failed_chip'))}</span>`
+    : '';
+  return `
+      <div class="skill-card ui-resource-card" data-catalog-id="${escapeHtml(row.id)}">
+        <div class="skill-card-header">
+          <span class="skill-card-avatar" aria-hidden="true">${escapeHtml(Array.from(name.trim())[0] || '?')}</span>
+          <span class="skill-card-name">${escapeHtml(name)}</span>
+        </div>
+        <div class="skill-card-desc${desc ? '' : ' is-empty'}">${escapeHtml(desc || t('skills.no_desc'))}</div>
+        <div class="skill-card-actions">${failedChip}${installBtn}</div>
+      </div>
+    `;
+}
+
+/** 已安装平台技能在 Hub 上有新版本时返回目录行（卡片「有更新」、详情「更新」）。 */
+function _skillCatalogUpdateRow(s) {
+  // 随包技能不由 Hub 更新（2026-10-21 定），不出「有更新」。
+  if (!_isSkillPlatformInstalled(s) || s.bundled || typeof catalogUpdateRow !== 'function') return null;
+  return catalogUpdateRow('skill', s.id);
+}
+
+async function _installCatalogSkill(row, opts = {}) {
+  if (!row || typeof catalogInstall !== 'function') return false;
+  const ok = await catalogInstall('skill', row, opts);
+  if (ok && typeof uiToast === 'function') {
+    uiToast(t(opts.update ? 'catalog.updated_toast' : 'catalog.installed_toast', { name: row.name || row.id }), { variant: 'success' });
+  }
+  return ok;
+}
+
+/** 统一详情弹窗：已安装 / 自建传 (id, source)；目录里还没装的传 catalogRow。 */
+function _openSkillCatalogPopup(id, source, catalogRow) {
+  const skill = id ? (_skillsCache || []).find((x) => x && x.id === id && (!source || x.source === source)) : null;
+  if (typeof openCatalogPopup !== 'function') {
+    if (skill) _showSkillsDetailView(skill.source, skill.id);
+    return;
+  }
+  const src = skill || catalogRow;
+  if (!src) return;
+  const lang = getLang();
+  const sid = String(src.id || '');
+  const installed = !!skill;
+  const bundled = !!(skill && skill.bundled);
+  const origin = skill ? (_skillSource(skill.source) === 'marketplace' ? 'platform' : 'own') : 'platform';
+  const catLabel = _resolveCategoryLabel(src.category, lang) || _generalCategoryLabel(lang);
+  const version = src.version ? t('marketplace.version').replace('{version}', String(src.version)) : '';
+  // 平台内容不标来源（spec FR-002）：只写分类与版本。
+  const meta = [origin === 'own' ? t('catalog.meta_own', { category: catLabel }) : catLabel, origin === 'platform' ? version : '']
+    .filter(Boolean).join(' · ');
+  const hubDisabled = skill && _isHubSkillDisabled(skill);
+  const withheld = skill && _isSkillWithheld(skill);
+  const canContribute = !!skill && !skill.ownerAgent && skill.category !== 'external'
+    && _skillSource(skill.source) === 'custom' && /^[A-Za-z0-9_-]+$/.test(String(skill.id || ''));
+  const name = String(src.name || sid);
+  const updateRow = skill ? _skillCatalogUpdateRow(skill) : null;
+  const installing = typeof catalogIsInstalling === 'function' && catalogIsInstalling('skill', sid);
+  const failed = !skill && !installing && typeof catalogInstallFailure === 'function' ? catalogInstallFailure('skill', sid) : '';
+  openCatalogPopup({
+    kind: 'skill',
+    origin,
+    id: sid,
+    name,
+    meta,
+    description: String(pickDesc(src, lang) || '').trim(),
+    tags: Array.isArray(src.tags) ? src.tags : [],
+    examples: src.examples,
+    does: Array.isArray(src.does) ? src.does : [],
+    iconHtml: `<span class="skill-card-avatar" aria-hidden="true">${escapeHtml(Array.from(name.trim())[0] || '?')}</span>`,
+    installed,
+    enabled: skill ? skill.enabled !== false && !hubDisabled : true,
+    contributable: canContribute,
+    bundled,
+    hubDisabled: !!hubDisabled,
+    installing: !skill && installing,
+    failed,
+    updateAvailable: !!updateRow && !installing,
+    blockedReason: hubDisabled ? t('marketplace.disabled_hint') : withheld ? t('skills.security_withheld_hint') : '',
+  }, {
+    use: () => useSkill(sid, name),
+    sendExample: async (text) => {
+      if (installed) { useSkill(sid, name, text); return true; }
+      if (!await _installCatalogSkill(catalogRow)) return false;
+      if (typeof closeCatalogPopup === 'function') closeCatalogPopup();
+      useSkill(sid, name, text);
+      return true;
+    },
+    install: () => _installCatalogSkill(catalogRow),
+    update: () => _installCatalogSkill(updateRow, { update: true }),
+    enable: () => _flipSkillEnabled(sid, true),
+    disable: () => _flipSkillEnabled(sid, false),
+    manage: () => _showSkillsDetailView(skill.source, sid),
+    contribute: () => { if (typeof window.startSkillContribution === 'function') window.startSkillContribution(sid, name); },
   });
 }
 
@@ -562,21 +946,37 @@ function renderSkillsGrid(skills) {
   const gridEl = document.getElementById('skills-grid');
   if (!gridEl) return;
   _ensureSkillsSearchControl();
+  _skillsEnsureCatalog();
 
-  if (!skills.length) {
+  // S4：首页只放平台（已安装 + 目录未安装）；我的技能 = 自建 + 本机已有。
+  const isMine = _skillsSubView === 'mine';
+  const allSkills = Array.isArray(skills) ? skills : [];
+  const platformSkills = allSkills.filter(_isSkillPlatformInstalled);
+  const mineSkills = allSkills.filter((x) => !_isSkillPlatformInstalled(x));
+  // 随包技能照常出现在平台组，但不进「已安装」管理页（2026-10-21 定）。
+  const managedSkills = platformSkills.filter((x) => !x.bundled);
+  const mineCount = mineSkills.length + ((typeof _openSkillsCache !== 'undefined' && Array.isArray(_openSkillsCache)) ? _openSkillsCache.length : 0);
+  if (_skillsSubView === 'installed') {
+    _renderSkillsChrome(mineCount, managedSkills.length);
+    _renderSkillsInstalledView(managedSkills, { gridEl, emptyEl, chipsHost });
+    return;
+  }
+  const catalogLayout = isMine ? null : _skillsCatalogLayout(platformSkills);
+  const pendingRows = catalogLayout ? catalogLayout.tail : [];
+  const keptSkills = catalogLayout ? catalogLayout.kept : new Map();
+  _renderSkillsChrome(mineCount, managedSkills.length);
+  skills = isMine ? mineSkills : platformSkills;
+
+  if (isMine) _skillsEnsureGlobalRootsState();
+  const homeBanner = !isMine && typeof catalogHomeBannerHtml === 'function' ? catalogHomeBannerHtml('skill') : '';
+  // 首次拉目录时平台组显示骨架，不先闪一下空态（FR-025）。
+  const catalogSt = !isMine && typeof catalogStatus === 'function' ? catalogStatus('skill') : null;
+  const platformLoading = !!catalogSt && catalogSt.loading && !catalogSt.loaded && !catalogSt.signedOut;
+  if (!isMine && !skills.length && !pendingRows.length && !platformLoading) {
     if (chipsHost) chipsHost.innerHTML = '';
-    // Even with no editable skills, open-tier skills (packages/global) may
-    // exist — render them so they're visible + togglable.
-    const openHtml = _openSkillsSectionHtml({ query: _skillsSearchQuery });
-    if (openHtml) {
-      gridEl.classList.add('is-sectioned');
-      gridEl.innerHTML = openHtml;
-      _wireOpenSkillCards(gridEl);
-      if (emptyEl) emptyEl.style.display = 'none';
-      return;
-    }
     gridEl.classList.remove('is-sectioned');
-    gridEl.innerHTML = '';
+    gridEl.innerHTML = homeBanner;
+    if (homeBanner && typeof catalogWireBanner === 'function') catalogWireBanner(gridEl, 'skill');
     if (emptyEl) {
       if (!_skillsSearchQuery && typeof _mpUpdateInstallingEmptyStates === 'function') _mpUpdateInstallingEmptyStates();
       else _renderSkillsEmptyState(emptyEl, Boolean(_skillsSearchQuery.trim()));
@@ -588,7 +988,6 @@ function renderSkillsGrid(skills) {
   const useTitle = t('skills.use_tooltip');
   const moreTitle = t('skills.more_actions');
   const lang = getLang();
-  const customChipLabel = t('skills.custom_group');
   const marketplaceGroupLabel = (() => {
     const raw = t('skills.builtin_group');
     return (raw && raw !== 'skills.builtin_group') ? raw : t('skills.source_marketplace');
@@ -607,7 +1006,7 @@ function renderSkillsGrid(skills) {
   };
   const cats = (typeof _mpCategoriesCache !== 'undefined' && _mpCategoriesCache) || [];
   const knownCodes = _knownCategoryCodes(cats);
-  const rawCodesPresent = new Set(skills.map((s) => canonicalCategoryCode(s && s.category)));
+  const rawCodesPresent = new Set([...skills, ...pendingRows].map((s) => canonicalCategoryCode(s && s.category)));
   const unknownCodes = [...rawCodesPresent].filter((c) => c && !knownCodes.has(c)).sort();
   if (unknownCodes.length && typeof _mpMaybeRefreshCategoriesForCodes === 'function') {
     _mpMaybeRefreshCategoriesForCodes(unknownCodes);
@@ -632,7 +1031,25 @@ function renderSkillsGrid(skills) {
     _skillsActiveCategory = '';
   }
 
-  if (chipsHost) {
+  if (chipsHost && isMine) {
+    // 我的技能：按来源筛，不按分类（spec FR-018）。
+    chipsHost.innerHTML = _skillUiSegmentedControl({
+      ariaLabel: t('catalog.origin_filter_label'),
+      value: _skillsMineOrigin,
+      className: 'skills-category-filter',
+      items: [
+        { label: allLabel, value: '', attrs: { 'data-skills-origin': '' } },
+        { label: t('catalog.origin_custom'), value: 'custom', attrs: { 'data-skills-origin': 'custom' } },
+        { label: t('catalog.origin_local'), value: 'local', attrs: { 'data-skills-origin': 'local' } },
+      ],
+    });
+    chipsHost.querySelectorAll('[data-skills-origin]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        _skillsMineOrigin = btn.dataset.skillsOrigin || '';
+        renderSkillsGrid(_skillsCache || []);
+      });
+    });
+  } else if (chipsHost) {
     chipsHost.innerHTML = _skillUiSegmentedControl({
       ariaLabel: t('skills.category_filter_label'),
       value: _skillsActiveCategory,
@@ -651,10 +1068,17 @@ function renderSkillsGrid(skills) {
   }
 
   const filtered = skills.filter((s) => {
+    if (isMine && _skillsMineOrigin === 'local') return false;
     if (_skillsActiveCategory !== '' && _effectiveCategoryCode(s && s.category, knownCodes) !== _skillsActiveCategory) return false;
     const query = _skillsSearchQuery.trim().toLocaleLowerCase();
     if (!query) return true;
     return `${s?.name || s?.id || ''} ${pickDesc(s, lang)}`.toLocaleLowerCase().includes(query);
+  });
+  const filteredPending = pendingRows.filter((row) => {
+    if (_skillsActiveCategory !== '' && _effectiveCategoryCode(row && row.category, knownCodes) !== _skillsActiveCategory) return false;
+    const query = _skillsSearchQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    return `${row?.name || row?.id || ''} ${pickDesc(row, lang) || ''}`.toLocaleLowerCase().includes(query);
   });
 
   const cardHtml = (s) => {
@@ -668,10 +1092,16 @@ function renderSkillsGrid(skills) {
       attrs: { 'data-skill-more': true },
     });
     const enabled = s.enabled !== false;
-    const cardChips = _skillCardChipsHtml(s);
+    const cardChips = (isMine ? `<span class="skill-card-chip">${escapeHtml(t('catalog.origin_custom'))}</span>` : '')
+      + _skillCardChipsHtml(s) + (_skillCatalogUpdateRow(s)
+      ? `<span class="skill-card-chip is-update">${escapeHtml(t('catalog.update_chip'))}</span>` : '');
     const withheld = _isSkillWithheld(s);
     const hubDisabled = _isHubSkillDisabled(s);
     const usable = enabled && !withheld && !hubDisabled;
+    // 用户自己停用的在卡片上写明（FR-016）；Hub 停用已由「使用」按钮文案说明。
+    const userDisabledChip = !enabled && !hubDisabled
+      ? `<span class="skill-card-chip">${escapeHtml(t('component.disabled'))}</span>`
+      : '';
     const thisUseTitle = hubDisabled ? t('marketplace.disabled_hint') : withheld ? t('skills.security_withheld_hint') : useTitle;
     const useBtn = _skillUiButton({
       label: hubDisabled ? t('marketplace.state_disabled') : t('skills.use'),
@@ -701,7 +1131,7 @@ function renderSkillsGrid(skills) {
         </div>
         <div class="${descClass}">${escapeHtml(descText)}</div>
         <div class="skill-card-actions">
-          ${cardChips}
+          ${cardChips}${userDisabledChip}
           ${contributeBtn}
           ${useBtn}
         </div>
@@ -715,7 +1145,7 @@ function renderSkillsGrid(skills) {
     // get their own per-owner sections below; never folded into custom.
     if (s.ownerAgent) { groups.private.push(s); continue; }
     const source = _skillSource(s?.source);
-    if (source === 'marketplace') groups.marketplace.push(s);
+    if (source === 'marketplace') { if (!keptSkills.has(String(s.id))) groups.marketplace.push(s); }
     else groups.custom.push(s);
   }
   const sectionHtml = (label, list) => {
@@ -730,8 +1160,10 @@ function renderSkillsGrid(skills) {
     `;
   };
   // Dev-only inspection sections — one per owning agent, reusing the same card
-  // and section markup. Empty (so absent) in production: the source IPC is
-  // dev-gated, so `groups.private` is always empty there.
+  // and section markup. Defensive-only since P-r3-41 removed the (never
+  // reachable) private-skill merge: `listSkills` excludes `ownerAgent` entries,
+  // so `groups.private` stays empty; the branch keeps a future dev-gated
+  // listing from leaking private skills into the custom group.
   let privateHtml = '';
   if (groups.private.length) {
     const baseLabel = t('skills.agent_private_group');
@@ -743,10 +1175,26 @@ function renderSkillsGrid(skills) {
     }
     for (const [owner, list] of byOwner) privateHtml += sectionHtml(`${baseLabel} · ${owner}`, list);
   }
-  const openHtml = _skillsActiveCategory === ''
+  const openHtml = isMine && _skillsMineOrigin !== 'custom'
     ? _openSkillsSectionHtml({ query: _skillsSearchQuery })
     : '';
-  if (!filtered.length && !openHtml) {
+  if (isMine && !filtered.length && !openHtml) {
+    gridEl.classList.remove('is-sectioned');
+    gridEl.innerHTML = _skillsLocalBarHtml();
+    _wireSkillsLocalBar(gridEl);
+    if (emptyEl) {
+      const searching = Boolean(_skillsSearchQuery.trim()) || _skillsMineOrigin !== '';
+      if (searching) _renderSkillsEmptyState(emptyEl, true);
+      else {
+        emptyEl.innerHTML = typeof window.uiEmptyState === 'function'
+          ? window.uiEmptyState({ kind: 'explained', title: t('catalog.mine_empty_skills'), hint: t('catalog.mine_empty_hint') })
+          : '';
+        emptyEl.style.display = '';
+      }
+    }
+    return;
+  }
+  if (!filtered.length && !openHtml && !filteredPending.length && !(platformLoading && !_skillsSearchQuery.trim())) {
     gridEl.classList.remove('is-sectioned');
     gridEl.innerHTML = '';
     _renderSkillsEmptyState(emptyEl, true);
@@ -754,11 +1202,31 @@ function renderSkillsGrid(skills) {
   }
   if (emptyEl) emptyEl.style.display = 'none';
   gridEl.classList.add('is-sectioned');
-  gridEl.innerHTML = _skillsSecuritySummaryHtml(filtered)
-    + sectionHtml(customChipLabel, groups.custom)
-    + sectionHtml(marketplaceGroupLabel, groups.marketplace)
-    + privateHtml
-    + openHtml;
+  const platformCount = groups.marketplace.length + filteredPending.length;
+  const filtering = Boolean(_skillsSearchQuery.trim()) || _skillsActiveCategory !== '';
+  const tail = !isMine && typeof catalogPlatformTail === 'function'
+    ? catalogPlatformTail('skill', catalogLayout.notInstalled.length, filtering) : { cards: '', note: '' };
+  const platformHtml = !isMine && (platformCount || tail.cards || tail.note) ? `
+      <section class="skills-source-section">
+        <div class="skills-source-section-head">${escapeHtml(marketplaceGroupLabel)} · ${platformCount}</div>
+        <div class="skills-source-section-grid ui-resource-grid">
+          ${groups.marketplace.map(cardHtml).join('')}${filteredPending.map((row) => (keptSkills.has(String(row.id)) ? cardHtml(keptSkills.get(String(row.id))) : _catalogSkillCardHtml(row, lang))).join('')}${tail.cards}
+        </div>
+        ${tail.note}
+      </section>
+    ` : '';
+  // 我的技能：一个网格，自定义在前、本机已有（外部包 + 全局文件夹）在后（spec FR-018）。
+  const mineHtml = isMine ? `${_skillsLocalBarHtml()}
+      <div class="skills-source-section-grid ui-resource-grid">${groups.custom.map(cardHtml).join('')}${openHtml}</div>${privateHtml}` : '';
+  // 安检汇总条只放在「已安装的技能」页（2026-10-20 定）：首页是逛平台用的，不放管理信息。
+  gridEl.innerHTML = isMine ? _skillsSecuritySummaryHtml(filtered) + mineHtml : homeBanner + platformHtml;
+  if (isMine) _wireSkillsLocalBar(gridEl);
+  else if (homeBanner && typeof catalogWireBanner === 'function') catalogWireBanner(gridEl, 'skill');
+  if (!isMine && typeof catalogTakeJustInstalledFlash === 'function') {
+    for (const card of gridEl.querySelectorAll('.skill-card[data-id]')) {
+      if (keptSkills.has(card.dataset.id) && catalogTakeJustInstalledFlash('skill', card.dataset.id)) card.classList.add('is-just-installed');
+    }
+  }
   _wireOpenSkillCards(gridEl);
   _wireSkillsSecurityRecheck(gridEl);
   _wireSkillSecurityPanels(gridEl);
@@ -795,7 +1263,19 @@ function renderSkillsGrid(skills) {
         _openSkillRowMenu(e.target.closest('[data-skill-more]'), id, source);
         return;
       }
-      _showSkillsDetailView(source, id);
+      _openSkillCatalogPopup(id, source);
+    });
+  }
+  for (const card of gridEl.querySelectorAll('.skill-card[data-catalog-id]')) {
+    const row = filteredPending.find((x) => String(x.id) === card.dataset.catalogId);
+    if (!row) continue;
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-catalog-install]')) {
+        e.stopPropagation();
+        void _installCatalogSkill(row);
+        return;
+      }
+      _openSkillCatalogPopup('', '', row);
     });
   }
 }
@@ -894,10 +1374,10 @@ function _groupGlobalSkills(rows) {
   return entries;
 }
 
-/** Read-only section for open-tier entries. External packages are package
- *  cards. Global folders auto-aggregate skills by the prefix before the first
- *  dash (`lark-*` → `lark`) so machine-shared roots don't become a wall of
- *  one-card-per-recipe rows. Management lives in per-card menus. Returns ''
+/** Open-tier tiles for 「我的技能」 (S4: one grid after the custom cards). External
+ *  packages are package cards. Global folders auto-aggregate skills by the prefix
+ *  before the first dash (`lark-*` → `lark`) so machine-shared roots don't become a
+ *  wall of one-card-per-recipe rows. Management lives in per-card menus. Returns ''
  *  when none. */
 function _openSkillsSectionHtml(options = {}) {
   const query = String(options.query || '').trim().toLocaleLowerCase();
@@ -958,6 +1438,7 @@ function _openSkillsSectionHtml(options = {}) {
         ${packageMeta}
         ${desc}
         <div class="skill-card-actions">
+          <span class="skill-card-chip">${escapeHtml(t('catalog.origin_local'))}</span>
           ${useBtn}
         </div>
       </div>`;
@@ -987,6 +1468,7 @@ function _openSkillsSectionHtml(options = {}) {
           ${moreBtn}
         </div>
         ${meta}
+        <div class="skill-card-actions"><span class="skill-card-chip">${escapeHtml(t('catalog.origin_package'))}</span></div>
       </div>`;
   };
   const globalGroupCard = (group) => {
@@ -1025,47 +1507,14 @@ function _openSkillsSectionHtml(options = {}) {
         </div>
       </div>`;
   };
-  // Split external packages and global folders into their own sections so
-  // user-installed packages read distinctly from machine-global skill dirs
-  // (both are open-tier, but they have different provenance/management). A
-  // short hint next to each title explains the provenance to the user.
-  const globalSection = (list) => {
-    if (!list.length) return '';
-    const hint = t('skills.global_group_hint');
-    const hintHtml = hint ? `<span class="skills-source-section-hint">${escapeHtml(hint)}</span>` : '';
-    const grouped = _groupGlobalSkills(list);
-    const tiles = [];
-    for (const item of grouped) {
-      if (item.kind === 'skill') {
-        tiles.push(card(item.row));
-        continue;
-      }
-      tiles.push(globalGroupCard(item));
-      if (_expandedGlobalSkillGroups.has(item.key)) {
-        for (const row of item.rows) tiles.push(card(row));
-      }
-    }
-    return `
-    <section class="skills-source-section skills-source-section--global">
-      <div class="skills-source-section-head">
-        <span>${escapeHtml(t('skills.global_group'))} · ${list.length}</span>
-        ${hintHtml}
-      </div>
-      <div class="skills-source-section-grid ui-resource-grid">${tiles.join('')}</div>
-    </section>`;
-  };
-  const externalHtml = externalPackageRows.length
-    ? `
-    <section class="skills-source-section">
-      <div class="skills-source-section-head">
-        <span>${escapeHtml(t('skills.external_group'))} · ${externalPackageRows.length}</span>
-        <span class="skills-source-section-hint">${escapeHtml(t('skills.external_group_hint'))}</span>
-      </div>
-      <div class="skills-source-section-grid ui-resource-grid">${externalPackageRows.map(packageCard).join('')}</div>
-    </section>`
-    : '';
-  return externalHtml
-    + globalSection(globalSkillRows);
+  // 「我的技能」一个网格：外部包卡片 + 全局文件夹卡片直接接在自定义卡片后面（spec FR-018）。
+  const globalTiles = [];
+  for (const item of _groupGlobalSkills(globalSkillRows)) {
+    if (item.kind === 'skill') { globalTiles.push(card(item.row)); continue; }
+    globalTiles.push(globalGroupCard(item));
+    if (_expandedGlobalSkillGroups.has(item.key)) for (const row of item.rows) globalTiles.push(card(row));
+  }
+  return externalPackageRows.map(packageCard).join('') + globalTiles.join('');
 }
 
 /** Re-run trust verification without spawning one scanner per skill at once. */
@@ -1306,9 +1755,13 @@ function _openExternalPackageMenu(anchorBtn, row) {
       } else if (action === 'toggle-package') {
         await _runOpenPackageAction(packageEnabled ? 'disable' : 'enable', packageName, card, packageDisplayName);
       } else if (action === 'remove-package') {
+        // 说清楚会带走几个技能（spec FR-021）；数不出来时退回原来的通用说明。
+        const pkg = (_packagesCache || []).find((p) => String(p.name || '') === packageName);
+        const count = (pkg && pkg.skill_count)
+          || (_openSkillsCache || []).filter((x) => x && x.source === 'external' && String(x.package_name || '') === packageName).length;
         const ok = await uiConfirmDanger({
           title: t('settings.packages.remove_title', { name: packageDisplayName }),
-          message: t('settings.packages.remove_msg'),
+          message: count ? t('catalog.package_remove_msg', { count }) : t('settings.packages.remove_msg'),
           dangerLabel: t('settings.packages.remove'),
         });
         if (ok) await _runOpenPackageAction('remove', packageName, card, packageDisplayName);
@@ -1424,6 +1877,8 @@ async function _flipOpenSkillEnabled(id) {
  *  and the detail-page enable/disable button). On failure, alerts and does
  *  not mutate UI state; on success, refreshes the grid + detail page. */
 async function _flipSkillEnabled(skillId, nextEnabled) {
+  // 停用前先说清楚哪些智能体会暂时不能用（spec FR-027）；取消则什么都不改。
+  if (!nextEnabled && !await _confirmSkillDependents('disable', skillId)) return false;
   try {
     const res = await window.cogseed.invoke('skills.setEnabled', { id: skillId, enabled: nextEnabled });
     if (!res || !res.ok) {
@@ -1433,6 +1888,8 @@ async function _flipSkillEnabled(skillId, nextEnabled) {
     const cached = _skillsCache?.find((s) => s.id === skillId);
     if (cached) cached.enabled = nextEnabled;
     await loadSkills();
+    // 依赖状态（`dependency_state`）随技能开关变化，刷新智能体页。
+    if (typeof loadAgents === 'function') void loadAgents(true);
     if (_selectedSkill?.id === skillId) {
       _renderSkillEnabledButton({ id: skillId, enabled: nextEnabled });
     }

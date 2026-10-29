@@ -440,4 +440,76 @@ describe("P3394 wake service › workflow cleanup failures", () => {
       "pending",
     );
   });
+
+  // 真机事故 2026-10-14 16:24（cid 38591293f03a）：唤醒 16:24:21 批准、工人
+  // 16:24:31 交付，commander 回合 16:24:36 才落盘并自称 waiting_input →
+  // 任务被打成 waiting_user 永久留在待办里，run_summary 却写 completed。
+  // 判据必须来自**记录**：该运行的唤醒请求若已无 pending，就不该再算"等用户"。
+  describe("run wake wait verdict", () => {
+    async function seedRunWake(
+      wake: typeof import("../../../../src/main/features/p3394/wake-service"),
+      runId: string,
+      label: string,
+    ) {
+      const created = await wake.evaluateWake(uid, {
+        conversationId: cid,
+        agentId,
+        source: "dispatch_to",
+        sourceActorId: "commander",
+        objective: label,
+        dispatchPayload: { text: label, run_id: runId },
+      });
+      return created.request;
+    }
+
+    it("treats a still-pending wake as a genuine wait", async () => {
+      const wake = await import("../../../../src/main/features/p3394/wake-service");
+      await seedRunWake(wake, "run-pending", "还在等批准");
+
+      await expect(
+        wake.runWakeWaitAlreadyAnswered(uid, cid, "run-pending"),
+      ).resolves.toBe(false);
+    });
+
+    it.each(["approved", "executed", "rejected"])(
+      "treats a %s wake as an already-answered wait",
+      async (state) => {
+        const wake = await import("../../../../src/main/features/p3394/wake-service");
+        const request = await seedRunWake(wake, `run-${state}`, `已${state}`);
+        if (state === "rejected") {
+          await wake.rejectWakeRequest(uid, request.id, "no");
+        } else {
+          await wake.approveWakeRequest(uid, request.id);
+          if (state === "executed") {
+            await wake.markWakeRequestExecuted(uid, request.id);
+          }
+        }
+
+        await expect(
+          wake.runWakeWaitAlreadyAnswered(uid, cid, `run-${state}`),
+        ).resolves.toBe(true);
+      },
+    );
+
+    it("keeps waiting when any wake of the run is still pending", async () => {
+      const wake = await import("../../../../src/main/features/p3394/wake-service");
+      const settled = await seedRunWake(wake, "run-mixed", "第一条");
+      await seedRunWake(wake, "run-mixed", "第二条");
+      await wake.approveWakeRequest(uid, settled.id);
+
+      await expect(
+        wake.runWakeWaitAlreadyAnswered(uid, cid, "run-mixed"),
+      ).resolves.toBe(false);
+    });
+
+    it("does not touch a wait that no wake of this run explains", async () => {
+      const wake = await import("../../../../src/main/features/p3394/wake-service");
+      const other = await seedRunWake(wake, "run-other", "别的运行");
+      await wake.approveWakeRequest(uid, other.id);
+
+      await expect(
+        wake.runWakeWaitAlreadyAnswered(uid, cid, "run-without-wake"),
+      ).resolves.toBe(false);
+    });
+  });
 });

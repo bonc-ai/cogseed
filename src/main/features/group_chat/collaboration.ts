@@ -2987,14 +2987,16 @@ export function extractContextPatchBlocks(
       parsed = JSON.parse(body);
     } catch (err) {
       errors.push(`invalid context-patch JSON: ${(err as Error).message}`);
-      clean += source.slice(lastIndex, index + full.length);
+      clean += source.slice(lastIndex, index);
+      changed = true;
       lastIndex = index + full.length;
       continue;
     }
     const patch = normalizeContextPatch(parsed, String(addedBy || "agent"));
     if (!patch) {
       errors.push("invalid context-patch payload: no supported patch fields");
-      clean += source.slice(lastIndex, index + full.length);
+      clean += source.slice(lastIndex, index);
+      changed = true;
       lastIndex = index + full.length;
       continue;
     }
@@ -3004,6 +3006,8 @@ export function extractContextPatchBlocks(
     changed = true;
   }
   clean += source.slice(lastIndex);
+  const unclosed = clean.search(/<context-patch(?:>|$)/i);
+  if (unclosed >= 0) { clean = clean.slice(0, unclosed); changed = true; }
   if (changed) clean = clean.replace(/[ \t]*\n[ \t]*\n/g, "\n").trim();
   return { cleanText: changed ? clean : source, patches, errors };
 }

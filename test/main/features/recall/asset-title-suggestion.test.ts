@@ -46,7 +46,7 @@ vi.mock('../../../../src/main/model/core-agent/runner', () => ({
   }),
 }));
 
-const STATEMENT = '遇到同类任务时，先列出已知与未知，再补齐缺口。';
+const STATEMENT = '先列已知与未知。再补齐缺口。';
 
 async function suggest(options: { attempts?: number } = {}) {
   const { suggestAbilityAssetTitle } = await import('../../../../src/main/features/recall/asset-title-suggestion');
@@ -80,7 +80,7 @@ describe('suggestAbilityAssetTitle（LLM 起标题共享函数：statement+type 
 
   it('首轮标题不合规（抄正文开头）：带失败原因重试，第二轮合规即返回', async () => {
     modelMocks.outputs = [
-      '{"title":"遇到同类任务先列清单"}', // 与正文开头重复 → 不合规
+      '{"title":"先列已知与未知"}', // 完整照抄首句 → 不合规
       '{"title":"已知未知清单法"}',
     ];
     const result = await suggest();
@@ -97,7 +97,7 @@ describe('suggestAbilityAssetTitle（LLM 起标题共享函数：statement+type 
   });
 
   it('全部轮次标题都不合规：明示失败（invalid_model_output），不自行编标题', async () => {
-    modelMocks.outputs = ['{"title":"遇到同类任务先列清单"}'];
+    modelMocks.outputs = ['{"title":"先列已知与未知"}'];
     await expect(suggest({ attempts: 2 })).rejects.toMatchObject({ code: 'invalid_model_output' });
     expect(modelMocks.runCalls).toHaveLength(2);
   });
@@ -124,5 +124,15 @@ describe('suggestAbilityAssetTitle（LLM 起标题共享函数：statement+type 
     await expect(suggestAbilityAssetTitle('user-title-suggest', { statement: '   ', type: 'fact' }))
       .rejects.toMatchObject({ code: 'model_failed' });
     expect(modelMocks.buildCalls).toHaveLength(0);
+  });
+  it('项目名与正文共用时首轮接受，不为首字重名多次调用模型改标题', async () => {
+    modelMocks.outputs = ['{"title":"星泽验收需宋遥签字"}'];
+    const { suggestAbilityAssetTitle } = await import('../../../../src/main/features/recall/asset-title-suggestion');
+    const statement = '星泽项目每次验收需要宋遥最终签字。自2026年9月22日起，宋遥是星泽项目的验收负责人；此规则仅适用于星泽项目。';
+    await expect(suggestAbilityAssetTitle('user-title-suggest', { statement, type: 'fact' })).resolves.toMatchObject({ title: '星泽验收需宋遥签字' });
+    expect(modelMocks.runCalls).toHaveLength(1);
+    expect(modelMocks.runCalls[0].message).toContain(statement);
+    expect(modelMocks.buildCalls[0].systemPrompt).toContain('可以保留相同的项目名、人名和术语');
+    expect(modelMocks.buildCalls[0].systemPrompt).not.toContain('第一个字都不能');
   });
 });
