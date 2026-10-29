@@ -62,7 +62,9 @@ app.whenReady().then(async()=>{
   if(chipRace) {
     await oldMeStarted;
     await window.webContents.executeJavaScript(`(async()=>{
-      window.t6Wait=async(fn)=>{for(let i=0;i<200;i++){if(fn())return;await new Promise(r=>setTimeout(r,10));}throw new Error('chip race wait timeout');};
+      // chip race 场景同样是「等到出现才继续」：2s 的预算在满载 runner 上等不到
+      // 详情/昵称渲染完成，会把真实失败记成 chip race wait timeout。提到有界的 10s。
+      window.t6Wait=async(fn)=>{for(let i=0;i<400;i++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw new Error('chip race wait timeout');};
       await loadRendererFeature('settings');
       setView('settings',null,{settingsTab:'account'});
       await t6Wait(()=>document.getElementById('hub-account-edit-name'));
@@ -168,7 +170,7 @@ app.whenReady().then(async()=>{
     await window.webContents.executeJavaScript(`(async()=>{
       await loadRendererFeature('settings');
       setView('settings',null,{settingsTab:'account'});
-      for(let i=0;i<200 && !document.getElementById('hub-account-edit-name');i++) await new Promise(r=>setTimeout(r,10));
+      for(let i=0;i<400 && !document.getElementById('hub-account-edit-name');i++) await new Promise(r=>setTimeout(r,25));
       if(!document.getElementById('hub-account-edit-name')) throw new Error('Settings did not load');
     })()`);
     const started=new Promise(r=>{enteredMe=r;});
