@@ -326,6 +326,44 @@ function _autoTaskMessagePreviewHtml(task, maxLength = 160) {
 
 // ─── Row rendering (shared between global tab and project-detail card) ──
 
+// ─── S5：依赖不就绪时的说明（FR-050 / FR-051）──────────────────────────
+
+function _autoRequirementLabel(item) {
+  const ref = (item && item.ref) || {};
+  const state = String((item && item.state) || '');
+  const kind = String(ref.kind || '');
+  const kindText = kind === 'skill' ? t('auto.req_skill')
+    : kind === 'agent' ? t('auto.req_agent')
+      : kind === 'connector_type' ? t('auto.req_connector')
+        : t('auto.req_other');
+  const stateText = (state === 'needs_fetch' || state === 'missing') ? t('auto.req_not_installed')
+    : (state === 'disabled' || state === 'user_disabled') ? t('auto.req_disabled')
+      : (state === 'incompatible') ? t('auto.req_incompatible')
+        : t('auto.req_needs_action');
+  return `${kindText} ${String(ref.id || '')}（${stateText}）`;
+}
+
+function _autoRelevantRequirementItems(items) {
+  // S5 product clarification: task-level connector prerequisites are legacy
+  // data. Connector access follows the selected execution Agent, so old skip
+  // records must not keep surfacing a separate connector problem in the UI.
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => String(item?.ref?.kind || '') !== 'connector_type');
+}
+
+function _autoRequirementSummary(items) {
+  const list = _autoRelevantRequirementItems(items);
+  if (!list.length) return t('auto.req_needs_action');
+  const first = _autoRequirementLabel(list[0]);
+  return list.length > 1 ? `${first} ${t('auto.req_more', { count: list.length - 1 })}` : first;
+}
+
+async function _autoShowRequirementIssues(items) {
+  const list = _autoRelevantRequirementItems(items).map((item) => '· ' + _autoRequirementLabel(item));
+  await uiAlert(t('auto.req_blocked_body', { count: list.length })
+    + (list.length ? '\n' + list.slice(0, 6).join('\n') : ''));
+}
+
 function _autoTaskCardTitle(task) {
   return String(task.title || '').trim() || String(task.content || '').replace(/\s+/g, ' ').trim() || t('auto.invalid_content');
 }
@@ -337,6 +375,9 @@ function _autoTaskCardMeta(task) {
   if (!task.enabled) parts.push(t('auto.paused'));
   if (!_autoIsTaskOnCurrentDevice(task)) parts.push(t('auto.remote_device', { name: _autoDisplayDeviceName(task.device_name || task.device_id) }));
   parts.push(_autoFormatSummary(task));
+  if (task.last_skip && task.last_skip.at && _autoRelevantRequirementItems(task.last_skip.items).length) {
+    parts.push(t('auto.skip_reason', { reason: _autoRequirementSummary(task.last_skip.items) }));
+  }
   const lastRunAt = [task.last_run_at, task.last_manual_run_at].filter(Boolean).sort().pop();
   parts.push(_autoFormatLastRun(lastRunAt));
   return parts.join(' · ');
@@ -394,6 +435,10 @@ async function _autoRunNow(task, opts) {
     if (!result || !result.ok) {
       _autoRunFailures.add(task.id);
       const error = result && result.error;
+      if (error === 'requirements_not_ready') {
+        await _autoShowRequirementIssues(result.items);
+        return;
+      }
       const key = error === 'already_running' ? 'auto.run_already_running'
         : error === 'device_mismatch' ? 'auto.run_device_mismatch'
         : error === 'recipient_unavailable' ? 'auto.run_recipient_unavailable' : 'auto.run_failed';
@@ -650,6 +695,10 @@ function _autoTaskMenuItems(task, opts) {
       onClick: async () => {
         try {
           const res = await window.cogseed.invoke('autoTasks.setEnabled', { taskId: task.id, enabled: !task.enabled });
+          if (res && res.ok === false && res.error === 'requirements_not_ready') {
+            await _autoShowRequirementIssues(res.items);
+            return;
+          }
           if (!res || !res.ok || !res.task) throw new Error('toggle rejected');
           Object.assign(task, res.task);
           _autoPaintRunState(task, res.task);
@@ -692,10 +741,123 @@ const _AUTO_TEMPLATES = [
   { id: 'blank',         icon: 'plus',           schedule: null },
 ];
 
+// ─── S5：Hub 任务模板 ─────────────────────────────────────────────────
+// 平台模板与内置示例同一组、不打来源标签（FR-003）；未登录 / Hub 不支持 / 断网
+// 只影响平台模板，内置的 7 个示例照常可用（FR-034）。
+
+let _taskTplState = {
+  loaded: false, loading: false, items: [], signedOut: false, hidden: false, fromCache: false, error: null,
+};
+/** 从 Hub 模板打开的新建表单上下文；普通新建为 null。 */
+let _taskTplCtx = null;
+
+function _autoNewRequestId() {
+  const rnd = (crypto && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+    : Math.random().toString(36).slice(2, 18);
+  return rnd;
+}
+
+async function _ensureTaskTemplates(force) {
+  if (_taskTplState.loading || (_taskTplState.loaded && !force)) return;
+  _taskTplState.loading = true;
+  let next;
+  try {
+    const res = await window.cogseed.invoke('templates.catalog.list', { type: 'task' });
+    next = {
+      loaded: true, loading: false,
+      items: Array.isArray(res && res.items) ? res.items : [],
+      signedOut: !!(res && res.signed_out),
+      hidden: !!(res && res.hidden),
+      fromCache: !!(res && res.from_cache),
+      error: (res && res.error) || null,
+    };
+  } catch (err) {
+    next = {
+      loaded: true, loading: false, items: [], signedOut: false, hidden: false,
+      fromCache: false, error: (err && err.message) || 'network',
+    };
+  }
+  _taskTplState = next;
+  const tplEl = document.getElementById('auto-templates');
+  if (tplEl && !tplEl.hidden) _autoRenderTemplates(tplEl, { compact: tplEl.classList.contains('is-compact') });
+}
+
+/** Hub 错误归类 → 文案（contracts/client-hub-templates.md §3）。`not_supported` 不在这张表里：
+ *  旧版 Hub 直接把平台入口藏起来，内置示例照常可用（FR-080）。 */
+function _autoHubErrorText(code) {
+  switch (code) {
+    case 'signed_out': return t('auto.hub_login_hint');
+    case 'offline': return t('auto.hub_offline');
+    case 'forbidden': return t('auto.hub_forbidden');
+    case 'not_found':
+    case 'disabled': return t('auto.hub_tpl_gone');
+    case 'invalid_template': return t('auto.hub_tpl_invalid');
+    default: return t('auto.hub_error');
+  }
+}
+
+function _autoHubNoteHtml() {
+  const st = _taskTplState;
+  if (st.hidden) return '';
+  let text = '';
+  if (st.signedOut) text = _autoHubErrorText('signed_out');
+  else if (st.error && st.fromCache) text = t('auto.hub_cached_with_reason', { reason: _autoHubErrorText(st.error) });
+  else if (st.error) text = _autoHubErrorText(st.error);
+  if (!text) return '';
+  return `<p class="auto-hub-note" data-auto-hub-note="${escapeHtml(st.error || (st.signedOut ? 'signed_out' : 'cached'))}">${escapeHtml(text)}</p>`;
+}
+
+/** 模板卡片结构：本地起始模板与 Hub 模板共用一份，避免每个来源各写一份
+ *  原生按钮。新增模板来源时复用本函数，不要再复制 `<button>` 字面量。 */
+function _autoTemplateCardHtml(options) {
+  const value = options || {};
+  const iconHtml = (name, cls) => (typeof uiIconHtml === 'function' ? uiIconHtml(name, cls) : '');
+  const extraClass = value.className ? ` ${value.className}` : '';
+  return `<button type="button" class="auto-tpl-card ui-resource-card${extraClass}" data-auto-tpl="${escapeHtml(value.id)}"${value.disabled ? ' disabled' : ''}>`
+    + `<span class="auto-tpl-card-ico">${iconHtml(value.icon, 'auto-tpl-ico')}</span>`
+    + `<span class="auto-tpl-card-body">`
+    + `<span class="auto-tpl-card-name">${value.name}</span>`
+    + `<span class="auto-tpl-card-desc">${value.desc}</span>`
+    + value.meta
+    + `</span></button>`;
+}
+
+function _autoHubCardsHtml() {
+  const st = _taskTplState;
+  if (st.hidden || !st.items.length) return '';
+  return st.items.map((tpl) => {
+    const id = String(tpl.template_id || '');
+    const name = escapeHtml(tpl.name || id);
+    const desc = escapeHtml(tpl.summary || '');
+    const blockedText = tpl.creatable === false
+      ? (tpl.blocked_reason === 'disabled' ? t('auto.hub_tpl_gone')
+        : (tpl.blocked_reason === 'client_too_old' || tpl.blocked_reason === 'invalid_template'
+          ? t('auto.hub_tpl_needs_update')
+          : t('auto.hub_unusable')))
+      : '';
+    const meta = blockedText
+      ? `<span class="auto-tpl-card-meta">${escapeHtml(blockedText)}</span>`
+      : '<span class="auto-tpl-card-meta is-placeholder" aria-hidden="true">&nbsp;</span>';
+    return _autoTemplateCardHtml({
+      id: `hub:${id}`,
+      icon: 'clipboard-list',
+      name,
+      desc,
+      meta,
+      disabled: tpl.creatable === false,
+    });
+  }).join('');
+}
+
 /** Open the create dialog and pre-fill it from a starter template.
  *  Always stays in create mode (never touches `_autoEditingTaskId`), so
  *  the eventual submit creates a brand-new task rather than editing one. */
 function _autoApplyTemplate(tplId) {
+  if (typeof tplId === 'string' && tplId.startsWith('hub:')) {
+    void _autoApplyHubTemplate(tplId.slice(4));
+    return;
+  }
   const tpl = _AUTO_TEMPLATES.find((x) => x && x.id === tplId) || null;
   // Blank (and any unknown id) → plain create form, no pre-fill.
   openAutoTaskDialog({});
@@ -715,6 +877,239 @@ function _autoApplyTemplate(tplId) {
   if (s.type === 'weekly' && _autoWeekdaySel) _autoWeekdaySel.setValue(String(s.weekday));
   if (s.type === 'monthly' && _autoMonthlyDaySel) _autoMonthlyDaySel.setValue(String(s.day));
   _autoTrackClick('auto_template_pick', { template_id: tpl.id });
+}
+
+// ─── S5：从 Hub 任务模板新建 ───────────────────────────────────────────
+
+const _AUTO_FILL_RE = /【[^】]*】/g;
+
+function _autoHubFillLabel(tpl, id) {
+  const fill = (Array.isArray(tpl && tpl.fill_ins) ? tpl.fill_ins : []).find((item) => item && item.id === id);
+  if (!fill) return id;
+  const lang = typeof getLang === 'function' ? getLang() : 'zh';
+  return (String(lang).startsWith('en') && fill.label_en) || fill.label_zh || id;
+}
+
+/** Hub wire format uses {{id}}; the editor and its validation use the visible 【label】 token. */
+function _autoTemplateDisplayText(tpl, value) {
+  return String(value || '').replace(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g, (_, id) => `【${_autoHubFillLabel(tpl, id)}】`);
+}
+
+function _autoFillIns(text) {
+  const out = [];
+  const src = String(text || '');
+  _AUTO_FILL_RE.lastIndex = 0;
+  let m;
+  while ((m = _AUTO_FILL_RE.exec(src))) {
+    const label = m[0].slice(1, -1);
+    if (label && !out.includes(label)) out.push(label);
+  }
+  return out;
+}
+
+/** 把光标/选区落到第一处留空上，让用户直接改（不弹二次确认）。 */
+function _autoSelectFillIn(ta, label) {
+  if (!ta || !label) return;
+  const src = String(ta.value || '');
+  const at = src.indexOf('【' + label + '】');
+  if (at < 0) { ta.focus(); return; }
+  ta.focus();
+  ta.setSelectionRange(at, at + label.length + 2);
+}
+
+function _autoRenderTemplateRisk() {
+  const ta = document.getElementById('auto-task-input');
+  if (!ta) return;
+  const host = ta.closest('.auto-composer') || ta.parentElement;
+  if (!host) return;
+  let el = document.getElementById('auto-hub-risk');
+  if (!el) {
+    el = document.createElement('p');
+    el.id = 'auto-hub-risk';
+    el.className = 'auto-hub-risk';
+    el.setAttribute('aria-live', 'polite');
+    host.appendChild(el);
+  }
+  const risk = (_taskTplCtx && _taskTplCtx.risk) || [];
+  el.hidden = !risk.length;
+  el.textContent = risk.length
+    ? t('auto.hub_risk', { count: risk.length }) + risk.slice(0, 3).map((r) => '「' + String(r.text || '') + '」').join('')
+    : '';
+}
+
+async function _autoApplyHubTemplate(templateId) {
+  let res = null;
+  try {
+    res = await window.cogseed.invoke('templates.catalog.detail', { type: 'task', template_id: templateId });
+  } catch (err) {
+    res = null;
+  }
+  if (!res || !res.ok) {
+    const code = (res && (res.error || res.code)) || 'server_error';
+    if (code === 'not_found' || code === 'disabled') {
+      // 模板在列表里已经没了：刷新目录，别让用户对着下架卡片反复点。
+      void _ensureTaskTemplates(true);
+      await uiAlert(t('auto.hub_tpl_gone'));
+      return;
+    }
+    await uiAlert(code === 'invalid_template' ? t('auto.tpl_client_too_old') : _autoHubErrorText(code));
+    return;
+  }
+  if (res.creatable === false && res.blocked_reason === 'disabled') {
+    // detail/content remain readable after withdrawal, but must not seed a new task.
+    void _ensureTaskTemplates(true);
+    await uiAlert(t('auto.hub_tpl_gone'));
+    return;
+  }
+  if (res.blocked_reason === 'client_too_old' || res.blocked_reason === 'invalid_template') {
+    await uiAlert(t('auto.tpl_client_too_old'));
+    return;
+  }
+  if (res.blocked_reason === 'content_too_long') { await uiAlert(t('auto.tpl_too_long')); return; }
+  const tpl = res.template || {};
+  const content = _autoTemplateDisplayText(tpl, tpl.content);
+  openAutoTaskDialog({});
+  _taskTplCtx = { template: tpl, risk: Array.isArray(res.risk) ? res.risk : [], requestId: _autoNewRequestId() };
+  _autoCurrentRecipient = tpl.execution_agent
+    ? { kind: 'agent', id: tpl.execution_agent.id, name: tpl.execution_agent.id }
+    : { kind: 'commander' };
+  _repaintAutoRecipientChip();
+  // 内容与标签：先 chips 后正文；提交时 chatUseMessagePartsFromText 会解析回 message_parts。
+  const parts = [
+    ...(tpl.skills || []).map((r) => ({
+      type: 'use', kind: r.kind === 'agent' ? 'agent' : 'skill', id: r.id, name: r.id,
+    })),
+    { type: 'text', text: content },
+  ];
+  const text = (typeof chatUseTextFromMessageParts === 'function')
+    ? chatUseTextFromMessageParts(parts)
+    : content;
+  _autoSetComposerValue(text || content);
+  const titleInput = document.getElementById('auto-title-input');
+  if (titleInput) {
+    titleInput.value = _autoTemplateDisplayText(tpl, tpl.title);
+    if (typeof window.enforceNameLimitOnControl === 'function') window.enforceNameLimitOnControl(titleInput);
+  }
+  const sched = tpl.schedule || { type: 'daily', hour: 9, minute: 0 };
+  if (_autoFreqSel) _autoFreqSel.setValue(sched.type || 'daily');
+  _autoSyncFreqRows(sched.type || 'daily');
+  if (Number.isInteger(sched.hour) && _autoHourSel) _autoHourSel.setValue(String(sched.hour));
+  if (Number.isInteger(sched.minute) && _autoMinuteSel) _autoMinuteSel.setValue(String(sched.minute));
+  if (sched.type === 'weekly' && _autoWeekdaySel) _autoWeekdaySel.setValue(String(sched.weekday));
+  if (sched.type === 'monthly' && _autoMonthlyDaySel) _autoMonthlyDaySel.setValue(String(sched.day));
+  if (sched.type === 'one_time') {
+    // 单次模板由用户重选日期（P7）；不给默认值，避免沿用模板里的过期时间。
+    const dateInput = document.getElementById('auto-date-input');
+    if (dateInput) dateInput.value = '';
+  }
+  _autoRenderTemplateRisk();
+  _autoTrackClick('auto_template_pick', { template_id: 'hub:' + templateId });
+}
+
+/** Hub 任务模板的执行前门：留空 → Agent / Skill 依赖 → 来源字段。
+ *  连接器能力属于执行 Agent，不是定时任务模板自己的引用或创建门禁。
+ *  返回 `null` 表示用户取消；返回 `{}` 表示普通（手建）任务。 */
+async function _autoTaskTemplateGate(type, content, ta, dateInput, hm, useSelections, recipient) {
+  const ctx = _taskTplCtx;
+  if (!ctx) return {};
+  const tpl = ctx.template || {};
+
+  // 映射层已把 `{{id}}` 转成【label】；只拦模板声明过的标签，避免用户正文里的普通【…】被误判。
+  const declaredFillLabels = Array.isArray(tpl.fill_ins)
+    ? tpl.fill_ins.map((f) => (f && (f.label_zh || f.id)) || '').filter(Boolean)
+    : [];
+  const left = _autoFillIns(content)
+    .filter((label) => declaredFillLabels.length === 0 || declaredFillLabels.includes(label));
+  if (left.length) {
+    _autoSetFormError(t('auto.fill_required', { label: left[0] }), ta);
+    _autoSelectFillIn(ta, left[0]);
+    return null;
+  }
+  if (type === 'one_time') {
+    const raw = dateInput ? String(dateInput.value || '').trim() : '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    const target = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), hm.hour, hm.minute, 0, 0) : null;
+    if (!target || Number.isNaN(target.getTime())) {
+      _autoSetFormError(t('auto.pick_date'), dateInput);
+      if (dateInput) dateInput.focus();
+      return null;
+    }
+    if (target.getTime() <= Date.now()) {
+      _autoSetFormError(t('auto.pick_future_date'), dateInput);
+      if (dateInput) dateInput.focus();
+      return null;
+    }
+  }
+
+  // Requirements are derived from the controls as saved, not from the
+  // original template. Removing a chip or switching back to Commander must
+  // remove that dependency from future execution checks (FR-038).
+  const selections = Array.isArray(useSelections) ? useSelections : [];
+  const selectedDependencyKeys = new Set(selections
+    .filter((s) => s && (s.kind === 'skill' || s.kind === 'agent'))
+    .map((s) => `${s.kind}:${String(s.id || s.name || '')}`));
+  const executionAgent = tpl.execution_agent && recipient && recipient.kind === 'agent'
+    && String(recipient.id || '') === String(tpl.execution_agent.id || '')
+    ? tpl.execution_agent
+    : null;
+  let refs = [
+    ...(executionAgent ? [executionAgent] : []),
+    ...(tpl.skills || []).filter((r) => selectedDependencyKeys.has(`${r.kind === 'agent' ? 'agent' : 'skill'}:${String(r.id || '')}`)),
+  ];
+  const resolve = async () => {
+    const res = await window.cogseed.invoke('templates.refs.resolve', { refs });
+    return { items: (res && res.items) || [] };
+  };
+  let resolved = await resolve();
+  const what = t('auto.what_task');
+
+  // 客户端不认识的引用（未知 kind / 可用性）：去掉会掩盖问题，只能提示更新客户端。
+  const unknown = resolved.items.filter((i) => i.state === 'unknown');
+  if (unknown.length) {
+    _autoSetFormError(t('auto.req_unknown_client'), ta);
+    return null;
+  }
+
+  const split = window.TemplateInstall.splitResolution(resolved.items);
+  if (split.toInstall.length && typeof navigator !== 'undefined' && navigator.onLine === false) {
+    // 需要下载依赖但已经断网：说清楚要联网，别让进度条空转。
+    _autoSetFormError(t('auto.need_online'), ta);
+    return null;
+  }
+  if (split.unavailable.length) {
+    const choice = await window.TemplateInstall.confirmDropUnavailable(split.unavailable, { what });
+    if (choice !== 'drop') return null;
+    const dropRefs = new Set(split.unavailable.map((u) => `${u.ref.kind}:${u.ref.id}`));
+    refs = refs.filter((r) => !dropRefs.has(`${r.kind}:${r.id}`));
+    resolved = await resolve();
+  }
+  if (split.toInstall.length) {
+    await window.TemplateInstall.installAndCreate({
+      toInstall: split.toInstall,
+      what,
+      onCreate: async () => { resolved = await resolve(); },
+    });
+    resolved = await resolve();
+    const stillMissing = resolved.items.filter((i) => i.state === 'needs_fetch' || i.state === 'missing');
+    if (stillMissing.length) {
+      _autoSetFormError(t('auto.install_incomplete'), ta);
+      return null;
+    }
+  }
+
+  return {
+    template_origin: {
+      template_id: String(tpl.template_id || ''),
+      version: String(tpl.version || ''),
+      request_id: ctx.requestId,
+    },
+    requirements: {
+      ...(executionAgent ? { agent: executionAgent } : {}),
+      // The persisted field keeps its historical name, but the frozen Hub
+      // contract also allows extra Agent refs here.
+      skills: refs.filter((r) => r !== executionAgent),
+    },
+  };
 }
 
 function _autoBindPageActions(container) {
@@ -785,25 +1180,28 @@ function _autoRenderPageState(state) {
 function _autoRenderTemplates(container, opts = {}) {
   if (!container) return;
   const compact = !!opts.compact;
-  const iconHtml = (name, cls) => (typeof uiIconHtml === 'function' ? uiIconHtml(name, cls) : '');
   const cards = _AUTO_TEMPLATES.map((tpl) => {
     const isBlank = tpl.id === 'blank';
     const name = escapeHtml(t('auto.tpl.' + tpl.id + '.name'));
     const desc = escapeHtml(t('auto.tpl.' + tpl.id + '.desc'));
     const meta = (!isBlank && tpl.schedule)
       ? `<span class="auto-tpl-card-meta">${escapeHtml(_autoFormatSummary({ schedule: tpl.schedule }))}</span>`
-      : '';
-    return `<button type="button" class="auto-tpl-card ui-resource-card${isBlank ? ' is-blank' : ''}" data-auto-tpl="${escapeHtml(tpl.id)}">`
-      + `<span class="auto-tpl-card-ico">${iconHtml(tpl.icon, 'auto-tpl-ico')}</span>`
-      + `<span class="auto-tpl-card-body">`
-      + `<span class="auto-tpl-card-name">${name}</span>`
-      + `<span class="auto-tpl-card-desc">${desc}</span>`
-      + meta
-      + `</span></button>`;
+      : '<span class="auto-tpl-card-meta is-placeholder" aria-hidden="true">&nbsp;</span>';
+    return _autoTemplateCardHtml({
+      id: tpl.id,
+      icon: tpl.icon,
+      name,
+      desc,
+      meta,
+      className: isBlank ? 'is-blank' : '',
+    });
   }).join('');
   const head = `<div class="auto-tpl-subhead">${escapeHtml(t('auto.templates_more'))}</div>`;
   container.classList.toggle('is-compact', compact);
-  container.innerHTML = head + `<div class="auto-tpl-grid ui-resource-grid">${cards}</div>`;
+  container.innerHTML = head
+    + `<div class="auto-tpl-grid ui-resource-grid">${cards}${_autoHubCardsHtml()}</div>`
+    + _autoHubNoteHtml();
+  if (!_taskTplState.loaded) void _ensureTaskTemplates();
   if (typeof hydrateUiIcons === 'function') hydrateUiIcons(container);
   container.querySelectorAll('[data-auto-tpl]').forEach((btn) => {
     btn.addEventListener('click', () => _autoApplyTemplate(btn.getAttribute('data-auto-tpl')));
@@ -1044,12 +1442,18 @@ function _autoUseToken(ref, kind) {
 }
 
 function _autoComposerValueForTask(task) {
+  const extraAgentTokens = task && task.requirements && Array.isArray(task.requirements.skills)
+    ? task.requirements.skills
+      .filter((ref) => ref && ref.kind === 'agent')
+      .map((ref) => _autoUseToken(ref, 'agent'))
+      .filter(Boolean)
+    : [];
   if (task && Array.isArray(task.message_parts)
       && typeof chatUseTextFromMessageParts === 'function') {
     const structured = chatUseTextFromMessageParts(task.message_parts);
-    if (structured) return structured;
+    if (structured) return extraAgentTokens.length ? `${extraAgentTokens.join(' ')} ${structured}` : structured;
   }
-  const tokens = [];
+  const tokens = [...extraAgentTokens];
   const skill = task && task.skill && (task.skill.id || task.skill.name) ? task.skill : null;
   const connector = task && task.connector && (task.connector.id || task.connector.name) ? task.connector : null;
   const skillToken = _autoUseToken(skill, 'skill');
@@ -1058,6 +1462,14 @@ function _autoComposerValueForTask(task) {
   if (connectorToken) tokens.push(connectorToken);
   const content = String((task && task.content) || '');
   return tokens.length ? `${tokens.join(' ')}${content ? ` ${content}` : ''}` : content;
+}
+
+/** Agent dependency chips belong to template requirements, not task message
+ * parts: firing a task must not turn an extra dependency into an invocation. */
+function _autoPersistableMessageParts(parts) {
+  if (!Array.isArray(parts)) return null;
+  const kept = parts.filter((part) => !(part && part.type === 'use' && part.kind === 'agent'));
+  return kept.some((part) => part && part.type === 'use') ? kept : null;
 }
 
 function _autoSetComposerValue(value) {
@@ -1871,10 +2283,27 @@ function _autoResetForm() {
  *                    Project-detail uses this to refresh its list. */
 function openAutoTaskDialog(opts = {}) {
   if (!_autoFormMounted) _mountAutoForm();
+  // 普通新建清空模板上下文；编辑模板任务时从已保存的不可变来源与依赖快照重建，
+  // 这样删除 Skill / Agent 标签后再次保存会同步更新 requirements。
+  _taskTplCtx = null;
+  const staleRisk = document.getElementById('auto-hub-risk');
+  if (staleRisk) staleRisk.hidden = true;
   _refreshAutoSyncNotice().catch(() => {});
   _autoSetFormError('');
   _autoSetSubmitBusy(false);
   const task = opts.task || null;
+  if (task && task.template_origin && task.requirements) {
+    _taskTplCtx = {
+      template: {
+        template_id: task.template_origin.template_id,
+        version: task.template_origin.version,
+        execution_agent: task.requirements.agent || null,
+        skills: Array.isArray(task.requirements.skills) ? task.requirements.skills : [],
+      },
+      risk: [],
+      requestId: task.template_origin.request_id,
+    };
+  }
   _autoLockedProjectId = _autoValidProjectId((opts.projectId && typeof opts.projectId === 'string') ? opts.projectId : '');
   _autoOnSaved = (typeof opts.onSaved === 'function') ? opts.onSaved : null;
 
@@ -1976,9 +2405,10 @@ async function _autoSubmitForm() {
     _autoSetFormError(t('auto.invalid_content'), ta);
     return;
   }
-  const messageParts = (typeof chatUseMessagePartsFromText === 'function')
+  const parsedMessageParts = (typeof chatUseMessagePartsFromText === 'function')
     ? chatUseMessagePartsFromText(rawContent)
     : null;
+  const messageParts = _autoPersistableMessageParts(parsedMessageParts);
   const useState = _autoReadComposerUseState();
   const skillField = useState.skill;
   const connectorField = useState.connector;
@@ -2029,6 +2459,11 @@ async function _autoSubmitForm() {
     return;
   }
 
+  const hubExtra = await _autoTaskTemplateGate(
+    type, content, ta, dateInput, { hour, minute }, useState.selections, _autoCurrentRecipient,
+  );
+  if (!hubExtra) return;
+
   const projectId = _autoSelectedProjectId();
   const isUpdate = !!_autoEditingTaskId;
   if (_autoCurrentAttachments.some((a) => a && a.status === 'uploading')) {
@@ -2074,6 +2509,8 @@ async function _autoSubmitForm() {
       ...(skillField ? { skill: skillField } : (_autoEditingTaskId ? { skill: null } : {})),
       ...(connectorField ? { connector: connectorField } : (_autoEditingTaskId ? { connector: null } : {})),
       ...(projectId ? { project_id: projectId } : (_autoEditingTaskId ? { project_id: null } : {})),
+      ...(hubExtra.template_origin ? { template_origin: hubExtra.template_origin } : {}),
+      ...(hubExtra.requirements ? { requirements: hubExtra.requirements } : {}),
       ...(attachmentNames.length ? { attachments: attachmentNames } : (_autoEditingTaskId ? { attachments: [] } : {})),
       // Carry the pre-allocated draft id (or current task id when editing) so
       // the backend adopts it — the already-uploaded files live under
@@ -2394,6 +2831,8 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     _autoRunDeviceOptions,
     _autoTaskMessagePreviewHtml,
     _autoComposerValueForTask,
+    _autoPersistableMessageParts,
+    _autoTemplateDisplayText,
     _AUTO_TEMPLATES,
   };
 }

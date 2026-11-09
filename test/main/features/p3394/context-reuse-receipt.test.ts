@@ -215,6 +215,55 @@ describe('P3394 context reuse receipts', () => {
     })).rejects.toThrow(/already finalized/i);
   });
 
+  it('treats same-status re-completion as an idempotent no-op', async () => {
+    const {
+      completeReceipt,
+      prepareReceipt,
+      readReceipt,
+    } = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    await prepareReceipt(userId, baseInput(), expectedTarget);
+
+    const completed = await completeReceipt(userId, 'execution-1', {
+      status: 'completed',
+    });
+    const replay = await completeReceipt(userId, 'execution-1', {
+      status: 'completed',
+      reusedRefs: ['artifact:one'],
+    });
+    expect(replay).toEqual(completed);
+    await expect(readReceipt(userId, 'execution-1')).resolves.toEqual(completed);
+  });
+
+  it('accepts a replay carrying the same execution ids as the finalized receipt', async () => {
+    const { completeReceipt, prepareReceipt, readReceipt } = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    await prepareReceipt(userId, baseInput(), expectedTarget);
+    const completed = await completeReceipt(userId, 'execution-1', {
+      status: 'completed',
+      baselineExecutionId: 'execution-baseline',
+      treatmentExecutionId: 'execution-treatment',
+    });
+    await expect(completeReceipt(userId, 'execution-1', {
+      status: 'completed',
+      baselineExecutionId: 'execution-baseline',
+      treatmentExecutionId: 'execution-treatment',
+    })).resolves.toEqual(completed);
+    await expect(readReceipt(userId, 'execution-1')).resolves.toEqual(completed);
+  });
+
+  it('rejects re-completion that changes execution ids on a finalized receipt', async () => {
+    const {
+      completeReceipt,
+      prepareReceipt,
+    } = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    await prepareReceipt(userId, baseInput(), expectedTarget);
+
+    await completeReceipt(userId, 'execution-1', { status: 'completed' });
+    await expect(completeReceipt(userId, 'execution-1', {
+      status: 'completed',
+      baselineExecutionId: 'execution-baseline',
+    })).rejects.toThrow(/already finalized/i);
+  });
+
   it('rejects prepared or unknown values as completion statuses', async () => {
     const { completeReceipt, prepareReceipt } = await import(
       '../../../../src/main/features/p3394/context-reuse-receipt'

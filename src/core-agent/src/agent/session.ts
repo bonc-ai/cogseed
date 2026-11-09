@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import type { ImageContent, Message, MessageContent, Usage } from "../shared/types.js";
+import { isValidTokenCount } from "../shared/types.js";
 import type { ToolResultImage } from "../tools/base.js";
 
 export const HISTORY_RAW_TRIGGER_TOKENS = 12_000;
@@ -6,6 +8,29 @@ export const HISTORY_RAW_RETAIN_TURNS_AFTER_SUMMARY = 2;
 export const HISTORY_RAW_RETAIN_TOKEN_BUDGET = 3_000;
 export const HISTORY_RAW_RETAIN_SINGLE_TURN_MAX_TOKENS = 2_000;
 export const HISTORY_SUMMARY_MAX_TOKENS = 2_048;
+
+// Optional transport continuity, independent of durable history/archival.
+// Shed the whole prefix at a bound instead of silently trimming its interior.
+export const FOREGROUND_MAX_TURNS = 8;
+export const FOREGROUND_MAX_TOKENS = 12_000;
+
+export type ForegroundProjectionOptions = {
+  /** Caller identity over provider/model, system, tools and visibility/policy.
+   * Change it whenever an old host snapshot must no longer be exposed. */
+  scopeKey: string;
+  /** Remaining message allowance after system/tools/output/safety reserves. */
+  maxMessageTokens: number;
+  turnContext?: string;
+};
+
+type ForegroundTurn = {
+  scopeKey: string;
+  turnId: number;
+  turns: number;
+  canonicalLength: number;
+  canonicalDigest: string;
+  messages: Message[];
+};
 
 export const ACTIVE_PROCESS_TRIGGER_TOKENS = 18_000;
 export const ACTIVE_RETAIN_TOOL_STEPS = 2;
@@ -278,6 +303,9 @@ export class Session {
   private messages: Message[] = [];
   private readonly maxHistoryTurns: number;
   private turnState: TurnTrackingState | null = null;
+  private foreground: ForegroundTurn | null = null;
+  private foregroundEpoch = 0;
+  private foregroundPrepared?: { epoch: number; scopeKey: string };
 
   constructor(opts?: { maxHistoryTurns?: number }) {
     this.maxHistoryTurns = opts?.maxHistoryTurns ?? 50;
@@ -332,6 +360,7 @@ export class Session {
     const state = this.turnState;
     const active = state?.activeTurn;
     if (!state || !active) return;
+    if (outcome) this.resetForeground();
 
     const endIndex = Math.max(active.startIndex, this.messages.length - 1);
     let finalAssistantMessageIndex: number | undefined;
@@ -373,6 +402,9 @@ export class Session {
     const existing = state.resources.find((r) => r.path === normalized.path && r.kind === normalized.kind);
     if (existing) {
       Object.assign(existing, { ...normalized, path: existing.path, kind: existing.kind });
+      // Revisions are recent resources too; don't hide them behind the cap.
+      state.resources.splice(state.resources.indexOf(existing), 1);
+      state.resources.push(existing);
     } else {
       state.resources.push(normalized);
     }
@@ -620,7 +652,7 @@ export class Session {
    * Get the LLM-facing view of the session.
    *
    * When turn tracking is enabled, completed history is projected as:
-   * history summary + resource ledger + bounded raw user/final-assistant I/O.
+   * history summary + bounded raw user/final-assistant I/O + live resources.
    * Old tool process messages remain in raw session history but are excluded
    * from the default model context. The active turn keeps recent process
    * messages, optionally preceded by a current-turn checkpoint summary.
@@ -628,7 +660,14 @@ export class Session {
    * Legacy sessions with no turn tracking keep the old provider view: raw
    * messages verbatim except stale image bytes are stripped.
    */
-  getMessagesForModel(opts?: { turnContext?: string; includeExecutionPlan?: boolean }): Message[] {
+  getMessagesForModel(opts?: {
+    turnContext?: string;
+    includeExecutionPlan?: boolean;
+    /** Foreground transport sends live resources through host snapshots. */
+    includeHistoryResources?: boolean;
+    /** Hide only host plan instructions; keep completed-work evidence visible. */
+    suppressExecutionPlanInstructions?: boolean;
+  }): Message[] {
     // `turnContext` is host-provided per-turn ephemeral text (orchestration
     // ledger, datetime, …). It is injected into THIS turn's user message only
     // and is NEVER persisted — see the injection at the active turn below and
@@ -657,7 +696,21 @@ export class Session {
       result.push(...pair);
     }
 
-    const active = state.activeTurn;
+    result.push(...this.activeMessagesForModel(turnContext));
+
+    result.push(...this.getExecutionContextForModel({
+      ...opts,
+      includeHistoryResources: opts?.includeHistoryResources !== false,
+      includeForegroundSupersession: false,
+    }));
+
+    return stripOldImages(result);
+  }
+
+  /** Shared canonical active slice, before provider-only metadata is stripped. */
+  private activeMessagesForModel(turnContext?: string): Message[] {
+    const result: Message[] = [];
+    const active = this.turnState?.activeTurn;
     if (active) {
       const user = this.messages[active.userMessageIndex];
       if (user) {
@@ -696,23 +749,130 @@ export class Session {
         result.push(cloneMessage(this.messages[i]));
       }
 
-      // The plan is persistent structured state, not checkpoint prose. Inject
-      // deterministic work evidence first, then the plan at the uncached tail
-      // on every model loop. Both live outside raw message history, so a
-      // probabilistic checkpoint cannot omit completed calls or the objective.
-      if (opts?.includeExecutionPlan !== false) {
-        const workLedger = this.completedWorkContextText(active.id);
-        if (workLedger) {
-          result.push({ role: "user", content: [{ type: "text", text: workLedger }] });
-        }
-        const planAnchor = this.executionPlanContextText(active.id);
-        if (planAnchor) {
-          result.push({ role: "user", content: [{ type: "text", text: planAnchor }] });
-        }
-      }
     }
 
     return stripOldImages(result);
+  }
+
+  /** Foreground only: reuse the last accepted request + final response, then
+   * append this turn's canonical tail. The runner supplies its final projected
+   * request to recordForegroundTurn; session history alone cannot reconstruct
+   * previous turnEphemeral or run-local host snapshots. Summaries never use it.
+   * A cache miss always falls back to the canonical bounded view. */
+  getForegroundMessagesForModel(opts: ForegroundProjectionOptions): Message[] {
+    const prepared = (messages: Message[]): Message[] => {
+      this.foregroundPrepared = { epoch: this.foregroundEpoch, scopeKey: opts.scopeKey };
+      return messages;
+    };
+    const canonical = this.getMessagesForModel({
+      turnContext: opts.turnContext,
+      includeExecutionPlan: false,
+      includeHistoryResources: false,
+    });
+    const cached = this.foreground;
+    if (!cached) return prepared(canonical);
+    const state = this.turnState;
+    const latest = state?.completedTurns.at(-1);
+    if (!state || cached.scopeKey !== opts.scopeKey || !opts.scopeKey
+      || latest?.id !== cached.turnId || state.activeTurn?.id === cached.turnId
+      || this.messages.length < cached.canonicalLength
+      || this.foregroundCanonicalDigest(cached.canonicalLength) !== cached.canonicalDigest) {
+      this.resetForeground();
+      return prepared(canonical);
+    }
+    const projected = [...cached.messages, ...this.activeMessagesForModel(opts.turnContext?.trim() || undefined)];
+    // Count full structured messages (including host state) against actual
+    // headroom. Never truncate current state to rescue an optional prefix.
+    const tokens = esticogseedTextTokens(JSON.stringify([
+      ...projected, ...this.getExecutionContextForModel(),
+    ]));
+    if (!Number.isFinite(opts.maxMessageTokens) || tokens > opts.maxMessageTokens) {
+      this.resetForeground();
+      return prepared(canonical);
+    }
+    return prepared(structuredClone(projected));
+  }
+
+  /** Capture only an accepted terminal foreground response, after it is added
+   * to canonical history, before the next turn starts (completion may precede
+   * or follow this hook). Exclude request-scoped controls. No disk writes, no
+   * summary changes, and no retained bitmap payloads. */
+  recordForegroundTurn(opts: Pick<ForegroundProjectionOptions, "scopeKey" | "maxMessageTokens"> & {
+    messages: Message[];
+  }): boolean {
+    const state = this.turnState;
+    const turn = state?.activeTurn ?? state?.completedTurns.at(-1);
+    const final = this.messages.at(-1);
+    const recordedFinal = opts.messages.at(-1);
+    const previous = this.foreground;
+    const extendsPrevious = previous?.scopeKey === opts.scopeKey
+      && JSON.stringify(opts.messages.slice(0, previous.messages.length)) === JSON.stringify(previous.messages);
+    const turns = extendsPrevious ? previous!.turns + 1 : 1;
+    const tokens = esticogseedTextTokens(JSON.stringify(opts.messages));
+    if (!turn || !opts.scopeKey || this.foregroundPrepared?.epoch !== this.foregroundEpoch
+      || this.foregroundPrepared.scopeKey !== opts.scopeKey
+      || final?.role !== "assistant" || recordedFinal?.role !== "assistant"
+      || final.content.some((content) => content.type === "tool_use")
+      || JSON.stringify(final.content) !== JSON.stringify(recordedFinal.content)
+      || opts.messages.some((message) => message.content.some((content) => content.type === "image"))
+      || !Number.isFinite(opts.maxMessageTokens)
+      || tokens > Math.min(FOREGROUND_MAX_TOKENS, opts.maxMessageTokens)
+      || turns > Math.min(FOREGROUND_MAX_TURNS, Math.max(1, this.maxHistoryTurns))) {
+      this.resetForeground();
+      return false;
+    }
+    this.foreground = {
+      scopeKey: opts.scopeKey,
+      turnId: turn.id,
+      turns,
+      canonicalLength: this.messages.length,
+      canonicalDigest: this.foregroundCanonicalDigest(this.messages.length),
+      messages: structuredClone(opts.messages),
+    };
+    return true;
+  }
+
+  /** Invalidate after overflow recovery or any caller-owned scope revocation. */
+  resetForeground(): void {
+    this.foreground = null;
+    this.foregroundEpoch++;
+  }
+
+  private foregroundCanonicalDigest(length: number): string {
+    const hash = createHash("sha256");
+    for (let i = 0; i < length; i++) hash.update(JSON.stringify(this.messages[i])).update("\n");
+    return hash.digest("hex");
+  }
+
+  /** Current host state, separate from transcript bytes so the provider can
+   * append bounded snapshots without rewriting prior tool rounds. Neither
+   * these messages nor their transport ordering are persisted. */
+  getExecutionContextForModel(opts?: {
+    suppressExecutionPlanInstructions?: boolean;
+    includeExecutionPlan?: boolean;
+    includeHistoryResources?: boolean;
+    /** Canonical/summary views never depend on optional transport retention. */
+    includeForegroundSupersession?: boolean;
+  }): Message[] {
+    const active = this.turnState?.activeTurn;
+    const resources = opts?.includeHistoryResources === false ? "" : this.historyResourcesText();
+    const includePlan = active && opts?.includeExecutionPlan !== false;
+    const workLedger = includePlan ? this.completedWorkContextText(active.id) : "";
+    const planAnchor = includePlan && !opts?.suppressExecutionPlanInstructions ? this.executionPlanContextText(active.id) : "";
+    // A fresh run's RequestContextProjection has no previous snapshots to
+    // clear. Supply explicit supersession even when current state is empty.
+    const authority = this.foreground && opts?.includeExecutionPlan !== false
+      && opts?.includeForegroundSupersession !== false
+      ? "[Current host state — not a user request]\n"
+        + "This state supersedes all earlier host resources, execution plans and work-ledger snapshots. "
+        + "Only host context attached to the current user turn applies; earlier per-turn host context is historical. "
+        + "Real user instructions retain their authority.\n"
+        + (!planAnchor ? "No current execution plan instructions.\n" : "")
+        + (!workLedger ? "No current work ledger.\n" : "")
+        + (!resources ? "No current history resources.\n" : "")
+      : "";
+    return [authority, resources, workLedger, planAnchor].filter(Boolean)
+      .map((text) => ({ role: "user", content: [{ type: "text", text }] }));
   }
 
   /**
@@ -754,6 +914,7 @@ export class Session {
 
   /** Clear all messages. */
   clear(): void {
+    this.resetForeground();
     this.messages = [];
     this.turnState = null;
   }
@@ -767,6 +928,7 @@ export class Session {
    */
   compact(summary: string): void {
     if (this.messages.length <= 2) return;
+    this.resetForeground();
 
     const kept = this.computeKeptTail();
 
@@ -832,6 +994,7 @@ export class Session {
     if (!state) return;
     const archived = new Set(turnIds);
     if (!archived.size) return;
+    this.resetForeground();
     for (const turn of state.completedTurns) {
       if (archived.has(turn.id)) turn.archived = true;
     }
@@ -966,6 +1129,7 @@ export class Session {
   }
 
   applyActiveCheckpointSummary(summary: string, checkpointThroughMessageIndex: number): string {
+    this.resetForeground();
     const active = this.turnState?.activeTurn;
     if (!active) return summary;
     const prevThrough = active.checkpointThroughMessageIndex ?? active.userMessageIndex;
@@ -1089,6 +1253,7 @@ export class Session {
   }
 
   restoreContextState(raw: SerializedSessionContextState | null | undefined): boolean {
+    this.resetForeground();
     if (!raw || raw.version !== 1) {
       this.turnState = null;
       return false;
@@ -1194,8 +1359,22 @@ export class Session {
    * context summary and resource ledger. Merging tool_result blocks does not add
    * or remove turns, so re-deriving indices keeps summaryThroughTurnId aligned.
    */
-  protected replaceMessagesPreservingContext(messages: Message[]): void {
+  protected replaceMessagesPreservingContext(messages: Message[], opts?: {
+    /** Healer-only request, independently proven below. Never bypasses checks. */
+    preserveForegroundForParallelResultMerge?: boolean;
+  }): void {
     const prev = this.turnState;
+    const foreground = this.foreground;
+    // The provider emits one tool-result message per block, regardless of
+    // adjacent pure user-row grouping. Preserve an already completed capture
+    // only when that is the ENTIRE change. Reorders, image movement, changed
+    // metadata, repaired calls/results or stale capture bytes fail closed.
+    const preserveForeground = opts?.preserveForegroundForParallelResultMerge
+      && foreground && prev && !prev.activeTurn
+      && foreground.canonicalLength === this.messages.length
+      && foreground.canonicalDigest === this.foregroundCanonicalDigest(this.messages.length)
+      && orderedToolResultProjectionDigest(this.messages) === orderedToolResultProjectionDigest(messages);
+    if (!preserveForeground) this.resetForeground();
     this.messages = messages.slice();
     this.turnState = prev
       ? this.rebuildTurnStateFromMessages({
@@ -1210,6 +1389,10 @@ export class Session {
           executionPlanAudit: prev.executionPlanAudit,
         })
       : null;
+    if (preserveForeground && foreground) {
+      foreground.canonicalLength = this.messages.length;
+      foreground.canonicalDigest = this.foregroundCanonicalDigest(this.messages.length);
+    }
   }
 
   private rebuildTurnStateFromMessages(preserve?: {
@@ -1548,8 +1731,6 @@ export class Session {
         state.historySummary,
       );
     }
-    const resources = this.historyResourcesText();
-    if (resources) parts.push(resources);
     return parts.join("\n\n");
   }
 
@@ -1561,11 +1742,11 @@ export class Session {
     const lines: string[] = ["[History resources]"];
     if (attachments.length) {
       lines.push("Attachments:");
-      for (const r of attachments.slice(0, 20)) lines.push(`- ${formatResource(r)}`);
+      for (const r of attachments.slice(-20)) lines.push(`- ${formatResource(r)}`);
     }
     if (outputs.length) {
       lines.push("Final outputs:");
-      for (const r of outputs.slice(0, 20)) lines.push(`- ${formatResource(r)}`);
+      for (const r of outputs.slice(-20)) lines.push(`- ${formatResource(r)}`);
     }
     return lines.join("\n");
   }
@@ -1722,6 +1903,7 @@ export class Session {
       if (keep !== null) start = Math.min(start, keep);
     }
     if (start <= 0) return;
+    this.resetForeground();
     this.messages = this.messages.slice(start);
     this.shiftTurnMetadata(start);
   }
@@ -2210,6 +2392,27 @@ function isToolResultOnlyMessage(msg: Message): boolean {
   return msg.role === "user" && msg.content.length > 0 && msg.content.every((c) => c.type === "tool_result");
 }
 
+/** Ignore ONLY boundaries between adjacent pure result rows with identical
+ * metadata. All result payloads/order, non-result messages and metadata remain
+ * exact. This models the provider's one-toolResult-per-block conversion without
+ * retaining a second canonical transcript or hashing one huge JSON string. */
+function orderedToolResultProjectionDigest(messages: readonly Message[]): string {
+  const hash = createHash("sha256");
+  let previousResultMetadata: string | undefined;
+  for (const message of messages) {
+    if (isToolResultOnlyMessage(message)) {
+      const metadata = JSON.stringify({ ...message, content: [] });
+      if (metadata !== previousResultMetadata) hash.update("result-group\n").update(metadata).update("\n");
+      for (const block of message.content) hash.update("result\n").update(JSON.stringify(block)).update("\n");
+      previousResultMetadata = metadata;
+    } else {
+      hash.update("message\n").update(JSON.stringify(message)).update("\n");
+      previousResultMetadata = undefined;
+    }
+  }
+  return hash.digest("hex");
+}
+
 function isImageOnlyMessage(msg: Message): boolean {
   return msg.role === "user" && msg.content.length > 0 && msg.content.every((c) => c.type === "image");
 }
@@ -2415,23 +2618,58 @@ export function esticogseedTextTokens(s: string): number {
   return Math.ceil(cjk * 1.5 + other / 4);
 }
 
-/** Merge token usage objects. 任一入参缺失按 0 处理（旧数据无 usage 块时不得抛）。 */
-export function mergeUsage(a: Usage = ZERO_USAGE, b: Partial<Usage> = {}): Usage {
+/** Sum reported usage. A missing object contributes nothing; an existing
+ * object's missing count makes that aggregate unknown. Presence and validity
+ * are independent per field; neither missing counts nor unsafe sums become 0. */
+export function mergeUsage(a?: Usage, b?: Partial<Usage>): Usage {
   const left = a ?? ZERO_USAGE;
-  const right = b ?? {};
+  const right = b ?? ZERO_USAGE;
+  const sumCount = (key: "inputTokens" | "outputTokens" | "totalTokens" | "cacheReadTokens" | "cacheWriteTokens"): number | undefined => {
+    const l = left[key];
+    const r = right[key];
+    if (a == null) return isValidTokenCount(r) ? r : undefined;
+    if (b == null) return isValidTokenCount(l) ? l : undefined;
+    if (!isValidTokenCount(l) || !isValidTokenCount(r)) return undefined;
+    const sum = l + r;
+    return isValidTokenCount(sum) ? sum : undefined;
+  };
+  const inputTokens = sumCount("inputTokens");
+  const outputTokens = sumCount("outputTokens");
+  const totalTokens = sumCount("totalTokens");
+  const cacheReadTokens = sumCount("cacheReadTokens");
+  const cacheWriteTokens = sumCount("cacheWriteTokens");
+  // Opt in only when a contribution actually carries a wire prompt total;
+  // preserve legacy strict object shapes otherwise. A missing whole operand
+  // is an identity, but missing buckets within a contribution stay unknown.
+  const completeInput = (usage?: Partial<Usage>): number | undefined => {
+    if (usage == null) return 0;
+    if (Object.hasOwn(usage, "totalInputTokens")) {
+      return isValidTokenCount(usage.totalInputTokens) ? usage.totalInputTokens : undefined;
+    }
+    if (!isValidTokenCount(usage.inputTokens)
+      || !isValidTokenCount(usage.cacheReadTokens)
+      || !isValidTokenCount(usage.cacheWriteTokens)) return undefined;
+    const sum = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+    return isValidTokenCount(sum) ? sum : undefined;
+  };
+  let totalInputTokens: number | undefined;
+  if (a?.totalInputTokens !== undefined || b?.totalInputTokens !== undefined) {
+    const l = completeInput(a);
+    const r = completeInput(b);
+    if (l !== undefined && r !== undefined && isValidTokenCount(l + r)) totalInputTokens = l + r;
+  }
   return {
-    inputTokens: (left.inputTokens ?? 0) + (right.inputTokens ?? 0),
-    outputTokens: (left.outputTokens ?? 0) + (right.outputTokens ?? 0),
-    cacheReadTokens: (left.cacheReadTokens ?? 0) + (right.cacheReadTokens ?? 0),
-    cacheWriteTokens: (left.cacheWriteTokens ?? 0) + (right.cacheWriteTokens ?? 0),
-    totalTokens: (left.totalTokens ?? 0) + (right.totalTokens ?? 0),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(cacheReadTokens != null ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens != null ? { cacheWriteTokens } : {}),
+    ...(totalInputTokens != null ? { totalInputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
   };
 }
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
   outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
   totalTokens: 0,
 };

@@ -291,6 +291,11 @@ export function abortActiveSessionsForConversation(cid: string): number {
 }
 
 type SafeUsage = {
+  /** Complete prompt input including caches; absent means unknown. */
+  totalInputTokens?: number;
+  requestedModel?: string;
+  /** Last-call observation only; does not describe every call in the turn. */
+  reportedModel?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -299,6 +304,7 @@ type SafeUsage = {
   /** 最后一次调用的 prompt 侧用量（2026-09-11）：当前上下文占用的权威
    *  口径；上方字段为整轮累加（消耗口径）。 */
   lastCallUsage?: {
+    totalInputTokens?: number;
     inputTokens?: number;
     outputTokens?: number;
     cacheReadTokens?: number;
@@ -458,15 +464,26 @@ function finiteNumber(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// Usage is a presence contract: null and numeric strings must not become zero.
+function usageNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function safeUsageForLog(usage: unknown): SafeUsage | undefined {
   if (!usage || typeof usage !== 'object') return undefined;
   const u = usage as Record<string, unknown>;
   const out: SafeUsage = {};
-  const inputTokens = finiteNumber(u.inputTokens);
-  const outputTokens = finiteNumber(u.outputTokens);
-  const cacheReadTokens = finiteNumber(u.cacheReadTokens);
-  const cacheWriteTokens = finiteNumber(u.cacheWriteTokens);
-  const totalTokens = finiteNumber(u.totalTokens);
+  const inputTokens = usageNumber(u.inputTokens);
+  const outputTokens = usageNumber(u.outputTokens);
+  const cacheReadTokens = usageNumber(u.cacheReadTokens);
+  const cacheWriteTokens = usageNumber(u.cacheWriteTokens);
+  const totalTokens = usageNumber(u.totalTokens);
+  const totalInputTokens = usageNumber(u.totalInputTokens);
+  if (totalInputTokens !== undefined) out.totalInputTokens = totalInputTokens;
+  for (const key of ['requestedModel', 'reportedModel'] as const) {
+    const value = u[key];
+    if (typeof value === 'string' && /^[A-Za-z0-9._:/@+\-]{1,160}$/.test(value)) out[key] = value;
+  }
   if (inputTokens !== undefined) out.inputTokens = inputTokens;
   if (outputTokens !== undefined) out.outputTokens = outputTokens;
   if (cacheReadTokens !== undefined) out.cacheReadTokens = cacheReadTokens;
@@ -476,10 +493,12 @@ function safeUsageForLog(usage: unknown): SafeUsage | undefined {
   if (nestedRaw && typeof nestedRaw === 'object' && !Array.isArray(nestedRaw)) {
     const n = nestedRaw as Record<string, unknown>;
     const nested: NonNullable<SafeUsage['lastCallUsage']> = {};
-    const ni = finiteNumber(n.inputTokens);
-    const no = finiteNumber(n.outputTokens);
-    const ncr = finiteNumber(n.cacheReadTokens);
-    const ncw = finiteNumber(n.cacheWriteTokens);
+    const ni = usageNumber(n.inputTokens);
+    const no = usageNumber(n.outputTokens);
+    const ncr = usageNumber(n.cacheReadTokens);
+    const ncw = usageNumber(n.cacheWriteTokens);
+    const nt = usageNumber(n.totalInputTokens);
+    if (nt !== undefined) nested.totalInputTokens = nt;
     if (ni !== undefined) nested.inputTokens = ni;
     if (no !== undefined) nested.outputTokens = no;
     if (ncr !== undefined) nested.cacheReadTokens = ncr;
@@ -738,9 +757,12 @@ export function recordModelRawEventForLog(stats: ModelRunLogDiagnostics, ev: unk
       // meta.lastCallUsage（2026-09-11）平级挂在 meta 上，先并入 usage 再
       // 走白名单过滤，否则占用口径字段会在这一站被剥掉。
       stats.usage = safeUsageForLog(
-        meta.lastCallUsage
-          ? { ...(meta.usage && typeof meta.usage === 'object' ? meta.usage : {}), lastCallUsage: meta.lastCallUsage }
-          : meta.usage,
+        {
+          ...(meta.usage && typeof meta.usage === 'object' ? meta.usage : {}),
+          ...(meta.lastCallUsage ? { lastCallUsage: meta.lastCallUsage } : {}),
+          ...(meta.model !== undefined ? { requestedModel: meta.model } : {}),
+          ...(meta.reportedModel !== undefined ? { reportedModel: meta.reportedModel } : {}),
+        },
       ) || stats.usage;
       stats.providerDurationMs = finiteNumber(meta.durationMs) ?? stats.providerDurationMs;
       stats.provider = typeof meta.provider === 'string' ? meta.provider : stats.provider;
@@ -934,6 +956,7 @@ function agentRunResultEventForTelemetry(input: {
   streamIdleTimeoutSec?: number;
   timings?: AgentRunTimings;
   failureCode?: string;
+  failureKind?: StreamEvent['failureKind'];
   failurePhase?: StreamEvent['failurePhase'];
   /** Terminal usage totals for this run (SafeUsage — provider-reported
    *  numbers only). Consumed by the group-chat bus to attach metrics to the
@@ -976,6 +999,7 @@ function agentRunResultEventForTelemetry(input: {
   if (Number.isFinite(input.firstTokenMs)) data.first_token_ms = Math.max(0, Math.round(input.firstTokenMs || 0));
   if (Number.isFinite(input.toolCalls) && (input.toolCalls || 0) > 0) data.tool_calls = input.toolCalls;
   if (errorCode) data.error_code = errorCode;
+  if (input.failureKind) data.failure_kind = input.failureKind;
   return { type: 'event', event: { stream: 'agent_run_result', data } };
 }
 
@@ -1094,6 +1118,9 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     idleTimeout = 1800,
     streamIdleTimeout = 180,
     maxToolLoops,
+    maxToolCalls,
+    toolDenylist,
+    suppressExecutionPlanInstructions,
     abortSignal = null,
     skillList,
     forceOpenSkillRefs,
@@ -1327,11 +1354,34 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
   let errText: string | null = null;
   let abortedFlag = false;
   let terminalFailureCode = '';
+  let terminalFailureKind: StreamEvent['failureKind'];
   let terminalFailurePhase: StreamEvent['failurePhase'];
   /** Reporting half of the deterministic-failure breaker. Hoisted because the
    *  terminal-status block runs in `finally`, where `built` is out of scope. */
   let toolFailureProbe: (() => { kind: string; code: string; reason: string; failures: number; tool: string } | null)
     | null = null;
+  // Consume only the runner's structured breaker receipt. Individual tool
+  // errors can recover and must never decide the terminal state here.
+  const toolFailureEvent = (): StreamEvent | null => {
+    if (errText || abortedFlag || externalAbort || directSessionAbort || idleHit) return null;
+    const trip = toolFailureProbe?.();
+    if (!trip) return null;
+    const failureKind: StreamEvent['failureKind'] = trip.kind === 'missing_dependency' ? 'dependency'
+      : trip.kind === 'invalid_args' ? 'validation'
+        : trip.kind === 'policy_denied' || trip.kind === 'missing_user_input' ? 'operation' : 'runtime';
+    log.warn('model turn ended after repeated deterministic tool failures', {
+      ...turnLogContext,
+      tool: safeToolNameForLog(trip.tool),
+      failureCode: trip.code,
+      failureKind,
+      countedFailures: trip.failures,
+    });
+    // endTurn skips synthesis. The receipt already contains cause, progress and
+    // recovery; use it verbatim without another model call. Earlier deltas and
+    // successful tool/artifact observations remain in the process trail.
+    finalText = trip.reason;
+    return { type: 'error', text: trip.reason, failureKind, failureCode: trip.code, failurePhase: 'tool' };
+  };
   // Set only after runner construction and all host-side preflight gates pass.
   // This is the taxonomy boundary between setup/config failures and failures
   // produced by an attempted model run; do not replace it with text matching.
@@ -1382,6 +1432,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       agentId,
       ...(agentName ? { agentName } : {}),
       ...(maxToolLoops ? { maxToolLoops } : {}),
+      ...(toolDenylist !== undefined ? { toolDenylist } : {}),
       ...(disableTools ? { disableTools: true } : {}),
       ...(toolAccess === 'read-only' ? { toolAccess: 'read-only' } : {}),
       ...(ephemeralSession ? { ephemeralSession: true } : {}),
@@ -1579,10 +1630,10 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     // very first attempt of the next turn; the 2026-10-13 run shows exactly that
     // ("CogSeed model provider request failed (400)" on the worker's first try,
     // while the post-turn log still reported changed: true).
-    // Trusted external reception runs on a throwaway in-memory session, so there
+    // Reception and ephemeral runs use throwaway in-memory sessions, so there
     // is no local session protocol to heal — and the local session must not be
     // loaded (or persisted) on this path at all.
-    if (!receptionScope) {
+    if (!receptionScope && !ephemeralSession) {
       try {
         const cachedForHeal = await _getCachedSession(sessionId);
         const heal = (cachedForHeal as { healAndPersist?: () => boolean } | null | undefined)?.healAndPersist;
@@ -1601,6 +1652,8 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     }
     const rawEvents = runner.runStream({
       message,
+      ...(maxToolCalls !== undefined ? { maxToolCalls } : {}),
+      ...(suppressExecutionPlanInstructions !== undefined ? { suppressExecutionPlanInstructions } : {}),
       ...(resumeActiveTurn ? { resumeActiveTurn: true } : {}),
       signal: controller.signal,
       sandboxEnv,
@@ -1753,18 +1806,33 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
         }
       }
       let outgoing: StreamEvent = ev;
-      if (ev.type === 'error' && !(ev as StreamEvent).aborted) {
-        terminalFailureCode = (ev as StreamEvent).failureCode || 'model_stream_error';
-        terminalFailurePhase = (ev as StreamEvent).failurePhase || (finalText ? 'model_text' : 'provider_wait');
+      // The mapper cannot see host breaker receipts and otherwise promotes
+      // pre-tool narration to final (or emits a synthetic empty-response error).
+      // Resolve that terminal event before any upstream consumer sees it.
+      if (ev.type === 'final' || (ev.type === 'error' && ev.failureCode === 'empty_response')) {
+        outgoing = toolFailureEvent() || ev;
+      }
+      if (outgoing.type === 'error' && !outgoing.aborted) {
+        // The mapper owns explicit Core termination classification. Preserve
+        // its deterministic receipt as lifecycle output instead of promoting
+        // an earlier delta. Match metadata only, never tool output or prose.
+        const terminationReason = (agentRunResult as import('#core-agent').AgentRunResult | null)?.meta.terminationReason;
+        if (terminationReason && outgoing.failureKind === 'runtime' && outgoing.failureCode === terminationReason) {
+          finalText = outgoing.text || finalText;
+        }
+        terminalFailureCode = outgoing.failureCode || 'model_stream_error';
+        terminalFailureKind = outgoing.failureKind || 'model';
+        terminalFailurePhase = outgoing.failurePhase || (finalText ? 'model_text' : 'provider_wait');
         outgoing = {
-          ...ev,
-          failureKind: (ev as StreamEvent).failureKind || 'model',
+          ...outgoing,
+          failureKind: terminalFailureKind,
           failureCode: terminalFailureCode,
           failurePhase: terminalFailurePhase,
         };
       }
       recordModelStreamEventForLog(diagnostics, outgoing);
       recorder.record(outgoing as any);
+      if (outgoing.type === 'delta') finalText += outgoing.text || '';
       if (outgoing.type === 'final') finalText = outgoing.text || finalText;
       if (outgoing.type === 'error') {
         errText = outgoing.text || errText;
@@ -1800,6 +1868,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     } else if (idleHit) {
       errText = errText || `Model exceeded ${idleHitWindow}s with no response (aborted)`;
       terminalFailureCode = 'idle_timeout';
+      terminalFailureKind = 'model';
       terminalFailurePhase = idleHitPhase;
       const idleEvent: StreamEvent = {
         type: 'error',
@@ -1813,9 +1882,10 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       yield idleEvent;
     }
   } catch (err) {
-    if (idleHit) {
+    if (idleHit && !externalAbort && !directSessionAbort) {
       errText = `Model exceeded ${idleHitWindow}s with no response (aborted)`;
       terminalFailureCode = 'idle_timeout';
+      terminalFailureKind = 'model';
       terminalFailurePhase = idleHitPhase;
       log.warn('model turn idle timeout surfaced after stream error', { ...turnLogContext, error: logErrorSummary(err) });
       const idleEvent: StreamEvent = {
@@ -1839,6 +1909,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     } else {
       errText = (err as Error).message || String(err);
       terminalFailureCode = modelRunStarted ? 'model_stream_error' : 'model_preflight';
+      terminalFailureKind = modelRunStarted ? 'model' : 'config';
       terminalFailurePhase = modelRunStarted ? 'provider_wait' : 'preflight';
       log.error('model turn stream error', { ...turnLogContext, error: logErrorSummary(err) });
       const errorEvent: StreamEvent = {
@@ -1865,10 +1936,10 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     // unmatched tool_use — provider APIs silently hang on that shape,
     // which surfaces as a "thinking" state that never ends. Heal is idempotent and
     // a no-op on healthy sessions, so running it unconditionally every
-    // local turn is safe. Trusted external reception has no cached local
+    // persistent turn is safe. Reception and ephemeral runs have no cached local
     // session to heal: its in-memory transcript is discarded with the turn, so
     // the local session file is left untouched.
-    if (!receptionScope) {
+    if (!receptionScope && !ephemeralSession) {
       try {
         const cached = await _getCachedSession(sessionId);
         if (cached && typeof (cached as { healAndPersist?: () => boolean }).healAndPersist === 'function') {
@@ -1891,23 +1962,23 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     }
     releaseSlotOnce('finally');
     releaseSessionOnce('finally');
-    // Reporting half of the deterministic-failure breaker: the breaker already
-    // ended the turn (`endTurn: true` via tool-failure-guard.ts); here the turn
-    // records *why*, so the failure is a named state instead of an internal
-    // maintenance state ("organising context"). Only when the turn did not
-    // already fail for another reason — a model/idle error keeps precedence.
-    const toolFailureTrip = toolFailureProbe?.() ?? null;
-    if (toolFailureTrip && !errText && !abortedFlag) {
-      terminalFailureCode = toolFailureTrip.code;
-      log.warn('model turn ended after repeated deterministic tool failures', {
-        ...turnLogContext,
-        tool: toolFailureTrip.tool,
-        failureCode: toolFailureTrip.code,
-        failureKind: toolFailureTrip.kind,
-        countedFailures: toolFailureTrip.failures,
-        reason: toolFailureTrip.reason,
-      });
+    const breakerEvent = toolFailureEvent();
+    if (breakerEvent) {
+      errText = breakerEvent.text || null;
+      terminalFailureCode = breakerEvent.failureCode || '';
+      terminalFailureKind = breakerEvent.failureKind;
+      terminalFailurePhase = breakerEvent.failurePhase;
+      recordModelStreamEventForLog(diagnostics, breakerEvent);
+      recorder.record(breakerEvent as any);
+      yield breakerEvent;
     }
+    // Cancellation wins even if an earlier terminal observation carried a
+    // failure. Do not leak that stale failure classification into telemetry.
+    const failureDetails = !abortedFlag && terminalFailureCode ? {
+      failureKind: terminalFailureKind,
+      failureCode: terminalFailureCode,
+      failurePhase: terminalFailurePhase,
+    } : {};
     const doneEvent: StreamEvent = { type: 'done' };
     recordModelStreamEventForLog(diagnostics, doneEvent);
     const terminalStatus = abortedFlag
@@ -1916,6 +1987,9 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     const sharedTerminalStatus = abortedFlag
       ? 'cancelled'
       : (idleHit ? 'timed_out' : (errText || !finalText ? 'failed' : 'completed'));
+    queueExecutionLifecycle('error', executionLifecycle && terminalFailureCode && !abortedFlag
+      ? () => executionLifecycle.event('error', failureDetails)
+      : undefined);
     queueExecutionLifecycle('terminal', executionLifecycle
       ? () => executionLifecycle.terminal({
         status: sharedTerminalStatus,
@@ -1935,9 +2009,8 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       idleTimeoutSec: idleTimeout,
       streamIdleTimeoutSec: streamIdleTimeout,
       timings: agentRunResult?.meta.timings || snapshotLiveRunTimings(liveRunTimings),
-      failureCode: terminalFailureCode || undefined,
-      failurePhase: terminalFailurePhase
-        || (terminalStatus === 'aborted' ? liveRunFailurePhase(liveRunTimings.phase) : undefined),
+      ...failureDetails,
+      failurePhase: abortedFlag ? liveRunFailurePhase(liveRunTimings.phase) : terminalFailurePhase,
       usage: diagnostics.usage,
       firstTokenMs: diagnostics.firstTextDeltaMs,
       toolCalls: diagnostics.toolStarts > 0 ? diagnostics.toolStarts : undefined,
@@ -1964,11 +2037,14 @@ export async function chatWithModel(opts: ChatOptions): Promise<ChatResult> {
   let finalText: string | null = null;
   let errText: string | null = null;
   let aborted = false;
+  let partialText = '';
   for await (const ev of streamChatWithModel(opts)) {
     if (ev.type === 'final') finalText = ev.text || '';
+    else if (ev.type === 'delta') partialText += ev.text || '';
     else if (ev.type === 'error' && !errText) errText = ev.text || '';
     if (ev.aborted) aborted = true;
   }
+  if (aborted || errText) return { ok: false, text: finalText || partialText, error: errText || 'aborted', aborted };
   if (finalText) return { ok: true, text: finalText, error: '', aborted: false };
   return { ok: false, text: '', error: errText || 'unknown error', aborted };
 }

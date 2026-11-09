@@ -53,6 +53,8 @@ export interface InspectionFinding extends ReportContentOwnership {
   /** Semantic findings remain review items until a person resolves them. */
   method?: 'semantic';
   assetVersions?: Record<string, string>;
+  /** When a semantic observation was written; legacy rows may omit it. */
+  at?: string;
 }
 
 export interface InspectionRun extends RecallJsonRecord {
@@ -494,7 +496,7 @@ export async function recordSemanticInspectionFindings(
         if (dismissed.has(key)) continue;
         findings.set(key, { key, category: 'conflict', assetIds, title: assetIds.join('+'),
           detail: '相关内容的结论或适用范围可能不同，请结合时间、场景和例外核对。',
-          method: 'semantic', assetVersions: { ...observation.assetVersions } });
+          method: 'semantic', assetVersions: { ...observation.assetVersions }, at: new Date().toISOString() });
         current.add(key); changed = true;
       }
       if (!changed) return;
@@ -504,6 +506,33 @@ export async function recordSemanticInspectionFindings(
         findings: [...findings.values()], unreportedSemanticKeys: [...current],
       });
     });
+  });
+}
+
+/** Read-only semantic observations for formation rechecks. No body, title or
+ * source text leaves this projection. */
+export interface SemanticInspectionFinding {
+  key: string;
+  assetIds: string[];
+  assetVersions: Record<string, string>;
+  detail: string;
+  at: string;
+}
+
+/** Read the persisted semantic observations without body text. */
+export async function listSemanticInspectionFindings(userId: string): Promise<SemanticInspectionFinding[]> {
+  const previous = await readRecallJsonRecord(userId, PROGRESS_COLLECTION, PROGRESS_ID);
+  const rows = Array.isArray(previous?.findings) ? previous.findings as InspectionFinding[] : [];
+  return rows.flatMap((finding) => {
+    if (finding.method !== 'semantic' || !finding.assetVersions
+      || !Array.isArray(finding.assetIds) || finding.assetIds.length !== 2) return [];
+    return [{
+      key: finding.key,
+      assetIds: [...finding.assetIds],
+      assetVersions: { ...finding.assetVersions },
+      detail: finding.detail,
+      at: finding.at || (typeof previous?.updatedAt === 'string' ? previous.updatedAt : ''),
+    }];
   });
 }
 

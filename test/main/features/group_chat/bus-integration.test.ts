@@ -2049,8 +2049,17 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
 
-    bus.subscribe(TEST_UID, cid, () => {});
-    _setScript(state.buildGmemberSessionId(TEST_UID, cid, AGENT_ID), [
+    const { GroupEventChatProjector } = await import('../../../../src/main/features/chat_events/project-group-event');
+    const projector = new GroupEventChatProjector();
+    const terminalEvents: any[] = [];
+    let projectedStarted = false;
+    bus.subscribe(TEST_UID, cid, event => {
+      const projected = projector.project(event);
+      if (projected.some(item => item.type === 'chat.turn.started')) projectedStarted = true;
+      terminalEvents.push(...projected.filter(item => item.type === 'chat.turn.completed'));
+    });
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "delta", text: "partial work" },
       { type: "__wait_for_abort__" },
       { type: "final", text: "should not appear after abort" },
     ]);
@@ -2074,12 +2083,13 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
         : undefined;
     };
     const start = Date.now();
-    while (Date.now() - start < 1000) {
+    while (Date.now() - start < 5000) {
       const worker = runningFor(AGENT_ID);
-      if (worker?.abortController) break;
+      if (worker?.abortController && projectedStarted) break;
       await new Promise((r) => setTimeout(r, 10));
     }
     expect(runningFor(AGENT_ID)?.abortController).toBeTruthy();
+    expect(projectedStarted).toBe(true);
 
     await bus.abort(TEST_UID, cid);
     await waitForQuiescent(TEST_UID, cid);
@@ -2094,6 +2104,9 @@ describe("group_chat bus integration › abort sticky across worker post-cleanup
         m.text.includes("should not appear after abort"),
       ),
     ).toBe(false);
+    expect(messages.find((m: any) => m.from === AGENT_ID && m.turn_end))
+      .toMatchObject({ terminal_status: 'cancelled' });
+    expect(terminalEvents).toEqual([expect.objectContaining({ status: 'cancelled' })]);
     const st = await state.readState(TEST_UID, cid);
     expect(st.status).toBe("aborted");
   });
@@ -7003,6 +7016,58 @@ describe("group_chat bus integration › Recall asset usage receipt", () => {
     const records = await usage.listRecallUsage(TEST_UID, asset.id);
     expect(records.length).toBeGreaterThanOrEqual(1);
   }, BUS_TEST_TIMEOUT_MS);
+
+  it("persists the confirmed-projection fallback on the commander reply", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    const projections = await import("../../../../src/main/features/recall/context-projection");
+    const assets = await import("../../../../src/main/features/recall/asset-service");
+
+    const candidate = await createNightlyCandidateFixture(TEST_UID, {
+      judgment: "Keep the review checklist aligned with the current source.",
+      summary: "Review checklist rule",
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: "exec-fallback" }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    await assets.setAbilityAssetMaturity(TEST_UID, asset.id, "transfer_validated");
+    const projection = await projections.previewContextProjection(TEST_UID, {
+      taskRunId: "task-fallback",
+      purpose: "review",
+      authorization: "user_confirmed",
+      explicitAssetIds: [asset.id],
+      confirm: true,
+    });
+    // 确认后改正文：冻结版本失效，committed 装配失败并回退自动投影。
+    await assets.updateAbilityAsset(TEST_UID, asset.id, {
+      statement: "Changed after confirmation: the review checklist v2.",
+      actor: "user",
+      reason: "test committed drift fallback",
+    });
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "done with fallback" },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "run the approved review",
+      committedProjectionId: projection.id,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const messages = await readConversationMessages(cid);
+    const reply = messages.find((message) => message.from === "commander" && message.text === "done with fallback");
+    expect(reply).toBeTruthy();
+    expect(reply!.recall_fallback).toEqual({
+      projectionId: projection.id,
+      reason: "projection_asset_version_changed",
+    });
+  }, BUS_TEST_TIMEOUT_MS);
 });
 
 describe("group_chat bus integration › deterministic host routing (task turn)", () => {
@@ -7029,6 +7094,31 @@ describe("group_chat bus integration › deterministic host routing (task turn)"
     const projections = await import("../../../../src/main/features/recall/context-projection");
     const projection = await projections.readContextProjection(TEST_UID, requirement!.projectionId!);
     expect(projection.status).toBe("confirmed");
+  }, BUS_TEST_TIMEOUT_MS);
+
+  it("continues an open task without a routing model call", async () => {
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "I will review it." }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "审查一下 bus.ts 的守卫实现" });
+    await waitForQuiescent(TEST_UID, cid);
+    const opened = await store.readConversationTaskState(TEST_UID, cid);
+    const judge = vi.fn(async () => ({ isTask: true, continuation: false }));
+    bus._setHostRoutingJudgeForTest(judge);
+    _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "Continuing." }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "继续处理这个任务" });
+    await waitForQuiescent(TEST_UID, cid);
+    const after = await store.readConversationTaskState(TEST_UID, cid);
+    expect(judge).not.toHaveBeenCalled();
+    expect(after?.currentTaskId).toBe(opened?.currentTaskId);
+    expect(after?.routingDecisions?.some(d => d.kind === 'explicit_continuation')).toBe(true);
+    _setScript(state.buildGconvSessionId(cid), [{ type: "final", text: "New task." }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "继续开发另一个系统" });
+    await waitForQuiescent(TEST_UID, cid);
+    expect(judge).toHaveBeenCalledOnce();
   }, BUS_TEST_TIMEOUT_MS);
 
   it("leaves greetings untouched — the trivial gate opens nothing and writes no task state", async () => {

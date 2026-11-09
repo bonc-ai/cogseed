@@ -8,6 +8,8 @@ import { prompts } from '../../prompts/loader';
 import { runRecallCaptureModel } from './capture-model-routing';
 import { parseCaptureAssessmentJson, parseCaptureGroundingAssessment, type GroundingCandidate, type GroundingSource, type CaptureGroundingAssessment } from './capture-grounding';
 import { validateFormationComparison, type FormationComparison } from './formation-comparison';
+import { formationOldContentPlanSchema, unavailableFormationOldContentPlan, validateFormationOldContentPlan,
+  type FormationOldContentPlan } from './formation-old-content';
 import { RECALL_TEXT_LIMITS } from './content-contract';
 import type { CaptureExistingAssetsResult } from './capture-existing-assets';
 import type { RecallCaptureModelCandidate } from './capture-settings';
@@ -33,7 +35,8 @@ export interface FormationBatchResult { revision?: z.infer<typeof revisionSchema
   /** Independent body/baseline verdict, before the host compares R metadata.
    * Cache replay must not reuse a previous host-derived mismatch or repair. */
   sourceChecks?: CaptureGroundingAssessment;
-  index: number; checks: CaptureGroundingAssessment; uncertaintyDisposition: string; comparison?: FormationComparison }
+  index: number; checks: CaptureGroundingAssessment; uncertaintyDisposition: string; comparison?: FormationComparison;
+  oldContentPlan?: FormationOldContentPlan }
 export interface FormationBatchCheckpoint { ruleSemanticsPolicyVersion?: 3; sourceFingerprint?: string; fingerprint: string; assessments: FormationBatchResult[];
   itemFailures?: Array<{ index: number; reason: 'assessment_invalid' | 'dependency_unavailable' | 'related_assets_overflow'; relatedAssetIds?: string[] }> }
 
@@ -165,7 +168,11 @@ export async function assessFormationBatch(userId: string, input: {
   const parseRow = (value: unknown, replay = false): FormationBatchResult => {
     const row = value as FormationBatchResult;
     const item = input.items.find(item => item.index === row?.index);
-    if (!item || !row || Object.keys(row).some(key => !['index', 'checks', 'uncertaintyDisposition', 'comparison', 'revision', 'sourceRuleConclusions'].includes(key))
+    if (!item || !row || Object.keys(row).some(key => !['index', 'checks', 'uncertaintyDisposition', 'comparison', 'revision',
+      'sourceRuleConclusions', 'oldContentPlan',
+      // Some providers echo source excerpts at the row root. They are not
+      // persisted and must not invalidate an otherwise complete assessment.
+      'excerpts'].includes(key))
       || !['effect_unverified', 'outside_claim_scope', 'source_attribution_only', 'content_unresolved', 'none'].includes(row.uncertaintyDisposition)) throw new Error('invalid formation assessment');
     // Some providers place the complete revision inside comparison. Move it
     // only when it has a single unambiguous value; never rewrite its content.
@@ -238,11 +245,44 @@ export async function assessFormationBatch(userId: string, input: {
         revision = undefined;
       }
     }
+    // Old-content actions share the assessment call but have a separate failure
+    // domain: an invalid or incomplete plan never removes the new-content row.
+    const related = (comparison?.relatedAssets || []).flatMap(row => row.assetId && row.version
+      ? [{ assetId: row.assetId, version: row.version }] : []);
+    let oldContentPlan: FormationOldContentPlan | undefined;
+    if (related.length >= 2) {
+      const groupIds = related.map(asset => asset.assetId);
+      if (input.existing.coverage.truncated || input.existing.coverage.unavailable > 0) {
+        oldContentPlan = unavailableFormationOldContentPlan(groupIds, input.existing.assets, 'insufficient');
+      } else if (row.oldContentPlan == null) {
+        oldContentPlan = unavailableFormationOldContentPlan(groupIds, input.existing.assets, 'unavailable');
+      } else if (replay) {
+        const stored = formationOldContentPlanSchema.safeParse(row.oldContentPlan);
+        const baselineMatches = stored.success && stored.data.assetIds.length === groupIds.length
+          && groupIds.every(assetId => stored.data.assetIds.includes(assetId)
+            && stored.data.baselineVersions[assetId] === related.find(row => row.assetId === assetId)?.version);
+        oldContentPlan = baselineMatches ? stored.data
+          : unavailableFormationOldContentPlan(groupIds, input.existing.assets, 'unavailable');
+      } else {
+        try {
+          oldContentPlan = validateFormationOldContentPlan(row.oldContentPlan, {
+            relatedAssets: related, assets: input.existing.assets,
+          });
+        } catch (error) {
+          log.warn('formation old-content plan invalid', {
+            index: row.index,
+            error: error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+          });
+          oldContentPlan = unavailableFormationOldContentPlan(groupIds, input.existing.assets, 'unavailable');
+        }
+      }
+    }
     const contracts = formationRuleContracts(item.candidate.ontologyChanges, ontologyRecords);
     const sourceRuleConclusions = parseSourceRuleConclusions(row.sourceRuleConclusions, contracts, item.sources);
     const rules = deriveFormationRuleRevisions(item.candidate.ontologyChanges, sourceRuleConclusions, ontologyRecords, true);
     if (!rules.supported) { checks.supported = false; checks.finalDecisionPreserved = false; }
     return { index: row.index, checks, uncertaintyDisposition: row.uncertaintyDisposition, ...(comparison ? { comparison } : {}),
+      ...(oldContentPlan ? { oldContentPlan } : {}),
       sourceChecks, ...(revision ? { revision } : {}), ...(rules.ruleRevisions.length ? { ruleRevisions: rules.ruleRevisions } : {}),
       ...(contracts.length ? { sourceRuleConclusions } : {}) };
   };
@@ -256,6 +296,7 @@ export async function assessFormationBatch(userId: string, input: {
       const parsed = parseRow({ index: row.index, checks: row.sourceChecks || row.checks,
         uncertaintyDisposition: row.uncertaintyDisposition,
         ...(comparison ? { comparison } : {}),
+        ...(row.oldContentPlan ? { oldContentPlan: row.oldContentPlan } : {}),
         ...(row.revision ? { revision: row.revision } : {}),
         ...(row.sourceRuleConclusions ? { sourceRuleConclusions: row.sourceRuleConclusions } : {}) }, true);
       assessments.set(parsed.index, parsed);

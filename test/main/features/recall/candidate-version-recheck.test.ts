@@ -393,6 +393,7 @@ describe('promote 通道的 IPC 契约（T021 / contracts/ipc.md §二）', () =
     expect(conflict).toEqual({
       ok: false,
       state: 'pending',
+      code: 'recall_candidate_version_conflict',
       versionConflict: { baselineVersion: '1', currentVersion: '2', targetVersionUsed: '1' },
       message: expect.stringContaining('没有生效'),
     });

@@ -249,8 +249,12 @@ function _csUpgradeFlowForLive(flow, startedAtMs) {
   _csSetBadgeLive(flow, true);
   _csStartTicker(flow, startedAtMs);
   // 重放流被 live 事件复活时补上运行中的默认紧凑态（首次升级才设，之后
-  // 用户手动展开的选择不被事件流覆盖）。
-  if (flow.dataset.csCompact === undefined) _csSetCompact(flow, true);
+  // 用户手动开合的选择不被事件流覆盖）。重放默认整块收起，必须先恢复
+  // body，才能让紧凑态只隐藏过程行、保留新正文。用户开合已设置 csCompact。
+  if (flow.dataset.csCompact === undefined) {
+    _csSetCollapsed(flow, false);
+    _csSetCompact(flow, true);
+  }
 }
 
 /** 活动流里的工具调用行数——徽章「N 次工具调用」的唯一口径。 */
@@ -838,31 +842,30 @@ function _csRenderDiffRow(row, payload) {
 
 function _csRenderUsageRow(row, payload) {
   const p = payload || {};
+  const tokens = window.conversationMetrics.tokenUsageMetrics(p);
   const bits = [];
-  // 显示分层（交互设计 2026-09-08 20:22 确认方案）：主显示只露裸输入+输出
-  // （真实增量，数值小且直观）；缓存命中率 ≥50% 显示正向标记「缓存 xx%」
-  // （大数不吓人，省钱变亮点）；四项全量明细放悬停 title。与页脚
-  // messageMetricsLine 同口径。
-  const bareIn = numOr0(p.inputTokens);
-  const cacheRead = numOr0(p.cacheReadTokens);
-  const out = numOr0(p.outputTokens);
-  if (bareIn > 0 || out > 0) bits.push(`↑${bareIn.toLocaleString()}`);
-  if (out > 0) bits.push(`↓${out.toLocaleString()}`);
-  const hitDenom = bareIn + cacheRead;
-  if (hitDenom > 0 && cacheRead / hitDenom >= 0.5) {
-    bits.push(`缓存 ${Math.round((cacheRead / hitDenom) * 100)}%`);
+  // Reuse the message/session contract. Keep known uncached input as the main
+  // readout only for a complete prompt; partial observations are lower bounds.
+  if (tokens.hasUsage) {
+    const inText = tokens.completeInputBreakdown ? tokens.inputTokens.toLocaleString() : tokens.inText;
+    bits.push(`↑${inText}`);
+    bits.push(`↓${tokens.outputTokens !== null ? tokens.outputTokens.toLocaleString() : '—'}`);
   }
-  if (p.estimatedCost != null) bits.push(`≈$${p.estimatedCost}`);
+  if (tokens.cacheBadgeText) bits.push(tokens.cacheBadgeText);
+  if (p.estimatedCost != null && tokens.completeInputBreakdown && tokens.outputTokens !== null) bits.push(`≈$${p.estimatedCost}`);
   if (numOr0(p.contextWindowRatio) > 0) {
     const pct = Math.round(p.contextWindowRatio * 100);
     bits.push(`ctx ${pct}%`);
     if (pct >= 85) bits.push('<span class="cs-ctx-warn">上下文接近上限</span>');
   }
-  if (!bits.length) return;
-  const cacheWrite = numOr0(p.cacheWriteTokens);
-  const title = (bareIn + cacheRead + cacheWrite + out) > 0
-    ? `裸输入 ${bareIn.toLocaleString()} · 缓存读 ${cacheRead.toLocaleString()} · 缓存写 ${cacheWrite.toLocaleString()} · 输出 ${out.toLocaleString()}`
-    : '';
+  // A later unknown observation must not leave a previous exact ratio visible.
+  if (!bits.length) { row.innerHTML = ''; return; }
+  const detail = [];
+  if (tokens.inputTokens !== null) detail.push(`裸输入 ${tokens.inputTokens.toLocaleString()}`);
+  if (tokens.cacheReadTokens !== null) detail.push(`缓存读 ${tokens.cacheReadTokens.toLocaleString()}`);
+  if (tokens.cacheWriteTokens !== null) detail.push(`缓存写 ${tokens.cacheWriteTokens.toLocaleString()}`);
+  if (tokens.outputTokens !== null) detail.push(`输出 ${tokens.outputTokens.toLocaleString()}`);
+  const title = detail.join(' · ');
   row.innerHTML = `<div class="cs-usage-row"${title ? ` title="${_csEscapeHtml(title)}"` : ''}>${bits.join(' · ')}</div>`;
 }
 

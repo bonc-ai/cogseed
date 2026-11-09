@@ -1,0 +1,65 @@
+{
+  "list_response": {
+    "list": [
+      { "content_id": "task-tpl-b", "version": "1.0.0", "status": "published", "name": "会议纪要日报", "summary": "每天汇总已结束会议的要点" },
+      { "content_id": "task-tpl-c", "version": "1.0.0", "status": "published", "name": "单次提醒", "summary": "单次任务，时间由用户选择" },
+      { "content_id": "task-tpl-disabled", "version": "1.0.0", "status": "disabled", "disabled": true, "name": "已下架的任务模板", "summary": "停用后仍保留目录行" }
+    ]
+  },
+  "details": {
+    "task-tpl-b": {
+      "content_id": "task-tpl-b",
+      "version": "1.0.0",
+      "status": "published",
+      "name": "会议纪要日报",
+      "config": {
+        "task_content_zh": "汇总今天已结束的会议，按{{team}}关心的议题整理要点和待办。",
+        "task_content_en": "Summarize today's completed meetings for {{team}}.",
+        "schedule": { "type": "daily", "hour": 18, "minute": 0 },
+        "prerequisites": [{ "connector_type": "tencent-meeting", "note_zh": "需要能读取会议转写" }]
+      },
+      "fill_ins": [{ "id": "team", "label_zh": "团队名称" }],
+      "references": []
+    },
+    "task-tpl-c": {
+      "content_id": "task-tpl-c",
+      "version": "1.0.0",
+      "status": "published",
+      "name": "单次提醒",
+      "config": { "task_content_zh": "提醒我准备季度复盘材料。", "schedule": { "type": "one_time" } },
+      "fill_ins": [],
+      "references": [
+        { "source": "hub", "kind": "agent", "id": "ccccccccccc1", "usage": "execution_agent", "min_version": "1.0.0", "availability": "available" }
+      ]
+    }
+  },
+  "contents": {
+    "task-tpl-b": {
+      "content_id": "task-tpl-b",
+      "version": "1.0.0",
+      "template_kind": "scheduled_task",
+      "status": "published",
+      "config_sha256": "121480e24168d6f7024723529368e478ecdbde1c788e9c9889a5615ba237e9f7",
+      "config": {
+        "task_content_zh": "汇总今天已结束的会议，按{{team}}关心的议题整理要点和待办。",
+        "task_content_en": "Summarize today's completed meetings for {{team}}.",
+        "schedule": { "type": "daily", "hour": 18, "minute": 0 },
+        "prerequisites": [{ "connector_type": "tencent-meeting", "note_zh": "需要能读取会议转写" }]
+      },
+      "fill_ins": [{ "id": "team", "label_zh": "团队名称" }],
+      "references": []
+    },
+    "task-tpl-c": {
+      "content_id": "task-tpl-c",
+      "version": "1.0.0",
+      "template_kind": "scheduled_task",
+      "status": "published",
+      "config_sha256": "b6fe7ff06cab2028003dad6ba415cda7863355e778d27516401a519e2312967c",
+      "config": { "task_content_zh": "提醒我准备季度复盘材料。", "schedule": { "type": "one_time" } },
+      "fill_ins": [],
+      "references": [
+        { "source": "hub", "kind": "agent", "id": "ccccccccccc1", "usage": "execution_agent", "min_version": "1.0.0", "availability": "available" }
+      ]
+    }
+  }
+}

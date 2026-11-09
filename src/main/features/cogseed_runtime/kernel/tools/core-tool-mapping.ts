@@ -104,6 +104,11 @@ export const COGSEED_NATIVE_RUNTIME_TOOL_NAMES = Object.freeze([
   'cogseed_tasks',
   'cogseed_cancel',
   'ontology_projection_apply',
+  'ontology_task_query',
+  'search_ability_assets',
+  'messaging_list_targets',
+  'messaging_send',
+  'p3394_send',
 ] as const);
 
 export function getExecutableCogSeedToolNames(): readonly string[] {

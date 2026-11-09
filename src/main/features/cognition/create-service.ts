@@ -49,16 +49,20 @@ const schema = z.object({ target: z.enum(['cognition', 'ontology', 'joint']),
   expectedOntologyRevision: z.number().int().nonnegative().optional(), mode: z.enum(['apply_if_authorized', 'propose']).optional(), reason: text(1000),
 }).strict();
 const list = (values?: readonly string[]) => values?.length ? values.map(value => `• ${value}`).join('\n') : t('cognition.edit.none');
-const fail = (code: ConstructorParameters<typeof OntologyError>[0], key: string): never => { throw new OntologyError(code, t(key)); };
+const fail = (code: ConstructorParameters<typeof OntologyError>[0], key: string, details?: Record<string, unknown>): never => {
+  throw new OntologyError(code, t(key), details);
+};
 function requireCreateIntent(host: CognitionEditHost, previewOnly: boolean): void {
   if (!host.cid || !host.turnId || !host.sourceMessageId || host.sourceMessageFromUser !== true || !host.taskText?.trim())
     fail('not_authorized', 'cognition.create.user_instruction_required');
   const value = host.taskText!;
   if (previewOnly && /预览|草稿|方案|preview|draft|rascunho|prévia|下書き|プレビュー/i.test(value)
     && /认知|本体|cognition|ontology|cogni[cç][aã]o|ontologia|認知|オントロジー/i.test(value)) return;
-  if (/(?:不要|不许|禁止|先别|暂不|请勿|do not|don't|n[aã]o|nunca)[^。；;]{0,20}(?:创建|新建|保存|记住|记下|create|save|remember|criar|salvar)/i.test(value)
-    || !/创建|新建|新增|保存为|记住|记下|记一条|create|add\b|remember|save\b|criar|adicionar|salvar|memorizar|作成|新規|覚えて/i.test(value)
-    || !/认知|本体|资产|偏好|规则|事实|记住|记下|记一条|cognition|ontology|preference|rule\b|remember|memorizar|cogni[cç][aã]o|ontologia|prefer[eê]ncia|認知|オントロジー|覚えて/i.test(value))
+  // 词面不确定不再拒绝：确认卡片本身就是"授权由用户拍板"，把不确定交给
+  // 卡片而不是替用户关门（卡片一次一授、无 always-allow）。只有明确否定
+  // 才整组拦下；词尾覆盖记录/记一下/记一记等口语措辞。裸「别」不进否定
+  // 词表——「别人创建的」会误伤。
+  if (/(?:不要|不许|禁止|先别|暂不|请勿|do not|don't|n[aã]o|nunca)[^。；;]{0,20}(?:创建|新建|保存|记住|记下|记录|记一下|记一记|create|save|remember|criar|salvar)/i.test(value))
     fail('not_authorized', 'cognition.create.user_instruction_required');
 }
 /** An explicitly requested shared-body creation is one joint decision. A
@@ -71,6 +75,31 @@ function requireRequestedCreationTarget(host: CognitionEditHost, input: Cognitio
   const denySharedBody = /(?:不要|无需|不必|禁止|do not|don't|n[aã]o)[^。；;\n]{0,24}(?:共用|共享|shar|compartilh)/i.test(instruction);
   if (input.target !== 'joint' && newCognition && sharedBody && ontology && !denySharedBody)
     throw new OntologyError('not_authorized', t('cognition.create.joint_required'), { requiredTarget: 'joint' });
+}
+/** Cross-field target requirements are not expressible in the top-level Zod
+ * shape; report the same path/message issues so the model can self-correct. */
+function creationShapeIssues(input: CognitionCreateInput): Array<{ path: string; message: string }> {
+  const issues: Array<{ path: string; message: string }> = [];
+  const requireField = (field: 'cognition' | 'explanation' | 'ontologyChanges', message: string) => {
+    if (!input[field]) issues.push({ path: field, message });
+  };
+  const rejectField = (field: 'cognition' | 'explanation' | 'ontologyChanges', message: string) => {
+    if (input[field]) issues.push({ path: field, message });
+  };
+  if (input.target === 'ontology') {
+    requireField('explanation', 'target=ontology 需要完整 explanation');
+    rejectField('cognition', 'target=ontology 不接受 cognition');
+    requireField('ontologyChanges', 'target=ontology 需要 ontologyChanges');
+  } else if (input.target === 'cognition') {
+    requireField('cognition', 'target=cognition 需要完整 cognition');
+    rejectField('explanation', 'target=cognition 不接受 explanation');
+    rejectField('ontologyChanges', 'target=cognition 不接受 ontologyChanges');
+  } else {
+    requireField('cognition', 'target=joint 需要完整 cognition');
+    requireField('ontologyChanges', 'target=joint 需要 ontologyChanges');
+    rejectField('explanation', 'target=joint 不接受 explanation');
+  }
+  return issues;
 }
 /** Formation intentionally stores blocked plans and legacy parsing can infer a
  * discriminator. Explicit creation instead reports strict canonical structure
@@ -171,12 +200,15 @@ export async function createCognition(userId: string, context: Omit<CognitionEdi
   const host = { ...context, userId };
   assertCognitionManagementActive(host);
   const parsed = schema.safeParse(raw);
-  if (!parsed.success) fail('invalid_input', 'cognition.create.invalid_input');
+  if (!parsed.success) fail('invalid_input', 'cognition.create.invalid_input', { issues:
+    parsed.error.issues.slice(0, 16).map(issue => ({
+      path: String(issue.path.join('.') || 'input').slice(0, 300),
+      message: String(issue.message).slice(0, 400),
+    })) });
   const input = parsed.data as CognitionCreateInput;
   requireCreateIntent(host, input.mode === 'propose');
-  if (input.target === 'ontology' ? !input.explanation || !!input.cognition || !input.ontologyChanges
-    : !input.cognition || !!input.explanation || (input.target === 'joint' ? !input.ontologyChanges : !!input.ontologyChanges))
-    fail('invalid_input', 'cognition.create.invalid_input');
+  const shapeIssues = creationShapeIssues(input);
+  if (shapeIssues.length) fail('invalid_input', 'cognition.create.invalid_input', { issues: shapeIssues });
   const source = await readHumanInstructionSource(userId, host.cid!, host.sourceMessageId!);
   if (source.text.trim() !== host.taskText!.trim()) fail('not_authorized', 'cognition.create.user_instruction_required');
   requireRequestedCreationTarget(host, input);
@@ -218,7 +250,20 @@ export async function createCognition(userId: string, context: Omit<CognitionEdi
       refs: normalizeAbilityAssetOntologyRefs(input.ontologyChanges.refs || []) }, 'statement' in body ? body.statement : body.description,
       new Date().toISOString(), input.target === 'ontology' ? 'ontology' : 'cognition');
     plan = validateOntologyFormationScope(userId, doc, plan, normalizedPolicy);
-    if (!plan || plan.blockedReasons.length) fail('formation_blocked', 'cognition.create.invalid_ontology');
+    if (!plan || plan.blockedReasons.length) {
+      // The same issues shape as invalid_input: a caller must be able to
+      // self-correct from one blocked response instead of probing blind.
+      const detailRows = plan?.blockedDetails ?? [];
+      const detailedCodes = new Set(detailRows.map(row => row.code));
+      const missingReasons = (plan?.blockedReasons ?? []).filter(code => !detailedCodes.has(code)).map(code => ({ code }));
+      const rows = [...detailRows, ...missingReasons];
+      const issues = (rows.length ? rows : [{ code: 'invalid_ontology_proposal', message: '提案解析失败（结构不完整）' }])
+        .slice(0, 32).map((row: { code: string; message?: string }) => ({
+          path: ('ontologyChanges.' + row.code).slice(0, 300),
+          message: String(row.message || row.code).slice(0, 400),
+        }));
+      fail('formation_blocked', 'cognition.create.invalid_ontology', { issues });
+    }
     plan = bindOntologyFormationPlan(candidateId, plan);
   }
   const prepared: SaveRecallCandidateInput = { proposalTarget: input.target, rawStatement: true,

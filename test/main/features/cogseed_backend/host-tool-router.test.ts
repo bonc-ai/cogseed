@@ -382,6 +382,29 @@ describe('CogSeed host tool router', () => {
     expect(escaped).toEqual({ content: expect.stringMatching(/^\[E_PATH_OUT_OF_SCOPE\]/), isError: true });
   });
 
+  it('routes the cognition query host tools and rejects Worker-supplied scope fields', async () => {
+    const router = createCogSeedHostToolRouter();
+    const query = await router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent',
+      call_id: 'host-cq1', name: 'ontology_task_query', input: { query: 'CogSeed' },
+    }, context);
+    expect(query.isError).toBeFalsy();
+    expect(JSON.parse(query.content)).toMatchObject({ query: 'CogSeed' });
+
+    const catalog = await router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent',
+      call_id: 'host-cq2', name: 'search_ability_assets', input: {},
+    }, context);
+    expect(catalog.isError).toBeFalsy();
+    expect(catalog.content).toContain('认知资产');
+
+    const escalated = await router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent',
+      call_id: 'host-cq3', name: 'ontology_task_query', input: { query: 'CogSeed', project_id: 'project-b' },
+    }, context);
+    expect(escalated).toEqual({ content: expect.stringMatching(/^\[E_COGNITION_QUERY_INPUT_REJECTED\]/), isError: true });
+  });
+
   it('routes publish_outputs with the persisted request scope and writable roots', async () => {
     const router = createCogSeedHostToolRouter({});
     const result = await router.handle({

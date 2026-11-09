@@ -875,8 +875,11 @@ export async function fetchCustomProviderModels(
         ? input.includes('image')
         : (Array.isArray(modalities) && modalities.length ? false : undefined);
       // 能力：supported_parameters（OpenRouter 系）与显式 capabilities 两处都看。
-      const declaredCapabilities = pickDeclaredTokens(params, CUSTOM_PROVIDER_MODEL_CAPABILITIES, DECLARED_CAPABILITY_ALIASES)
-        || pickDeclaredTokens(record.capabilities, CUSTOM_PROVIDER_MODEL_CAPABILITIES, DECLARED_CAPABILITY_ALIASES);
+      const declaredCapabilities = pickDeclaredTokens(
+        [...params, ...(Array.isArray(record.capabilities) ? record.capabilities : [])],
+        CUSTOM_PROVIDER_MODEL_CAPABILITIES,
+        DECLARED_CAPABILITY_ALIASES,
+      );
       out.push({
         id: rawId,
         ...(name && name !== rawId ? { name } : {}),

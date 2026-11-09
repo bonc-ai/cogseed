@@ -1233,6 +1233,9 @@ function _settingsCustomProviderModalStatus(kind, text) {
 
 const _MODEL_FORM_INPUT_TYPES = ['text', 'image', 'video', 'pdf'];
 const _MODEL_FORM_CAPABILITIES = ['structured_output', 'native_web_search', 'system_message'];
+// Persist endpoint transport declarations without exposing extra form controls.
+const _MODEL_TRANSPORT_CAPABILITIES = ['prompt_cache_key', 'session_affinity', 'prompt_cache_retention_24h'];
+const _MODEL_STORED_CAPABILITIES = [..._MODEL_FORM_CAPABILITIES, ..._MODEL_TRANSPORT_CAPABILITIES];
 const _MODEL_FORM_MAX_LEVELS = 8;
 const _MODEL_FORM_MAX_LEVEL_LENGTH = 40;
 
@@ -1266,7 +1269,7 @@ function _settingsNormalizeCustomProviderModel(input) {
   const capabilities = [];
   for (const raw of Array.isArray(input?.capabilities) ? input.capabilities : []) {
     const token = String(raw || '').trim().toLowerCase();
-    if (_MODEL_FORM_CAPABILITIES.includes(token) && !capabilities.includes(token)) capabilities.push(token);
+    if (_MODEL_STORED_CAPABILITIES.includes(token) && !capabilities.includes(token)) capabilities.push(token);
   }
   const reasoningLevels = [];
   for (const raw of Array.isArray(input?.reasoningLevels) ? input.reasoningLevels : []) {
@@ -1419,6 +1422,15 @@ const _RECYCLE_KIND_LABEL = {
   agent: '智能体', skill: '技能', workspace: '工作区', other: '其他',
 };
 
+// display_items 的 category 粒度比 batch.kind 更细，单独给一张标签表，
+// 这样标题能按条目真实类型显示（会话/项目/技能……）而非笼统的批次类型。
+const _RECYCLE_CATEGORY_LABEL = {
+  conversation: '会话', edit_conversation: '会话', auto_task: '自动化任务', project: '项目',
+  space_file: '空间文件', attachment: '附件', artifact: '生成物', context: '资料库/知识库',
+  saved_app: '已保存应用', agent: '智能体', skill: '技能', memory: '记忆', settings: '设置',
+  marketplace: '市场', file: '文件', other: '其他',
+};
+
 async function _settingsRefreshRecycle() {
   try {
     const res = await window.cogseed.invoke('recycle.list');
@@ -1431,6 +1443,17 @@ async function _settingsRefreshRecycle() {
 function _settingsRecycleTitle(batch) {
   const name = batch && (batch.label || batch.display_title);
   if (name) return String(name);
+  // 后端 buildRecycleDisplayItems 已算好每个条目的真实标题（会话名、项目名等），
+  // 优先用它；只有缺失时才回退到类型标签 + 文件名。
+  const items = Array.isArray(batch && batch.display_items) ? batch.display_items : [];
+  const named = items.filter((it) => it && typeof it.title === 'string' && it.title.trim());
+  if (named.length) {
+    const first = named[0];
+    const label = _RECYCLE_CATEGORY_LABEL[String(first.category || 'other')] || '其他';
+    const title = String(first.title).trim();
+    if (named.length === 1) return `${label} · ${title}`;
+    return `${label} · ${title} 等 ${named.length} 项`;
+  }
   const label = _RECYCLE_KIND_LABEL[String(batch && batch.kind || 'other')] || '其他';
   const paths = Array.isArray(batch && batch.paths_preview) ? batch.paths_preview : [];
   const first = paths[0] ? String(paths[0]).split('/').pop() : '';
@@ -2258,7 +2281,7 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
         ? meta.input.filter((token) => _MODEL_FORM_INPUT_TYPES.includes(token))
         : [];
       const declaredCapabilities = Array.isArray(meta.capabilities)
-        ? meta.capabilities.filter((token) => _MODEL_FORM_CAPABILITIES.includes(token))
+        ? meta.capabilities.filter((token) => _MODEL_STORED_CAPABILITIES.includes(token))
         : [];
       const normalized = _settingsNormalizeCustomProviderModel({
         id,
@@ -2729,6 +2752,14 @@ function _settingsOpenCustomProviderModelEditor(provider, model = null, options 
 }
 
 async function _settingsSaveCustomProviderModel(provider, previousModelId, input) {
+  // The visible checkbox group replaces only editable capabilities. Preserve
+  // confirmed transport metadata from the original model, including on rename.
+  const previous = _settingsCustomProviderModels(provider).find((model) => model.id === previousModelId);
+  const transport = Array.isArray(previous?.capabilities)
+    ? previous.capabilities.filter((token) => _MODEL_TRANSPORT_CAPABILITIES.includes(token)) : [];
+  if (transport.length && Array.isArray(input?.capabilities)) {
+    input = { ...input, capabilities: [...input.capabilities, ...transport] };
+  }
   const normalized = _settingsNormalizeCustomProviderModel(input);
   if (!normalized.ok) {
     _settingsCustomProviderModalStatus('error', normalized.error);

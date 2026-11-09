@@ -20,6 +20,7 @@ const log = createLogger('cogseed-runtime:metrics');
 
 export interface RuntimeRoundMetric {
   kind: 'round';
+  usage_schema_version?: 2;
   request_id: string;
   runtime_session_id: string;
   trace_id?: string;
@@ -28,6 +29,8 @@ export interface RuntimeRoundMetric {
   tool_calls: number;
   model_ms: number;
   input_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
   agent_id?: string;

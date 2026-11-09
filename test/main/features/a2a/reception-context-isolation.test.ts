@@ -1122,7 +1122,7 @@ describe('a2a reception › trusted external turn context source isolation', () 
     const localRequests = providerRequests.filter((request) => request.phase === 'local');
     const localSystem = localRequests.map(systemText).join('\n---\n');
     // orchestration ledger 按设计被 runner 从 system 剥到本回合 user message
-    // （turnEphemeral），所以正对照必须检查整个请求体；shared/KStar 留在 system。
+    // （turnEphemeral）；shared/KStar 也在请求尾部，正对照必须检查整个请求体。
     const localRequestText = localRequests.map(requestText).join('\n---\n');
     const localDiagnostics = `local provider requests=${localRequests.map(describeRequest).join(',') || '<none>'}`;
     expect(localRequests.length, `positive control: no local commander provider request — ${localDiagnostics}`)
@@ -1131,10 +1131,8 @@ describe('a2a reception › trusted external turn context source isolation', () 
       expect(localRequestText, `positive control: the local commander request must carry ${marker} — ${localDiagnostics}`)
         .toContain(marker);
     }
-    expect(localSystem, `positive control: the local commander system must carry ${SHARED_PRIVATE_MARKER}`)
-      .toContain(SHARED_PRIVATE_MARKER);
-    expect(localSystem, `positive control: the local commander system must carry ${KSTAR_PRIVATE_MARKER}`)
-      .toContain(KSTAR_PRIVATE_MARKER);
+    expect(localSystem).not.toContain(SHARED_PRIVATE_MARKER);
+    expect(localSystem).not.toContain(KSTAR_PRIVATE_MARKER);
 
     // 本地 user 回合会把 interrupted ledger 收尾清掉；外部回合前重新种入同一
     // 份私有计划，确保“外部不含 orchestration 标记”是接待门控的结果，而不是
@@ -1197,8 +1195,8 @@ describe('a2a reception › trusted external turn context source isolation', () 
 
     const localRequests = providerRequests.filter((request) => request.phase === 'local');
     expect(
-      localRequests.some((request) => systemText(request).includes(SHARED_PRIVATE_MARKER)),
-      `positive control: the local agent system prompt must carry ${SHARED_PRIVATE_MARKER}`,
+      localRequests.some((request) => messagesText(request).includes(SHARED_PRIVATE_MARKER)),
+      `positive control: the local agent request tail must carry ${SHARED_PRIVATE_MARKER}`,
     ).toBe(true);
 
     capturePhase = 'external';

@@ -50,13 +50,19 @@ export interface BootTaskOptions {
   /** Tasks sharing a class never overlap, even when different delay cohorts
    * become eligible together. */
   resourceClass?: BootResourceClass;
-  /** Prefer an interaction-idle window and never start during active chat work. */
+  /** Prefer an interaction-idle window and avoid starting during active chat
+   * work, except when the runtime-busy deferral cap force-admits the task. */
   preferIdle?: boolean;
   /** Recent renderer input window. Defaults to 2 seconds. */
   recentActivityMs?: number;
-  /** User activity may postpone work up to this long. Active chat work has no
-   * deadline and always wins. Defaults to 2 minutes. */
+  /** User activity may postpone work up to this long. Active chat work defers
+   * admission until maxRuntimeDeferralMs expires. Defaults to 2 minutes. */
   maxUserDeferralMs?: number;
+  /** Active chat work (runtimeBusy) may postpone admission up to this long
+   * before the task is force-admitted with a warning. Cap exists so a
+   * continuously-busy runtime cannot defer background work forever. This is an
+   * admission-wait budget, not a task wall-clock limit. Defaults to 10 minutes. */
+  maxRuntimeDeferralMs?: number;
   /** Cooperative slice budget. Expiry aborts the signal and logs; task code
    * can stop/yield at its next cancellation point. */
   maxSliceMs?: number;
@@ -324,6 +330,7 @@ async function _waitForAdmission(t: Task, phase: string): Promise<boolean> {
   const eligibleAt = Date.now();
   const recentActivityMs = Math.max(0, t.options.recentActivityMs ?? 2_000);
   const maxUserDeferralMs = Math.max(0, t.options.maxUserDeferralMs ?? 120_000);
+  const maxRuntimeDeferralMs = Math.max(0, t.options.maxRuntimeDeferralMs ?? 600_000);
   const pollMs = Math.max(10, t.options.admissionPollMs ?? 1_000);
   let logged = false;
   while (true) {
@@ -333,6 +340,10 @@ async function _waitForAdmission(t: Task, phase: string): Promise<boolean> {
     const userRecent = (Date.now() - _lastUserActivityAt) < recentActivityMs;
     const userDeadlineReached = (Date.now() - eligibleAt) >= maxUserDeferralMs;
     if (!runtimeBusy && (!userRecent || userDeadlineReached)) return true;
+    if (runtimeBusy && (Date.now() - eligibleAt) >= maxRuntimeDeferralMs) {
+      log.warn(`task force-admitted after runtime-busy deferral cap phase=${phase} name=${t.name} ms=${maxRuntimeDeferralMs}`);
+      return true;
+    }
     if (!logged) {
       logged = true;
       log.info(`task waiting for idle phase=${phase} name=${t.name} runtime_busy=${runtimeBusy} user_recent=${userRecent}`);

@@ -72,7 +72,7 @@ export function withUserDisabledDependencies(
 }
 
 /** 该 Agent 的随包私有 Skill id：安装时解到 `<agent>/skills/<id>/SKILL.md`。 */
-function privateSkillIds(uid: string, agentId: string): Set<string> {
+export function privateSkillIds(uid: string, agentId: string): Set<string> {
   const out = new Set<string>();
   const dir = userMarketplaceAgentSkillsDir(uid, agentId);
   let entries: fs.Dirent[];
@@ -83,7 +83,7 @@ function privateSkillIds(uid: string, agentId: string): Set<string> {
   return out;
 }
 
-function localSkillState(uid: string): (skillId: string) => LocalSkillState {
+export function localSkillState(uid: string): (skillId: string) => LocalSkillState {
   return (skillId) => {
     const present = fs.existsSync(path.join(userSkillsDir(uid), skillId, 'SKILL.md'))
       || fs.existsSync(path.join(userMarketplaceSkillDir(uid, skillId), 'SKILL.md'));

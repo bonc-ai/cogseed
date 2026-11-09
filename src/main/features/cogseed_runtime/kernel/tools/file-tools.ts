@@ -6,6 +6,7 @@ import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS, type WrapOpts } from '../.
 import { getCachedMeta, getExtractedText, kindOf, readRange, statFile } from '../../../file_indexer';
 import { cogseedRuntimeSessionToolResultsDir } from '../../../../paths';
 import { normalizeRuntimePath, ensureRuntimeAllowedRoots, isRuntimeTranscriptPath } from './permissions';
+import { assertRuntimePathAllowed, isRuntimeProtectedPath } from './protected-paths';
 import type { RuntimeToolName } from './catalog';
 import type { RuntimeToolPolicy } from '../types';
 import type { RuntimeSkillVersionPin } from '../../protocol';
@@ -159,9 +160,12 @@ function normalizeReadableRuntimePath(candidate: unknown, ctx: RuntimeToolCallCo
     if (isRuntimeTranscriptPath(abs)) {
       throw Object.assign(new Error('Runtime request cannot read CogSeed transcript paths'), { code: 'E_RUNTIME_TRANSCRIPT_PATH' });
     }
+    assertRuntimePathAllowed(ctx.userId, abs, 'read');
     return abs;
   }
-  return normalizeRuntimePath(String(candidate ?? ''), ctx.allowedRoots);
+  const abs = normalizeRuntimePath(String(candidate ?? ''), ctx.allowedRoots);
+  assertRuntimePathAllowed(ctx.userId, abs, 'read');
+  return abs;
 }
 
 async function runStatFile(input: { path: string }, ctx: RuntimeToolCallContext): Promise<RuntimeToolResult> {
@@ -212,7 +216,7 @@ async function runSearchFiles(input: { query?: string }, ctx: RuntimeToolCallCon
     const hits: string[] = [];
     for (const root of roots) {
       for (const abs of walkFiles(root, 5000)) {
-        if (isRuntimeTranscriptPath(abs)) continue;
+        if (isRuntimeTranscriptPath(abs) || isRuntimeProtectedPath(ctx.userId, abs)) continue;
         const rel = path.relative(root, abs).split(path.sep).join('/');
         const name = path.basename(abs);
         if (!matcher.test(name) && !matcher.test(rel)) continue;
@@ -243,7 +247,7 @@ async function runGrepFiles(input: { pattern: string; regex?: boolean; glob?: st
     const seenFiles = new Set<string>();
     for (const root of roots) {
       for (const abs of walkFiles(root, 5000)) {
-        if (isRuntimeTranscriptPath(abs)) continue;
+        if (isRuntimeTranscriptPath(abs) || isRuntimeProtectedPath(ctx.userId, abs)) continue;
         const rel = path.relative(root, abs).split(path.sep).join('/');
         if (globMatcher) {
           const cmp = glob.includes('/') ? rel : path.basename(abs);
@@ -290,12 +294,15 @@ function normalizeWritableRuntimePath(candidate: unknown, ctx: RuntimeToolCallCo
     if (isRuntimeTranscriptPath(abs)) {
       throw Object.assign(new Error('Runtime request cannot write CogSeed transcript paths'), { code: 'E_RUNTIME_TRANSCRIPT_PATH' });
     }
+    assertRuntimePathAllowed(ctx.userId, abs, 'write');
     return abs;
   }
   if (ctx.toolPolicy.fileWrite !== 'explicit_writable_roots') {
     throw Object.assign(new Error('runtime file write is not enabled by policy'), { code: 'E_RUNTIME_PERMISSION_DENIED' });
   }
-  return normalizeRuntimePath(String(candidate ?? ''), ctx.writableRoots);
+  const abs = normalizeRuntimePath(String(candidate ?? ''), ctx.writableRoots);
+  assertRuntimePathAllowed(ctx.userId, abs, 'write');
+  return abs;
 }
 
 function runtimeWriteFingerprint(target: string): string {

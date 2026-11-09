@@ -1,4 +1,5 @@
 import { requireContentCategory } from '../features/recall/content-category';
+import type { OldContentPlanOp } from '../features/recall/old-content-plan-contract';
 /**
  * IPC wiring — replaces `bridge/routes.py` for the Electron era.
  *
@@ -41,6 +42,7 @@ import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as contacts from '../features/contacts/store';
 import * as a2aConsultations from '../features/a2a/consultations';
+import { answerAndDeliverConsultation, onConsultationChanged, recoverConsultations, requestConsultationForConversation } from '../features/a2a/consultation-service';
 import { confirmReception, declineReception, expireStaleReceptions, listPendingReceptions, previewReceptionWorkspace } from '../features/a2a/reception-service';
 import { runReception, type ReceptionQuestion } from '../features/a2a/reception-run';
 import { cancelReceptionNudge } from '../features/a2a/reception-nudge';
@@ -76,6 +78,7 @@ import * as recallExperienceMigration from '../features/recall/experience-migrat
 import * as recallExperienceReference from '../features/recall/experience-reference';
 import { cognitionSourceRefMetadataOnly } from '../features/recall/source-service';
 import * as recallAssetApproval from '../features/recall/asset-approval-service';
+import * as recallRelatedOverflow from '../features/recall/related-overflow-service';
 import * as recallCleanup from '../features/recall/cleanup-report-service';
 import * as recallInspection from '../features/recall/asset-inspection-service';
 import * as recallProfileSync from '../features/recall/personal-profile-sync';
@@ -125,6 +128,8 @@ import * as skills from '../features/skills';
 import * as skillReverify from '../features/skill_reverify';
 import * as skillTrust from '../features/skill_trust';
 import * as marketplace from '../features/marketplace';
+import * as templateCatalog from '../features/marketplace/template-catalog';
+import * as templateRefs from '../features/template_refs';
 import { recordAgentSessionStarts } from '../features/marketplace/engagement-event';
 import * as notificationPermissions from '../features/notification_permissions';
 import * as marketplaceBiz from '../features/marketplace_biz';
@@ -856,7 +861,20 @@ async function _afterRecycleRestore(ctx: IpcContext, paths: string[]): Promise<v
       log.warn('auto task reschedule after recycle restore failed', { error: logErrorRef(err) });
     });
   }
-  void change;
+  // 恢复直接把 `_index.json` 写回磁盘，绕过了 chats 的正常写入路径，内存里的
+  // 会话索引/列表缓存（TTL 10s）不会自动失效——紧随其后的 getConversation 命中
+  // 旧缓存就报 `conversation not found`，hydrate 失败、侧栏也就加不回会话。
+  // 这与 sync 拉取是同一类“外部写盘”场景，复用同一个公共失效入口。必须在下面
+  // 广播之前清掉，渲染层 hydrate 时才读得到刚恢复的行。
+  if (change.domains.includes('chats')) {
+    try { chats.invalidateConversationCaches(ctx.userId); } catch { /* best-effort cache bust */ }
+  }
+  // 复原是在设置页触发的，会话列表所在窗口不会自己重绘。复用删除/外部消息同款
+  // 的 `conversations:updated` 推送，让侧栏按 cid 重新 hydrate 恢复出的会话，
+  // 无需手动刷新。（之前这里把 change 丢弃，所以恢复后任务里看不到会话。）
+  for (const cid of change.cids) {
+    broadcastToRenderer('conversations:updated', { cid });
+  }
 }
 
 // ── Invoke handlers ──────────────────────────────────────────────────────
@@ -1533,7 +1551,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const space = await spaces.getSpace(ctx.userId, spaceId);
     if (!space) throw new Error('not_found');
-    return { space };
+    const origin = await spaces.readSpaceOrigin(ctx.userId, spaceId);
+    return { space, ...(origin ? { origin } : {}) };
+  },
+
+  // S5：Hub 空间模板一次建好空间（严格引用、按 request_id 去重）；结果码原样回给渲染层，不抛错。
+  'spaces.createFromTemplate': async (args = {}, ctx) => {
+    const { request_id, template, name, goal, instructions, project_dir, role_templates, extra_agents, extra_skills, base_agents } = args;
+    const refList = (v: unknown) => (Array.isArray(v) && v.length <= 50 ? v : null);
+    if (!template || typeof template !== 'object' || typeof name !== 'string'
+      || !refList(role_templates) || !refList(extra_agents) || !refList(extra_skills)
+      || (goal !== undefined && typeof goal !== 'string') || (instructions !== undefined && typeof instructions !== 'string')
+      || (project_dir !== undefined && typeof project_dir !== 'string')
+      || (base_agents !== undefined && (!Array.isArray(base_agents) || base_agents.length > 8))) {
+      throw new Error('invalid template space request');
+    }
+    return spaces.createSpaceFromTemplate(ctx.userId, {
+      request_id, template, name, goal, instructions, project_dir,
+      role_templates, extra_agents, extra_skills, base_agents, app_version: marketplace.currentAppVersion(),
+    });
   },
 
   'spaces.update': async (args, ctx) => {
@@ -1985,8 +2021,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { tasks };
   },
 
-  'autoTasks.create': async ({ id, content, message_parts, schedule, title, enabled, recipient, skill, connector, project_id, attachments }, ctx) => {
+  'autoTasks.create': async ({ id, content, message_parts, schedule, title, enabled, recipient, skill, connector, project_id, attachments, template_origin, requirements }, ctx) => {
     const result = await autoTasks.createTask(ctx.userId, {
+      // S5：模板任务来源与依赖声明；形状由 features 侧校验，这里只透传。
+      ...(template_origin && typeof template_origin === 'object' ? { template_origin } : {}),
+      ...(requirements && typeof requirements === 'object' ? { requirements } : {}),
       ...(typeof id === 'string' && id ? { id } : {}),
       content: typeof content === 'string' ? content : '',
       message_parts: Array.isArray(message_parts) ? message_parts : undefined,
@@ -2146,13 +2185,45 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'autoTasks.setEnabled': async ({ taskId, enabled }, ctx) => {
     if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
     const result = await autoTasks.setTaskEnabled(ctx.userId, taskId, !!enabled);
-    if (!result.ok) throw new Error((result as { error: string }).error);
+    if (!result.ok) {
+      const failure = result as { error: string; items?: unknown };
+      // 依赖不就绪：把明细原样回给渲染层去提示，不抛成一句无法区分的错误。
+      if (failure.error === 'requirements_not_ready') {
+        return { ok: false, error: failure.error, items: Array.isArray(failure.items) ? failure.items : [] };
+      }
+      throw new Error(failure.error);
+    }
     return { task: result.task };
   },
 
   'autoTasks.runNow': async ({ taskId } = {}, ctx) => {
     if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
     return autoTasks.runTaskNow(ctx.userId, taskId);
+  },
+
+  // S5 Hub 模板：列表 / 详情走模板目录（映射层在 features 内），依赖检查走 template_refs。
+  'templates.catalog.list': async ({ type } = {}, ctx) => {
+    if (type !== 'workspace' && type !== 'task') throw new Error('invalid template type');
+    return templateCatalog.listTemplates(ctx.userId, type);
+  },
+
+  'templates.catalog.detail': async ({ type, template_id } = {}, ctx) => {
+    if (type !== 'workspace' && type !== 'task') throw new Error('invalid template type');
+    if (typeof template_id !== 'string' || !template_id || template_id.length > 128) throw new Error('invalid template_id');
+    return templateCatalog.getTemplateDetail(ctx.userId, type, template_id);
+  },
+
+  'templates.refs.resolve': async ({ refs, connector_types } = {}, ctx) => {
+    if (!Array.isArray(refs) || refs.length > 100) throw new Error('invalid refs');
+    for (const r of refs) {
+      if (!r || typeof r !== 'object' || typeof r.source !== 'string' || typeof r.kind !== 'string'
+        || typeof r.id !== 'string' || !r.id || r.id.length > 128) throw new Error('invalid ref');
+    }
+    const types = connector_types === undefined ? [] : connector_types;
+    if (!Array.isArray(types) || types.length > 50 || types.some((t: unknown) => typeof t !== 'string' || !t || t.length > 64)) {
+      throw new Error('invalid connector_types');
+    }
+    return templateRefs.resolveTemplateRequirements(ctx.userId, refs, types, marketplace.currentAppVersion());
   },
 
   // ── Group chat (replaces legacy conversations.send / .stream / .markFormSubmitted) ──
@@ -2430,7 +2501,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       // 而晋升闸门按同一批数据判冲突并拒绝——又是一次假审批。
       const conflicts = recallCandidates.recallCandidateConflictingTypes(all);
       const withDetails = await Promise.all(all.map(candidate => recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, candidate)));
-      const withCaps = withDetails.map((candidate) => withRecallCandidateCapabilities(candidate, conflicts.get(candidate.id)));
+      const withRelated = await recallCandidates.withRecallCandidateRelatedFormation(ctx.userId, withDetails);
+      const withCaps = withRelated.map((candidate) => withRecallCandidateCapabilities(candidate, conflicts.get(candidate.id)));
       if (view === 'activity-queue') return projectReviewQueueCandidates(projectActivityCandidates(withCaps, await recallAssets.listAbilityAssets(ctx.userId)), true);
       if (view === 'review-queue') return projectReviewQueueCandidates(withCaps);
       return withCaps;
@@ -2637,6 +2709,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.captures.sweep.stop': async (_input, ctx) => ({ ok: true, ...await recallCaptures.stopRecallCaptureSweep(ctx.userId) }),
 
+  // 关联超过上限的候选不建假候选：列出关联身份，用户合并或保留后记录处置。
+  'recall.captures.relatedOverflow.list': async ({ runId } = {}, ctx) => {
+    if (runId !== undefined && (typeof runId !== 'string' || !runId || runId.length > 200)) {
+      throw new Error('invalid recall sweep run id');
+    }
+    return { ok: true, ...await recallRelatedOverflow.listRelatedOverflow(ctx.userId,
+      runId === undefined ? {} : { runId }) };
+  },
+
+  'recall.captures.relatedOverflow.resolve': async ({ captureId, candidateIndex, action, targetAssetId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    if (!Number.isInteger(candidateIndex) || candidateIndex < 0) throw new Error('invalid candidate index');
+    if (action !== 'merge' && action !== 'keep') throw new Error('invalid related overflow action');
+    if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid merge target id');
+    return { ok: true, ...await recallRelatedOverflow.resolveRelatedOverflow(ctx.userId, {
+      captureId, candidateIndex, action,
+      ...(targetAssetId === undefined ? {} : { targetAssetId }),
+    }) };
+  },
+
   'recall.captures.settings.update': async (input = {}, ctx) => {
     const settings = await recallCaptureSettings.updateRecallCaptureSettings(ctx.userId, input);
     return { ok: true, settings };
@@ -2644,7 +2736,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.candidates.read': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
-    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, await recallCandidates.readRecallCandidate(ctx.userId, candidateId))) };
+    return { ok: true, candidate: withRecallCandidateCapabilities((await recallCandidates.withRecallCandidateRelatedFormation(ctx.userId, [
+      await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, await recallCandidates.readRecallCandidate(ctx.userId, candidateId)),
+    ]))[0]) };
   },
 
   // 逐条历史按当前用户和已存在候选寻址，不接受任意账本 target_ref。
@@ -2714,6 +2808,139 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
     return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, await recallCandidates.keepCurrentRecallCandidate(ctx.userId, candidateId, note))) };
+  },
+
+  'recall.oldContent.plan.list': async (_args, ctx) => {
+    const service = await import('../features/recall/old-content-plan-service');
+    return { ok: true, plans: await service.listActionableOldContentPlans(ctx.userId) };
+  },
+  'recall.oldContent.plan.undoPreview': async ({ planId } = {}, ctx) => {
+    if (!safeId(planId)) throw new Error('invalid old-content plan id');
+    const undo = await import('../features/recall/old-content-undo');
+    return { ok: true, preview: await undo.previewOldContentUndo(ctx.userId, planId) };
+  },
+  'recall.oldContent.plan.undo': async ({ planId, token } = {}, ctx) => {
+    if (!safeId(planId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token))
+      throw new Error('invalid old-content undo request');
+    const undo = await import('../features/recall/old-content-undo');
+    const result = await undo.undoOldContentPlan(ctx.userId, planId, token);
+    return { ok: true, ...result };
+  },
+  'recall.oldContent.plan.review': async ({ planId } = {}, ctx) => {
+    if (!safeId(planId)) throw new Error('invalid old-content plan id');
+    const { buildOldContentPlanReview } = await import('../features/recall/old-content-plan-review');
+    return { ok: true, review: await buildOldContentPlanReview(ctx.userId, planId) };
+  },
+  'recall.oldContent.plan.read': async ({ planId } = {}, ctx) => {
+    if (!safeId(planId)) throw new Error('invalid old-content plan id');
+    const service = await import('../features/recall/old-content-plan-service');
+    return { ok: true, plan: await service.readOldContentPlan(ctx.userId, planId) };
+  },
+  'recall.oldContent.plan.forAssets': async ({ assetIds } = {}, ctx) => {
+    if (!Array.isArray(assetIds) || assetIds.length < 1 || assetIds.length > 6
+      || assetIds.some(assetId => typeof assetId !== 'string' || !safeId(assetId))) throw new Error('invalid old-content asset group');
+    const service = await import('../features/recall/old-content-plan-service');
+    return { ok: true, plans: await service.listOldContentPlansForAssets(ctx.userId, assetIds) };
+  },
+  'recall.oldContent.plan.resolve': async ({ planId, expectedRevision, resolutions } = {}, ctx) => {
+    if (!safeId(planId) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
+      throw new Error('invalid old-content plan revision');
+    if (!Array.isArray(resolutions) || !resolutions.length || resolutions.length > 16)
+      throw new Error('invalid old-content resolutions');
+    const { oldContentPlanOpSchema } = await import('../features/recall/old-content-plan-contract');
+    const ops = resolutions.map(row => oldContentPlanOpSchema.parse({ op: 'resolve_unresolved', ...row })) as OldContentPlanOp[];
+    const service = await import('../features/recall/old-content-plan-service');
+    return { ok: true, plan: await service.resolveOldContentUnresolved(ctx.userId, planId, expectedRevision, ops) };
+  },
+  'recall.oldContent.plan.update': async ({ planId, expectedRevision, ops } = {}, ctx) => {
+    if (!safeId(planId) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid old-content plan revision');
+    if (!Array.isArray(ops) || !ops.length || ops.length > 20) throw new Error('invalid old-content plan edits');
+    const { oldContentPlanOpSchema } = await import('../features/recall/old-content-plan-contract');
+    const parsed = ops.map(op => oldContentPlanOpSchema.parse(op)) as import('../features/recall/old-content-plan-contract').OldContentPlanOp[];
+    const service = await import('../features/recall/old-content-plan-service');
+    return { ok: true, plan: await service.updateOldContentPlan(ctx.userId, planId, expectedRevision, parsed) };
+  },
+  'recall.oldContent.plan.execute': async ({ planId, expectedRevision, candidateId, itemIds } = {}, ctx) => {
+    if (!safeId(planId)) throw new Error('invalid old-content plan id');
+    if (candidateId !== undefined && !safeId(candidateId)) throw new Error('invalid recall candidate id');
+    if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1))
+      throw new Error('invalid old-content plan revision');
+    if (itemIds !== undefined && (!Array.isArray(itemIds) || !itemIds.length || itemIds.length > 32
+      || itemIds.some(itemId => typeof itemId !== 'string' || !safeId(itemId))))
+      throw new Error('invalid old-content units');
+    const service = await import('../features/recall/old-content-plan-service');
+    const result = await service.executeOldContentPlan(ctx.userId, planId,
+      { ...(expectedRevision ? { expectedRevision } : {}), ...(candidateId ? { candidateId } : {}),
+        ...(itemIds ? { itemIds } : {}) });
+    return { ok: true, plan: result.plan, execution: result.execution, executions: result.executions,
+      results: result.results, ...(result.duplicate ? { duplicate: true } : {}) };
+  },
+  'recall.oldContent.plan.dismiss': async ({ planId, expectedRevision } = {}, ctx) => {
+    if (!safeId(planId) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid old-content plan revision');
+    const service = await import('../features/recall/old-content-plan-service');
+    return { ok: true, plan: await service.dismissOldContentPlan(ctx.userId, planId, expectedRevision) };
+  },
+  'recall.candidates.finalize': async ({ candidateId, mode, forceCreateSimilar, riskAcknowledged, confirmBaselineVersion } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    if (mode !== undefined && !['old_then_new', 'old_only', 'new_only'].includes(mode)) throw new Error('invalid finalize mode');
+    if (confirmBaselineVersion !== undefined && (typeof confirmBaselineVersion !== 'string'
+      || !/^\d{1,9}$/.test(confirmBaselineVersion))) throw new Error('invalid finalize baseline');
+    const finalize = await import('../features/recall/old-content-finalize');
+    try {
+      const result = await finalize.finalizeCandidate(ctx.userId, candidateId, mode || 'old_then_new', {
+        ...(forceCreateSimilar === true ? { forceCreateSimilar: true } : {}),
+        ...(riskAcknowledged === true ? { riskAcknowledged: true } : {}),
+        ...(confirmBaselineVersion ? { confirmBaselineVersion } : {}),
+      });
+      return { ok: true, ...result, candidate: withRecallCandidateCapabilities(
+        await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, result.candidate)) };
+    } catch (error) {
+      if (error instanceof finalize.OldContentFinalizeError) {
+        const { error: detail, ...rest } = error.result;
+        return {
+          ok: false,
+          ...rest,
+          code: detail?.code || 'old_content_finalize_failed',
+          message: detail?.message || 'old-content finalize failed',
+          ...(detail?.versionConflict !== undefined ? { versionConflict: detail.versionConflict } : {}),
+          candidate: withRecallCandidateCapabilities(
+            await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, error.result.candidate)),
+        };
+      }
+      throw error;
+    }
+  },
+  // 多条关联内容的一次性处置：合并成一份后重新核对，或保留全部。
+  // 归并/版本/边界判定全在服务层；这里只收形状，并回传逐条回执与重判状态。
+  'recall.candidates.oldContent.confirm': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    const { confirmOldContentPlan } = await import('../features/recall/old-content-execution');
+    const result = await confirmOldContentPlan(ctx.userId, candidateId);
+    return { ok: true, ...result, candidate: withRecallCandidateCapabilities(
+      await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, result.candidate)) };
+  },
+  'recall.candidates.resolveRelated': async ({ candidateId, action, targetAssetId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    if (action !== 'merge' && action !== 'keep') throw new Error('invalid related formation action');
+    if (targetAssetId !== undefined && (typeof targetAssetId !== 'string' || !safeId(targetAssetId))) {
+      throw new Error('invalid related formation target');
+    }
+    if (action === 'keep' && targetAssetId !== undefined) throw new Error('keep cannot choose a merge target');
+    const result = await recallCandidates.resolveRelatedFormationCandidate(ctx.userId, candidateId, {
+      action, ...(targetAssetId ? { targetAssetId } : {}),
+    });
+    const conflicts = recallCandidates.recallCandidateConflictingTypes(await recallCandidates.listRecallCandidates(ctx.userId));
+    return {
+      ok: true,
+      resolved: result.resolved,
+      candidate: withRecallCandidateCapabilities(
+        await recallCandidates.withRecallCandidateProcessingDetails(ctx.userId, result.candidate),
+        conflicts.get(result.candidate.id),
+      ),
+      receipts: result.receipts,
+      ...(result.resolution ? { resolution: result.resolution } : {}),
+      ...(result.reformation ? { reformation: result.reformation } : {}),
+    };
   },
 
   'recall.candidates.organization.update': async ({ candidateId, outputs } = {}, ctx) => {
@@ -2802,6 +3029,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         ok: false,
         // 与审批卡同一状态名（待处理），不是候选内部状态名。
         state: 'pending',
+        code: recallCandidates.RECALL_CANDIDATE_VERSION_CONFLICT_CODE,
         versionConflict,
         message: `这条资产在你确认之前被改过（候选基于 v${versionConflict.baselineVersion}，现在是用 v${versionConflict.currentVersion}），所以这次没有生效。请按最新在用版重新看一眼差异再确认。`,
       };
@@ -3802,18 +4030,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   ),
 
   // ── A2A 请示（D-7）─────────────────────────────────────────────
-  // 接收方本人对助理拟回复的裁决；只在本机，永不过 Hub（D-10）。
+  // Private question/proposal stay local; only owner-selected final wording crosses relay.
   'a2a.consultations.list': async ({ conversationId, state } = {}, ctx) => ({
     consultations: await a2aConsultations.listConsultations(ctx.userId, {
       ...(conversationId ? { conversationId: String(conversationId) } : {}),
       ...(state ? { state: String(state) as never } : {}),
     }),
   }),
-  'a2a.consultations.create': async ({ conversationId, peerUserId, peerName, question, proposedReply }, ctx) => ({
-    consultation: await a2aConsultations.createConsultation(ctx.userId, {
+  'a2a.consultations.create': async ({ conversationId, question, proposedReply }, ctx) => ({
+    consultation: await requestConsultationForConversation(ctx.userId, {
       conversationId: String(conversationId || ''),
-      peerUserId: String(peerUserId || ''),
-      ...(peerName ? { peerName: String(peerName) } : {}),
       question: String(question || ''),
       proposedReply: String(proposedReply || ''),
     }),
@@ -3891,11 +4117,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { marker: conversation?.a2a ?? null };
   },
   // 5 分钟提示（D-23）：把仍待决且超过窗口的请示标记一次，供发起方显示「稍后回复」。
-  'a2a.consultations.nudge': async (_args, ctx) => ({
-    nudged: await a2aConsultations.nudgePendingConsultations(ctx.userId),
-  }),
+  'a2a.consultations.nudge': async (_args, ctx) => {
+    await recoverConsultations(ctx.userId);
+    return { consultations: await a2aConsultations.listConsultations(ctx.userId) };
+  },
   'a2a.consultations.answer': async ({ id, decision, text }, ctx) => ({
-    consultation: await a2aConsultations.answerConsultation(
+    consultation: await answerAndDeliverConsultation(
       ctx.userId,
       String(id || ''),
       String(decision || '') as never,
@@ -4186,6 +4413,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'agents.get': async ({ agent_id }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const { refreshMarketplaceContentStatus } = await import('../features/marketplace/content-status-refresh');
+    await refreshMarketplaceContentStatus(ctx.userId, 'agent', agent_id, { force: true });
     const agent = await agents.getAgentForUser(ctx.userId, agent_id);
     if (!agent) throw new Error('agent not found');
     return { agent };
@@ -4861,6 +5090,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'marketplace.listAgents': async (opts = {}) => marketplace.listMarketplaceAgents(opts),
 
   'marketplace.listSkills': async (opts = {}) => marketplace.listMarketplaceSkills(opts),
+
+  // Narrow final-use status probe. It checks one installed marketplace item,
+  // never the whole manifest; custom/local ids return without network I/O.
+  'marketplace.refreshContentStatus': async ({ kind, id }, ctx) => {
+    if ((kind !== 'agent' && kind !== 'skill') || typeof id !== 'string' || !safeId(id)) {
+      throw new Error('invalid marketplace content');
+    }
+    const { refreshMarketplaceContentStatus } = await import('../features/marketplace/content-status-refresh');
+    return refreshMarketplaceContentStatus(ctx.userId, kind, id, { force: true });
+  },
 
   // Curated open-source projects catalog (read-only). Returns { list, total, categories }.
   'marketplace.listProjects': async (opts = {}) => marketplace.listMarketplaceProjects(opts),
@@ -8175,6 +8414,9 @@ export const p3394BridgeIpcPort = new P3394IpcChannel('ipc', {
 });
 
 export function register(): void {
+  onConsultationChanged(({ userId, conversationId }) => {
+    if (userId === users.getActiveUserId()) broadcastToRenderer('a2a:consultation', { conversationId });
+  });
   // A2A 在线心跳（D-3/FR-25）：没心跳所有人都离线，而离线联系人在 @ 面板里不可选
   // （AC-03），所以发送侧必须先让自己「在线」。
   try {

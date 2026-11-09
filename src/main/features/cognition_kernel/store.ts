@@ -96,17 +96,39 @@ export function cognitionAuditPath(uid: string): string {
 
 // ── 读取 ─────────────────────────────────────────────────────────────────
 
-/**
- * 同步加载：坏档三件套读侧（copy 备份 + 登记拒写 latch）后返回空库供展示；
- * ENOENT → 空库（懒创建，读路径零副作用、永不写盘）。
- */
-export function loadCognitionStoreSync(uid: string): CognitionStoreDocument {
-  if (!safeId(uid)) return emptyCognitionStore();
-  const filePath = cognitionStorePath(uid);
-  if (!fs.existsSync(filePath)) return emptyCognitionStore();
+/** 进程内读缓存：主档单文件、低频写高频读，一次解析+规范化随规模到几百毫秒
+ * （3500 条实测约 440ms），而一次任务查询会读它多遍。命中 = 本进程写入纪元
+ * 未变 且 stat 的 mtime+size 与缓存一致。外部进程写通常改变 mtime/size，但
+ * 备份/同步工具保留原元数据时不会失效（已知窗口）；账号切换调用
+ * clearCognitionStoreReadCache 清理。只缓存成功解析的档；坏档/缺档每次如实走
+ * 原路径。缓存对象按版本共享：本文件全部写入路径都是先拷贝再改
+ * （applyCognitionDeltas/purge 均 clone-first），读方不得原地改动；recall 侧
+ * 的 updater 边界另行克隆。缓存入仓时整体冻结：原地赋值直接抛错，把静默
+ * 污染变成响亮失败；写入边界的 structuredClone/JSON 拷贝天然解冻，不受影响。 */
+interface CognitionStoreCacheEntry { epoch: number; mtimeMs: number; size: number; doc: CognitionStoreDocument }
+const cognitionStoreReadCache = new Map<string, CognitionStoreCacheEntry>();
+const cognitionStoreWriteEpoch = new Map<string, number>();
+
+/** 主档是 JSON.parse 的纯树（写路径全程 stringify 往返，无环）；递归冻结一次
+ * 的成本远低于它所伴随的一次解析。 */
+function freezeStoreSnapshot<T>(value: T): T {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const key of Object.keys(value)) freezeStoreSnapshot((value as Record<string, unknown>)[key]);
+  Object.freeze(value);
+  return value;
+}
+
+/** Account activation may switch or rename the workspace root; cached documents
+ *  are keyed by absolute paths, so drop them rather than retain stale memory. */
+export function clearCognitionStoreReadCache(): void {
+  cognitionStoreReadCache.clear();
+  cognitionStoreWriteEpoch.clear();
+}
+
+function readCognitionStoreUncached(uid: string, filePath: string): { doc: CognitionStoreDocument; parsed: boolean } {
   const guarded = readTextGuarded(filePath, { domain: COGNITION_STORE_CORRUPT_DOMAIN });
-  if (guarded.status === 'corrupt') return emptyCognitionStore();
-  if (guarded.status !== 'ok') return emptyCognitionStore();
+  if (guarded.status === 'corrupt') return { doc: emptyCognitionStore(), parsed: false };
+  if (guarded.status !== 'ok') return { doc: emptyCognitionStore(), parsed: false };
   try {
     const parsed = JSON.parse(guarded.text) as Record<string, unknown>;
     if (parsed.schemaVersion !== COGNITION_STORE_SCHEMA_VERSION) {
@@ -114,16 +136,46 @@ export function loadCognitionStoreSync(uid: string): CognitionStoreDocument {
       reportCorruptFile(filePath, `unsupported schemaVersion ${String(parsed.schemaVersion)}`, {
         domain: COGNITION_STORE_CORRUPT_DOMAIN,
       });
-      return emptyCognitionStore();
+      return { doc: emptyCognitionStore(), parsed: false };
     }
-    return normalizeCognitionStoreDocument(parsed);
+    return { doc: normalizeCognitionStoreDocument(parsed), parsed: true };
   } catch (err) {
     reportCorruptFile(filePath, `bad JSON: ${(err as Error).message}`, {
       domain: COGNITION_STORE_CORRUPT_DOMAIN,
     });
     log.warn('cognition store unreadable; corrupt-guard engaged', { uid, error: (err as Error).message });
+    return { doc: emptyCognitionStore(), parsed: false };
+  }
+}
+
+/**
+ * 同步加载：坏档三件套读侧（copy 备份 + 登记拒写 latch）后返回空库供展示；
+ * ENOENT → 空库（懒创建，读路径零副作用、永不写盘）。
+ */
+export function loadCognitionStoreSync(uid: string): CognitionStoreDocument {
+  if (!safeId(uid)) return emptyCognitionStore();
+  const filePath = cognitionStorePath(uid);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    cognitionStoreReadCache.delete(filePath);
     return emptyCognitionStore();
   }
+  const epoch = cognitionStoreWriteEpoch.get(filePath) ?? 0;
+  const cached = cognitionStoreReadCache.get(filePath);
+  if (cached && cached.epoch === epoch && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.doc;
+  }
+  const { doc, parsed } = readCognitionStoreUncached(uid, filePath);
+  // 坏档/缺档结果不进缓存：修复或建档后的首次读取必须重新解析。
+  if (parsed) {
+    const frozen = freezeStoreSnapshot(doc);
+    cognitionStoreReadCache.set(filePath, { epoch, mtimeMs: stat.mtimeMs, size: stat.size, doc: frozen });
+    return frozen;
+  }
+  cognitionStoreReadCache.delete(filePath);
+  return doc;
 }
 
 // ── 纯函数落地器 ─────────────────────────────────────────────────────────
@@ -425,6 +477,8 @@ function writeStoreFileSync(filePath: string, doc: CognitionStoreDocument): void
   const fd = fs.openSync(tmp, 'w');
   try { fs.writeFileSync(fd, JSON.stringify(doc, null, 2), 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(tmp, filePath);
+  // 同毫秒同长度的重写极端情况下 mtime+size 都不变；本进程写入用纪元兜底失效。
+  cognitionStoreWriteEpoch.set(filePath, (cognitionStoreWriteEpoch.get(filePath) ?? 0) + 1);
   if (process.platform !== 'win32') {
     const directory = fs.openSync(path.dirname(filePath), 'r');
     try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }

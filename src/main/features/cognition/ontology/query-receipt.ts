@@ -14,6 +14,7 @@ export interface OntologyQueryReadRef {
 export interface OntologyQueryReadReceipt extends RecallJsonRecord {
   schemaVersion: 1;
   taskRunId: string;
+  executionId?: string;
   status: 'result_produced';
   recordRefs: OntologyQueryReadRef[];
   createdAt: string;
@@ -34,9 +35,11 @@ export async function recordOntologyQueryReadReceipt(
   userId: string,
   taskRunId: string | undefined,
   refs: readonly OntologyQueryReadRef[],
+  executionId?: string,
 ): Promise<OntologyQueryReadReceipt | undefined> {
   if (!taskRunId) return undefined;
   if (!safeId(userId) || !safeId(taskRunId)) throw new Error('invalid ontology query receipt owner or turn');
+  if (executionId !== undefined && !safeId(executionId)) throw new Error('invalid ontology query receipt execution');
   if (refs.length > 150) throw new Error('ontology query receipt exceeds result limit');
   const unique = new Map<string, OntologyQueryReadRef>();
   for (const raw of refs) {
@@ -46,6 +49,7 @@ export async function recordOntologyQueryReadReceipt(
   if (!unique.size) return undefined;
   const receipt: OntologyQueryReadReceipt = {
     schemaVersion: 1, ownerId: userId, id: `ontread-${genId12()}`, taskRunId,
+    ...(executionId ? { executionId } : {}),
     status: 'result_produced', recordRefs: [...unique.values()], createdAt: new Date().toISOString(),
   };
   await appendRecallJsonlRecord(userId, 'ontology-query-receipts', 'events', receipt);
@@ -63,6 +67,7 @@ export async function listOntologyQueryReadReceipts(
   for (const value of values) {
     if (value.schemaVersion !== 1 || value.ownerId !== userId || value.taskRunId !== taskRunId
       || value.status !== 'result_produced' || typeof value.id !== 'string' || !/^ontread-[A-Za-z0-9_-]{8,40}$/.test(value.id)
+      || (value.executionId !== undefined && (typeof value.executionId !== 'string' || !safeId(value.executionId)))
       || typeof value.createdAt !== 'string' || !Array.isArray(value.recordRefs) || value.recordRefs.length > 150) continue;
     try {
       const recordRefs = value.recordRefs.map(ref => validateRef(ref as OntologyQueryReadRef));

@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 import YAML from 'yaml';
 
 const repoRoot = resolve(import.meta.dirname, '..', '..');
-const releaseVersion = '1.4.0';
-const releaseDate = '2026-10-28';
+const releaseVersion = '1.4.1';
+const releaseDate = '2026-11-09';
 
 function readJson(relativePath: string): any {
   return JSON.parse(readFileSync(resolve(repoRoot, relativePath), 'utf8'));

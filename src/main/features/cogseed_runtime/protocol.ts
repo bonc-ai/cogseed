@@ -135,7 +135,7 @@ export const RUNTIME_HOST_TOOL_NAMES = Object.freeze([
   'publish_outputs',
   'messaging_list_targets', 'messaging_send',
   'p3394_send',
-  'ontology_graph_read', 'ontology_projection_apply',
+  'ontology_graph_read', 'ontology_projection_apply', 'ontology_task_query', 'search_ability_assets',
   // Internal only: these are never exposed in the Runtime model tool catalog.
   // They let an isolated Worker wait for the main-process human approval gate
   // and append the eventual execution outcome to its local audit journal.

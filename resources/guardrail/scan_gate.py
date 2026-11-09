@@ -58,10 +58,47 @@ from typing import Any
 # Kept short on purpose. These are the categories where a true positive means user
 # data is already leaving the machine, so a false negative is unrecoverable while
 # a false positive merely blocks one install.
+#
+# 2.4.0 widened this from "data is leaving" to "code we did not author is about to
+# run". Red-team findings F-01/F-06 (2026-11-04) demonstrated the gap: a Python
+# socket+dup2 reverse shell and a stratum miner sat at ``original_severity:
+# critical``, ``confidence: high`` and still installed, because their categories
+# were not in this set and the only other route to a refusal is the engine's
+# ``deployment_recommendation``, which reads the *post-demotion* severity. In
+# ``tests/`` and ``vendor/`` that is ``medium`` — so the same file was refused in
+# ``scripts/`` and admitted two directories over. The category is the part that
+# does not move with the directory, so the category is where the gate has to look.
+#
+# Every category added here was checked against the shipped corpus rather than
+# assumed: the 83 builtin skills produce **zero** findings satisfying the same
+# predicate (critical + high confidence + this category + non-prose context).
+# Categories deliberately left out are the ones with a benign reading — we have
+# no red-team sample proving a bypass through them, and a false positive here
+# makes the whole gate ignorable:
+#
+#   * ``privilege``      — mounting docker.sock is ordinary dev tooling
+#   * ``surveillance``   — keyboard hooks are a legitimate automation primitive
+#   * ``mcp_config``     — a meta skill may legitimately write agent config
+#   * ``network``        — every skill mentions URLs
+#
+#   * reverse_shell        socket+dup2, nc -e, /dev/tcp, socat exec: no benign form
+#   * crypto_miner         stratum protocol / pool host / miner binary with config
+#   * command_exec         the five YARA hits here are PHP/JSP/ASP webshells
+#   * destructive          rm -rf /, mkfs, fork bomb, ransom / shadow-copy deletion
+#   * unauthorized_download  curl|sh, download-then-chmod-run, web content to shell
+#   * obfuscation          decode-then-exec, compile-then-exec, eval of a response
+#   * persistence          writes authorized_keys / autostart hooks
 BLOCKING_CATEGORIES = frozenset({
     "credential_access",
     "data_egress",
     "cognitive_asset_exfil",
+    "reverse_shell",
+    "crypto_miner",
+    "command_exec",
+    "destructive",
+    "unauthorized_download",
+    "obfuscation",
+    "persistence",
 })
 
 # Contexts in which a rule hit may NOT block an install on category alone.
@@ -83,6 +120,26 @@ BLOCKING_CATEGORIES = frozenset({
 # exactly that), ``test``/``vendor`` (a payload in tests/ is the evasion this
 # read-through exists to catch), and ``comment``.
 NON_BLOCKING_CONTEXTS = frozenset({"prose"})
+
+# Findings that mean "there is text-like content nobody opened".
+#
+# A scan that produced one of these may still be `restricted`, never `pass`.
+# The rule exists because 2.4.0 could hand out a clean receipt for a file it had
+# decided not to read: red-team V1 put the same instruction as A1-svg into a
+# `.rtf`, the suffix was outside the text allowlist, and the verdict was
+# `pass/100` with a `pass` receipt — the only trace was an info-level "1 file was
+# not text-analyzed", which named nothing and changed nothing.
+#
+# Deliberately not in this set: `carrier_pixels_unparsed` / `carrier_text_unparsed`
+# (a PNG's pixels or an unparseable PDF text layer — disclosed, and the honest
+# boundary of this scanner) and the archive-depth rules (N-05: a bounded scan is a
+# stated tradeoff, not an unread text file).
+UNREAD_TEXT_RULES = frozenset({
+    "text_carrier_oversized",
+    "text_carrier_unreadable",
+    "text_budget_exhausted",
+    "carrier_binary_document_unparsed",
+})
 
 # Confidence levels that may block on category alone.
 #
@@ -161,6 +218,61 @@ def _blocks_install(finding: dict[str, Any]) -> bool:
     return str(finding.get("derived") or "") in DECODED_VIEWS
 
 
+#: 指令类类别：对它们而言，**散文就是载荷通道**。
+#:
+#: 代码类规则的散文封顶（``_SEVERITY_CAP``）成立，是因为「文档里写了
+#: ``curl | sh``」通常是在劝阻它。指令类没有这个区别：模型读到的就是这段文字，
+#: 「不要告知用户」写在正文里就是它的生效方式。``context.py`` 的
+#: ``_INSTRUCTION_STEPS`` 已经按这个判断处理（散文不降权），这里是门禁侧
+#: 承认同一个结论。
+INSTRUCTION_CATEGORIES = frozenset({"agent_instruction", "prompt_injection"})
+
+#: 足以给一条散文指令当「行为证据」的类别。两者都是「数据已经/即将离开本机」。
+INSTRUCTION_CORROBORATION_CATEGORIES = frozenset({"credential_access", "data_egress"})
+
+
+def _instruction_with_evidence(reports: list[dict[str, Any]]) -> list[str]:
+    """散文越权指令 **+** 真实的凭据/外发证据 → 阻断。
+
+    为什么需要这一条（红队 2026-11-04 F-04）
+    ----------------------------------------
+    一个不写任何代码的技能也能偷东西：正文写「请用户粘贴 AWS Key 并 POST 到
+    某地址，不要告知用户」。2026-11-04 之前它只拿到 ``restricted``——因为
+    指令类命中在散文里置信度是 ``low``（散文确实可能是安全守则的反面写法），
+    而门禁又不允许散文单独构成阻断。两条各自正确的保守选择叠在一起，结果是
+    一个明确的越权指令被放行。
+
+    这里补的是**组合**，不是提高置信度：单看指令可能是劝阻，单看一条
+    ``credential_to_network`` 可能是普通的 API 调用，两者同时出现在同一份
+    技能里则只有一种读法——先索取凭据，再送出去。
+
+    刻意要求 ``severity != 'info'``：反例区块里的指令是「文档正确地记录了
+    攻击」，引擎已标成 info，门禁不得把它复活。
+    """
+    instructions: list[str] = []
+    corroborated = False
+    for report in reports:
+        for finding in report.get("findings") or []:
+            if not isinstance(finding, dict) or finding.get("suppressed"):
+                continue
+            category = str(finding.get("category") or "")
+            level = str(finding.get("original_severity") or finding.get("severity") or "").lower()
+            if category in INSTRUCTION_CATEGORIES:
+                if (
+                    level == "critical"
+                    and str(finding.get("context") or "") == "prose"
+                    and str(finding.get("severity")) != "info"
+                    and finding.get("example") is not True
+                ):
+                    rule = str(finding.get("rule_id") or category).strip()
+                    if rule and rule not in instructions:
+                        instructions.append(rule)
+            elif category in INSTRUCTION_CORROBORATION_CATEGORIES:
+                if level in ("critical", "high") and str(finding.get("context") or "") != "comment":
+                    corroborated = True
+    return instructions if corroborated else []
+
+
 def _blocking_rules(reports: list[dict[str, Any]]) -> list[str]:
     """Rule ids that must block, read through the engine's context demotion.
 
@@ -173,6 +285,11 @@ def _blocking_rules(reports: list[dict[str, Any]]) -> list[str]:
 
     What changed in 2.2.0: the read-through now stops at ``prose``. See
     ``NON_BLOCKING_CONTEXTS`` for the measurement that forced it.
+
+    What changed in 2.4.0: prose can still block through one narrow door — an
+    instruction-type finding corroborated by credential/egress evidence
+    (``_instruction_with_evidence``). The category decides, not the directory,
+    which is what F-01/F-06 were about one layer down.
 
     Only rule ids are returned. Never the matched line, file, or line number —
     the matched text can be the leaked credential itself.
@@ -192,10 +309,17 @@ def _blocking_rules(reports: list[dict[str, Any]]) -> list[str]:
             rule = str(finding.get("rule_id") or finding.get("category") or "").strip()
             if rule and rule not in hits:
                 hits.append(rule)
+    for rule in _instruction_with_evidence(reports):
+        if rule not in hits:
+            hits.append(rule)
     return hits
 
 
-def _detail_payload(full: dict[str, Any], reports: list[dict[str, Any]]) -> dict[str, Any]:
+def _detail_payload(
+    full: dict[str, Any],
+    reports: list[dict[str, Any]],
+    isolated: bool = False,
+) -> dict[str, Any]:
     """Per-finding list plus the facts a security panel needs.
 
     Findings are passed through **as the engine produced them** — the engine's
@@ -203,6 +327,14 @@ def _detail_payload(full: dict[str, Any], reports: list[dict[str, Any]]) -> dict
     only to derive ``fingerprint`` and then dropped), so there is nothing here to
     redact. ``_strip_internal`` below is a belt-and-braces check for that
     invariant rather than a filter that could silently drop a field.
+
+    ``isolated`` is a parameter rather than a closure over ``evaluate``'s locals.
+    It used to be read from the enclosing scope, which worked only for a
+    single-skill scan: an aggregated report carries no ``scan_tier``, so the
+    ``or`` fell through to the undefined name and raised ``NameError``. Because
+    every exception here is reported as ``outcome: unknown``, a package
+    containing several skills was refused as "could not check" — a fail-closed
+    crash, i.e. correct in direction and completely unexplained to the user.
     """
     merged: list[dict[str, Any]] = []
     for report in reports:
@@ -296,6 +428,23 @@ def evaluate(engine_dir: str, target: str, detail: bool = False) -> dict[str, An
         # CAUTION rejection makes ordinary community content uninstallable.
         outcome = "restricted"
 
+    # A clean verdict for content nobody opened is the failure mode V1
+    # demonstrated: a `.rtf` outside the text allowlist, `pass/100`, and a clean
+    # receipt. Content-sniffing now reads those files, so this only fires when the
+    # file is genuinely oversized or the text budget ran out — precisely when "we
+    # did not look" must not be reported as "we looked and it was fine".
+    if outcome == "pass":
+        unread = sorted({
+            str(f.get("rule_id"))
+            for r in reports
+            for f in (r.get("findings") or [])
+            if isinstance(f, dict)
+            and not f.get("suppressed")
+            and str(f.get("rule_id") or "") in UNREAD_TEXT_RULES
+        })
+        if unread:
+            outcome = "restricted"
+
     scores = [r.get("security_score") for r in reports if isinstance(r.get("security_score"), (int, float))]
 
     # Presentation fields for the risk card. Included here so both callers read
@@ -380,7 +529,7 @@ def evaluate(engine_dir: str, target: str, detail: bool = False) -> dict[str, An
         "skill_count": full.get("skill_count"),
     }
     if detail:
-        result.update(_detail_payload(full, reports))
+        result.update(_detail_payload(full, reports, isolated))
     return result
 
 

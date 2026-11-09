@@ -169,7 +169,8 @@ describe.each(callers)('%s real HTTP auth integration', (caller) => {
     else expect(h.tokens.loadHubSession(USER)).toMatchObject({ session_id: 'session-2', access_token: 'new-login-access' });
   });
 
-  it('drops a late retry success after logout and re-login', async () => {
+  it(caller === 'relay send' ? 'retains an acknowledged send after logout and re-login without restoring credentials'
+    : 'drops a late retry success after logout and re-login', async () => {
     const started = deferred<'retry'>();
     const gate = deferred<Response>();
     h.fetch.mockResolvedValueOnce(response(401, 'AUTH_INVALID_TOKEN')).mockImplementationOnce(() => {
@@ -181,10 +182,27 @@ describe.each(callers)('%s real HTTP auth integration', (caller) => {
     await h.auth.logout(USER);
     h.seed({ session_id: 'session-2', access_token: 'new-login-access' }, 'cs_new');
     gate.resolve(response(200, undefined, dataFor(caller)));
-    expect(await pending).toEqual(failureFor(caller, 'HUB_NOT_CONFIGURED'));
+    expect(await pending).toEqual(caller === 'relay send' ? successFor(caller) : failureFor(caller, 'HUB_NOT_CONFIGURED'));
     expect(h.fetch).toHaveBeenCalledTimes(2);
     expect(h.tokens.loadHubSession(USER)?.access_token).toBe('new-login-access');
   });
+});
+
+it('keeps a retry without acknowledgement uncertain when logout races the second POST', async () => {
+  const started = deferred<'retry'>();
+  const gate = deferred<Response>();
+  h.fetch.mockResolvedValueOnce(response(401, 'AUTH_INVALID_TOKEN')).mockImplementationOnce(() => {
+    started.resolve('retry');
+    return gate.promise;
+  });
+  const pending = h.call('relay send');
+  expect(await Promise.race([started.promise, pending.then(() => 'settled')])).toBe('retry');
+  await h.auth.logout(USER);
+  h.seed({ session_id: 'session-2', access_token: 'new-login-access' }, 'cs_new');
+  gate.resolve(new Response('unreadable acknowledgement', { status: 200 }));
+  expect(await pending).toEqual({ ok: false, code: 'HUB_ACKNOWLEDGEMENT_UNKNOWN' });
+  expect(h.fetch).toHaveBeenCalledTimes(2);
+  expect(h.tokens.loadHubSession(USER)?.access_token).toBe('new-login-access');
 });
 
 it.each(['contacts list', 'relay poll'] as const)('%s rechecks the active-scope guard after refresh before retry', async (caller) => {

@@ -101,4 +101,28 @@ describe('a2a relay client › idempotent request envelope', () => {
     expect(relayConfigured(USER)).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])('retains the external effect when sign-out races the response (ack=%s)', async acknowledged => {
+    const { clearHubSession } = await import('../../../../src/main/features/hub_account/tokens');
+    vi.mocked(fetch).mockImplementationOnce(async () => {
+      clearHubSession(USER);
+      if (!acknowledged) throw new TypeError('response connection closed');
+      return { ok: true, json: async () => ({ ok: true, data: { messageId: 'old-session-ack' } }) } as Response;
+    });
+    const { sendRelayMessageDetailed } = await import('../../../../src/main/features/a2a/relay-client');
+    await expect(sendRelayMessageDetailed(USER, {
+      to: 'cs_alice', conversationId: 'a2a-0123456789abcdef0123', kind: 'answer', text: 'Chosen reply',
+    })).resolves.toEqual(acknowledged ? { ok: true, messageId: 'old-session-ack' }
+      : { ok: false, code: 'HUB_ACKNOWLEDGEMENT_UNKNOWN' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks the host identity after session freshness awaits and before POST', async () => {
+    const isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    const { sendRelayMessageDetailed } = await import('../../../../src/main/features/a2a/relay-client');
+    await expect(sendRelayMessageDetailed(USER, {
+      to: 'cs_alice', conversationId: 'a2a-0123456789abcdef0123', kind: 'answer', text: 'Chosen reply', isCurrent,
+    })).resolves.toEqual({ ok: false, code: 'HUB_NOT_CONFIGURED' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

@@ -90,6 +90,7 @@ import { app as electronApp } from 'electron';
 import { readAgentDependencyState, withUserDisabledDependencies, type AgentDependencyState } from './agent_dependency_state';
 import { isKnownBuiltinRef, parseBuiltinRef } from './agent_builtin_capabilities';
 import { activeUpdateFailure, readAgentUpdateFailures, type AgentUpdateFailure } from './agent_update_failures';
+import { refreshMarketplaceContentStatus } from './marketplace/content-status-refresh';
 import { NAME_DISPLAY_MAX_UNITS, nameDisplayWidth } from '../util/name-limit';
 import {
   getAgentDispatchPolicy,
@@ -1954,6 +1955,11 @@ export async function getAgentForChatDispatch(
   userId: string,
   agentId: string | null | undefined,
 ): Promise<Agent | null> {
+  // Refresh before the admission checks and full runtime-spec load. Otherwise
+  // an Agent restored on Hub remains locally blocked and never reaches the
+  // refresh that would clear its stale disabled state.
+  // Custom/local ids return from the helper without network I/O.
+  if (agentId) await refreshMarketplaceContentStatus(userId, 'agent', agentId);
   const initialPolicy = await getAgentDispatchPolicy(userId, agentId);
   if (!isAgentChatDispatchable(initialPolicy)) return null;
   const agent = await _readAgentSpec(userId, agentId);

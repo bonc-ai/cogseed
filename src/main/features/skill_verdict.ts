@@ -69,6 +69,12 @@ export function isConventionRule(rule: string): boolean {
  * never whether the user may see the finding.
  */
 export function securityNotableOf(receipt: VerdictFields): boolean {
+  // `blocked` is what an overridden install records (the refusal is kept verbatim
+  // — see `skill_trust._receiptDecisionOf`), and by construction it is never
+  // bookkeeping: the scanner refused the content. It has to stay notable, or the
+  // one skill the user knowingly accepted risk on is the one the security page
+  // de-emphasises.
+  if (receipt.decision === 'blocked') return true;
   if (receipt.decision !== 'risk') return false;
   if (isConventionRule(receipt.topRule || '')) return false;
   return receipt.topLevel === 'EXTREME' || receipt.topLevel === 'MEDIUM';

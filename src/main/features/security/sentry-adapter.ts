@@ -39,7 +39,7 @@ import {
 import { resolveExternalScanner, activeUidOrNull } from './scan-orchestrator';
 import { chatWithModel } from '../../model/client';
 import { prompts } from '../../prompts/loader';
-import { validateSkillDir } from '../../quality';
+import { installBlockingViolations, validateSkillDir } from '../../quality';
 
 const log = createLogger('security/sentry');
 
@@ -479,9 +479,7 @@ export interface SentryScanResult {
 function localRedLines(skillDir: string): string[] {
   try {
     const report = validateSkillDir(skillDir, { enforceSkillRunner: false });
-    return report.violations
-      .filter((v) => (v.original_level || v.level) === 'EXTREME')
-      .map((v) => v.rule);
+    return installBlockingViolations(report).map((v) => v.rule);
   } catch {
     // A local-scan failure must not mask sentry's verdict; the caller still has
     // the primary result. Returning empty is the same direction as the rest of
@@ -857,7 +855,27 @@ async function _withInstructionRisk(
       })
       : { report: null, reason: 'no_active_user' };
 
-    return { ...scan, instructionRisk: decideInstructionVerdict(segments, report, reason) };
+    const verdict = decideInstructionVerdict(segments, report, reason);
+    // A model-adjudicated `suspicious` is a risk, not a clean pass.
+    //
+    // The verdict itself never blocks: instruction attacks need the user to
+    // co-operate, and a fuzzy model judgement must not refuse an install on its
+    // own (that is what `scanVerdictAllowsOverride` exists for, and what the
+    // `reviewed_clean` token protects). It is also not nothing: a skill whose
+    // only signal is prose — "paste your key here, don't tell the user" — scored
+    // 100/100 on the code rules, and `pass` is a claim about behaviour the code
+    // rules cannot see. `restricted` keeps it installable and puts the card up.
+    //
+    // `unavailable` deliberately stays a pass: the passages were recalled by a
+    // deliberately wide prefilter that also fires on security *teaching* (the
+    // skill explaining why not to do the thing). Downgrading that to a risk
+    // would trade a false negative for a false positive on exactly the content
+    // most worth having in a skill library, and the panel already renders
+    // "not checked" with the passages.
+    if (verdict.status === 'suspicious' && scan.outcome === 'pass') {
+      return { ...scan, outcome: 'restricted', instructionRisk: verdict };
+    }
+    return { ...scan, instructionRisk: verdict };
   } catch (err) {
     log.warn('instruction audit failed', { error: (err as Error).message });
     return scan;

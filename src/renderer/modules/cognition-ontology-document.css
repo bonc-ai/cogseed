@@ -487,12 +487,6 @@
 #ca-root .ontology-workspace.ont-prototype .cog-og-edge-label rect{fill:#fbfdf8;stroke:none}
 #ca-root .ontology-workspace.ont-prototype .cog-og-edge-label text{fill:#78946a;font-size:10px}
 #ca-root .ontology-workspace.ont-prototype .cog-og-edge>path{stroke:#abc2a0;stroke-width:1.5}
-#ca-root .ontology-workspace.ont-prototype .ont-graph-navigator{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:10px 18px;background:#fff;border-bottom:1px solid #edf1e8}
-#ca-root .ontology-workspace.ont-prototype .ont-graph-lenses{display:flex;gap:5px;flex-wrap:wrap}
-#ca-root .ontology-workspace.ont-prototype .ont-graph-lenses button{border:0;background:transparent;font-size:10px;padding:5px 8px;color:#7d9077}
-#ca-root .ontology-workspace.ont-prototype .ont-graph-lenses button[aria-pressed=true]{background:#eef4e9;color:#557449}
-#ca-root .ontology-workspace.ont-prototype .ont-graph-navigator label{display:flex;align-items:center;gap:8px;color:#8b9e7d;font-size:10px}
-#ca-root .ontology-workspace.ont-prototype .ont-graph-navigator select{max-width:240px;font-size:10px;padding:5px 8px;border:1px solid #e3e9df;border-radius:6px;background:#fafcf7;color:#557449}
 #ca-root .ontology-workspace.ont-prototype .cog-og-node--definition circle{fill:#edf3e5;stroke:#bdcea8}
 #ca-root .ontology-workspace.ont-prototype .cog-og-node--assertion circle{fill:#e5f0e9;stroke:#aecab7}
 #ca-root .ontology-workspace.ont-prototype .cog-og-node--reference circle{fill:#eeebf3;stroke:#c7bed7}
@@ -523,7 +517,7 @@
 #ca-root .ontology-workspace.ont-prototype .ont-is-graph .ont-graph-title{flex-shrink:0}
 #ca-root .ontology-workspace.ont-prototype :is(.ont-directory-graph,.ont-is-graph) .ontology-document-graph,
 #ca-root .ontology-workspace.ont-prototype :is(.ont-directory-graph,.ont-is-graph) .cog-og{display:flex;flex-direction:column;flex:1;min-height:0}
-#ca-root .ontology-workspace.ont-prototype :is(.ont-directory-graph,.ont-is-graph) :is(.cog-og-toolbar,.ont-graph-navigator){flex-shrink:0}
+#ca-root .ontology-workspace.ont-prototype :is(.ont-directory-graph,.ont-is-graph) .cog-og-toolbar{flex-shrink:0}
 #ca-root .ontology-workspace.ont-prototype :is(.ont-directory-graph,.ont-is-graph) .cog-og-body{flex:1;min-height:0}
 #ca-root .ontology-workspace.ont-prototype :is(.ont-directory-graph,.ont-is-graph) .cog-og-canvas{flex:1;min-height:0;height:0}
 #ca-root .ontology-workspace.ont-prototype :is(.ont-directory-graph,.ont-is-graph) .cog-og-inspector{flex-shrink:0;max-height:40%;overflow:auto}

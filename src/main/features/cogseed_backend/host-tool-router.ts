@@ -232,6 +232,10 @@ export function createCogSeedHostToolRouter(deps: CogSeedHostToolRouterDeps = {}
         const { runOntologyHostTool } = await import('./ontology-host-adapter');
         return cap(await runOntologyHostTool(call.name, call.input, scope));
       }
+      if (call.name === 'ontology_task_query' || call.name === 'search_ability_assets') {
+        const { runCognitionQueryHostTool } = await import('./cognition-query-host-adapter');
+        return cap(await runCognitionQueryHostTool(call.name, call.input || {}, scope));
+      }
       try {
         // Native counterpart of the core-agent `publish_outputs` contract.
         // The host verifies every path against this session's write records,

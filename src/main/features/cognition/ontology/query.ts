@@ -1,7 +1,7 @@
 /** 查询区分现实有效时间与当时系统知道的版本；未知起点不自动当成有效。 */
 import { createHash } from 'node:crypto';
 import { OntologyError, isCalendarDate, type OntologyAssertion, type OntologyDocument, type OntologyModule, type OntologyRecord } from './model';
-import { moduleCanUse, resolveOntologyRecordForModule } from './commands';
+import { buildOntologyReferenceIndex, moduleCanUse, resolveOntologyRecordForModule } from './commands';
 
 /** 任务侧上下文的最小结构（与 cognition_kernel 的 RecallAgentReadContextLike 同形）。 */
 export interface OntologyTaskScopeContext { projectId?: string; workspaceId?: string }
@@ -30,7 +30,9 @@ export function assertionValidityAt(assertion: OntologyAssertion, day: string): 
 export function ontologyRecordsKnownAt(doc: OntologyDocument, recordedAt?: string, knownRevision?: number): Record<string, OntologyRecord> {
   if (knownRevision !== undefined && (!Number.isSafeInteger(knownRevision) || knownRevision < 0 || knownRevision > doc.revision))
     throw new OntologyError('invalid_time', 'knowledge revision is outside the document history');
-  if (!recordedAt && knownRevision === undefined) return structuredClone(doc.records);
+  // Shallow map copy: query callers only read records. Deep-cloning every
+  // record here multiplied an O(records) copy across every module query.
+  if (!recordedAt && knownRevision === undefined) return { ...doc.records };
   if (recordedAt && (!/^\d{4}-\d{2}-\d{2}T/.test(recordedAt) || Number.isNaN(Date.parse(recordedAt))))
     throw new OntologyError('invalid_time', 'invalid knowledge timestamp');
   const cutoff = recordedAt ? Date.parse(recordedAt) : Infinity, records: Record<string, OntologyRecord> = {};
@@ -54,8 +56,12 @@ export function queryOntologyFacts(doc: OntologyDocument, input: {
   if (!module || module.kind !== 'module' || module.status !== 'active' || module.access !== 'task') throw new OntologyError('not_found', 'ontology module unavailable');
   if (doc.records[input.moduleId]?.status !== 'active' || doc.records[input.moduleId]?.access !== 'task') throw new OntologyError('not_authorized', 'current ontology permission unavailable');
   const matched: OntologyAssertion[] = [], uncertain: OntologyAssertion[] = [];
+  // One index per module query: the loop below checks every record's module
+  // visibility, and a per-record reference scan made large documents
+  // superlinear.
+  const viewReferenceIndex = buildOntologyReferenceIndex(view, input.moduleId);
   for (const record of Object.values(records)) {
-    if (record.kind !== 'assertion' || record.access === 'owner_only' || !moduleCanUse(view, input.moduleId, record)
+    if (record.kind !== 'assertion' || record.access === 'owner_only' || !moduleCanUse(view, input.moduleId, record, viewReferenceIndex)
       || records[record.moduleId]?.status !== 'active' || records[record.moduleId]?.access !== 'task'
       || (input.subjectId && record.subjectId !== input.subjectId)
       || (input.definitionId && record.definitionId !== input.definitionId)) continue;
@@ -113,9 +119,10 @@ export function queryOntologyRules(doc: OntologyDocument, input: { moduleId: str
   const records = ontologyRecordsKnownAt(doc, input.task.knownAt, input.task.knownRevision), view: OntologyDocument = { ...doc, records };
   const module = records[input.moduleId];
   if (!module || module.kind !== 'module' || module.status !== 'active' || module.access !== 'task') throw new OntologyError('not_found', 'ontology module unavailable');
+  const viewReferenceIndex = buildOntologyReferenceIndex(view, input.moduleId);
   return Object.values(records).filter((r): r is OntologyRecord & { kind: 'rule' } => r.kind === 'rule'
     && r.status === 'active' && r.access !== 'owner_only' && records[r.moduleId]?.status === 'active'
-    && records[r.moduleId]?.access === 'task' && moduleCanUse(view, input.moduleId, r)).map(rule => {
+    && records[r.moduleId]?.access === 'task' && moduleCanUse(view, input.moduleId, r, viewReferenceIndex)).map(rule => {
     const applicability = evaluateCondition(view, input.moduleId, rule.condition, input.task);
     return { rule, match: applicability === 'not_matched' ? applicability
       : rule.certainty && rule.certainty !== 'confirmed' ? 'unknown' as const : applicability };
@@ -302,14 +309,40 @@ export function queryOntologyGraph(doc: OntologyDocument, input: { moduleId?: st
   return { ...bound('module', [...nodes.values()], edges, MODULE_GRAPH_NODE_LIMIT, MODULE_GRAPH_EDGE_LIMIT), ...(input.contentScale ? { contentScale: input.contentScale } : {}) };
 }
 
-export function searchOntologyRecords(doc: OntologyDocument, query: string, moduleId?: string): Array<{
+export interface OntologySearchRow {
   id: string; kind: string; name: string; moduleId?: string; status: string; description: string;
-}> {
-  const q = query.trim().toLocaleLowerCase();
-  if (!q) return [];
+}
+
+export interface OntologySearchResult {
+  rows: OntologySearchRow[];
+  truncated: boolean;
+}
+
+export interface OntologySearchOptions {
+  taskOnly?: boolean;
+  limit?: number;
+}
+
+function compareSearchText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Task callers must not let owner-only names consume the bounded search
+ * result; the owner-facing IPC search keeps the default unfiltered behavior. */
+export function searchOntologyRecordsWithMeta(
+  doc: OntologyDocument,
+  query: string,
+  moduleId?: string,
+  options: OntologySearchOptions = {},
+): OntologySearchResult {
+  const q = query.trim().toLowerCase();
+  if (!q) return { rows: [], truncated: false };
+  const limit = Number.isSafeInteger(options.limit) && Number(options.limit) > 0 ? Number(options.limit) : 100;
   const rows = Object.values(doc.records).filter(r => {
     if (r.status !== 'active' || (r.kind !== 'module' && doc.records[r.moduleId]?.status !== 'active')
       || (moduleId && (r.kind === 'module' ? r.id !== moduleId : r.moduleId !== moduleId))) return false;
+    if (options.taskOnly && (r.access !== 'task'
+      || (r.kind !== 'module' && doc.records[r.moduleId]?.access !== 'task'))) return false;
     const subject = r.kind === 'assertion' ? doc.records[r.subjectId] : undefined;
     const definition = r.kind === 'assertion' ? doc.records[r.definitionId] : undefined;
     const value = r.kind === 'assertion' ? r.object.kind === 'entity' ? doc.records[r.object.id] : r.object.value : undefined;
@@ -323,7 +356,7 @@ export function searchOntologyRecords(doc: OntologyDocument, query: string, modu
       r.kind === 'assertion' && definition?.kind === 'definition' ? definition.name : '',
       r.kind === 'assertion' && value && typeof value === 'object' && 'name' in value ? value.name : value]
       .filter(value => value != null).map(String);
-    return searchable.some(value => value.toLocaleLowerCase().includes(q));
+    return searchable.some(value => value.toLowerCase().includes(q));
   }).map(r => {
     const subject = r.kind === 'assertion' ? doc.records[r.subjectId] : undefined;
     const definition = r.kind === 'assertion' ? doc.records[r.definitionId] : undefined;
@@ -337,7 +370,11 @@ export function searchOntologyRecords(doc: OntologyDocument, query: string, modu
       ...(r.kind === 'module' ? {} : { moduleId: r.moduleId }), status: r.status,
       description: 'description' in r ? r.description : r.kind === 'rule' ? r.requirement : r.kind === 'assertion' ? `${r.validity.from || 'unknown'} → ${r.validity.until || 'open'}` : '' };
   });
-  rows.sort((a, b) => Number(b.id.toLocaleLowerCase() === q) - Number(a.id.toLocaleLowerCase() === q)
-    || a.name.localeCompare(b.name));
-  return rows.slice(0, 100);
+  rows.sort((a, b) => Number(b.id.toLowerCase() === q) - Number(a.id.toLowerCase() === q)
+    || compareSearchText(a.name, b.name) || compareSearchText(a.id, b.id));
+  return { rows: rows.slice(0, limit), truncated: rows.length > limit };
+}
+
+export function searchOntologyRecords(doc: OntologyDocument, query: string, moduleId?: string): OntologySearchRow[] {
+  return searchOntologyRecordsWithMeta(doc, query, moduleId).rows;
 }

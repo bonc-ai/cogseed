@@ -7,7 +7,7 @@ import { loadCognitionAssets } from './helpers/cognition-renderer';
 const rendererRoot = path.resolve(__dirname, '../../src/renderer');
 
 describe('Ontology navigation copy', () => {
-  it.each(['zh', 'en', 'ja', 'pt'] as const)('keeps localized ontology navigation while the tree is disabled (%s)', (locale) => {
+  it.each(['zh', 'en', 'ja', 'pt'] as const)('keeps localized ontology navigation in four parallel entries plus the disabled tree entry (%s)', (locale) => {
     const translations = JSON.parse(
       fs.readFileSync(path.join(rendererRoot, 'locales', `${locale}.json`), 'utf8'),
     ) as Record<string, string>;
@@ -17,8 +17,11 @@ describe('Ontology navigation copy', () => {
     const rendered = page.render();
 
     expect(rendered).toContain(translations['cognition.tab_ontology']);
-    expect(rendered).toContain('data-id="tree"');
-    expect(rendered).toContain('aria-disabled="true"');
+    expect(rendered).not.toContain('ca-tabs-group');
+    for (const id of ['ontology', 'overview', 'activity', 'settings']) expect(rendered).toContain(`data-id="${id}"`);
+    // 2026-11 恢复禁用态「认知树」入口（PR #216）：它仍在导航里，但不可点。
+    expect(rendered).toMatch(/data-id="tree"[^>]*aria-disabled="true"/);
+    expect(rendered).toMatch(/class="ca-tab is-disabled"[^>]*data-id="tree"/);
     expect(rendered).not.toContain('class="trunk-name"');
   });
 

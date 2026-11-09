@@ -148,6 +148,40 @@ describe('core-agent client skill sandbox env', () => {
     expect(serialized).not.toContain('profile-secret');
   });
 
+  it('authoritative complete input: diagnostics preserves raw totals and last-call model identifiers without inventing write zero', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const stats = client.createModelRunLogDiagnostics(0);
+    client.recordModelRawEventForLog(stats, { type: 'done', result: { meta: {
+      model: 'requested-alias', reportedModel: 'provider/model@v1',
+      usage: { totalInputTokens: 200, cacheReadTokens: 120, outputTokens: 10 },
+      lastCallUsage: { totalInputTokens: 80, cacheReadTokens: 60 },
+    } } }, 100);
+    expect(client.summarizeModelRunForLog(stats, 100).usage).toEqual({
+      totalInputTokens: 200, cacheReadTokens: 120, outputTokens: 10,
+      requestedModel: 'requested-alias', reportedModel: 'provider/model@v1',
+      lastCallUsage: { totalInputTokens: 80, cacheReadTokens: 60 },
+    });
+  });
+
+  it.each(['', 'x'.repeat(161), 'unsafe model', 'model\nsecret', 'model\n', 'model\r', '../bad?secret'])('authoritative complete input: rejects unbounded model identifier %j', async model => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const stats = client.createModelRunLogDiagnostics(0);
+    client.recordModelRawEventForLog(stats, { type: 'done', result: { meta: {
+      model, reportedModel: model, usage: { totalInputTokens: 0, cacheReadTokens: 0 }, lastCallUsage: { totalInputTokens: 0 },
+    } } }, 100);
+    expect(client.summarizeModelRunForLog(stats, 100).usage).toEqual({ totalInputTokens: 0, cacheReadTokens: 0, lastCallUsage: { totalInputTokens: 0 } });
+  });
+
+  it('authoritative complete input: keeps missing totals absent and never coerces null buckets into zero', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const stats = client.createModelRunLogDiagnostics(0);
+    client.recordModelRawEventForLog(stats, { type: 'done', result: { meta: {
+      usage: { inputTokens: 10, cacheReadTokens: null, cacheWriteTokens: '0' },
+      lastCallUsage: { inputTokens: 0, cacheWriteTokens: null },
+    } } }, 100);
+    expect(client.summarizeModelRunForLog(stats, 100).usage).toEqual({ inputTokens: 10, lastCallUsage: { inputTokens: 0 } });
+  });
+
   it('summarizes model events without tool arguments, tool results, or final text', async () => {
     const client = await import('../../../../src/main/model/core-agent/client');
     const stats = client.createModelRunLogDiagnostics(1000);

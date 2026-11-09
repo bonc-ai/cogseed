@@ -9,7 +9,6 @@ const tokens = fs.readFileSync(path.join(root, 'src/renderer/tokens.css'), 'utf8
 const galleryHtml = fs.readFileSync(path.join(root, 'src/renderer/component-gallery.html'), 'utf8');
 const gallerySource = fs.readFileSync(path.join(root, 'src/renderer/component-gallery.js'), 'utf8');
 const rail = fs.readFileSync(path.join(root, 'src/renderer/modules/ui-app-rail.js'), 'utf8');
-const contactsSource = fs.readFileSync(path.join(root, 'src/renderer/modules/contacts.js'), 'utf8');
 const zh = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/zh.json'), 'utf8')) as Record<string, string>;
 const en = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/en.json'), 'utf8')) as Record<string, string>;
 
@@ -23,6 +22,7 @@ const en = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/en.j
     expect(html).not.toContain('id="new-task-btn"');
     for (const [id, key] of [
       ['task-nav-btn', 'rail.task'],
+      ['contacts-btn', 'sidebar.contacts'],
       ['workspace-btn', 'sidebar.workspace'],
       ['kb-btn', 'sidebar.kb'],
       ['recall-btn', 'sidebar.recall'],
@@ -41,11 +41,13 @@ const en = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/en.j
     expect(html).not.toContain('class="sidebar-logo"');
   });
 
-  it('renders the contacts navigation action through the shared button primitive', () => {
-    expect(html).toContain('id="contacts-nav-host"');
+  it('places contacts in the shared top-level rail without a second task-sidebar entry', () => {
+    expect(html).not.toContain('id="contacts-nav-host"');
     expect(html).not.toMatch(/<button\b[^>]*\bid="contacts-btn"/);
-    expect(contactsSource).toContain('window.uiButton({');
-    expect(contactsSource).toContain("attrs: { id: 'contacts-btn' }");
+    expect(rail).toContain("module: 'contacts', id: 'contacts-btn'");
+    expect(rail).toMatch(/module: 'contacts'[^\n]*badgeId: 'contacts-nav-badge'/);
+    expect(zh['sidebar.contacts']).toBe('通讯录');
+    expect(en['sidebar.contacts']).toBe('Contacts');
   });
 
   it('uses the consolidated 6-entry navigation labels', () => {

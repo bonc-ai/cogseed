@@ -71,6 +71,12 @@ const F = {
   captureService: 'src/main/features/recall/capture-service.ts',
   stockProvenance: 'src/main/features/recall/stock-organization-provenance.ts',
   stockOrganization: 'src/main/features/recall/stock-organization.ts',
+  oldContentPlanService: 'src/main/features/recall/old-content-plan-service.ts',
+  oldContentPlanner: 'src/main/features/recall/old-content-plan-planner.ts',
+  oldContentUndo: 'src/main/features/recall/old-content-undo.ts',
+  oldContentPlanContract: 'src/main/features/recall/old-content-plan-contract.ts',
+  oldContentFormation: 'src/main/features/recall/formation-old-content.ts',
+  oldContentFinalize: 'src/main/features/recall/old-content-finalize.ts',
 } as const;
 
 function rel(abs: string): string {
@@ -357,6 +363,30 @@ describe('② 不存在第二处「采用判定」', () => {
       file: F.contentOrganization,
       why: '**另一个域**的执行结果：候选内容组织/整理的回执状态，表示组织动作是否已提交，不读取采用回执也不决定资产准入。',
     },
+    {
+      file: F.oldContentPlanService,
+      why: '**另一个域**的执行结果：旧内容整理逐单位回执（applied/kept/failed/already_applied），表示整理动作是否提交，不读取采用回执也不决定资产准入。',
+    },
+    {
+      file: F.oldContentUndo,
+      why: '**另一个域**的方案生命周期：判断旧内容整理方案是否已执行、能否撤销（plan.status === applied），不读取采用回执也不决定资产准入。',
+    },
+    {
+      file: F.oldContentPlanContract,
+      why: '**另一个域**的方案/回执状态枚举：旧内容整理方案的 applied 生命周期与逐单位回执 status，不读取采用回执也不决定资产准入。',
+    },
+    {
+      file: F.oldContentPlanner,
+      why: '**另一个域**的逐单位回执构造：写入旧内容整理动作的 applied/kept 状态，不读取采用回执也不决定资产准入。',
+    },
+    {
+      file: F.oldContentFormation,
+      why: '**另一个域**的形成回执枚举：旧内容整理方案条目的 applied/kept 执行状态，不读取采用回执也不决定资产准入。',
+    },
+    {
+      file: F.oldContentFinalize,
+      why: '**另一个域**的收尾阶段判断：旧内容整理方案是否 applied 以决定跳过旧段，只读写方案本身，不参与资产采用判定。',
+    },
   ];
 
   const APPLIED_LITERAL = /['"]applied['"]/g;
@@ -515,8 +545,11 @@ describe('③ 不存在第二处版本比对', () => {
     // 重放要求提交的 targetVersionUsed 与 job.prepared 完全一致（provenance），
     // 本体命令则绑定 job 内记录的 expectedVersion（stock-organization）。
     // 它们都不读取资产当前在用版，也不承担准入重检。
+    // 旧内容方案执行前的逐单位基线预检只读复核，真正写入仍在资产 owner 写锁内
+    // 由 asset-service 再核一次；它不接受用户提交的基线，也不新增准入入口。
     expect(expectationHits.every(hit => [F.assetService, F.automaticPolicy, F.automaticSupport, F.standingAuthority,
-      F.automaticFormationUndo, F.captureService, F.stockProvenance, F.stockOrganization].includes(hit.file as typeof F.assetService)), hitSummary(expectationHits)).toBe(true);
+      F.automaticFormationUndo, F.captureService, F.stockProvenance, F.stockOrganization,
+      F.oldContentPlanService].includes(hit.file as typeof F.assetService)), hitSummary(expectationHits)).toBe(true);
     const standingCode = stripComments(readSource(F.standingAuthority));
     expect(standingCode).not.toMatch(/\b(?:createAbilityAsset|updateAbilityAsset|promoteRecallCandidate|persistCognitionSource|writeRecallJsonRecord|updateRecallJsonRecord)\s*\(/);
     const supportCode = stripComments(readSource(F.automaticSupport));

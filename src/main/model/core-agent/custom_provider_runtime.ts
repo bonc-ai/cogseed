@@ -217,10 +217,21 @@ export async function createCustomProvider(
     recognition = (await recognizeModelByIdReady(modelId)) || undefined;
   } catch { /* unrecognized → no reasoning forwarding */ }
   const model = buildCustomProviderModel(cp, modelId, recognition);
+  // Only explicit per-model endpoint declarations opt into wire hints. Model
+  // recognition and vendor auth routing cannot establish cache capabilities.
+  const capabilities = cp.models.find((candidate) => candidate.id === modelId)?.capabilities ?? [];
+  const openai = cp.protocol === 'openai' || cp.protocol === 'openai-responses';
   return mod.createPiProvider({
     provider: customProviderId(cp.id),
     apiKey,
     customModel: model,
+    cacheNamespace: userId,
+    promptCachePolicy: {
+      key: openai && capabilities.includes('prompt_cache_key'),
+      affinity: openai && capabilities.includes('session_affinity'),
+      ...(openai && capabilities.includes('prompt_cache_key') && capabilities.includes('prompt_cache_retention_24h')
+        ? { retention: '24h' as const } : {}),
+    },
   });
 }
 

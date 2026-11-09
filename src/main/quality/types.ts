@@ -89,5 +89,10 @@ export interface RuleDef {
  *  0.6.1 — `skill_meta_category_missing` MEDIUM → LOW. Bumping invalidates every
  *  stored receipt, so each skill is rescanned on next load and picks up both the
  *  new level and the `topLevel` field added alongside it. That rescan is the
- *  intended mechanism, not a side effect. */
-export const VALIDATOR_VERSION = '0.6.1';
+ *  intended mechanism, not a side effect.
+ *
+ *  0.6.2 — new rule `no_socket_shell_attach` (socket + dup2/pty + shell). Also
+ *  invalidates receipts produced before the 2.4.0 engine, which is what makes the
+ *  carrier fixes apply to content that is already installed: `ruleProfile` is
+ *  `builtin@<this version>`, and `isReceiptStale` compares it. */
+export const VALIDATOR_VERSION = '0.6.2';

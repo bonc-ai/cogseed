@@ -23,7 +23,9 @@ export type AgentRunParams = {
   /** Per-turn ephemeral context (e.g. an orchestration ledger / datetime that
    * changes EVERY turn). Injected into the model-facing view of THIS turn's
    * user message only — the uncached tail, after all history — and NEVER
-   * persisted to the session JSONL or replayed into future turns. Host uses
+   * persisted to session JSONL or canonical summary/reload views. A bounded
+   * memory-only foreground transport can retain old snapshots as historical,
+   * explicitly superseded state until scope/headroom/archival invalidates it. Host uses
    * this to keep volatile blocks out of the (cached) system prompt so the
    * system + history cache prefix stays byte-stable across turns. */
   turnEphemeral?: string;
@@ -35,6 +37,14 @@ export type AgentRunParams = {
   systemPrompt?: string;
   /** Abort signal. */
   signal?: AbortSignal;
+  /** Hard per-run total of actual tool.execute entries, across all batches.
+   * Zero forbids execution. Denied/unknown/skipped calls do not consume it.
+   * Exhaustion permits one bounded tool-free summary, then closes with the
+   * explicit tool_call_limit boundary; it never grants more tool executions. */
+  maxToolCalls?: number;
+  /** Omit host plan instructions and pending-plan terminal nudges for this
+   * run, while retaining the durable plan, history and completed-work ledger. */
+  suppressExecutionPlanInstructions?: boolean;
   /** Working directory for tool execution. */
   workingDir?: string;
   /** Thinking/reasoning level. */
@@ -105,6 +115,8 @@ export type AgentRunMeta = {
   durationMs: number;
   /** Model used. */
   model: string;
+  /** Last returned response identity, including a budget closure; not the routing alias. */
+  reportedModel?: string;
   /** Provider used. */
   provider: string;
   /** Stop reason. */
@@ -125,6 +137,10 @@ export type AgentRunMeta = {
   timings?: AgentRunTimings;
   /** Whether the run was aborted. */
   aborted?: boolean;
+  /** Host-enforced execution boundary. The response text is a partial receipt,
+   * not a successful completion. Separate from provider/model errors and never
+   * inferred from assistant prose, tags, or individual tool failures. */
+  terminationReason?: "tool_call_limit" | "read_only_limit";
   /** Error info if the run failed. */
   error?: {
     kind: "auth" | "rate_limit" | "context_overflow" | "timeout" | "provider_error";

@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { validateSkillDir } from '../../../src/main/quality';
+import { installBlockingViolations, validateSkillDir } from '../../../src/main/quality';
 
 const CORPUS_ROOT = 'resources/builtin';
 
@@ -67,6 +67,27 @@ describe('quality › builtin corpus calibration', () => {
       }
     }
     expect(blocked).toEqual([]);
+  });
+
+  it('admits every builtin skill at the install gate, not just at `report.ok`', () => {
+    // `report.ok` reads the *effective* level, so a demoted hit makes it true
+    // while the install predicate still refuses. That gap is precisely how
+    // `seo-crawl` passed this suite and still could not be imported (F-13 →
+    // retest N-04): one `test/`-context `no_cloud_metadata_access`, demoted to
+    // MEDIUM, promoted back to EXTREME by the read-through, `localRedLines`
+    // non-empty, import refused.
+    //
+    // This is the release gate the retest recommended: assert on the same
+    // predicate the installer uses, per skill, not on the aggregate `ok`.
+    const refused: Array<{ dir: string; rules: string[] }> = [];
+    for (const dir of dirs) {
+      const report = validateSkillDir(dir, { enforceSkillRunner: false });
+      const blocking = installBlockingViolations(report);
+      if (blocking.length) {
+        refused.push({ dir, rules: blocking.map((v) => `${v.rule}@${v.context ?? 'source'}`) });
+      }
+    }
+    expect(refused).toEqual([]);
   });
 
   it('produces no EXTREME finding anywhere in the corpus', () => {

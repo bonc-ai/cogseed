@@ -121,7 +121,9 @@ export async function prepareContentOrganization(userId: string, input: Organiza
       record: { ...base, name: output.title, requirement: output.statement } } as OntologyAction);
   });
   const outcome = actions.length ? applyOntologyCommand(doc, { commandId: operationId, expectedRevision: doc.revision, actions }, now) : undefined;
-  const next = outcome?.document || structuredClone(doc);
+  // A duplicate command returns the input document itself; only a freshly
+  // applied command owns a private draft that this preview may mutate.
+  const next = outcome && !outcome.duplicate ? outcome.document : structuredClone(doc);
   for (const recordId of outcome?.receipt.changedIds || []) {
     const record = next.records[recordId];
     if (sharedIds.has(recordId)) { record.source = structuredClone(doc.records[recordId].source); continue; }

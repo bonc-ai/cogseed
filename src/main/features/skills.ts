@@ -60,6 +60,7 @@ import { scanSkillDir, type SentryScanResult } from './security/sentry-adapter';
 import type { CustomAdmissionResult } from './security/custom-skill-admission';
 import { findOuterTagRanges } from '../util/markdown-prose-code';
 import {
+  installBlockingViolations,
   validateSkillFile,
   validateSkillDir,
   ValidationReport as QualityReport,
@@ -1978,23 +1979,55 @@ function _isBlacklistedImportSource(realDir: string): { blocked: true; reason: s
   return _isBlacklistedImportSourceForTest(realDir);
 }
 
+/**
+ * Names whose removal changes what the security verdict covers.
+ *
+ * The import filter drops a lot of things for good reasons (`dist/`, `.git`,
+ * caches). Most of them are irrelevant to safety. These are the ones where the
+ * dropped file could have carried behaviour — an npm install hook, a pinned
+ * dependency set — so the scan of the copy is not a scan of the source.
+ */
+const IMPORT_SECURITY_RELEVANT_NAMES: ReadonlySet<string> = new Set([
+  'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock',
+]);
+
 function _walkImportSource(root: string): {
   files: { src: string; rel: string; size: number }[];
   fileCount: number;
   totalBytes: number;
+  /** Dropped entries that a security verdict would otherwise have covered. */
+  skippedSecurityRelevant: string[];
+  skippedCount: number;
 } {
   const files: { src: string; rel: string; size: number }[] = [];
+  const skippedSecurityRelevant: string[] = [];
+  let skippedCount = 0;
   let fileCount = 0;
   let totalBytes = 0;
 
   function walk(dir: string, relBase: string): void {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const e of entries) {
-      if (IMPORT_FILTER_NAMES.has(e.name)) continue;
+      if (IMPORT_FILTER_NAMES.has(e.name)) {
+        // Only count/record it where it could matter. `dist/` counts as dropped
+        // but not as security-relevant: nothing in the verdict depended on it.
+        skippedCount += 1;
+        if (IMPORT_SECURITY_RELEVANT_NAMES.has(e.name)) {
+          skippedSecurityRelevant.push(relBase ? `${relBase}/${e.name}` : e.name);
+        }
+        continue;
+      }
       if (_isGeneratedSkillSidecarName(e.name)) continue;
       const rel = relBase ? `${relBase}/${e.name}` : e.name;
       const full = path.join(dir, e.name);
-      if (e.isSymbolicLink()) continue; // skip symlinks defensively
+      if (e.isSymbolicLink()) {
+        // Skipped defensively (a link can point outside the skill). The link's
+        // *target* is therefore never inspected, which is exactly the kind of
+        // gap the receipt has to state rather than absorb.
+        skippedCount += 1;
+        skippedSecurityRelevant.push(rel);
+        continue;
+      }
       if (e.isDirectory()) {
         walk(full, rel);
       } else if (e.isFile()) {
@@ -2011,7 +2044,7 @@ function _walkImportSource(root: string): {
     }
   }
   walk(root, '');
-  return { files, fileCount, totalBytes };
+  return { files, fileCount, totalBytes, skippedSecurityRelevant, skippedCount };
 }
 
 export interface ImportResult {
@@ -2044,6 +2077,15 @@ export interface ImportResult {
    * evidence is indistinguishable from no check at all.
    */
   securityPass?: SentryScanResult;
+  /**
+   * What the import filter removed before the scan ran (red-team F-10).
+   *
+   * `securityRelevant` non-empty means the verdict covers a subset of what the
+   * user picked — a symlink's target or a `package.json` install hook was never
+   * inspected. The caller shows it, and the receipt records `risk` instead of
+   * `pass` so the caveat survives the toast.
+   */
+  normalization?: { skipped: number; securityRelevant: string[] };
 }
 
 /**
@@ -2063,11 +2105,18 @@ export interface ImportResult {
  * first means known-malicious content never reaches the model at all.
  */
 async function _scanImportedSkill(skillDir: string): Promise<SentryScanResult> {
-  return scanSkillDir(skillDir, 'community');
+  // `detail: true` because this verdict outlives the toast: the import writes it
+  // into a receipt, and the receipt's `topRule` is what explains the skill's risk
+  // badge afterwards. Without the finding list a `restricted` verdict fell back to
+  // the quality report's `shape_trigger_missing` — an authoring nit — while the
+  // real cause (an unreviewable binary, a zip bomb, a vulnerable dependency) was
+  // recorded nowhere the panel reads (red-team F-11). Imports are a one-shot user
+  // action, so the larger payload is paid once, not per load.
+  return scanSkillDir(skillDir, 'community', { detail: true });
 }
 
 /**
- * Record a passing import scan as a receipt.
+ * Record an import scan as a receipt.
  *
  * The import already deep-scans and rolls the batch back on `blocked`, but the
  * result used to be discarded — so an imported skill had no baseline hash, and
@@ -2077,24 +2126,108 @@ async function _scanImportedSkill(skillDir: string): Promise<SentryScanResult> {
  * payload hidden in `tests/` inside a custom skill was neither blocked nor
  * withheld before this.
  *
- * Best-effort by design: the scan has already passed and the skill is installed,
- * so a failed write must not undo that. It only means the first re-verification
+ * Best-effort by design: the skill is installed by the time this runs, so a
+ * failed write must not undo that. It only means the first re-verification
  * rescans instead of reusing a receipt.
+ *
+ * `acceptedRisk` is the caller's `acceptRedFlagRisk`. When it is set and the scan
+ * actually refused, the receipt records `userOverride` — the audit answer to "why
+ * is a blocked skill installed". Without it the only remaining explanation is the
+ * `decision` field, which reads as "the scanner said blocked" with nothing saying
+ * the user was asked (red-team F-05: 9 consented samples, 0 overrides recorded).
  */
-async function _recordImportReceipt(userId: string, skillId: string, skillDir: string, scan: SentryScanResult): Promise<void> {
+async function _recordImportReceipt(
+  userId: string,
+  skillId: string,
+  skillDir: string,
+  scan: SentryScanResult,
+  acceptedRisk = false,
+  normalization?: { skipped: number; securityRelevant: string[] },
+): Promise<void> {
   try {
     const hash = skillPayloadHash(skillDir);
     if (!hash) return;
     const report = validateSkillDir(skillDir, { enforceSkillRunner: false });
-    const top = topViolationOf(report.violations);
-    writeInstallReceipt(userId, skillId, hash, scan, {
-      violationCount: report.violations.length,
-      ...(top?.rule ? { topRule: top.rule } : {}),
-      ...(top?.level ? { topLevel: top.level } : {}),
-    }, undefined, skillDir);
+    const top = _receiptTopRuleOf(scan) ?? topViolationOf(report.violations);
+    const userOverride = acceptedRisk && scanVerdictBlocksInstall(scan.outcome)
+      ? { outcome: scan.outcome, at: Date.now() }
+      : undefined;
+    const partialCoverage = (normalization?.securityRelevant.length ?? 0) > 0;
+    writeInstallReceipt(
+      userId, skillId, hash,
+      {
+        ...scan,
+        ...(userOverride ? { userOverride } : {}),
+        ...(normalization ? { normalization } : {}),
+      },
+      {
+        violationCount: report.violations.length,
+        // When the tree was stripped, the most useful thing to name is that
+        // fact — a shape nit would explain the risk badge with the wrong reason.
+        ...(partialCoverage
+          ? { topRule: 'import_normalized', topLevel: 'MEDIUM' as const }
+          : {
+            ...(top?.rule ? { topRule: top.rule } : {}),
+            ...(top?.level ? { topLevel: top.level } : {}),
+          }),
+      },
+      undefined, skillDir,
+    );
   } catch (err) {
     log.warn('failed to record import receipt', { skillId, error: (err as Error).message });
   }
+}
+
+/** Severity order used to pick the receipt's `topRule` from security findings. */
+const _SECURITY_SEVERITY_RANK: Readonly<Record<string, number>> = {
+  critical: 4, high: 3, medium: 2, low: 1, info: 0,
+};
+
+/**
+ * Pick the rule that actually decided a security verdict, for the receipt's
+ * `topRule`.
+ *
+ * `topRule` used to come only from the *quality* report, so a sample blocked for a
+ * reverse shell recorded `shape_trigger_missing` — an authoring nit at MEDIUM —
+ * as its highest-severity reason (red-team F-11). The panel then explained the
+ * verdict with the wrong rule, and the security finding that mattered was not
+ * named anywhere the user looks first.
+ *
+ * Falls back to the quality report when the scan passed (there is no security
+ * reason to show) or when the only findings are coverage notes — saying "the
+ * external tool is missing" as the top rule would repeat the same mistake in the
+ * other direction.
+ */
+function _receiptTopRuleOf(
+  scan: SentryScanResult,
+): { rule: string; level?: 'EXTREME' | 'MEDIUM' | 'LOW' } | null {
+  if (scan.outcome === 'pass') return null;
+  // The rule that refused the install, when there is one. Import scans run
+  // WITHOUT `detail` (the panel does not need 60 findings on a user-triggered
+  // import), so `findings` is usually absent — but `blockingRules` and
+  // `localRedLines` are always populated, and they name the deciding rule
+  // exactly. Measured: before this branch, every blocked carrier sample recorded
+  // `shape_trigger_missing` as its top rule, i.e. F-11 survived the fix.
+  const refusal = scan.blockingRules?.[0] ?? scan.localRedLines?.[0];
+  if (refusal) return { rule: refusal, level: 'EXTREME' };
+  let best: { ruleId: string; severity: string } | null = null;
+  for (const finding of scan.findings ?? []) {
+    if (finding.suppressed) continue;
+    if (finding.category === 'scan_coverage') continue;
+    if ((_SECURITY_SEVERITY_RANK[finding.severity] ?? 0) < 2) continue;
+    if (!best || (_SECURITY_SEVERITY_RANK[finding.severity] ?? 0)
+      > (_SECURITY_SEVERITY_RANK[best.severity] ?? 0)) {
+      best = { ruleId: finding.ruleId, severity: finding.severity };
+    }
+  }
+  if (!best) return null;
+  // Only three buckets exist. A scanner `critical` is the gate's refusal
+  // threshold, so it maps to EXTREME; high/medium stay MEDIUM rather than
+  // inflating every risk finding into an unskippable one.
+  return {
+    rule: best.ruleId,
+    level: best.severity === 'critical' ? 'EXTREME' : 'MEDIUM',
+  };
 }
 
 /**
@@ -2311,23 +2444,20 @@ function _sourceSkillInstallMeta(sourceRoot: string, sourceSkillMd: string): Ski
   return { category, status };
 }
 
-/**
- * Every EXTREME violation blocks the import, regardless of `force`.
+/*
+ * `force` never weakens the red-flag gate.
  *
- * `quality/README.md` defines EXTREME as non-overridable ("There is
- * intentionally NO override for EXTREME"). All nine red-flag rules
- * (`rules/red-flags.ts`) and the runner contract are EXTREME, so
- * `report.ok === false` is already the correct block condition and `force`
- * must not weaken it.
+ * `force` is set by ordinary retry paths. Treating it as consent would let every
+ * retry silently accept security risk on the user's behalf, so it stays a
+ * "rewrite despite a conflict" flag and nothing more; the only thing that may
+ * waive a refusal is `acceptRedFlagRisk`, which the main process re-checks
+ * (`security/sentry-adapter.resolveInstallDecision`).
  *
- * This previously only hard-blocked `skill_script_requires_runner` — an
- * authoring-convention rule — while letting `force` bypass the genuine
- * malice patterns (credential reads, download-then-execute, obfuscated
- * payloads, …). That was inverted: the convention rule was unskippable
- * while the security rules were skippable.
- *
- * `force` remains meaningful for MEDIUM/LOW advisories, which never blocked
- * the write to begin with.
+ * History worth keeping: an earlier version hard-blocked only
+ * `skill_script_requires_runner` — an authoring-convention rule — while letting
+ * `force` bypass the genuine malice patterns (credential reads,
+ * download-then-execute, obfuscated payloads). That was inverted: the convention
+ * rule was unskippable while the security rules were skippable.
  */
 /**
  * Whether the structural report should block an import.
@@ -2341,18 +2471,38 @@ function _sourceSkillInstallMeta(sourceRoot: string, sourceSkillMd: string): Ski
  * `cat ~/.aws/credentials | curl -d @-` produces `report.ok === true`, because
  * the EXTREME hit is recorded as MEDIUM after demotion. That sample imported
  * cleanly before this check looked at `original_level`.
+ *
+ * EXCEPT for `comment`, and that exception is the whole point of the field.
+ *
+ * `original_level` is recovered for *locations where a payload can hide*:
+ * `test/`, `vendor/`, `generated/` are directories the runtime can still execute
+ * from. `comment` is different in kind — it is a position inside a file, and by
+ * construction it cannot run. Recovering the pre-demotion level there does not
+ * close a hole, it re-opens the false positive the demotion existed to fix:
+ *
+ *   - measured on the shipped corpus, `seo-crawl`'s SSRF guard names
+ *     `169.254.169.254` in a comment at `scripts/url_safety.py:49` (and in a test
+ *     assertion) *because it blocks that address*. The local validator demoted it
+ *     to LOW, this check promoted it back to EXTREME, and the import was refused.
+ *     1 of 83 official skills could not be re-imported or edited.
+ *   - red-team F-13 (2026-11-04) reproduced exactly that and classified it as a
+ *     false positive on our own product content.
+ *
+ * So: a comment may still *report* a red flag (the finding stays in the report
+ * with its original level), it just cannot be the reason an install is refused.
+ * A docstring counts as `comment` too — see `quality/rules/context.ts`.
  */
 function _isQualityBlockedImport(
   report: QualityReport, acceptRedFlagRisk = false,
 ): boolean {
   // An informed user may proceed past a red flag. Reverses an earlier absolute
   // rule; the reasoning and the history it overturns are in `quality/README.md`.
-  // Note this reads `original_level`, so a demotion (e.g. a `tests/` path) cannot
-  // quietly turn a red flag into a soft advisory — the override has to be a
-  // decision, not a side effect of where the file happens to live.
   if (acceptRedFlagRisk) return false;
   if (!report.ok) return true;
-  return report.violations.some((v) => (v.original_level || v.level) === 'EXTREME');
+  // The predicate is shared with `sentry-adapter.localRedLines` — the two used to
+  // be the same expression written twice, which is how F-13 was fixed in one gate
+  // and left standing in the other.
+  return installBlockingViolations(report).length > 0;
 }
 
 async function _installSourceSkillRoots(
@@ -2364,6 +2514,7 @@ async function _installSourceSkillRoots(
   sourceRoots: string[],
   totalBytes: number,
   acceptRedFlagRisk = false,
+  normalization?: { skipped: number; securityRelevant: string[] },
 ): Promise<ImportResult> {
   const reserved = new Set<string>();
   const createdIds: string[] = [];
@@ -2490,7 +2641,11 @@ async function _installSourceSkillRoots(
   // Receipts last: only verdicts that admitted the skill become receipts, and the
   // hash must describe the tree as it will be found on disk.
   for (const entry of admitted) {
-    await _recordImportReceipt(userId, entry.skillId, customSkillDirForUser(userId, entry.skillId), entry.scan);
+    await _recordImportReceipt(
+      userId, entry.skillId, customSkillDirForUser(userId, entry.skillId), entry.scan,
+      acceptRedFlagRisk,
+      normalization,
+    );
   }
 
   log.info('created-from-dir direct skill install', {
@@ -2512,6 +2667,7 @@ async function _installSourceSkillRoots(
     seedModelText: false,
     seedMessage: false,
     ...(worstScan ? { securityPass: worstScan } : {}),
+    ...(normalization ? { normalization } : {}),
   };
 }
 
@@ -2523,6 +2679,7 @@ async function _createEditableDraftFromImportDir(
   files: { src: string; rel: string; size: number }[],
   totalBytes: number,
   acceptRedFlagRisk = false,
+  normalization?: { skipped: number; securityRelevant: string[] },
 ): Promise<ImportResult> {
   const effectiveName = (name || '').trim() || _defaultSkillNameFromDir(realSrc);
   const effectiveDesc = (description || '').trim() || t('skills.import.default_desc_dir');
@@ -2563,7 +2720,9 @@ async function _createEditableDraftFromImportDir(
   if (!acceptRedFlagRisk && scanVerdictBlocksInstall(scan.outcome)) {
     return _rejectImportForSecurity(userId, scan, [created.id]);
   }
-  await _recordImportReceipt(userId, created.id, skillDir, scan);
+  await _recordImportReceipt(
+    userId, created.id, skillDir, scan, acceptRedFlagRisk, normalization,
+  );
 
   const fresh = await getCustomSkillForUser(userId, created.id) || created;
   log.info('created-from-dir import draft', {
@@ -2579,6 +2738,7 @@ async function _createEditableDraftFromImportDir(
     seedModelText,
     seedMessage: seedModelText,
     securityPass: scan,
+    ...(normalization ? { normalization } : {}),
   };
 }
 
@@ -2714,7 +2874,10 @@ export async function createFromDirForUser(
   if (black.blocked) return { ok: false, error: t('skills.errors.import_refused', { reason: black.reason || '' }) };
 
   // Stats walk first so we fail fast before any copy.
-  const { files, fileCount, totalBytes } = _walkImportSource(realSrc);
+  const { files, fileCount, totalBytes, skippedSecurityRelevant, skippedCount } = _walkImportSource(realSrc);
+  const normalization = (skippedSecurityRelevant.length || skippedCount)
+    ? { skipped: skippedCount, securityRelevant: skippedSecurityRelevant }
+    : undefined;
   if (fileCount === 0) return { ok: false, error: t('skills.errors.dir_empty') };
   if (fileCount > IMPORT_MAX_FILES) {
     return { ok: false, error: t('skills.errors.too_many_files', { count: fileCount, max: IMPORT_MAX_FILES }) };
@@ -2727,13 +2890,13 @@ export async function createFromDirForUser(
   if (sourceRoots.length > 0) {
     return _installSourceSkillRoots(
       userId, name, description, realSrc, files, sourceRoots, totalBytes,
-      _opts.acceptRedFlagRisk === true,
+      _opts.acceptRedFlagRisk === true, normalization,
     );
   }
 
   return _createEditableDraftFromImportDir(
     userId, name, description, realSrc, files, totalBytes,
-    _opts.acceptRedFlagRisk === true,
+    _opts.acceptRedFlagRisk === true, normalization,
   );
 }
 

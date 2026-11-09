@@ -411,7 +411,8 @@ async function addCandidateUnlocked(
       : nowIso(),
   };
 
-  const candidates = readCandidates(uid);
+  // 统一库模式 readCandidates 返回按 store 版本共享的冻结数组；先拷贝再改。
+  const candidates = structuredClone(readCandidates(uid));
   const index = candidates.findIndex((item) => item.candidate_id === candidateId);
   if (index >= 0) candidates[index] = candidate;
   else candidates.push(candidate);
@@ -427,7 +428,8 @@ async function addCandidateUnlocked(
 async function rejectCandidateUnlocked(uid: string, candidateId: string, reason?: string): Promise<{ ok: boolean }> {
   if (!safeId(uid) || !candidateId) throw new Error('invalid uid or candidateId');
 
-  const candidates = readCandidates(uid);
+  // 同上：统一库共享数组不可原地 splice。
+  const candidates = structuredClone(readCandidates(uid));
   const idx = candidates.findIndex(c => c.candidate_id === candidateId);
   if (idx === -1) {
     log.warn('rejectCandidate: candidate not found', { uid, candidateId });

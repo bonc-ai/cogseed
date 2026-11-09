@@ -64,7 +64,9 @@ describe('role-template boundary › M6 模板目录只剩 PO 一个出口', () 
   it('目录出口走 contract，IPC 层不再直连 T-box 常量', () => {
     expect(ipc).toContain("'personalOntology.templates.catalog'");
     expect(ipc).toContain("'personalOntology.scenarios.list'");
-    expect(ipc).not.toContain('role_templates');
+    // `role_templates` 同时是 Hub 模板引用契约里的字段名（specs/010），整串判定会误伤；
+    // 这里禁止的是 IPC 层直连 T-box 模块本身。
+    expect(ipc).not.toMatch(/from\s+['"][^'"]*\/role_templates(?:\.ts)?['"]/);
   });
 
   it('Workspace / 会话导入 / 空间构建师都不再 import role_templates', () => {
@@ -75,7 +77,7 @@ describe('role-template boundary › M6 模板目录只剩 PO 一个出口', () 
       'src/main/features/group_chat/bus.ts',
     ]) {
       expect(stripComments(read(file)), `${file} must not import role_templates`)
-        .not.toContain('role_templates');
+        .not.toMatch(/from\s+['"][^'"]*\/role_templates(?:\.ts)?['"]/);
     }
   });
 

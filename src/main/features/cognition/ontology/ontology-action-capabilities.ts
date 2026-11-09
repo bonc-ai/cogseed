@@ -10,6 +10,7 @@ const readOnly = new Set([
   'list_asset_change_proposals', 'chat_search', 'chat_read', 'list_connector_tools', 'expense_configuration_status', 'expense_case_status',
   'messaging_list_targets', 'p3394_peers', 'p3394_sessions', 'touchpoint_list', 'briefing_get', 'office_read', 'interactive_cli_read',
   'interactive_cli_close', 'cross_session_memory', 'load_skill', 'skill_read', 'cogseed_tasks', 'browser_snapshot', 'browser_open',
+  'ontology_task_query', 'ontology_graph_read',
 ]);
 const fileWrites = new Set(['write_file', 'edit_file', 'markdown_to_pdf', 'html_to_pdf', 'create_docx', 'create_xlsx', 'create_pptx',
   'edit_office', 'office_render', 'create_artifact', 'generate_image']);

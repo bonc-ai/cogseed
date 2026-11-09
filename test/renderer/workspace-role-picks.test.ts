@@ -35,8 +35,8 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     expect(body).not.toContain('_createTemplate || roles[0]');
   });
 
-  it('marks primary/secondary in the role option grid and offers make-primary', () => {
-    // 角色 tab：已选按主→副展示徽标，副角色可「设为主」；卡片用 div 防 button 嵌套
+  it('keeps catalog order while marking primary/secondary and offering make-primary', () => {
+    // 角色 tab：勾选后不前移，在目录原位标记主/副；卡片用 div 防 button 嵌套
     const start = wsSource.indexOf('function _renderRoleOptionGrid');
     const end = wsSource.indexOf('// ── 空间设置抽屉配套', start);
     expect(start).toBeGreaterThan(-1);
@@ -47,6 +47,10 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     expect(body).toContain("className: 'ws-role-primary-btn'");
     expect(body).toContain('is-primary');
     expect(body).toContain('is-secondary');
+    expect(body).toContain('const idx = picked.indexOf(o.id);');
+    expect(body).toContain('list.map(card)');
+    expect(body).not.toContain('pickedItems');
+    expect(body).not.toContain('availItems');
     // 副角色「设为主」：把该角色移到 picks 首位（原主自动降为副）
     const mpStart = wsSource.indexOf('function _makeRolePrimary');
     expect(mpStart).toBeGreaterThan(-1);

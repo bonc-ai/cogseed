@@ -119,6 +119,7 @@ describe('系统活动列表与逐项审核', () => {
     expect(html).toContain('data-act="activity-expand"');
     expect(html).toContain('data-act="activity-close"');
     expect(html.indexOf('data-act="activity-expand"')).toBeLessThan(html.indexOf('data-act="activity-close"'));
+    expect(html.indexOf('ca-detail-title-actions')).toBeLessThan(html.indexOf('class="ca-library-facts"'));
     expect(html).not.toContain('ca-detail-expand');
     const card = { dataset: { candId: 'a', candType: 'template' } };
     loaded.ns.activityController.handleInput({ target: { dataset: { f: 'judgment' }, value: '抽屉里的草稿', closest: () => card } });
@@ -128,6 +129,7 @@ describe('系统活动列表与逐项审核', () => {
     expect(html).toContain('data-detail-mirror="true"');
     expect(html).toContain('抽屉里的草稿');
     expect(html).toContain('data-act="activity-expand-close"');
+    expect(html.indexOf('class="ca-library-facts"')).toBeLessThan(html.indexOf('ca-detail-title-actions'));
     const escapeExpand = { key: 'Escape', preventDefault: vi.fn(), target: {} };
     await loaded.ns.activityController.handleKeydown(escapeExpand);
     html = loaded.render();

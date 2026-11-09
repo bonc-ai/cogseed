@@ -96,6 +96,18 @@ describe('explicit nightly automatic confirmation', () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(await assets.listAbilityAssets('alice')).toHaveLength(0);
   });
+  it('holds a candidate carrying old-content actions for individual review', async () => {
+    const f = await fixture({ suggestedType: 'cognition', oldContentPlan: { schemaVersion: 1,
+      status: 'needs_review', assetIds: ['asset-a', 'asset-b'], baselineVersions: { 'asset-a': '1', 'asset-b': '1' },
+      items: [{ itemId: 'old-1', action: 'keep', reasonCode: 'keep_independent', reason: '两条内容服务不同场景。',
+        assetIds: ['asset-a'], expectedVersions: { 'asset-a': '1' } }],
+      unresolved: [{ reasonCode: 'needs_user_arbitration', reason: '两条结论存在冲突。', assetIds: ['asset-b'],
+        baselineVersions: { 'asset-b': '1' } }] } });
+    const review = await f.policy.evaluateNightlyAutomaticApproval('alice', f.candidate);
+    expect(review.eligible).toBe(false);
+    expect(review.reasons).toContain('old_content_plan_requires_individual_review');
+  });
+
   it.each(['transition', 'asset-record', 'store'] as const)('cancels approval waiting for the %s lock after support was persisted', async lockKind => {
     const bridge = await import('../../../../src/main/features/cognition_bridge');
     await bridge.replaceCognitionSources('alice', { mode: 'unified', revision: 1,

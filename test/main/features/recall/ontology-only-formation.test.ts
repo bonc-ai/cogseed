@@ -282,4 +282,42 @@ describe('independent ontology proposals use the canonical formation chain', () 
     expect(f.ontology.readOntologyDocument(user).records['source-rule']).toBeUndefined();
     expect((await f.candidates.readRecallCandidate(user, f.candidate.id)).status).toBe('pending_review');
   });
+  it('concurrent confirmation produces one ontology revision and one receipt', async () => {
+    const f = await fixture();
+    const captures = await import('../../../../src/main/features/recall/capture-service');
+    const results = await Promise.allSettled([
+      captures.promoteRecallCaptureCandidate(user, f.candidate.id),
+      captures.promoteRecallCaptureCandidate(user, f.candidate.id),
+    ]);
+    expect(results.some(result => result.status === 'fulfilled')).toBe(true);
+    const document = f.ontology.readOntologyDocument(user);
+    expect(document.revision).toBe(2);
+    const receipts = Object.values(document.receipts).filter(
+      receipt => receipt.commandId === f.candidate.ontologyFormation!.commandId,
+    );
+    expect(receipts).toHaveLength(1);
+  });
+  it('rejects an ontology-only candidate that also carries an old-content plan', async () => {
+    const f = await fixture();
+    await expect(createNightlyCandidateFixture(user, {
+      proposalTarget: 'ontology',
+      formationProposalId: 'ontology-with-old-content',
+      judgment: '新增项目记录来源规则，后续核对记录时使用。',
+      summary: '本体来源规则',
+      value: '后续项目记录使用可核对的来源，减少错误事实。',
+      suggestedType: 'cognition',
+      suggestedScope: 'general',
+      suggestedAction: 'create',
+      sourceRefs: [],
+      ontologyFormation: f.candidate.ontologyFormation,
+      oldContentPlan: {
+        schemaVersion: 1,
+        status: 'ready',
+        assetIds: ['aa-old-content'],
+        baselineVersions: { 'aa-old-content': '1' },
+        items: [],
+        unresolved: [],
+      },
+    })).rejects.toThrow('ontology-only suggestion cannot carry an old-content plan');
+  });
 });

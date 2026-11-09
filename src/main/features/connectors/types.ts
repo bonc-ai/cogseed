@@ -287,7 +287,7 @@ export type CatalogCategory =
 
 // credentials: UI-owned password/app-password, encrypted per user and instance.
 // provider_device: provider-owned init/poll protocol, no application secret or DCR registration.
-export type AuthMode = 'server_bridge' | 'mcp_dcr' | 'local_cli' | 'credentials' | 'provider_device' | 'interactive_token';
+export type AuthMode = 'server_bridge' | 'mcp_dcr' | 'local_cli' | 'local_mcp' | 'credentials' | 'provider_device' | 'interactive_token';
 
 /** How an `interactive_token` entry obtains its credential.
  *
@@ -344,6 +344,7 @@ export interface CatalogEntry {
   description_en: string;
   /** Which authorization pathway this provider needs — see the `// ── Auth ──` section above. */
   auth_mode: AuthMode;
+  default_enabled_subtools?: string[];
   /** Required when `auth_mode === 'server_bridge'`; absent for `'mcp_dcr'` (no pre-registration)
    *  and for `'local_cli'` (the adapter child owns the credential, so there is nothing to
    *  pre-register and no grant to obtain). */
@@ -370,6 +371,9 @@ export interface CatalogEntry {
     /** Command the user runs themselves when the CLI is missing (`local_cli`). Rendered verbatim
      *  with a copy button — never executed by us. */
     install_command?: string;
+    install_url?: string;
+    install_label_zh?: string;
+    install_label_en?: string;
     /** Ordered, imperative steps for the whole onboarding. Keep each step to one action. */
     steps_zh: string[];
     steps_en: string[];
@@ -389,7 +393,7 @@ export interface CatalogEntry {
   /** Why a `visible_disabled` card is disabled. `unsupported` = remote config said so;
    *  `cli_missing` = this machine does not have the `local_cli` connector's CLI installed, which
    *  the user can fix themselves, so the card must say so instead of the generic message. */
-  disabled_reason?: 'unsupported' | 'cli_missing';
+  disabled_reason?: 'unsupported' | 'cli_missing' | 'macos_only';
   runtime_installable?: boolean;
   runtime_progress?: { phase: 'downloading' | 'verifying' | 'installing'; percent?: number };
   /** When set, this catalog entry is a **UI-only bundle**: one OAuth flow provisions N member

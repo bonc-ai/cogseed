@@ -495,6 +495,26 @@ describe('model-assisted cognition compliance observations', () => {
     expect(runModel).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a grounded assessment when the provider appends an all-empty trailing row', async () => {
+    await supplied();
+    runModel.mockResolvedValue({ result: { text: JSON.stringify({ checks: [good, { assetId: '', version: '', status: 'unknown' }] }), meta: {} } });
+    const { checkPersistedCognitionOutput } = await import('../../../../src/main/features/recall/cognition-output-check');
+    expect(await checkPersistedCognitionOutput('user-a', input)).toMatchObject({ modelCompleted: true, checks: [{ status: 'complied' }] });
+    expect(runModel).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: 'empty identity carrying a verdict', row: { assetId: '', version: '', status: 'complied' } },
+    { label: 'empty identity with evidence', row: { assetId: '', version: '', status: 'unknown', outputEvidence: { quote: '结论：采用隔离测试数据。' } } },
+    { label: 'foreign identity filler', row: { assetId: 'foreign-asset', version: '', status: 'unknown' } },
+  ])('rejects an empty-row look-alike that asserts something: $label', async ({ row }) => {
+    await supplied();
+    runModel.mockResolvedValue({ result: { text: JSON.stringify({ checks: [good, row] }), meta: {} } });
+    const { checkPersistedCognitionOutput } = await import('../../../../src/main/features/recall/cognition-output-check');
+    expect(await checkPersistedCognitionOutput('user-a', input)).toMatchObject({ modelCompleted: false, checks: [{ status: 'unknown' }] });
+    expect(runModel).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['unknown', 'not_complied'])('does not repair a complete %s observation', async status => {
     await supplied(); runModel.mockResolvedValue({ result: { text: JSON.stringify({ checks: [{ ...good, status }] }), meta: {} } });
     const { checkPersistedCognitionOutput } = await import('../../../../src/main/features/recall/cognition-output-check');

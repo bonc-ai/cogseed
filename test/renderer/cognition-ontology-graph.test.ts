@@ -250,11 +250,87 @@ describe('ontology relationship projection', () => {
   it('caps star visibility while always keeping the focus', () => {
     const api = graphApi();
     const nodes = Array.from({ length: 200 }, (_, index) => ({ id: `e${index}`, kind: 'entity', box: 'A', r: 11 }));
-    const visible = api._visibleStar({ nodes, edges: [] }, 'e42', 'all');
+    const visible = api._visibleStar({ nodes, edges: [] }, 'e42');
     expect(visible.nodes).toHaveLength(60);
     expect(visible.nodes.some((node: any) => node.id === 'e42')).toBe(true);
     expect(visible.hidden).toBe(140);
     expect(visible.focusId).toBe('e42');
+  });
+
+  it('prefers model edge labels and preserves uncertainty suffixes', () => {
+    const api = graphApi();
+    const edge = { id: 'edge', label: '关系', unknownDate: true, certainty: 'unknown' };
+    expect(api._starEdgeText(edge, { edgeLabels: { edge: '模型关系' } }, (_key: string, fallback: string) => fallback))
+      .toBe('模型关系 时? 未?');
+    expect(api._starEdgeText(edge, {}, (_key: string, fallback: string) => fallback)).toBe('关系 时? 未?');
+  });
+
+  it('shows edge labels only for focus, selection and hover neighbours', () => {
+    const api = graphApi();
+    const edge = { id: 'edge', from: 'a', to: 'b' };
+    expect(api._starEdgeLabelVisible(edge, {})).toBe(false);
+    expect(api._starEdgeLabelVisible(edge, { focusId: 'a' })).toBe(true);
+    expect(api._starEdgeLabelVisible(edge, { focusId: 'c' })).toBe(false);
+    expect(api._starEdgeLabelVisible(edge, { selection: { kind: 'node', id: 'b' } })).toBe(true);
+    expect(api._starEdgeLabelVisible(edge, { selection: { kind: 'edge', id: 'edge' } })).toBe(true);
+    expect(api._starEdgeLabelVisible(edge, { hoveredNode: 'a' })).toBe(true);
+    expect(api._starEdgeLabelVisible(edge, { hoveredEdge: 'edge' })).toBe(true);
+    expect(api._starEdgeLabelVisible(edge, { hoveredEdge: 'other' })).toBe(false);
+  });
+
+  it('anchors relation labels near the curve and keeps parallel labels apart', () => {
+    const api = graphApi();
+    const records: Record<string, any> = {
+      m: moduleRecord('m'), a: entity('a'), b: entity('b'), c: entity('c'),
+      rel: { id: 'rel', kind: 'definition', moduleId: 'm', status: 'active', name: '关系' },
+      one: { id: 'one', kind: 'assertion', status: 'active', moduleId: 'm', subjectId: 'a', definitionId: 'rel', object: { kind: 'entity', id: 'b' }, validity: { from: null, until: null, precision: 'day' } },
+      two: { id: 'two', kind: 'assertion', status: 'active', moduleId: 'm', subjectId: 'a', definitionId: 'rel', object: { kind: 'entity', id: 'b' }, validity: { from: null, until: null, precision: 'day' } },
+    };
+    const projected = api._starProject({ records }, 'm', '2026-10-10', (_key: string, fallback: string) => fallback);
+    const laidOut = api._starLayout(projected, 'a', new Map());
+    const byId = new Map(projected.nodes.map((node: any) => [node.id, node]));
+    const [one, two] = projected.edges.filter((edge: any) => edge.kind === 'assertion');
+    const occupied: any[] = [];
+    const first = api._starEdgeLabelAnchor(one, laidOut.positions, byId, '关系', projected.nodes, occupied);
+    const second = api._starEdgeLabelAnchor(two, laidOut.positions, byId, '关系', projected.nodes, occupied);
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(Math.abs(first.x - second.x) >= (first.width + second.width) / 2
+      || Math.abs(first.y - second.y) >= (first.height + second.height) / 2).toBe(true);
+    const trim = api._starTrimEdge(one, laidOut.positions, byId);
+    let closest = Infinity;
+    for (let index = 0; index <= 100; index++) {
+      const t = index / 100, mt = 1 - t;
+      const x = mt * mt * trim.start.x + 2 * mt * t * trim.control.x + t * t * trim.end.x;
+      const y = mt * mt * trim.start.y + 2 * mt * t * trim.control.y + t * t * trim.end.y;
+      closest = Math.min(closest, Math.hypot(first.x - x, first.y - y));
+    }
+    expect(closest).toBeLessThan(40);
+  });
+
+  it('keeps rule, definition and entity nodes together after the lens removal', () => {
+    const api = graphApi();
+    const nodes = [
+      { id: 'e', kind: 'entity', box: 'A', r: 11 },
+      { id: 'd', kind: 'definition', box: 'T', r: 7 },
+      { id: 'r', kind: 'rule', box: 'R', r: 13 },
+    ];
+    const visible = api._visibleStar({ nodes, edges: [] }, 'd');
+    expect(visible.nodes.map((node: any) => node.id).sort()).toEqual(['d', 'e', 'r']);
+  });
+
+  it('restores a model position baseline after a focus reset', () => {
+    const api = graphApi();
+    const baseline = api._starBaseline({ positions: { a: { x: 10, y: 20 }, bad: { x: Number.NaN, y: 2 }, missing: { x: 1 } } });
+    expect([...baseline.keys()]).toEqual(['a']);
+    const saved = new Map([['stale', { x: 9, y: 9 }]]);
+    saved.clear();
+    api._starRestore(saved, baseline);
+    expect(saved.get('a')).toEqual({ x: 10, y: 20 });
+    expect(saved.has('stale')).toBe(false);
+    const untouched = new Map([['x', { x: 1, y: 1 }]]);
+    api._starRestore(untouched, new Map());
+    expect(untouched.get('x')).toEqual({ x: 1, y: 1 });
   });
 
   it('exposes at most five non-empty reading points', () => {

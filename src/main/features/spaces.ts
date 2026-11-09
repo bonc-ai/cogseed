@@ -34,6 +34,7 @@ import {
   type RoleTemplateCatalogEntry,
 } from './personal_ontology_contract';
 import type { RecallAbilityAssetRecord } from './recall/candidate-service';
+import type { RefResolution, TemplateProjectDirRequirement, TemplateRef } from './template_types';
 
 const log = createLogger('spaces');
 
@@ -462,8 +463,22 @@ function _notifyDirty(): void {
   } catch { /* features/sync stripped */ }
 }
 
+const SPACE_ID_RE = /^[A-Za-z0-9_-]+$/;
+
 function genSpaceId(): string {
   return 'sp_' + crypto.randomBytes(6).toString('hex');
+}
+
+/** 引用 id 列表归一化：去非字符串、trim、去重、限长（与 IPC 侧 50 条上限一致）。 */
+function _normaliseRefIdList(raw: string[] | undefined): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const value of raw) {
+    const id = typeof value === 'string' ? value.trim() : '';
+    if (id && !out.includes(id)) out.push(id);
+    if (out.length >= 50) break;
+  }
+  return out;
 }
 
 /** Trim + length cap（照抄 projects.normName）。 */
@@ -576,7 +591,7 @@ async function _listSpaceIds(uid: string): Promise<string[]> {
     return [];
   }
   return entries
-    .filter((e) => e.isFile() && e.name.endsWith('.json'))
+    .filter((e) => e.isFile() && e.name.endsWith('.json') && !e.name.endsWith(SPACE_ORIGIN_SUFFIX))
     .map((e) => e.name.slice(0, -'.json'.length))
     .filter((n) => n.startsWith('sp_'));
 }
@@ -754,6 +769,12 @@ export async function createSpace(
     recommended_questions?: string[];
     /** 绑定的本地项目目录（可选）。给出时空间内会话在该目录原地工作，见 Space.project_dir。 */
     projectDir?: string;
+    /** 预分配的空间 id（模板创建用：来源旁挂文件要先于空间落盘）。非法或缺失时现生成。 */
+    space_id?: string;
+    /** 初始扩充智能体；与 name 一起写进同一个 meta 文件，不做二次写。 */
+    extra_agents?: string[];
+    /** 初始扩充技能；同上。 */
+    extra_skills?: string[];
   },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const name = normName(opts.name);
@@ -784,15 +805,15 @@ export async function createSpace(
   const baseAgents = (opts.base_agents || (typeof opts.base_agent === 'string' && opts.base_agent ? [opts.base_agent] : []))
     .filter(Boolean).slice(0, 8);
   const space: Space = {
-    space_id: genSpaceId(),
+    space_id: typeof opts.space_id === 'string' && SPACE_ID_RE.test(opts.space_id) ? opts.space_id : genSpaceId(),
     name,
     system_name_key: systemNameKey,
     icon: typeof opts.icon === 'string' && opts.icon ? opts.icon : undefined,
     template_id: primary,
     primary_template_id: primary,
     secondary_template_ids: secondary,
-    extra_skills: [],
-    extra_agents: [],
+    extra_skills: _normaliseRefIdList(opts.extra_skills),
+    extra_agents: _normaliseRefIdList(opts.extra_agents),
     space_type: opts.space_type ?? 'complex_project',
     sustained_outcome: opts.sustained_outcome || undefined,
     instructions: opts.instructions || undefined,
@@ -817,6 +838,167 @@ export async function createSpace(
   syncSpaceDirName(uid, space.space_id, name);
   log.info(`created space user=${uid} sid=${space.space_id} name=${name} type=${space.space_type} boundProject=${projectDir ? 'yes' : 'no'}`);
   return { ok: true, space };
+}
+
+// ── Hub 空间模板 → 创建（S5：严格引用、一次调用、来源旁挂）──────────────────
+//
+// 来源写在旁挂文件 `<sid>.origin.json`，不进空间对象：`_normaliseSpace` 逐字段拼对象，
+// 已发布的旧客户端改动空间会丢未知字段。旁挂文件不含 `space_id`，旧客户端扫描到它时
+// 按 `<sid>.origin` 去读、得到 null 后跳过，不会把它当成空间（specs/010 research R3）。
+
+const SPACE_ORIGIN_SUFFIX = '.origin.json';
+const REQUEST_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 空间的模板来源；只在「空间设置」显示一行，不做来源状态、不提示更新（FR-033）。 */
+export interface SpaceOrigin {
+  template_id: string;
+  template_name: string;
+  version: string;
+  created_at: string;
+  request_id: string;
+}
+
+function spaceOriginFile(uid: string, spaceId: string): string {
+  return path.join(userSpacesDir(uid), `${spaceId}${SPACE_ORIGIN_SUFFIX}`);
+}
+
+export async function readSpaceOrigin(uid: string, spaceId: string): Promise<SpaceOrigin | null> {
+  if (!spaceId || !/^[A-Za-z0-9_-]+$/.test(spaceId)) return null;
+  const raw = await readJson<Partial<SpaceOrigin>>(spaceOriginFile(uid, spaceId));
+  if (!raw || typeof raw.template_id !== 'string' || !raw.template_id) return null;
+  return {
+    template_id: raw.template_id,
+    template_name: typeof raw.template_name === 'string' ? raw.template_name : '',
+    version: typeof raw.version === 'string' ? raw.version : '',
+    created_at: typeof raw.created_at === 'string' ? raw.created_at : '',
+    request_id: typeof raw.request_id === 'string' ? raw.request_id : '',
+  };
+}
+
+/**
+ * 写来源旁挂文件。
+ *
+ * 与 `_writeSpace` 同一套写盘：`writeJson` 原子写 + 同步 dirty 信号，不另起一套文件 IO。
+ * 本模块没有跨进程锁（`_writeSpace` 也没有），所以这里不再假装有锁；并发安全由调用方的
+ * 「同一 uid + request_id 串行」保证。
+ */
+export async function writeSpaceOrigin(uid: string, spaceId: string, origin: SpaceOrigin): Promise<void> {
+  if (!spaceId || !SPACE_ID_RE.test(spaceId)) throw new Error('invalid space id');
+  await writeJson(spaceOriginFile(uid, spaceId), origin);
+  _notifyDirty();
+}
+
+/** 同一次创建操作的重试：按 request_id 找已建好的空间（旁挂文件在、空间也在才算）。 */
+async function _spaceIdForRequest(uid: string, requestId: string): Promise<string | null> {
+  let names: string[];
+  try { names = await fsp.readdir(ensureSpacesDir(uid)); } catch { return null; }
+  for (const name of names) {
+    if (!name.endsWith(SPACE_ORIGIN_SUFFIX)) continue;
+    const sid = name.slice(0, -SPACE_ORIGIN_SUFFIX.length);
+    const origin = await readSpaceOrigin(uid, sid);
+    if (origin?.request_id === requestId && await spaceExists(uid, sid)) return sid;
+  }
+  return null;
+}
+
+export interface CreateSpaceFromTemplateInput {
+  /** 本次创建操作的标识（渲染层生成）；重试时不变，用于去重。 */
+  request_id: string;
+  template: { template_id: string; name: string; version: string; project_dir: TemplateProjectDirRequirement };
+  name: string;
+  goal?: string;
+  instructions?: string;
+  project_dir?: string;
+  /** 第一个为主角色模板，其余为副角色模板（最多 2 个）。 */
+  role_templates: TemplateRef[];
+  extra_agents: TemplateRef[];
+  extra_skills: TemplateRef[];
+  /** 可协作的 AI 工具 Agent（cli type），与普通新建空间相同。 */
+  base_agents?: string[];
+  /** 内置能力引入版本判断用。 */
+  app_version: string;
+}
+
+export type CreateSpaceFromTemplateResult =
+  | { ok: true; space: Space; reused?: true }
+  | { ok: false; code: 'invalid_request' | 'refs_not_ready' | SpaceError; items?: RefResolution[] };
+
+/**
+ * 用 Hub 空间模板建空间：一次调用完成「建空间 + 写资源 + 写来源」。
+ *
+ * 与 `createSpaceFromDraft` 不同，这里不按名称纠正引用、不忽略找不到的引用：
+ * 任何引用不就绪（含角色模板展开出的能力）都拒绝创建并返回明细（FR-010、D11）。
+ * 缺的 Hub 内容由渲染层先走 S4 安装流程装齐，再调用这里；这里只再校验一次。
+ */
+// 同一 uid + request_id 的创建在进程内串行：幂等是「先查再建」，并发两次调用会各建一个空间
+// （连点、重试与首次请求重叠都会撞上；同步传输不参与，空间是单机私有数据）。
+const _createQueues = new Map<string, Promise<unknown>>();
+
+function _withCreateQueue<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const prev = _createQueues.get(key) ?? Promise.resolve();
+  const run = prev.then(task, task);
+  const settle = run.then(() => {}, () => {});
+  _createQueues.set(key, settle);
+  void settle.then(() => { if (_createQueues.get(key) === settle) _createQueues.delete(key); });
+  return run;
+}
+
+export async function createSpaceFromTemplate(
+  uid: string, input: CreateSpaceFromTemplateInput,
+): Promise<CreateSpaceFromTemplateResult> {
+  if (!input || typeof input.request_id !== 'string' || !REQUEST_ID_RE.test(input.request_id)
+    || !input.template || typeof input.template.template_id !== 'string' || !input.template.template_id) {
+    return { ok: false, code: 'invalid_request' };
+  }
+  return _withCreateQueue(`${uid}:${input.request_id}`, () => _createSpaceFromTemplateLocked(uid, input));
+}
+
+async function _createSpaceFromTemplateLocked(
+  uid: string, input: CreateSpaceFromTemplateInput,
+): Promise<CreateSpaceFromTemplateResult> {
+  const existing = await _spaceIdForRequest(uid, input.request_id);
+  if (existing) {
+    const space = await getSpace(uid, existing);
+    if (space) return { ok: true, space, reused: true };
+  }
+  const roleRefs = (input.role_templates || []).slice(0, 3);
+  const agentRefs = input.extra_agents || [];
+  const skillRefs = input.extra_skills || [];
+  const { resolveTemplateRefs } = await import('./template_refs');
+  const notReady = resolveTemplateRefs(uid, [...roleRefs, ...agentRefs, ...skillRefs], input.app_version || '')
+    .filter((r) => r.state !== 'ready');
+  if (notReady.length) return { ok: false, code: 'refs_not_ready', items: notReady };
+
+  const spaceId = genSpaceId();
+  const origin: SpaceOrigin = {
+    template_id: input.template.template_id,
+    template_name: String(input.template.name || ''),
+    version: String(input.template.version || ''),
+    created_at: nowIso(),
+    request_id: input.request_id,
+  };
+  // 先落来源、再一次写入空间（含资源）：来源是旁挂文件，孤儿（有文件没空间）会被
+  // `_spaceIdForRequest` 忽略；反过来「空间建好却没有来源」会让重试撞上重名、无法自愈。
+  await writeSpaceOrigin(uid, spaceId, origin);
+  const created = await createSpace(uid, {
+    space_id: spaceId,
+    name: input.name,
+    primary_template_id: roleRefs[0]?.id,
+    secondary_template_ids: roleRefs.slice(1).map((r) => r.id),
+    sustained_outcome: input.goal || undefined,
+    instructions: input.instructions || undefined,
+    projectDir: input.project_dir || undefined,
+    base_agents: Array.isArray(input.base_agents) ? input.base_agents.filter((x) => typeof x === 'string') : undefined,
+    extra_agents: agentRefs.map((r) => r.id),
+    extra_skills: skillRefs.map((r) => r.id),
+  });
+  if (!created.ok) {
+    // 空间没建出来：把刚写的来源清掉，别留一份指向不存在空间的记录。
+    await fsp.unlink(spaceOriginFile(uid, spaceId)).catch(() => {});
+    return { ok: false, code: (created as { error: SpaceError }).error };
+  }
+  log.info(`created space from template user=${uid} sid=${created.space.space_id} template=${origin.template_id}@${origin.version}`);
+  return { ok: true, space: created.space };
 }
 
 // ── 空间构建师草稿 → 创建（带资产存在性校验）──────────────────────────────
@@ -1167,6 +1349,7 @@ export async function deleteSpace(
   try {
     const f = spaceMetaFile(uid, spaceId);
     if (fs.existsSync(f)) await fsp.rm(f, { force: true });
+    await fsp.rm(spaceOriginFile(uid, spaceId), { force: true });
   } catch (err) {
     log.warn(`drop space file user=${uid} sid=${spaceId}: ${(err as Error).message}`);
   }

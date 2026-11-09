@@ -197,6 +197,50 @@ describe('conversation session stats line', () => {
     expect(cost.title).toContain('chat.stats.costTitle|');
   });
 
+  it('cache accounting: actual session stats marks incomplete totals as lower bounds and omits exact ratios', () => {
+    const h = makeHarness({
+      messages: [assistantMsg(METRICS), assistantMsg({
+        ...METRICS, usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 100 },
+      })], contextWindow: 128_000,
+      priceRaw: JSON.stringify({ '*': { in: 1, out: 2 } }),
+    });
+    h.refresh();
+    const text = h.box.children.map((c) => String(c.textContent)).join('|');
+    expect(text).toContain('chat.stats.tokV|{"i":"≥150K","o":"10K"}');
+    expect(text).toContain('chat.stats.ctxK|≥110');
+    expect(text).not.toContain('chat.stats.cacheK|');
+    expect(text).not.toContain('tokVCache');
+    expect(text).not.toContain('%');
+    expect(text).not.toContain('null');
+    expect(text).not.toContain('chat.stats.cost|');
+  });
+
+  it('authoritative complete input: real session stats uses raw total and final-call pressure without pricing unknown buckets', () => {
+    const h = makeHarness({ messages: [assistantMsg({ ...METRICS, usage: {
+      totalInputTokens: 200, cacheReadTokens: 120, outputTokens: 10,
+      lastCallUsage: { totalInputTokens: 80, cacheReadTokens: 60 },
+    } })], contextWindow: 100, priceRaw: JSON.stringify({ '*': { in: 1, out: 2 } }) });
+    h.refresh();
+    const text = h.box.children.map((c) => String(c.textContent)).join('|');
+    expect(text).toContain('chat.stats.tokV|{"i":"200","o":"10"}');
+    expect(text).toContain('chat.stats.cacheK|60%');
+    expect(text).toContain('chat.stats.ctxK|80/100·80%');
+    expect(text).not.toContain('tokVCache');
+    expect(text).not.toContain('chat.stats.cost|');
+  });
+
+  it('cache accounting: a later time-only turn does not display stale context or exact session usage', () => {
+    const h = makeHarness({ messages: [assistantMsg(METRICS), assistantMsg({
+      startedAt: 2000, firstTokenAt: 2100, completedAt: 3000,
+    })], contextWindow: 128_000 });
+    h.refresh();
+    const text = h.box.children.map((c) => String(c.textContent)).join('|');
+    expect(text).toContain('"i":"≥150K"');
+    expect(text).toContain('"o":"≥10K"');
+    expect(text).not.toContain('chat.stats.ctxK|');
+    expect(text).not.toContain('chat.stats.cacheK|');
+  });
+
   it('omits the cost segment when the shared dashboard price table is absent', () => {
     const h = makeHarness({ messages: [assistantMsg(METRICS)], priceRaw: null });
     h.refresh();
@@ -233,7 +277,7 @@ describe('conversation session stats line', () => {
     // gap instead of whitespace-only.
     expect(source).toMatch(/_mountMsgMeta\(msgDiv, message\.metrics\);[\s\S]{0,200}?_refreshSessionStats\(\);/);
     // _mountMsgMeta tail (covers the streaming finalize path).
-    expect(source).toMatch(/if \(line\.titleLines\.length\) meta\.title = line\.titleLines\.join\('\\n'\);[\s\S]{0,200}?_refreshSessionStats\(\);/);
+    expect(source).toMatch(/meta\.title = line\.titleLines\.join\('\\n'\);[\s\S]{0,200}?_refreshSessionStats\(\);/);
     // loadConversationHistory: refresh after the off-DOM fragment lands
     // (the empty-history branch merges through the same point).
     expect(source).toMatch(/container\.appendChild\(historyFragment\);[\s\S]{0,300}?_refreshSessionStats\(\);/);

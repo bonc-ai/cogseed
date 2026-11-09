@@ -481,7 +481,11 @@ app.whenReady().then(async () => {
     await waitFor('real bounded timeline loaded', () => js(`CogAssets.store.blockStatus.timeline?.loaded && !CogAssets.store.blockStatus.timeline?.loading`));
     Object.assign(outcome.inventory, await js(`({ rendererAssets: CogAssets.store.assets.length, rendererGlobalTimelineWindow: CogAssets.store.proofs.length })`));
     record('production global timeline is the documented bounded window', outcome.inventory.rendererGlobalTimelineWindow === 500);
-    record('global timeline reads the canonical main file once, not once per asset', outcome.ipc['recall.timeline.list']?.mainFileReads[0] === 1,
+    // A preceding domain read may have warmed the canonical store cache. Both
+    // zero cached reads and one cold read satisfy the bounded-read contract.
+    const firstTimelineReads = outcome.ipc['recall.timeline.list']?.mainFileReads?.[0];
+    record('global timeline reads the canonical main file at most once, including a warm cache',
+      Number.isInteger(firstTimelineReads) && firstTimelineReads >= 0 && firstTimelineReads <= 1,
       outcome.ipc['recall.timeline.list']?.mainFileReads);
     const queries = [['会议', 1000], ['范围编号 9', 111], ['项目', 1000], ['范围编号 4', 111]];
     markStage('search-samples');

@@ -60,7 +60,7 @@
 #ca-root .ca-app .ca-library-detail .scope-editor-grid { grid-template-columns:minmax(0,1fr); }
 #ca-root .ca-app .ca-library-detail-empty { padding:var(--space-5); }
 #ca-root .ca-app .ca-library-scrim { display:none; }
-#ca-root .ca-app .ca-detail-title-actions { display:flex; align-items:center; gap:2px; flex:none; }
+#ca-root .ca-app .ca-detail-title-actions { display:flex; align-items:center; gap:var(--space-1); flex:none; }
 @media (max-width:1100px), (max-height:500px) {
   #ca-root .ca-app .ca-library-layout { grid-template-columns:minmax(0,1fr); }
   #ca-root .ca-app .ca-library-detail { display:none; }

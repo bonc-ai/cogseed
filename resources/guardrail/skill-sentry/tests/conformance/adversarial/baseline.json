@@ -1,6 +1,6 @@
 {
   "criterion": "escape = 裁决未达到该来源策略的 fail_on 阈值（逐来源判定）",
-  "engine_version": "2.3.0",
+  "engine_version": "2.4.1",
   "ruleset": {
     "rule_count": 181,
     "rule_groups": 12,
@@ -67,34 +67,114 @@
     "attack-nested-archive": {
       "axis": "carrier",
       "channel": "嵌套归档内的脚本不被解包",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "capabilities.yaml::structural_analysis「归档只报存在，不解包递归扫描」",
+      "security_score": 25
+    },
+    "attack-pdf-text-instruction": {
+      "axis": "carrier",
+      "channel": "PDF 文本层承载越权指令（不解析 PDF）",
       "confirmed_critical": false,
       "escape_sources": [
         "official"
       ],
       "example_info": 0,
       "kind": "attack",
-      "max_severity": "medium",
+      "max_severity": "critical",
       "recommendation": "CAUTION",
-      "risk_classification": "LOW",
-      "root_cause": "capabilities.yaml::structural_analysis「归档只报存在，不解包递归扫描」",
-      "security_score": 84
+      "risk_classification": "HIGH",
+      "root_cause": "红队 F-02：PDF 是二进制，2.3.0 只有 strings 指标，从不抽取文本层。2.4.0 起抽取未加密内容流的文本字面量；门禁 blocked，引擎建议仍为 CAUTION（与 attack-svg-instruction 同一条残留差异）",
+      "security_score": 31
     },
     "attack-png-instruction": {
       "axis": "carrier",
       "channel": "图像 tEXt 块承载越权指令",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "capabilities.yaml::hidden_content_detection 声明不处理图像/PDF 内隐写；扫描器没有 OCR 或多模态通道（研究条目 65：NCVA 在 9 种配置下 ASR 43.1%）",
+      "security_score": 17
+    },
+    "attack-prose-bulk-collection": {
+      "axis": "context",
+      "channel": "散文指令：收集用户目录全部文件并外发 + 要求隐瞒",
       "confirmed_critical": false,
       "escape_sources": [
-        "official",
-        "community",
-        "thirdparty"
+        "official"
       ],
       "example_info": 0,
       "kind": "attack",
-      "max_severity": "none",
-      "recommendation": "ALLOW",
-      "risk_classification": "LOW",
-      "root_cause": "capabilities.yaml::hidden_content_detection 声明不处理图像/PDF 内隐写；扫描器没有 OCR 或多模态通道（研究条目 65：NCVA 在 9 种配置下 ASR 43.1%）",
-      "security_score": 100
+      "max_severity": "critical",
+      "recommendation": "CAUTION",
+      "risk_classification": "HIGH",
+      "root_cause": "第二阶段复测 V9（2026-11-05）：`_instruction_with_evidence` 要求凭据类佐证，而凭据识别依赖 `~/.ssh`、AWS Key 等字面量；换成「home 目录/所有文件/上传」后 corroboration 整条不成立，`pass/100`。2.4.1 起新增`bulk_collection_to_network` 组合与扩写的 `covert_execution`",
+      "security_score": 76
+    },
+    "attack-rtf-text-carrier": {
+      "axis": "carrier",
+      "channel": "`.rtf` 承载同一段越权指令（扩展名不在 TEXT_EXT）",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official"
+      ],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "critical",
+      "recommendation": "CAUTION",
+      "risk_classification": "HIGH",
+      "root_cause": "第二阶段复测 V1（2026-11-05）：与 attack-svg-instruction 同一段指令，只把后缀换成 `.rtf`。2.4.0 修的是扩展名清单，不是「文本内容必须被读」，于是整段没进管线，`pass/100` + 干净回执。2.4.1 起按内容探测（NUL/UTF-8/可打印占比），白名单只决定先读哪些。门禁由此变 blocked；引擎自身的 deployment_recommendation 仍是 CAUTION（doc 上下文对 credential_access 仍降一档），与 attack-svg-instruction 同一条安全方向的残留差异",
+      "security_score": 31
+    },
+    "attack-sentence-split-bypass": {
+      "axis": "transform",
+      "channel": "「拦截语境 + 校验对象 + 关闭动作」被一个换行拆成两行",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "第二阶段复测 V5（2026-11-05）：`guardrail_bypass_on_block` 逐**物理行**判定，同一句在「校验」前换行即失效——绕过成本是一个 `\\n`，且从restricted 变成 pass/100。2.4.1 起按逻辑句判定（句读符 + Markdown 块边界）",
+      "security_score": 25
+    },
+    "attack-svg-instruction": {
+      "axis": "carrier",
+      "channel": "SVG 正文承载越权指令（`.svg` 不在 TEXT_EXT，且被当作散文）",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official"
+      ],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "critical",
+      "recommendation": "CAUTION",
+      "risk_classification": "HIGH",
+      "root_cause": "红队 F-02：path_security.TEXT_EXT 不含 .svg/.html/.ipynb，文件被跳过；补进表之后还有第二道：载体文件当时落进 CONTEXT_PROSE，散文封顶把 credential_path_read 压到 low。2.4.0 两条都修了，安装门禁（scan_gate）按 original_severity 判 blocked。引擎自身的 deployment_recommendation 仍是 CAUTION：doc 上下文对 credential_access 仍降一档，这条残留差异是**安全方向**（门禁更严），已作为缺口记录在基线里",
+      "security_score": 31
+    },
+    "attack-tests-import-revshell": {
+      "axis": "context",
+      "channel": "入口脚本 import tests/ 下的模块，被降权的反弹 shell 在正常使用时执行",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "红队 F-01：context.py 对 test/ 上下文降 2 档（critical→medium），而 scan_gate.BLOCKING_CATEGORIES 不含 reverse_shell——于是同一份代码在 scripts/ 被拒、在 tests/ 被放行。降权本身没有错，错在门禁只按「类别 + 原始严重级」判定，却没把这个类别放进拒装集合",
+      "security_score": 25
     },
     "attack-variable-mediated-b64": {
       "axis": "transform",
@@ -110,6 +190,47 @@
       "risk_classification": "MEDIUM",
       "root_cause": "capabilities.yaml::obfuscation_detection「自定义解码器无法识别」；text_static_analysis「变量拼接后的字符串无法检出」——真命令（curl|bash）从未高于 low，只剩 os.system(变量) 这一条 high",
       "security_score": 64
+    },
+    "attack-vendor-keylogger": {
+      "axis": "context",
+      "channel": "`vendor/` 下的键盘记录器（输入监听 + 外发），surveillance 不阻断",
+      "confirmed_critical": false,
+      "escape_sources": [
+        "official"
+      ],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "high",
+      "recommendation": "CAUTION",
+      "risk_classification": "LOW",
+      "root_cause": "第二阶段复测 V8（2026-11-05）：F-06 只补了 crypto_miner；`surveillance` 被明确排除在 BLOCKING_CATEGORIES 之外（键盘钩子是合法自动化原语）。2.4.1 起组合到外发时升 high 且不随目录降权，落 restricted/CAUTION；仍**可装**（带风险卡），这是产品口径保留的缺口，不是遗漏",
+      "security_score": 80
+    },
+    "attack-vendor-miner": {
+      "axis": "context",
+      "channel": "vendor/ 下的挖矿模块被入口脚本 import",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "红队 F-06：与上一条同源——vendor 上下文降 2 档把 critical 压成 medium，而 crypto_miner 不在阻断类别里。同一份 miner.py 移到 scripts/ 会被拒装",
+      "security_score": 25
+    },
+    "attack-zipslip-member": {
+      "axis": "carrier",
+      "channel": "zip 成员路径越界（`../`），解包会覆盖技能目录之外的文件",
+      "confirmed_critical": true,
+      "escape_sources": [],
+      "example_info": 0,
+      "kind": "attack",
+      "max_severity": "critical",
+      "recommendation": "DO_NOT_INSTALL",
+      "risk_classification": "CRITICAL",
+      "root_cause": "红队 F-03：归档只报「存在」不解包，成员路径校验只发生在 safe_extract（把 Skill 包本身解开那一步），从未用于扫描成员",
+      "security_score": 25
     },
     "control-comment-marker": {
       "axis": "control",

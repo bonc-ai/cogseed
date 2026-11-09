@@ -20,6 +20,9 @@
 import type { AgentTool, HistoryResource, LLMProvider, ToolContext, ToolResult } from '#core-agent';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
+import { getWorkspacePathReadOnly } from '../../features/user_workspace';
+import { getLocalExecMode } from '../../features/permissions';
 
 import {
   pickChatEntryGroup,
@@ -89,8 +92,9 @@ import { createFeishuTools } from './feishu-tools';
 import { createImageGenTool } from './image-gen-tool';
 import { createResearchRerankTool } from './research-rerank-tool';
 import { isToolVisibleToAgent } from './tool-catalog';
-import { createToolFailureGuard, guardToolsWithFailureBreaker } from './tool-failure-guard';
+import { createToolFailureGuard, createToolFailureBreaker } from './tool-failure-guard';
 import { createWebSearchOverrideTool } from './search-tools';
+import { createA2AConsultationTools } from './consultation-tools';
 import {
   agentEvolvedSkillsDir,
   agentPrivateSkillsDir,
@@ -314,6 +318,9 @@ export interface BuildRunnerParams {
   /** Host-selected subset for a bounded task. Intersects, never widens, any
    * creator or read-only policy; an empty list disables every tool. */
   toolAllowlist?: readonly string[];
+  /** Host-selected exclusions applied after every allowlist and at the SDK
+   * constructor boundary, including builtin and late-added tools. */
+  toolDenylist?: readonly string[];
   /** Provider stream deadline before its first usable text/tool event. This
    * boundary is safe for fallback because no visible output has committed. */
   providerFirstEventTimeoutMs?: number;
@@ -551,7 +558,7 @@ export function assertTrustedReceptionRoot(
 export async function buildRunner(params: BuildRunnerParams): Promise<{
   runner: AgentRunnerInstance;
   resolvedSystemPrompt: string;
-  /** Per-turn volatile blocks (orchestration ledger / plan / datetime) peeled
+  /** Per-turn volatile blocks (runtime/task context / orchestration / datetime) peeled
    *  OUT of the system prompt to keep the cache prefix stable; the caller
    *  forwards this as `runStream({ turnEphemeral })` so it rides this turn's
    *  user message instead. Empty for runs with no volatile blocks. */
@@ -570,7 +577,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   /** UI-only agent display names collected once before the run.
    *  Not injected into model context; reused for process-log labels. */
   agentDisplayNameById: Map<string, string>;
-  /** Last deterministic-failure breaker trip of this run, or `null`. The
+  /** Last terminal deterministic-failure breaker trip of this run, or `null`. The
    *  breaker ends the turn itself (`endTurn: true`); this accessor is the
    *  reporting half, consulted after `runner.run()` so the turn carries a real
    *  failure kind/code instead of an internal maintenance state. */
@@ -1372,6 +1379,8 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // tools (targets gated to in-process agents in bus.ts) and the execution-plan
   // bookkeeping are reachable.
   const RECEPTION_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
+    // Private owner decision, bound to this host reception dispatch.
+    'request_a2a_consultation',
     // host-scoped file tools (single root R, checked at entry)
     'read_file', 'stat_file', 'ocr_file', 'search_files', 'grep_files', 'list_files',
     'write_file', 'edit_file',
@@ -1389,6 +1398,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // `extraTools` entry of the same name (last-write-wins would otherwise let an
   // injected `read_file` / `bash` shadow the scoped implementation).
   const RECEPTION_HOST_PROTECTED_TOOL_NAMES: ReadonlySet<string> = new Set([
+    'request_a2a_consultation',
     'read_file', 'stat_file', 'ocr_file', 'search_files', 'grep_files', 'list_files',
     'write_file', 'edit_file', 'bash', 'publish_outputs',
     'kb_list', 'kb_search', 'kb_read', 'material_search', 'material_list', 'ask_materials',
@@ -1402,6 +1412,9 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
 
   // Merge injected tools with extra tools from caller
   const allTools = params.disableTools ? [] : [
+    ...(uid && receptionMode ? createA2AConsultationTools({
+      userId: uid, scope: params.receptionScope!, turnId: params.turnId,
+    }) : []),
     ...receptionInjectedTools,
     ...localTools,
     ...fileTools,
@@ -1441,6 +1454,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     : creatorExecution?.toolAllowlist
       ? params.toolAllowlist.filter(name => creatorExecution!.toolAllowlist.includes(name))
       : params.toolAllowlist;
+  const deniedToolNames = new Set(params.toolDenylist);
   let visibleTools = params.disableTools
     ? []
     : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
@@ -1461,7 +1475,14 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       RECEPTION_TOOL_ALLOWLIST.has(tool.name) && !RECEPTION_BLOCKED_TOOL_NAMES.has(tool.name)
     ));
   }
+  visibleTools = visibleTools.filter(tool => !deniedToolNames.has(tool.name));
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
+  // Capture last-write-wins provenance from the original definitions, before
+  // execution policies are installed. A name alone never grants host trust.
+  const toolProvenance = new Map(visibleTools.map(tool => [tool.name, {
+    localMarkdownAdapter: localTools.includes(tool),
+    trustedImplementation: !params.extraTools?.includes(tool),
+  }]));
 
   // Turn-level failure breaker. core-agent counts `isError && !recoverable`
   // results into `permanentToolErrors` (agent/runner.ts:1500-1502), and client.ts
@@ -1470,7 +1491,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // using turn-count semantics only. The idle/watchdog path owns time-based stops. See
   // tool-failure-guard.ts for the contract.
   const toolFailureGuard = createToolFailureGuard();
-  // Last breaker trip of this run, surfaced through the builder's return so the
+  // Last terminal breaker trip of this run, surfaced through the builder's return so the
   // turn owner (client.ts builds the runner and owns the failureCode channel at
   // `terminalFailureCode` / `failureKind`) can report a real cause instead of the
   // internal maintenance state ("organising context").
@@ -1481,22 +1502,28 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     failures: number;
     tool: string;
   } | null = null;
-  visibleTools = guardToolsWithFailureBreaker(visibleTools, {
+  const toolFailureBreaker = createToolFailureBreaker({
     guard: toolFailureGuard,
     onTrip: (event) => {
-      lastToolFailure = {
-        kind: event.kind,
-        code: event.code,
-        reason: event.reason,
-        failures: event.countedFailures,
-        tool: event.tool,
-      };
+      // Parallel reads report threshold observations without ending the batch.
+      // Keep their diagnostics, but never expose them as terminal receipts to
+      // the client: the model may still recover on the following step.
+      if (event.endTurn) {
+        lastToolFailure = {
+          kind: event.kind,
+          code: event.code,
+          reason: event.reason,
+          failures: event.countedFailures,
+          tool: event.tool,
+        };
+      }
       log.warn('tool failure breaker tripped', {
         sessionId: params.sessionId,
         sessionKind: sessionKindOf(params.sessionId) || undefined,
         tool: event.tool,
         failureCode: event.code,
         failures: event.countedFailures,
+        endTurn: event.endTurn,
       });
     },
   });
@@ -1518,6 +1545,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       RECEPTION_TOOL_ALLOWLIST.has(t.name) && !RECEPTION_BLOCKED_TOOL_NAMES.has(t.name)
     ));
   }
+  builtinTools = builtinTools.filter(tool => !deniedToolNames.has(tool.name));
 
   // core-agent's AgentRunner re-adds its own builtins (web_fetch/web_search
   // included) and the execution-plan tool after this host filter. A positive
@@ -1528,11 +1556,31 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const receptionToolAllowlist = receptionMode
     ? (params.disableTools ? [] : Array.from(RECEPTION_TOOL_ALLOWLIST))
     : null;
-  const runnerToolAllowlist = receptionToolAllowlist
+  let runnerToolAllowlist = receptionToolAllowlist
     ? (effectiveToolAllowlist
         ? effectiveToolAllowlist.filter((name) => receptionToolAllowlist.includes(name))
         : receptionToolAllowlist)
     : effectiveToolAllowlist;
+  if (params.disableTools) {
+    runnerToolAllowlist = [];
+  } else if (params.toolAccess === 'read-only') {
+    // Host filtering alone cannot stop the SDK from re-adding write/shell,
+    // execution-plan or skill-management tools during construction.
+    runnerToolAllowlist = (runnerToolAllowlist ?? Array.from(READ_ONLY_TOOL_ALLOWLIST))
+      .filter(name => READ_ONLY_TOOL_ALLOWLIST.has(name));
+  }
+  if (deniedToolNames.size) {
+    // AgentRunner adds plan and (when evolution is enabled) skill management
+    // after merging builtins and caller tools. Include those candidates before
+    // subtracting denials, then pass the resulting ceiling to its constructor.
+    // An existing policy is always intersected, never replaced by this union.
+    const candidates = runnerToolAllowlist ?? [
+      ...builtinTools.map(tool => tool.name),
+      ...visibleTools.map(tool => tool.name),
+      'manage_execution_plan', 'skill_manage',
+    ];
+    runnerToolAllowlist = Array.from(new Set(candidates)).filter(name => !deniedToolNames.has(name));
+  }
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
   // boundary. Keeping this as a result transformer (instead of pre-wrapping
@@ -1597,10 +1645,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
 
   // Finalize system prompt. Cache-friendly order:
   //   [base prompt] → [connectors] → [system skills] → [skills]
-  //   → [agents] → [runtime injection] → [memory] → [orchestration state]
-  //   → [volatile datetime tail].
-  // Everything from [runtime injection] onward is the turn-volatile region;
-  // the stable prefix above it is what the provider prompt-cache reuses.
+  //   → [agents] → [project instructions] → [memory].
+  // Runtime injection (including current task requirements), orchestration
+  // and datetime belong in this turn's view-only context, after history.
+  // Re-read eligible memory and connector state normally; never freeze live
+  // visibility or user configuration merely to preserve a cache prefix.
   // Tool list is no longer in the prompt (see toolsBlock removal note above)
   // because the SDK tool-use protocol delivers it via a separate API field.
   const parts: string[] = [];
@@ -1632,7 +1681,6 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     : '';
   if (projectInstructionsBlock) parts.push(projectInstructionsBlock);
   if (isCommander && params.cid) parts.push('Read existing ontology and confirmed transcript corrections when they help the current task. User answers and current document corrections do not directly create long-term cognition. Durable formation requires the source-bound creation or nightly extraction workflow and user confirmation.');
-  if (runtimeInjectionBlock) parts.push(runtimeInjectionBlock);
   // Cross-session memory (read side): the user's stored profile + notes as
   // background context. It is more turn-volatile than resource indexes, so
   // it sits after connectors / skills / agents but before per-turn state.
@@ -1703,15 +1751,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     : '';
   if (roleProfileBlock) parts.push(roleProfileBlock);
   const resolvedSystemPrompt = parts.join('\n\n');
-  // The truly per-turn-volatile blocks — the orchestration ledger (~7-9K
-  // JSON that changes every commander turn) and the datetime tail — do NOT go
+  // Per-turn-volatile blocks — runtime/task context, orchestration ledger and
+  // the datetime tail — do NOT go
   // into the system prompt. Even peeled to the tail they bust the
   // Anthropic single-block system cache (and therefore the whole history
   // prefix) every turn. Instead they ride on THIS turn's user message
   // (core-agent AgentRunParams.turnEphemeral → getMessagesForModel), the
   // uncached tail after all history, so the system + history cache prefix stays
   // byte-stable across turns.
-  const turnEphemeral = [orchestrationBlock, volatileTail]
+  const turnEphemeral = [runtimeInjectionBlock, orchestrationBlock, volatileTail]
     .filter((b) => b && b.trim())
     .join('\n\n');
 
@@ -1846,16 +1894,35 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ? (id: string) => params.onSkillAdvertised!(id, 'B')
     : undefined;
 
+  // Transport-only continuity must be revoked when the host's effective file,
+  // permission or connector scope changes. This digest is neither a prompt nor
+  // an authorization token; executors still enforce live permissions at entry.
+  let foregroundWorkspace: string | null = null;
+  try { if (uid) foregroundWorkspace = getWorkspacePathReadOnly(uid, params.projectId); }
+  catch { /* Unavailable scopes never reuse a previous resolved workspace. */ }
+  const foregroundScopeKey = createHash('sha256').update(JSON.stringify({
+    uid, sessionId: params.sessionId, cid: params.cid, agentId,
+    projectId: params.projectId, spaceId: params.spaceId,
+    workspace: foregroundWorkspace, receptionRoot, creatorExecution,
+    permissionMode: params.permissionMode || getLocalExecMode(),
+    extraRoots: [...(params.extraRoots || [])].sort(),
+    readRoots: [...fileReadOnlyExtraRoots].sort(), exposure, connectorBlock,
+    declaredConnectors: declaredConnectors ? [...declaredConnectors].sort() : undefined,
+    disableTools: params.disableTools === true,
+  })).digest('hex');
+
   const runner = new mod.AgentRunner({
     config,
     providers,
     session,
     ...(params.disableTools ? { disableTools: true } : {}),
-    ...(ontologyActionPreflight ? { beforeToolExecute: async (toolName: string, input: Record<string, unknown>) => {
-      const winner = [...visibleTools].reverse().find(tool => tool.name === toolName);
-      // A caller overriding a local tool does not inherit its final-write adapter.
-      return ontologyActionPreflight(toolName, input, Boolean(winner && localTools.includes(winner)), !(winner && params.extraTools?.includes(winner)));
-    } } : {}),
+    beforeToolExecute: async (toolName: string, input: Record<string, unknown>, ctx) => {
+      const source = toolProvenance.get(toolName);
+      const denial = await ontologyActionPreflight?.(toolName, input, source?.localMarkdownAdapter ?? false, source?.trustedImplementation ?? true);
+      if (ctx.signal?.aborted) return undefined;
+      return denial || toolFailureBreaker.beforeExecute(toolName, input);
+    },
+    afterToolExecute: toolFailureBreaker.afterExecute,
     ...(runnerToolAllowlist ? { toolAllowlist: runnerToolAllowlist } : {}),
     ...(visibleTools.length ? { tools: visibleTools } : {}),    ...(transformToolResult ? { transformToolResult } : {}),
     // `approvalContext` 让宿主侧工具能定位"这次调用属于哪个会话"。用途之一是把写操作接到
@@ -1869,6 +1936,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...(toolResultsDir || params.sessionId || params.cid
       ? {
           toolContextState: {
+            foregroundScopeKey,
             ...(toolResultsDir ? { toolResultSpoolDir: toolResultsDir } : {}),
             approvalContext: {
               ...(params.sessionId ? { sessionId: params.sessionId } : {}),

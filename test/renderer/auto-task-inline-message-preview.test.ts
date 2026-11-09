@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 const auto = require('../../src/renderer/modules/auto.js') as {
   _autoTaskMessagePreviewHtml: (task: unknown, maxLength?: number) => string;
   _autoComposerValueForTask: (task: unknown) => string;
+  _autoPersistableMessageParts: (parts: unknown) => unknown;
 };
 
 const injectedGlobals = [
@@ -124,5 +125,43 @@ describe('automation task message preview', () => {
       expect(next).toBeGreaterThan(cursor);
       cursor = next;
     }
+  });
+
+  it('rebuilds removable extra-Agent chips for edit without persisting them as message invocations', () => {
+    const globals = globalThis as Record<string, unknown>;
+    globals._chatUseTokenFor = (selection: { kind: string; name: string }) => (
+      `[[${selection.kind}:${selection.name}]]`
+    );
+    globals.chatUseTextFromMessageParts = (parts: Array<Record<string, string>>) => parts.map((part) => (
+      part.type === 'text' ? part.text : `[[${part.kind}:${part.name}]]`
+    )).join('');
+
+    const task = {
+      content: 'prepare report',
+      message_parts: [
+        { type: 'use', kind: 'skill', id: 'reader', name: 'Reader' },
+        { type: 'text', text: ' prepare report' },
+      ],
+      requirements: {
+        skills: [{ source: 'hub', kind: 'agent', id: 'analyst', name: 'Analyst' }],
+        connector_types: [],
+      },
+    };
+
+    expect(auto._autoComposerValueForTask(task)).toBe(
+      '[[agent:Analyst]] [[skill:Reader]] prepare report',
+    );
+    expect(auto._autoPersistableMessageParts([
+      { type: 'use', kind: 'agent', id: 'analyst', name: 'Analyst' },
+      { type: 'use', kind: 'skill', id: 'reader', name: 'Reader' },
+      { type: 'text', text: ' prepare report' },
+    ])).toEqual([
+      { type: 'use', kind: 'skill', id: 'reader', name: 'Reader' },
+      { type: 'text', text: ' prepare report' },
+    ]);
+    expect(auto._autoPersistableMessageParts([
+      { type: 'use', kind: 'agent', id: 'analyst', name: 'Analyst' },
+      { type: 'text', text: ' prepare report' },
+    ])).toBeNull();
   });
 });

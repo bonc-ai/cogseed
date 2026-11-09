@@ -23,6 +23,18 @@ export interface ReceptionLedgerEntry extends ReceptionIdentity {
   payloadHash: string;
   generation: string;
   requiresConfirmation?: boolean;
+  /** Host-validated private decision attempt. Suppresses all model forwarding,
+   * including partial output when consultation storage itself fails. */
+  consultationRequested?: boolean;
+  /** Private creation outbox. LOCAL ledger only: survives a failed card write
+   * without ever redispatching the model or restarting the five-minute clock. */
+  consultationIntent?: {
+    createdAt: string;
+    question: string;
+    proposedReply: string;
+    workspace: string;
+    creationError?: 'INVALID_INPUT';
+  };
   peerName?: string;
   /**
    * `expired` 是暂存过期的**终态墓碑**：正文已清空，payloadHash 因此不可再校验，

@@ -75,14 +75,31 @@ export type Message = {
   turnId?: number;
 };
 
-/** Token usage tracking. */
+/** Presence-aware usage. Prefer authoritative totalInputTokens for complete
+ * input; otherwise all three legacy input buckets must be known. Absence of a
+ * count means unknown; numeric zero remains meaningful. A successful response
+ * with no usage is an empty object, distinct from no contribution. With an
+ * incomplete wire breakdown, legacy inputTokens may remain SDK-normalized and
+ * must not be used to infer exact fresh input or a price estimate. */
 export type Usage = {
-  inputTokens: number;
-  outputTokens: number;
+  /** Authoritative inclusive prompt total from the wire, when known. */
+  totalInputTokens?: number;
+  /** Uncached input, excluding cache reads AND writes (legacy contract). */
+  inputTokens?: number;
+  outputTokens?: number;
+  /** Cache-read input. In a sum, absent if any contribution omitted it. */
   cacheReadTokens?: number;
+  /** Cache-write input. In a sum, absent if any contribution omitted it. */
   cacheWriteTokens?: number;
-  totalTokens: number;
+  /** Reported inclusive total, or a safe sum of known inclusive input and
+   * output counts. Never a fallback for missing input/output evidence. */
+  totalTokens?: number;
 };
+
+/** Cache counts received from compatible providers are untrusted at runtime. */
+export function isValidTokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
 
 /** Stop reasons from LLM API calls. */
 export type StopReason = "end_turn" | "tool_use" | "max_tokens" | "stop_sequence";
@@ -110,5 +127,7 @@ export type StreamEvent =
       content?: MessageContent[];
       /** Model id echoed back so CompletionResult callers can record it. */
       model?: string;
+      /** Bounded model identifier actually reported by the endpoint. */
+      reportedModel?: string;
     }
   | { type: "error"; error: Error };

@@ -20,7 +20,7 @@ describe('资产目录视图', () => {
     const cases = [
       ['overview', '查找已保存的内容，理解依据，再决定如何使用。', '启用不代表所有任务自动使用'],
       ['activity', '集中浏览建议，逐项核对后处理。', '保存不代表任务已采用。'],
-      ['settings', '从对话中发现新认知，整理已有认知与本体；在认知生长查看建议和处理结果。', ''],
+      ['settings', '控制夜间发现、自动确认和运行结果。', ''],
     ];
     for (const [name, description, removed] of cases) {
       const header = vi.fn(({ title, meta }) => `<header><h1>${title}</h1><span>${meta || ''}</span></header>`);
@@ -32,7 +32,7 @@ describe('资产目录视图', () => {
   });
   it('后台刷新和切页保留可交互页签节点，角标变化不替换整排导航', () => {
     const loaded = loadCognitionAssets({}, { name: 'overview' });
-    const items = new Map(['tree', 'overview', 'ontology', 'review', 'activity', 'settings'].map(id => [id, { innerHTML: '', classList: { toggle: vi.fn() } }]));
+    const items = new Map(['tree', 'ontology', 'overview', 'activity', 'settings'].map(id => [id, { innerHTML: '', classList: { toggle: vi.fn() } }]));
     const replaceNav = vi.fn();
     const nav = {
       querySelector: (selector: string) => items.get(selector.match(/data-id="([^"]+)"/)?.[1] || ''),

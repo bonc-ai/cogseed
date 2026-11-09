@@ -322,10 +322,26 @@ describe('hub_content_used 采集（O2 / O3 / O4，FR-061–FR-066）', () => {
     it('埋点落在脚本真正跑过之后（成功 / 失败由退出码与超时决定）', () => {
       const runtime = readSrc('main/features/cogseed_runtime/kernel/tools/skill-tools.ts');
       const exec = runtime.slice(runtime.indexOf('const execute = async ()'));
-      expect(exec).toContain('const result = await runProcess([');
+      // The runner arguments are shared with the optional OS sandbox wrapper.
+      expect(exec).toContain("const skillArgs = [runSkillPath, skillId, script, '--', ...args];");
+      expect(exec).toContain('wrapProcessForOsSandbox(process.execPath, skillArgs,');
+      expect(exec).toContain('const result = await runProcess(skillArgs, cwd, env, undefined, sandboxed);');
       expect(exec).toMatch(/const usageResult = !result\.timedOut && result\.code === 0 \? 'success' : 'failure';/);
-      // 采集在 runProcess 之后、返回结果之前。
-      expect(exec.indexOf('runProcess([')).toBeLessThan(exec.indexOf('recordHubContentUsage'));
+      // Require the awaited result before classification/receipt and both exit paths.
+      // Check presence as well as order: indexOf === -1 must never pass this guard.
+      const execution = exec.indexOf('const result = await runProcess(');
+      const classification = exec.indexOf('const usageResult =');
+      const receipt = exec.indexOf('recordHubContentUsage(');
+      const timeoutReturn = exec.indexOf('if (result.timedOut) return');
+      const failureReturn = exec.indexOf('if (result.code !== 0)');
+      expect(execution).toBeGreaterThanOrEqual(0);
+      expect(classification).toBeGreaterThan(execution);
+      expect(receipt).toBeGreaterThan(classification);
+      expect(timeoutReturn).toBeGreaterThan(receipt);
+      expect(failureReturn).toBeGreaterThan(receipt);
+      expect(exec.match(/recordHubContentUsage\(/g)).toHaveLength(1);
+      expect(exec).toContain('pinnedVersion: pin?.version ??');
+      expect(exec).toContain('result: usageResult,');
     });
   });
 });

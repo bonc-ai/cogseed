@@ -359,6 +359,10 @@ export function activateUser(uid: string): void {
     if (typeof store?._evictAll === 'function') store._evictAll();
   } catch { /* not loaded yet */ }
   try {
+    const cognitionStore = require('./cognition_kernel/store');
+    if (typeof cognitionStore?.clearCognitionStoreReadCache === 'function') cognitionStore.clearCognitionStoreReadCache();
+  } catch { /* not loaded yet */ }
+  try {
     const runner = require.cache[require.resolve('../model/core-agent/runner')];
     if (runner && typeof (runner.exports as any)?.invalidateConfig === 'function') {
       (runner.exports as any).invalidateConfig();

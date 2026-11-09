@@ -25,10 +25,12 @@ describe('public connector boundary', () => {
   // What this test must keep preventing: an entry that only works because CogSeed holds a
   // private client secret, or that meters usage. Adding a mode is a deliberate widening — it is
   // not a licence to add non-public connectors under the new label.
-  const PUBLIC_AUTH_MODES = ['server_bridge', 'mcp_dcr', 'local_cli', 'credentials', 'provider_device', 'interactive_token'];
+  const PUBLIC_AUTH_MODES = ['server_bridge', 'mcp_dcr', 'local_cli', 'local_mcp', 'credentials', 'provider_device', 'interactive_token'];
 
   it('keeps every catalog connector on a public authorization mode without credit metering', () => {
-    expect(CONNECTOR_CATALOG).toHaveLength(31);
+    expect(CONNECTOR_CATALOG).toHaveLength(33);
+    expect(CONNECTOR_CATALOG.filter(entry => entry.auth_mode === 'local_mcp').map(entry => entry.id))
+      .toEqual(['apple-reminders', 'apple-notes']);
     expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'mcp_dcr')).toHaveLength(11);
     expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'server_bridge')).toHaveLength(10);
     expect(CONNECTOR_CATALOG.filter((entry) => entry.auth_mode === 'local_cli')).toHaveLength(4);
@@ -46,7 +48,16 @@ describe('public connector boundary', () => {
       else if (['tencent-meeting', 'feishu', 'wecom', 'dingtalk', 'tencent-docs', 'wps'].includes(entry.id)) {
         expect(entry.icon_name).toBe(`connector-${entry.id}`);
       }
-      else expect(entry.icon_svg).toMatch(/^<svg\b/);
+      else if (entry.auth_mode === 'local_mcp') {
+        expect(entry.icon_name).toBe(entry.id === 'apple-reminders' ? 'clipboard-list' : 'file-text');
+        expect(entry.oauth).toBeUndefined();
+        expect(entry.required_oauth_scopes).toBeUndefined();
+        expect(entry.transport_template?.kind).toBe('stdio');
+        const tpl = entry.transport_template as { command?: string; oauth_env_key?: string; env_synthesizer?: string };
+        expect(tpl.command).toBe(entry.id === 'apple-reminders' ? 'remctl' : 'npx');
+        expect(tpl.oauth_env_key).toBeUndefined();
+        expect(tpl.env_synthesizer).toBeUndefined();
+      } else expect(entry.icon_svg).toMatch(/^<svg\b/);
       if (entry.auth_mode === 'mcp_dcr') {
         expect(entry.transport_template?.kind).toBe('streamable-http');
         expect(entry.transport_template && 'url' in entry.transport_template

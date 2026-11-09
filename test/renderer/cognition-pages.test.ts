@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 // 2026-10-07 旧模块 personal-ontology.js 随停驻页退役删除——同名懒加载组只余
 // personal-context-review.js，手动沉淀模块已下线。
 // ─────────────────────────────────────────────────────────────────────────────
-describe('cognition-assets 五页签结构(迁移终态)', () => {
+describe('cognition-assets 页签结构(认知树灰色占位 + 四个并列入口)', () => {
   const core2 = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/core.js'), 'utf8');
   const views2 = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf8');
   const html2 = readFileSync(resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
@@ -24,17 +24,16 @@ describe('cognition-assets 五页签结构(迁移终态)', () => {
     return tabs;
   }
 
-  it('TABS 保留五个位置但认知树禁用，顺序固定', () => {
-    // 认知树暂禁用并由旧路由归一到「我的认知」。2026-10-08 U04:独立「待我处理」页签
-    // 下线,治理动作收敛到系统活动(需要关注/已处理),旧 review 路由归一。
-    // 2026-09-27 子安定序:「我的认知」提到「个人本体(关于我)」之前。
+  it('TABS 保持认知树灰色占位 + 四个并列入口，顺序固定', () => {
+    // 2026-11-04：本体与我的认知是并列知识层，不再设「个人本体」父级分组。
+    // 2026-11-06：认知树恢复为 disabled 占位页签；tree 路由仍归一到我的认知。
     const tabs = parseTabs(core2);
-    expect(tabs.map((t) => t.id)).toEqual(['tree', 'overview', 'ontology', 'activity', 'settings']);
+    expect(tabs.map((t) => t.id)).toEqual(['tree', 'ontology', 'overview', 'activity', 'settings']);
     expect(tabs.map((t) => t.titleKey)).toEqual([
-      'cognition.tab_tree', 'cognition.tab_overview', 'cognition.tab_ontology',
+      'cognition.tab_tree', 'cognition.tab_ontology', 'cognition.tab_overview',
       'cognition.tab_activity', 'cognition.tab_settings',
     ]);
-    expect(core2).toContain("{ id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树', disabled: true }");
+    expect(views2).not.toContain('ca-tabs-group');
   });
 
   it('默认路由是我的认知，旧树深链归一且详情键保留', () => {
@@ -74,10 +73,10 @@ describe('cognition-assets 五页签结构(迁移终态)', () => {
     expect(core2).not.toContain('refreshPersonalOntology');
   });
 
-  it('五页签标题四语齐全', () => {
+  it('页签标题四语齐全', () => {
     for (const locale of ['zh', 'en', 'ja', 'pt'] as const) {
       const table = JSON.parse(readFileSync(resolve(__dirname, `../../src/renderer/locales/${locale}.json`), 'utf8'));
-      for (const key of ['cognition.tab_tree', 'cognition.tab_ontology', 'cognition.tab_overview', 'cognition.tab_review', 'cognition.tab_activity', 'cognition.tab_settings']) {
+      for (const key of ['cognition.tab_tree', 'cognition.tab_ontology', 'cognition.tab_overview', 'cognition.tab_activity', 'cognition.tab_settings']) {
         expect(table[key], `${locale}:${key}`).toBeTruthy();
       }
     }

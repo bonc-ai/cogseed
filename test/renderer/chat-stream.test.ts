@@ -198,6 +198,7 @@ describe('chat-stream module', () => {
     g.setInterval = () => 0;
     g.clearInterval = () => {};
     g.createLogger = () => ({ info() {}, warn(...a: unknown[]) { console.warn('[chat-stream]', ...a); }, error() {} });
+    g.window.conversationMetrics = require('../../src/renderer/modules/conversation-metrics.js');
     await import('../../src/renderer/modules/chat-stream.js');
   });
 
@@ -732,6 +733,71 @@ describe('chat-stream module', () => {
     }
   });
 
+  it('cache accounting: live usage badges include cache writes and use the shared precise percentage', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const usageRow = (id: string, payload: unknown) => {
+      handle({ type: 'chat.item', turnId: 'T1', itemId: id, kind: 'usage', status: 'completed', payload });
+      return bodyOf(inserts[0].node).children.find((c) => c.dataset.csItem === id)!;
+    };
+    expect(usageRow('below', { inputTokens: 50, cacheReadTokens: 50, cacheWriteTokens: 100 }).innerHTML).not.toContain('%');
+    expect(usageRow('half', { inputTokens: 50, cacheReadTokens: 100, cacheWriteTokens: 50 }).innerHTML).toContain('缓存 50%');
+    const almost = usageRow('almost', { inputTokens: 1, cacheReadTokens: 9999, cacheWriteTokens: 0 }).innerHTML;
+    expect(almost).toContain('缓存 99.99%');
+    expect(almost).not.toContain('缓存 100%');
+  });
+
+  it('cache accounting: live updates remove stale ratios and show observed partial input as a lower bound', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const update = (payload: unknown) => handle({ type: 'chat.item', turnId: 'T1', itemId: 'usage', kind: 'usage', status: 'completed', payload });
+    update({ inputTokens: 50, outputTokens: 10, cacheReadTokens: 100, cacheWriteTokens: 0 });
+    const row = bodyOf(inserts[0].node).children.find((c) => c.dataset.csItem === 'usage')!;
+    expect(row.innerHTML).toContain('缓存 67%');
+    update({ inputTokens: 50, outputTokens: 10, cacheReadTokens: 100 });
+    expect(row.innerHTML).toContain('↑≥150');
+    expect(row.innerHTML).not.toContain('%');
+    expect(row.innerHTML).not.toContain('缓存写');
+    update({ inputTokens: 100 });
+    expect(row.innerHTML).toContain('↑≥100');
+    expect(row.innerHTML).toContain('↓—');
+    expect(row.innerHTML).not.toContain('缓存读');
+    update({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    expect(row.innerHTML).toContain('↑0');
+    expect(row.innerHTML).toContain('↓0');
+    update({});
+    expect(row.innerHTML).toBe('');
+  });
+
+  it('authoritative complete input: live raw total supports the badge without a fabricated breakdown, then clears missing read', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const update = (payload: unknown) => handle({ type: 'chat.item', turnId: 'T1', itemId: 'usage', kind: 'usage', status: 'completed', payload });
+    update({ totalInputTokens: 200, cacheReadTokens: 120, outputTokens: 10, estimatedCost: 5 });
+    const row = bodyOf(inserts[0].node).children.find((c) => c.dataset.csItem === 'usage')!;
+    expect(row.innerHTML).toContain('↑200');
+    expect(row.innerHTML).toContain('缓存 60%');
+    expect(row.innerHTML).not.toContain('裸输入');
+    expect(row.innerHTML).not.toContain('缓存写');
+    expect(row.innerHTML).not.toContain('≈$');
+    update({ totalInputTokens: 200, outputTokens: 10 });
+    expect(row.innerHTML).toContain('↑200');
+    expect(row.innerHTML).not.toContain('%');
+    update({ totalInputTokens: 200, inputTokens: 50, cacheReadTokens: 120, outputTokens: 10 });
+    expect(row.innerHTML).toContain('↑200');
+    expect(row.innerHTML).toContain('缓存 60%');
+  });
+
+  it('recovered SDK input: live usage preserves 80% but omits fresh/write and estimates', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'usage', kind: 'usage', status: 'completed', payload: {
+      inputTokens: 100, totalInputTokens: 100, cacheReadTokens: 80, outputTokens: 10, estimatedCost: 5,
+    } });
+    const row = bodyOf(inserts[0].node).children.find((c) => c.dataset.csItem === 'usage')!;
+    expect(row.innerHTML).toContain('↑100');
+    expect(row.innerHTML).toContain('缓存 80%');
+    expect(row.innerHTML).not.toContain('裸输入');
+    expect(row.innerHTML).not.toContain('缓存写');
+    expect(row.innerHTML).not.toContain('≈$');
+  });
+
   it('usage 行渲染并含上下文告警，diff 行渲染增删统计与着色行', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'u1', kind: 'usage', status: 'completed', payload: { inputTokens: 100, contextWindowRatio: 0.92 } });
@@ -852,6 +918,59 @@ describe('chat-stream module', () => {
     expect(intervalCalls).toBe(1);
   });
 
+  it.each([false, true])('B05 replay-to-live: streamed reply is visible without expanding (turn.started=%s)', (withStarted) => {
+    const msgDiv = makeEl('div');
+    root.appendChild(msgDiv);
+    const started = { type: 'chat.turn.started', turnId: 'resumed', startedAt: '2026-11-06T10:00:00.000Z' };
+    const items = [
+      { type: 'turn', turn: started },
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'resumed', itemId: 'tool-1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'read_file', argsSummary: '{"path":"minutes.md"}' } } },
+    ];
+    // An in-flight persisted snapshot has no turn.completed. Replay currently
+    // renders it as a collapsed historical flow until the next live event.
+    expect(g.window.chatStreamRenderPersisted('c-1', msgDiv, items)).toBe(true);
+    const flow = msgDiv.querySelector('.cs-flow')!;
+    const body = bodyOf(flow);
+    expect(body.style.display).toBe('none');
+
+    if (withStarted) g.window.chatStreamHandleEvent('c-1', msgDiv, started);
+    g.window.chatStreamHandleEvent('c-1', msgDiv, {
+      type: 'chat.item', turnId: 'resumed', itemId: 'reply-1', kind: 'text', status: 'inProgress',
+      payload: { delta: 'The minutes are ready for confirmation.' },
+    });
+
+    // Exercise the public replay/live seam with the same message anchor. Text
+    // must be readable immediately; old tool rows may stay compact by default.
+    expect(msgDiv.querySelector('.cs-flow')).toBe(flow);
+    expect(body.querySelector('.cs-text')!.textContent).toBe('The minutes are ready for confirmation.');
+    expect(body.style.display).not.toBe('none');
+    expect(flow.dataset.csCompact).toBe('1');
+    expect(flow.querySelector('.cs-badge')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it.each([false, true])('B05 replay-to-live: preserves the user disclosure choice (collapsed=%s)', (collapsed) => {
+    const msgDiv = makeEl('div');
+    root.appendChild(msgDiv);
+    const items = [
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'chosen', itemId: 'tool-1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'read_file', argsSummary: '{"path":"minutes.md"}' } } },
+    ];
+    expect(g.window.chatStreamRenderPersisted('c-1', msgDiv, items)).toBe(true);
+    const flow = msgDiv.querySelector('.cs-flow')!;
+    const badge = flow.querySelector('.cs-badge')!;
+    badge.handlers.click!(); // Explicitly expand the historical flow.
+    if (collapsed) badge.handlers.click!(); // Then explicitly collapse it.
+
+    g.window.chatStreamHandleEvent('c-1', msgDiv, {
+      type: 'chat.item', turnId: 'chosen', itemId: 'reply-1', kind: 'text', status: 'inProgress',
+      payload: { delta: 'The minutes are ready for confirmation.' },
+    });
+    const body = bodyOf(flow);
+    expect(body.querySelector('.cs-text')!.textContent).toBe('The minutes are ready for confirmation.');
+    expect(body.style.display).toBe(collapsed ? 'none' : '');
+    expect(flow.dataset.csCompact).toBe('0');
+    expect(badge.getAttribute('aria-expanded')).toBe(String(!collapsed));
+  });
+
   it('终态流不被 live 迟到事件复活（csTerminal 保护）', () => {
     let intervalCalls = 0;
     g.setInterval = () => { intervalCalls += 1; return intervalCalls; };
@@ -865,6 +984,8 @@ describe('chat-stream module', () => {
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'u1', kind: 'usage', status: 'completed', payload: { text: 'tokens' } });
     expect(intervalCalls).toBe(before);
     expect(flow.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
+    expect(bodyOf(flow).style.display).toBe('none');
+    expect(flow.className).not.toContain('running');
   });
 
   it('interaction.requested 渲染审批卡，closed 撤卡禁用', () => {

@@ -12,7 +12,7 @@ function turn(overrides: Record<string, unknown> = {}) {
     startedAt: NOW,
     firstTokenAt: NOW + 500,
     completedAt: NOW + 3_000,
-    usage: { inputTokens: 1_000, outputTokens: 200 },
+    usage: { inputTokens: 1_000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 },
     ...overrides,
   };
 }

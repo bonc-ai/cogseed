@@ -464,7 +464,7 @@
 #ca-root .tree-stage,
 #ca-root .onto-page { margin: 0; padding: 0; }
 #ca-root button { font-family: inherit; cursor: pointer; }
-#ca-root button:focus-visible,
+#ca-root button:where(:not(.ui-icon-button)):focus-visible,
 #ca-root input:focus-visible,
 #ca-root textarea:focus-visible,
 #ca-root [tabindex]:focus-visible,
@@ -866,7 +866,7 @@
   #ca-root .wrap { padding: 16px 14px 72px; }
 }
 @media (max-width: 800px) {
-  #ca-root button:where(:not(.ca-nightly-model-hit)) { min-height: 36px; }
+  #ca-root button:where(:not(.ca-nightly-model-hit):not(.ui-icon-button)) { min-height: 36px; }
 }
 @media (max-width: 720px) {
   /* Small panes must let section titles keep their natural width and move

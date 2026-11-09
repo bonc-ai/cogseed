@@ -2,6 +2,7 @@ import type {
   RuntimeModelProvider,
   RuntimeModelProviderChunk,
   RuntimeModelToolCall,
+  RuntimeModelUsage,
 } from '../cogseed_runtime/kernel/model-adapter';
 import { resolveCogSeedApiKeyProfile, type CogSeedProviderProfile } from './provider-profiles';
 
@@ -54,11 +55,12 @@ function readString(record: Record<string, unknown> | null, key: string): string
 function usageChunk(value: unknown): RuntimeModelProviderChunk | null {
   const record = asRecord(value);
   if (!record) return null;
-  const inputTokens = typeof record.prompt_tokens === 'number' ? record.prompt_tokens : undefined;
-  const outputTokens = typeof record.completion_tokens === 'number' ? record.completion_tokens : undefined;
-  const totalTokens = typeof record.total_tokens === 'number' ? record.total_tokens : undefined;
-  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) return null;
-  return { type: 'usage', usage: { inputTokens, outputTokens, totalTokens } };
+  const inputTokens = readNumberValue(record, 'prompt_tokens');
+  const outputTokens = readNumberValue(record, 'completion_tokens');
+  const totalTokens = readNumberValue(record, 'total_tokens');
+  const cacheReadTokens = readNumberValue(asRecord(record.prompt_tokens_details), 'cached_tokens');
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined && cacheReadTokens === undefined) return null;
+  return { type: 'usage', usage: { inputTokens, outputTokens, totalTokens, ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}) } };
 }
 
 function mergeToolCalls(delta: Record<string, unknown>, pending: Map<number, PendingToolCall>): void {
@@ -145,6 +147,7 @@ export function createCogSeedOpenAICompatibleProvider(
     const payload = {
       model: profile.model,
       stream: true,
+      ...(new URL(profile.baseUrl).origin === 'https://api.openai.com' ? { stream_options: { include_usage: true } } : {}),
       messages: [
         ...(input.systemPrompt ? [{ role: 'system', content: input.systemPrompt }] : []),
         { role: 'user', content: input.message },
@@ -218,7 +221,7 @@ function endpointForAnthropic(baseUrl: string): string {
 
 function readNumberValue(record: Record<string, unknown> | null, key: string): number | undefined {
   const value = record?.[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 export interface CogSeedAnthropicProviderOptions {
@@ -293,6 +296,8 @@ export function createCogSeedAnthropicProvider(
     let sawMessageStop = false;
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
+    let cacheReadTokens: number | undefined;
+    let cacheWriteTokens: number | undefined;
 
     for await (const frame of sseDataFrames(response.body)) {
       let event: Record<string, unknown> | null;
@@ -312,6 +317,8 @@ export function createCogSeedAnthropicProvider(
         sawMessageStart = true;
         const usage = asRecord(asRecord(event?.message)?.usage);
         inputTokens = readNumberValue(usage, 'input_tokens') ?? inputTokens;
+        cacheReadTokens = readNumberValue(usage, 'cache_read_input_tokens') ?? cacheReadTokens;
+        cacheWriteTokens = readNumberValue(usage, 'cache_creation_input_tokens') ?? cacheWriteTokens;
       } else if (type === 'content_block_start') {
         const block = asRecord(event?.content_block);
         if (readString(block, 'type') === 'tool_use') {
@@ -339,14 +346,20 @@ export function createCogSeedAnthropicProvider(
         }
       } else if (type === 'message_delta') {
         const usage = asRecord(event?.usage);
+        inputTokens = readNumberValue(usage, 'input_tokens') ?? inputTokens;
+        cacheReadTokens = readNumberValue(usage, 'cache_read_input_tokens') ?? cacheReadTokens;
+        cacheWriteTokens = readNumberValue(usage, 'cache_creation_input_tokens') ?? cacheWriteTokens;
         outputTokens = readNumberValue(usage, 'output_tokens') ?? outputTokens;
-        if (inputTokens !== undefined || outputTokens !== undefined) {
+        const totalInputTokens = inputTokens === undefined ? undefined : inputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
+        if (inputTokens !== undefined || outputTokens !== undefined || cacheReadTokens !== undefined || cacheWriteTokens !== undefined) {
           yield {
             type: 'usage',
             usage: {
-              inputTokens,
+              inputTokens: totalInputTokens,
               outputTokens,
-              totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0),
+              totalTokens: totalInputTokens !== undefined && outputTokens !== undefined ? totalInputTokens + outputTokens : undefined,
+              ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+              ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
             },
           };
         }
@@ -460,8 +473,9 @@ export function createCogSeedGeminiProvider(
         const inputTokens = readNumberValue(usage, 'promptTokenCount');
         const outputTokens = readNumberValue(usage, 'candidatesTokenCount');
         const totalTokens = readNumberValue(usage, 'totalTokenCount');
-        if (inputTokens !== undefined || outputTokens !== undefined || totalTokens !== undefined) {
-          yield { type: 'usage', usage: { inputTokens, outputTokens, totalTokens } };
+        const cacheReadTokens = readNumberValue(usage, 'cachedContentTokenCount');
+        if (inputTokens !== undefined || outputTokens !== undefined || totalTokens !== undefined || cacheReadTokens !== undefined) {
+          yield { type: 'usage', usage: { inputTokens, outputTokens, totalTokens, ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}) } };
         }
       }
     }
@@ -485,8 +499,7 @@ export interface CogSeedOpenAIResponsesProviderOptions {
  * `instructions`, tools as function declarations with JSON-schema
  * `parameters`. Tool calls arrive as function_call items whose arguments
  * stream through response.function_call_arguments.delta and are finalized by
- * response.output_item.done; usage lands on response.completed (input_tokens
- * includes cached tokens — subtract them for the non-cached figure).
+ * response.output_item.done; usage lands on response.completed.
  */
 export function createCogSeedOpenAIResponsesProvider(
   options: CogSeedOpenAIResponsesProviderOptions = {},
@@ -540,7 +553,7 @@ export function createCogSeedOpenAIResponsesProvider(
     let currentItemType: string | null = null;
     let currentCallId: string | null = null;
     let sawCompleted = false;
-    let usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
+    let usage: RuntimeModelUsage | undefined;
 
     for await (const frame of sseDataFrames(response.body)) {
       let event: Record<string, unknown> | null;
@@ -604,17 +617,18 @@ export function createCogSeedOpenAIResponsesProvider(
         const response = asRecord(event?.response);
         const usageRecord = asRecord(response?.usage);
         if (usageRecord) {
-          const cached = readNumberValue(asRecord(usageRecord?.input_tokens_details), 'cached_tokens') ?? 0;
+          const cacheReadTokens = readNumberValue(asRecord(usageRecord?.input_tokens_details), 'cached_tokens');
           const inputTokens = readNumberValue(usageRecord, 'input_tokens');
           const outputTokens = readNumberValue(usageRecord, 'output_tokens');
           const totalTokens = readNumberValue(usageRecord, 'total_tokens');
-          if (inputTokens !== undefined || outputTokens !== undefined || totalTokens !== undefined) {
+          if (inputTokens !== undefined || outputTokens !== undefined || totalTokens !== undefined || cacheReadTokens !== undefined) {
             // Deferred until after tool calls are finalized so usage lands
             // after the tool_call chunks, matching the other providers.
             usage = {
-              inputTokens: inputTokens === undefined ? undefined : Math.max(0, inputTokens - cached),
+              inputTokens,
               outputTokens,
               totalTokens,
+              ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
             };
           }
         }

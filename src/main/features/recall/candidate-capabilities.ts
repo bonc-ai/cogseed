@@ -446,6 +446,11 @@ export type RecallCandidateErrorCode =
   /** 确认期间候选正文/范围/条件/证据或目标被另一入口改动；
    *  必须重新展示当前内容再确认，不能沿用旧快照落库。 */
   | 'recall_candidate_changed_during_confirmation'
+  /** 多条关联内容的归并/保留请求找不到可核对的分组，或所属整理任务当前
+   *  不能重判；候选与资产都未改动，刷新后按当前内容再试。 */
+  | 'recall_candidate_related_group_unavailable'
+  /** A host-validated old-content plan replaces the legacy related merge path. */
+  | 'recall_candidate_old_content_plan'
   | 'recall_capture_not_review_ready'
   | 'ontology_meaning_unresolved'
   | 'recall_capture_writing';

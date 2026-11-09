@@ -30,17 +30,23 @@ import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runti
 const CODEBUDDY = '/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy';
 
 let previousVariant: string | undefined;
-let variantName: string;
+let previousBaseDir: string | undefined;
+let scratchBase = '';
 
 beforeEach(() => {
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
-  variantName = 'p3394-start-' + Math.random().toString(36).slice(2, 8);
-  process.env.COGSEED_RUNTIME_VARIANT = variantName;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  // runtime-paths 现在校验变体名：隔离改为整棵变体树指到一次性临时根。
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-start-'));
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 });
 afterEach(() => {
   if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
+  try { fs.rmSync(scratchBase, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
 async function startFakeBridge() {

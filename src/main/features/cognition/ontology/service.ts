@@ -1,23 +1,24 @@
-/** 本体提交与读取复用认知主档、transition → document锁和坏档拒写。 */
+/** 本体提交与读取复用认知主档、transition → document锁和坏档拒写。
+ * 读取直接复用 store 缓存中 normalize 已校验的 ontology；同版本对象共享，调用方只读。 */
 import { randomUUID } from 'node:crypto';
 import { withCognitionTransition } from '../../cognition_bridge';
 import { cognitionStorePath, applyCognitionDeltas, loadCognitionStoreSync, assertCognitionCommitActive, archiveCognitionOntologyHistory } from '../../cognition_kernel/store';
 import { corruptRecordFor } from '../../../util/corrupt-guard';
 import { notifyCognitionWrite } from '../../recall/store-events';
 import { applyOntologyCommand, validateOntologyCommand, type OntologyCommandOutcome, type OntologyCommandSourceOverride } from './commands';
-import { emptyOntologyDocument, OntologyError, validateOntologyDocument, type OntologyDocument, type OntologyRecord } from './model';
+import { emptyOntologyDocument, OntologyError, type OntologyDocument, type OntologyRecord } from './model';
 import { ontologyScopeViolations } from './cognition-scope';
 import type { RecallAbilityAssetScopePolicy } from '../../recall/scope-policy';
 import type { CognitionEditDecision } from '../edit-decision';
 
+/** normalizeCognitionStoreDocument 已对 ontology 做全量校验；同一 store 版本
+ * 共享一个对象，调用方只读，写入方在各自边界先拷贝。 */
 export function readOntologyDocument(userId: string): OntologyDocument {
-  const empty = emptyOntologyDocument(userId);
   const doc = loadCognitionStoreSync(userId);
   if (corruptRecordFor(cognitionStorePath(userId))) throw new OntologyError('store_corrupt', 'cognition store unreadable; ontology read refused');
-  if (!doc.ontology) return empty;
-  const result = validateOntologyDocument(doc.ontology);
-  if (result.ownerId !== userId) throw new OntologyError('store_corrupt', 'ontology owner mismatch');
-  return result;
+  if (!doc.ontology) return emptyOntologyDocument(userId);
+  if (doc.ontology.ownerId !== userId) throw new OntologyError('store_corrupt', 'ontology owner mismatch');
+  return doc.ontology;
 }
 export async function readOntologyView(userId: string): Promise<OntologyDocument> {
   const canonical = readOntologyDocument(userId);
@@ -27,7 +28,13 @@ export async function readOntologyView(userId: string): Promise<OntologyDocument
 export function previewOntologyCommand(userId: string, input: unknown): OntologyCommandOutcome {
   return applyOntologyCommand(readOntologyDocument(userId), input, new Date().toISOString());
 }
-export async function commitOntologyCommand(userId: string, input: unknown, sourceOverride?: OntologyCommandSourceOverride, userEditDecision?: CognitionEditDecision): Promise<Omit<OntologyCommandOutcome, 'document'>> {
+export interface OntologyCommitOptions {
+  /** Bulk callers commit several commands in a row; they schedule one graph
+   * regeneration after the final batch instead of one per command. */
+  scheduleGraphGeneration?: boolean;
+}
+
+export async function commitOntologyCommand(userId: string, input: unknown, sourceOverride?: OntologyCommandSourceOverride, userEditDecision?: CognitionEditDecision, options?: OntologyCommitOptions): Promise<Omit<OntologyCommandOutcome, 'document'>> {
   let result: OntologyCommandOutcome;
   try {
     const outcome = await withCognitionTransition(userId, () => {
@@ -73,7 +80,17 @@ export async function commitOntologyCommand(userId: string, input: unknown, sour
     if (corruptRecordFor(cognitionStorePath(userId))) throw new OntologyError('store_corrupt', 'cognition store corrupt; ontology write refused');
     throw new OntologyError('commit_failed', 'ontology commit failed');
   }
-  if (!result.duplicate) notifyCognitionWrite(userId, 'ontology', 'update');
+  if (!result.duplicate) {
+    notifyCognitionWrite(userId, 'ontology', 'update');
+    // Graph layout is a sidecar projection; save success never waits for the
+    // model. The generator rechecks the revision before it replaces a snapshot.
+    if (options?.scheduleGraphGeneration !== false
+      && (process.env.NODE_ENV !== 'test' || process.env.COGSEED_GRAPH_GENERATION_IN_TEST === '1')) {
+      void import('./graph-generation')
+        .then(module => module.scheduleGraphGenerationForOntologyChange(userId, result.receipt.changedIds, result.receipt.revision))
+        .catch(() => undefined);
+    }
+  }
   return { receipt: result.receipt, duplicate: result.duplicate };
 }
 

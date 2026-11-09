@@ -17,22 +17,28 @@ vi.mock('../../../../src/main/features/kb_embed', () => ({
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 let previousRuntimeVariant: string | undefined;
-let testRuntimeVariant: string;
+let previousBaseDir: string | undefined;
+let scratchBase = '';
 
 beforeEach(() => {
   vi.resetModules();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-kstar-tasklevel-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   previousRuntimeVariant = process.env.COGSEED_RUNTIME_VARIANT;
-  testRuntimeVariant = 'kstar-tasklevel-p3394-' + Math.random().toString(36).slice(2, 8);
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  // per-variant 状态目录指到一次性临时根（runtime-paths 现在校验变体名）。
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-kstar-p3394-'));
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
-  process.env.COGSEED_RUNTIME_VARIANT = testRuntimeVariant;
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 });
 
 afterEach(() => {
   if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
-  fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', testRuntimeVariant), { recursive: true, force: true });
+  fs.rmSync(scratchBase, { recursive: true, force: true });
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
   if (previousRuntimeVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousRuntimeVariant;
   fs.rmSync(tmpDir, { recursive: true, force: true });

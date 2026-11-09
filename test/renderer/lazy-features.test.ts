@@ -128,7 +128,8 @@ describe('renderer lazy feature loader', () => {
     // workspace key + workspace.js；spaces.js 已废弃且无引用）。
     const { context, appended } = loadFeatureLoader();
     await context.loadRendererFeature('workspace');
-    expect(appended.map((script) => script.src)).toEqual(['./modules/workspace.js']);
+    // S5：模板一步创建的共享确认框先于 workspace.js 加载（auto.js 也用它）。
+    expect(appended.map((script) => script.src)).toEqual(['./modules/template-install.js', './modules/workspace.js']);
 
     const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/workspace.js'), 'utf8');
     // Actual IPC calls and deferred capability loading are exercised through

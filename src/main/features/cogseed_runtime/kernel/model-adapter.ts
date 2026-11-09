@@ -24,6 +24,8 @@ export interface RuntimeModelToolCall {
 
 export interface RuntimeModelUsage {
   inputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
 }

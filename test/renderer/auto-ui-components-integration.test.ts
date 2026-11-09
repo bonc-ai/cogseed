@@ -87,4 +87,10 @@ describe('automation page shared-component integration', () => {
     expect(rendererCss).toMatch(/\.auto-tpl-card-desc\s*{[^}]*-webkit-line-clamp:\s*2;/s);
     expect(rendererCss).toMatch(/\.auto-tpl-card-ico\s*{[^}]*background:\s*var\(--color-brand-soft\);[^}]*color:\s*var\(--color-accent\);/s);
   });
+  it('normalizes template card height and reserves the metadata row', () => {
+    expect(rendererCss).toContain('min-height: 126px;');
+    expect(rendererCss).toContain('min-height: 18px;');
+    expect(rendererCss).toContain('margin-top: auto;');
+    expect(rendererCss).toContain('.auto-tpl-card-meta.is-placeholder { visibility: hidden; }');
+  });
 });

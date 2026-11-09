@@ -12,6 +12,25 @@ const _bashPermLog = createLogger('bash-permission');
 
 const _bashPermQueue = [];
 let _bashPermDialogOpen = false;
+let _bashPermActive = null;
+
+// Human approval has no deadline. Explicit cancellation must still release
+// the FIFO even when an IPC lookup or a test dialog is unresolved.
+function _bashPermissionWait(value, signal) {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(undefined);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(value).then((result) => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(signal.aborted ? undefined : result);
+    }, (error) => {
+      signal.removeEventListener('abort', onAbort);
+      if (signal.aborted) resolve(undefined);
+      else reject(error);
+    });
+  });
+}
 
 const _BASH_PERMISSION_MODES = ['workspace_approval', 'all_files_approval', 'all_files_auto'];
 const _BASH_PERMISSION_DEFAULT_MODE = 'all_files_approval';
@@ -87,7 +106,8 @@ async function _setBashPermissionMode(mode) {
   }
 }
 
-function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, getMessage }) {
+function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, getMessage, signal }) {
+  if (signal?.aborted) return Promise.resolve(undefined);
   let modes = _bashPermissionModeOptions();
   const safeCurrentMode = _bashIsMode(currentMode) ? currentMode : _BASH_PERMISSION_DEFAULT_MODE;
   const localizedTitle = () => typeof getTitle === 'function' ? getTitle() : title;
@@ -261,17 +281,20 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
       }
     };
     const cleanup = () => {
+      signal?.removeEventListener('abort', onAbort);
       document.removeEventListener('keydown', onKey, true);
       document.removeEventListener('click', onDocClick, true);
       window.removeEventListener('i18n-change', onI18nChange);
       overlay.remove();
     };
     const finish = (choice) => {
+      if (settled) return;
       const mode = selectedMode();
       if (controller) controller.close('action');
       cleanup();
       settle({ choice, mode });
     };
+    const onAbort = () => finish('deny');
     overlay.querySelectorAll('[data-act="choice"]').forEach((btn) => {
       btn.addEventListener('click', () => finish(btn.dataset.id || 'deny'));
     });
@@ -298,12 +321,13 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
       if (modeMenu && !modeMenu.hidden) positionMenu();
     };
     window.addEventListener('i18n-change', onI18nChange);
+    signal?.addEventListener('abort', onAbort, { once: true });
     if (controller) controller.open();
     else setTimeout(() => cancelBtn.focus(), 0);
   });
 }
 
-async function _showBashPermissionDialog(info) {
+async function _showBashPermissionDialog(info, signal) {
   const agent = _bashAgentLabel(info);
   const command = String(info.command || '');
   const operation = String(info.operation || '').trim();
@@ -321,20 +345,23 @@ async function _showBashPermissionDialog(info) {
       : t('bash.permission.message', { agent, reasons: reasonsText }) + '\n\n' + command;
   };
 
-  const currentMode = await _getBashPermissionCurrentMode();
-  const result = await _showBashPermissionModeDialog({
+  const currentMode = await _bashPermissionWait(_getBashPermissionCurrentMode(), signal);
+  if (signal.aborted) return;
+  const result = await _bashPermissionWait(_showBashPermissionModeDialog({
     title: getTitle(),
     message: getMessage(),
     currentMode,
     getTitle,
     getMessage,
-  });
+    signal,
+  }), signal);
+  if (signal.aborted) return;
   const choice = result && typeof result === 'object' ? result.choice : result;
   const selectedMode = _bashIsMode(result && result.mode) ? result.mode : currentMode;
   let decision = (choice === 'allow_once' || choice === 'allow_run') ? choice : 'deny';
   let effectiveMode = currentMode;
   if (choice === 'allow_always') {
-    const ok = currentMode === 'all_files_auto' || await _setBashPermissionMode('all_files_auto');
+    const ok = currentMode === 'all_files_auto' || await _bashPermissionWait(_setBashPermissionMode('all_files_auto'), signal);
     if (ok) {
       decision = 'allow_once';
       effectiveMode = 'all_files_auto';
@@ -342,11 +369,12 @@ async function _showBashPermissionDialog(info) {
       decision = 'deny';
     }
   } else if (decision !== 'deny' && selectedMode !== currentMode) {
-    const ok = await _setBashPermissionMode(selectedMode);
+    const ok = await _bashPermissionWait(_setBashPermissionMode(selectedMode), signal);
     if (ok) effectiveMode = selectedMode;
     else decision = 'deny';
   }
 
+  if (signal.aborted) return;
   try {
     if (window.Monitor) {
       Monitor.event('bash_risk_prompt_result', {
@@ -377,8 +405,13 @@ async function _drainBashPermissionQueue() {
   _bashPermDialogOpen = true;
   try {
     while (_bashPermQueue.length) {
-      const info = _bashPermQueue.shift();
-      await _showBashPermissionDialog(info);
+      const entry = _bashPermQueue.shift();
+      _bashPermActive = entry;
+      try {
+        await _showBashPermissionDialog(entry.info, entry.controller.signal);
+      } finally {
+        _bashPermActive = null;
+      }
     }
   } finally {
     _bashPermDialogOpen = false;
@@ -389,7 +422,7 @@ if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
   try {
     window.cogseed.onPushEvent('bash:permission', (info) => {
       if (!info || typeof info.request_id !== 'string') return;
-      _bashPermQueue.push(info);
+      _bashPermQueue.push({ info, controller: new AbortController() });
       // conv-core M2.1：同一请求镜像到会话过程面板（消息流上下文审批），
       // 无活跃面板时 chat-stream 内部静默跳过，弹窗照常。
       if (typeof window.chatStreamBridgeBashPermission === 'function') {
@@ -397,5 +430,17 @@ if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
       }
       _drainBashPermissionQueue();
     });
-  } catch (_err) { /* push channel unavailable; bash calls deny on timeout */ }
+    window.cogseed.onPushEvent('bash:permission-closed', (info) => {
+      if (!info || typeof info.request_id !== 'string') return;
+      const matches = (entry) => entry && entry.info.request_id === info.request_id
+        && entry.info.cid === info.cid;
+      for (let i = _bashPermQueue.length - 1; i >= 0; i--) {
+        if (matches(_bashPermQueue[i])) _bashPermQueue.splice(i, 1);
+      }
+      if (matches(_bashPermActive)) _bashPermActive.controller.abort();
+      if (typeof window.chatStreamDismissBashPermission === 'function') {
+        try { window.chatStreamDismissBashPermission(info.request_id); } catch (_e) { /* ignore */ }
+      }
+    });
+  } catch (_err) { /* push channel unavailable */ }
 }

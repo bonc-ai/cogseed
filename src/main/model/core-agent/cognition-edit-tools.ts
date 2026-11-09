@@ -4,7 +4,7 @@ import { editCognition, type CognitionEditHost, type CognitionEditInput } from '
 export function createCognitionEditTools(host: CognitionEditHost): AgentTool[] {
   return [{
     name: 'edit_cognition',
-    description: '按当前用户明确指令修改已有认知资产或本体。先用 read_ability_asset(mode=manage) 或 cognition_ontology_query(mode=manage) 看正文和版本。精确字段/唯一片段补丁可直接保存；缺完整本人决定或 AI 改写时，主进程展示完整正文与条件并请用户确认一次。共享规则正文自动与拥有认知同次保存。单条编辑不创建新资产。operation=merge/split 时读取所有目标的在用全文与版本，用当前模型起草完整 outputs，附原文片段与本体去向；宿主展示整组结果，确认后新建结果并归档原条目。不恢复暂停，不扩大默认使用授权；明确本人确认的新版本在原范围内继续用于普通后续任务。mode=propose 只预览不保存。',
+    description: '按当前用户明确指令修改已有认知资产或本体。先用 read_ability_asset(assetId) 或 cognition_ontology_query(recordId=正式ID) 看正文和版本。精确字段/唯一片段补丁可直接保存；缺完整本人决定或 AI 改写时，主进程展示完整正文与条件并请用户确认一次。共享规则正文自动与拥有认知同次保存。单条编辑不创建新资产。operation=merge/split 时读取所有目标的在用全文与版本，用当前模型起草完整 outputs，附原文片段与本体去向；宿主展示整组结果，确认后新建结果并归档原条目。不恢复暂停，不扩大默认使用授权；明确本人确认的新版本在原范围内继续用于普通后续任务。mode=propose 只预览不保存。',
     inputSchema: { type: 'object', properties: {
       operation: { type: 'string', enum: ['merge', 'split'], description: '合并或拆分用户指定的认知：新建结果、原条目归档，整组预览确认。此时不用 target/fields，使用 sourceAssetIds/outputs/expectedVersions。' },
       sourceAssetIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 },

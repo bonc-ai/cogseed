@@ -5,16 +5,20 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
-// 游标文件落在 per-variant 数据根（runtime-paths），测试用独立 scratch
-// variant，绝不触碰真实 cogseed 变体的状态。
-const SCRATCH_VARIANT = 'p3394-cursor-test-' + Math.random().toString(36).slice(2, 8);
-process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
+// 游标文件落在 per-variant 数据根（runtime-paths）；把整棵变体树指到
+// scratch 临时目录，绝不触碰真实 cogseed 变体的状态。
+const SCRATCH_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-cursor-test-'));
+process.env.COGSEED_VARIANT_BASE_DIR = SCRATCH_BASE;
+process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 
 afterEach(() => {
-  const root = path.join(os.homedir(), '.cogseed', 'runtime-variants', SCRATCH_VARIANT);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(path.join(SCRATCH_BASE, 'runtime-variants'), { recursive: true, force: true });
+});
+
+afterAll(() => {
+  fs.rmSync(SCRATCH_BASE, { recursive: true, force: true });
 });
 
 describe('P3394 event cursor store (R-06/S-05)', () => {

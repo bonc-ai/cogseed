@@ -19815,6 +19815,8 @@ body:has(#panel-settings.active) .main-top-actions {
   margin-top: 18px;
   border-top: 1px solid var(--border);
 }
+.auto-hub-note { margin: 10px 0 0; color: var(--color-muted); font-size: var(--font-size-2); }
+.auto-hub-note:empty { display: none; }
 .auto-tpl-subhead {
   font-size: 12.5px;
   font-weight: 600;
@@ -19860,6 +19862,7 @@ body:has(#panel-settings.active) .main-top-actions {
   align-items: flex-start;
   width: 100%;
   max-width: 400px;
+  min-height: 126px;
   gap: 12px;
   padding: var(--space-4);
   text-align: left;
@@ -19876,6 +19879,7 @@ body:has(#panel-settings.active) .main-top-actions {
   border-color: var(--line-strong);
   box-shadow: var(--shadow-card-hover);
 }
+.auto-tpl-card[disabled] { opacity: 0.72; cursor: not-allowed; }
 .auto-tpl-card.is-blank {
   border-style: dashed;
   background: transparent;
@@ -19896,8 +19900,10 @@ body:has(#panel-settings.active) .main-top-actions {
 .auto-tpl-card-body {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: 4px;
   min-width: 0;
+  min-height: 92px;
 }
 .auto-tpl-card-name {
   display: -webkit-box;
@@ -19913,6 +19919,7 @@ body:has(#panel-settings.active) .main-top-actions {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  min-height: 36px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--muted);
@@ -19920,11 +19927,13 @@ body:has(#panel-settings.active) .main-top-actions {
 .auto-tpl-card-meta {
   display: inline-flex;
   align-items: center;
-  margin-top: 2px;
+  min-height: 18px;
+  margin-top: auto;
   font-family: inherit;
   font-size: inherit;
   color: var(--muted);
 }
+.auto-tpl-card-meta.is-placeholder { visibility: hidden; }
 /* Project-detail auto card hint */
 .project-auto-hint {
   margin-top: 8px;
@@ -23432,7 +23441,7 @@ body:has(#panel-settings.active) .main-top-actions {
   display: grid;
   /* 显式可收缩轨道：隐式 auto 轨在超长 nowrap 标题下会按 min-content 撑穿卡片。 */
   grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
+  gap: 4px;
 }
 .chat-recall-citation {
   min-width: 0;
@@ -23513,15 +23522,34 @@ body:has(#panel-settings.active) .main-top-actions {
   color: var(--muted);
   font-size: var(--font-size-1);
 }
+/* 已确认投影回退备注：独立一行，不参与尾行的右对齐。 */
+.chat-recall-fallback-note {
+  display: block;
+  margin: 6px 0 0;
+  padding-left: 0;
+}
 /* 逐行反馈：按钮推到行尾，已反馈的行只留感谢态。 */
 .chat-recall-feedback-row { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
+/* 行内反馈按钮随三轮收窄（2026-11-06）：scoped 覆盖 28→24px、图标 12px，
+   与尾行按钮同档——页内覆盖，不动共享 sm 档（同 .chat-recall-feedback-actions 的先例）。 */
+.chat-recall-feedback-row .ui-button {
+  height: 24px;
+  padding-inline: var(--space-2);
+  font-size: var(--font-size-2);
+}
+.chat-recall-feedback-row .ui-button .ui-button__icon,
+.chat-recall-feedback-row .ui-button .ui-icon {
+  width: 12px;
+  height: 12px;
+}
 .chat-recall-citation.is-feedback-sent .chat-recall-feedback-row .chat-recall-feedback-btn { display: none; }
 .chat-recall-citations.is-feedback-sent .chat-recall-feedback-btn { opacity: 0.55; pointer-events: none; }
 
 /* 折叠（2026-09-29 二轮）：头部即点击热区（cursor/悬停反馈在这层），箭头只是
-   指示图标（aria-hidden）；点击收起/展开引用明细（列表＋省略块），尾部反馈、
-   提示句与撤销保持可见。状态记在宿主 dataset，整卡重画不丢；展开时箭头朝上
-   （点它收起），收起时朝下。计数上移内联在标题右侧。 */
+   指示图标（aria-hidden）；点击收起/展开引用明细（列表＋省略块），合并态尾部
+   反馈与撤销保持可见。状态记在宿主 dataset，整卡重画不丢；展开时箭头朝上
+   （点它收起），收起时朝下。计数在头部行右侧、紧邻折叠箭头（三轮挪出标题），
+   折叠态 head margin 收零（头部下方无内容，上下收窄）。 */
 .chat-recall-citations-head { cursor: pointer; user-select: none; }
 .chat-recall-citations .chat-recall-toggle {
   display: inline-flex;
@@ -23532,8 +23560,11 @@ body:has(#panel-settings.active) .main-top-actions {
 }
 .chat-recall-citations-head:hover .chat-recall-toggle { color: var(--primary); }
 .chat-recall-citations .chat-recall-toggle .ui-icon { transform: rotate(180deg); }
+/* 计数（2026-11-06 三轮）：从标题内联挪到头部行右侧、紧邻折叠箭头；
+   头部 flex 的 8px gap 负责间距，不再用 margin-left。 */
 .chat-recall-citations-count {
-  margin-left: 6px;
+  flex: 0 0 auto;
+  margin-top: 1px;
   color: var(--muted);
   font-size: var(--font-size-1);
   font-weight: var(--font-weight-regular);
@@ -23542,6 +23573,7 @@ body:has(#panel-settings.active) .main-top-actions {
 .chat-recall-citations.is-collapsed .chat-recall-projection-omitted {
   display: none;
 }
+.chat-recall-citations.is-collapsed .chat-recall-citations-head { margin-bottom: 0; }
 .chat-recall-citations.is-collapsed .chat-recall-toggle .ui-icon { transform: none; }
 
 /* 教学卡样式已删：教学回执并入保存回执卡
@@ -33926,12 +33958,13 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .chat-message.is-coalesced {
   display: none !important;
 }
+/* 头部与列表的节奏（2026-11-06 三轮收窄）：8px→4px，展开态间隙收紧。 */
 .chat-recall-projection-head,
 .chat-recall-citations-head {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 /* 头部图标：两卡同一条头部语言（图标 + 标题 + 右侧状态）。图标只从 icons.js
    出（uiIconHtml），原语缺席时 JS 侧渲染空串。 */
@@ -33956,13 +33989,6 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
   line-height: 1.35;
-}
-.chat-recall-projection-title small,
-.chat-recall-citations-title small {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: var(--font-size-1);
 }
 .chat-recall-projection-status,
 .chat-recall-feedback-status {

@@ -1120,8 +1120,26 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
   // 'review') is not a meaningful query, and skipping the embed avoids
   // blocking calls when no task text exists.
   const selection = await applySemanticSelection(userId, includedAssets, taskText, options, omittedRefs, purpose, input.workspaceId, input.projectId);
-  const orderedAssets = selection.assets;
-  const assetMatches = selection.assetMatches;
+  // 写入侧与每轮注入闸门同一口径：来源已失效（如导入资产指向已删除会话）
+  // 的条目在落盘前剔除并留痕，避免 confirmed 投影带着注定读不出的资产。
+  // 只对选中有界集合跑（而非全量 includedAssets），控制可用性检查的 IO 放大。
+  // 校验过程抛异常不等于来源已失效：保留该资产，由每轮注入闸门按运行时
+  // 状态复核，避免把瞬时 IO 故障固化进落盘视图后无法恢复。
+  let sourceCheckIndeterminate = false;
+  const sourcesAvailable = createAssetSourceAvailability(userId, {
+    onIndeterminate: () => {
+      sourceCheckIndeterminate = true;
+      log.warn('source availability check inconclusive; retaining asset for runtime recheck');
+    },
+  });
+  const orderedAssets: RecallAbilityAssetRecord[] = [];
+  for (const asset of selection.assets) {
+    sourceCheckIndeterminate = false;
+    const available = await sourcesAvailable(asset);
+    if (available || sourceCheckIndeterminate) orderedAssets.push(asset);
+    else omittedRefs.push({ assetId: asset.id, reason: 'source_unavailable' });
+  }
+  const assetMatches = selection.assetMatches?.filter((match) => orderedAssets.some((asset) => asset.id === match.assetId));
 
   const sourceRefs: CognitionSourceRef[] = [];
   const seen = new Set<string>();
@@ -1535,7 +1553,12 @@ async function validateFrozenProjectionAssets(
       if (isCommittedProjection(projection)) continue;
       throw projectionKnowledgeError('projection_asset_ineligible');
     }
-    if (!await sourcesAvailable(asset)) throw projectionKnowledgeError('projection_source_unavailable');
+    if (!await sourcesAvailable(asset)) {
+      // 来源失效与资产停用/作用域漂移同属"逐条状态"：已确认投影按条收敛，
+      // 交给下游 omitted 留痕；预览/确认仍整组拒绝并给出规则码。
+      if (requireCommitted) continue;
+      throw projectionKnowledgeError('projection_source_unavailable');
+    }
     out[assetId] = expected[assetId];
   }
   return out;
@@ -1558,7 +1581,8 @@ export function validateCommittedProjectionAssetVersions(
   runtimeScope: AssetScopeContext = {},
   assetsById?: ReadonlyMap<string, RecallAbilityAssetRecord>,
 ): Promise<Record<string, string>> {
-  // 返回当前仍可读取的版本子集；非 active 是逐条停用，正文版本或权限漂移仍整组拒绝。
+  // 返回当前仍可读取的版本子集；非 active/作用域/来源失效是逐条收敛，
+  // 正文版本漂移仍整组拒绝。
   return validateFrozenProjectionAssets(userId, projection, true, runtimeScope, assetsById);
 }
 

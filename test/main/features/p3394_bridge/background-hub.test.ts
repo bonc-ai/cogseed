@@ -33,7 +33,8 @@ const MANIFEST = {
 };
 
 let previousVariant: string | undefined;
-let variantName: string;
+let previousBaseDir: string | undefined;
+let scratchBase: string;
 let uid: string;
 
 function envelope(overrides: Record<string, unknown> = {}): P3394Envelope {
@@ -93,8 +94,10 @@ function finishedEnvelope(overrides: Record<string, unknown> = {}): P3394Envelop
 
 beforeEach(() => {
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
-  variantName = 'p3394-bg-hub-' + Math.random().toString(36).slice(2, 8);
-  process.env.COGSEED_RUNTIME_VARIANT = variantName;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-bg-hub-'));
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
   uid = 'bghub-' + Math.random().toString(36).slice(2, 10);
   try { fs.unlinkSync(p3394StateFile('p3394-outbox.jsonl')); } catch { /* absent */ }
 });
@@ -102,7 +105,9 @@ beforeEach(() => {
 afterEach(() => {
   if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
+  try { fs.rmSync(scratchBase, { recursive: true, force: true }); } catch { /* best effort */ }
   try { fs.rmSync(path.dirname(path.dirname(backgroundJobsFile(uid))), { recursive: true, force: true }); } catch { /* best effort */ }
 });
 

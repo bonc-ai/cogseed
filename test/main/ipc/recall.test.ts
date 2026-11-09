@@ -21,7 +21,20 @@ const recallMock = vi.hoisted(() => ({
     failed: [],
   })),
   promoteRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ candidate: { id }, asset: { id: 'aa-a' } })),
+  RECALL_CANDIDATE_VERSION_CONFLICT_CODE: 'recall_candidate_version_conflict',
+  recallCandidateVersionConflictOf: (error: unknown) => (error as { versionConflict?: unknown })?.versionConflict,
 }));
+const finalizeMock = vi.hoisted(() => {
+  class OldContentFinalizeError extends Error {
+    result: Record<string, unknown>;
+    constructor(result: Record<string, unknown>) {
+      super('old-content finalize failed');
+      this.name = 'OldContentFinalizeError';
+      this.result = result;
+    }
+  }
+  return { finalizeCandidate: vi.fn(), OldContentFinalizeError };
+});
 const assetMock = vi.hoisted(() => ({
   listAbilityAssets: vi.fn(async () => []),
   readAbilityAsset: vi.fn(async (_uid: string, id: string) => ({ id })),
@@ -204,6 +217,7 @@ vi.mock('../../../src/main/logger', () => ({ createLogger: () => ({ debug: vi.fn
 vi.mock('../../../src/main/features/chats', () => chatsMock);
 vi.mock('../../../src/main/features/recycle_bin', () => recycleBinMock);
 vi.mock('../../../src/main/features/recall/candidate-service', () => recallMock);
+vi.mock('../../../src/main/features/recall/old-content-finalize', () => finalizeMock);
 vi.mock('../../../src/main/features/recall/asset-service', () => assetMock);
 vi.mock('../../../src/main/features/recall/source-catalog', () => sourceMock);
 vi.mock('../../../src/main/features/recall/capture-service', () => captureMock);
@@ -261,6 +275,43 @@ describe('ipc › recall candidate governance', () => {
     expect(assetMock.listAbilityAssetVersions).toHaveBeenCalledWith(UID, 'aa-method');
     await expect(call('recall.assets.resume', { assetId: '../bad' })).resolves.toMatchObject({ ok: false });
     expect(assetMock.resumeAbilityAsset).toHaveBeenCalledTimes(1);
+  });
+
+  it('flattens old-content finalize failures into the top-level error envelope', async () => {
+    finalizeMock.finalizeCandidate.mockRejectedValueOnce(new finalizeMock.OldContentFinalizeError({
+      ok: false,
+      phase: 'new_failed',
+      candidate: { id: 'cand-finalize' },
+      plan: { id: 'plan-finalize' },
+      error: {
+        code: 'recall_candidate_version_conflict',
+        message: 'asset changed before confirmation',
+        versionConflict: { baselineVersion: '1', currentVersion: '3' },
+      },
+    }));
+    const result = await call('recall.candidates.finalize', { candidateId: 'cand-finalize', mode: 'new_only' });
+    expect(result).toMatchObject({
+      ok: false,
+      phase: 'new_failed',
+      code: 'recall_candidate_version_conflict',
+      message: 'asset changed before confirmation',
+      versionConflict: { baselineVersion: '1', currentVersion: '3' },
+      candidate: { id: 'cand-finalize' },
+      plan: { id: 'plan-finalize' },
+    });
+    expect(result).not.toHaveProperty('error');
+  });
+
+  it('adds the stable conflict code to a promote version conflict', async () => {
+    captureMock.promoteRecallCaptureCandidate.mockRejectedValueOnce(Object.assign(new Error('conflict'), {
+      versionConflict: { baselineVersion: '1', currentVersion: '2' },
+    }));
+    await expect(call('recall.candidates.promote', { candidateId: 'cand-conflict' })).resolves.toMatchObject({
+      ok: false,
+      state: 'pending',
+      code: 'recall_candidate_version_conflict',
+      versionConflict: { baselineVersion: '1', currentVersion: '2' },
+    });
   });
 
   it('routes validated save and governance actions with the active uid', async () => {

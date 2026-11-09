@@ -1,12 +1,18 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { clearSessionForTest, listSessions, normalizeGoal, sessionFor, sessionForGoal } from '../../../../src/main/features/p3394_bridge/session-store';
 
-// isolate: the session store writes under COGSEED_RUNTIME_VARIANT; point it at a scratch variant
-const SCRATCH_VARIANT = 'p3394-session-test-' + Math.random().toString(36).slice(2, 8);
-process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
+// isolate: the session store writes under the per-variant state dir; redirect
+// the whole variant tree to a scratch base instead of inventing variant names.
+const SCRATCH_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-session-test-'));
+process.env.COGSEED_VARIANT_BASE_DIR = SCRATCH_BASE;
+process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
+
+afterAll(() => {
+  fs.rmSync(SCRATCH_BASE, { recursive: true, force: true });
+});
 
 describe('p3394 session store', () => {
   beforeEach(() => {
@@ -71,7 +77,7 @@ describe('p3394 session store', () => {
 
   it('persists the binding to disk (restart stability)', () => {
     const before = sessionFor('conv-a', 'hermes');
-    const stateFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', SCRATCH_VARIANT, 'p3394-sessions.json');
+    const stateFile = path.join(SCRATCH_BASE, 'runtime-variants', 'cogseed', 'p3394-sessions.json');
     const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     expect(onDisk.schema_version).toBe(1);
     expect(onDisk.sessions['conv-a\u0000hermes']).toBe(before);

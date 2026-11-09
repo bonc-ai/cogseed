@@ -88,7 +88,9 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
     | 'danger_snapshot' | 'danger_confirmed' | 'danger_denied' | 'attempt_blocked'
     // 审批提议：AI 提出、用户三态处置、以及用户编辑卡片内容。
     // 提议本身不改资产，但它必须与"谁在什么时候做了什么决定"绑在同一条履历上。
-    | 'approval_proposed' | 'approval_confirmed' | 'approval_rejected' | 'approval_deferred' | 'approval_edited';
+    | 'approval_proposed' | 'approval_confirmed' | 'approval_rejected' | 'approval_deferred' | 'approval_edited'
+    // 旧内容整理：单个资产的合并/归档/删除因果，以及整组撤销。
+    | 'old_content_applied' | 'old_content_undone';
   at: string;
   actor?: AbilityAssetActor;
   note?: string;
@@ -101,6 +103,10 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
    *  `note` 是既有消费方（渲染层生命周期记录 / timeline summary）在读的字段，
    *  保留不动；`reason` 是台账四项里可单独查询的那一项。 */
   reason?: string;
+  /** 旧内容整理因果：方案、执行、决定与目标。 */
+  refs?: AbilityAssetAuditRefs;
+  /** 确定性事件 ID：同一执行/资产的审计重放不会追加第二行。 */
+  eventId?: string;
   /** 失败/被拦截的归因。成功的记录不带——「被拦截不得计为成功」靠这个字段
    *  与 `ok:false` 回执共同表达。 */
   failureCategory?: AbilityAssetFailureCategory;
@@ -638,6 +644,15 @@ export function classifyAbilityAssetWriteFailure(error: unknown): AbilityAssetFa
   return 'unknown';
 }
 
+export interface AbilityAssetAuditRefs {
+  planId: string;
+  candidateId?: string;
+  executionId: string;
+  decisionId: string;
+  itemId?: string;
+  targetAssetId?: string;
+  targetVersion?: string;
+}
 export interface AbilityAssetAuditMetadata {
   note?: string;
   reason?: string;
@@ -645,6 +660,8 @@ export interface AbilityAssetAuditMetadata {
   before?: string;
   after?: string;
   failureCategory?: AbilityAssetFailureCategory;
+  refs?: AbilityAssetAuditRefs;
+  eventId?: string;
   /** 这一步改动**之前**在用哪一版：回滚锚点。写路径自己填，渲染层的
    *  「回滚到改动前」直接拿它调 rollback——从 `before` 摘要里反解版本号是
    *  解析展示文本，迟早随文案改动而错。 */
@@ -660,7 +677,9 @@ async function appendAudit(userId: string, assetId: string, action: AbilityAsset
   await appendRecallJsonlRecord(userId, 'ability-asset-audit', assetId, {
     schemaVersion: 1,
     ownerId: userId,
-    id: `${assetId}-${action}-${at.replace(/[^A-Za-z0-9]/g, '')}`,
+    id: metadata.eventId ? `${assetId}-${action}-${metadata.eventId}` : `${assetId}-${action}-${at.replace(/[^A-Za-z0-9]/g, '')}`,
+    ...(metadata.eventId ? { eventId: metadata.eventId } : {}),
+    ...(metadata.refs ? { refs: metadata.refs } : {}),
     assetId,
     action,
     at,
@@ -843,7 +862,7 @@ export async function hasReviewAnchoredPersonalType(userId: string, asset: Recal
 /** Keep the optional role-template view aligned with the canonical asset. The
  * prompt reader also rechecks live eligibility, so a transient cleanup failure
  * cannot make a paused or restricted asset visible to a task. */
-async function reconcilePersonalProfileProjection(
+export async function reconcilePersonalProfileProjection(
   userId: string,
   asset: RecallAbilityAssetRecord,
 ): Promise<void> {
@@ -2013,7 +2032,7 @@ export async function sweepPurgedAbilityAssetVersionStreams(
 async function sweepPurgedOrganizationContent(userId: string, assetId?: string): Promise<void> {
   await withCognitionTransition(userId, async () => {
     const purged = new Map<string, boolean>();
-    for (const collection of ['stock-organization', 'candidates', 'asset-approvals']) {
+    for (const collection of ['stock-organization', 'candidates', 'asset-approvals', 'old-content-plans']) {
       const reader = createRecallCollectionReader(userId, collection);
       let ids = reader.ids;
       if (!ids) {
@@ -2337,6 +2356,107 @@ export async function mergeAbilityAssets(
   // Reuse the reentrant cognition transition rail so source/target permissions
   // cannot change between the boundary check, version migration and commit.
   return withCognitionTransition(userId, () => mergeAbilityAssetsInTransition(userId, sourceAssetId, targetAssetId, input));
+}
+
+export type MergeAssetGroupSkipReason = 'not_found' | 'not_mutable' | 'already_merged'
+  | 'type_mismatch' | 'boundary_mismatch' | 'version_conflict' | 'merge_failed';
+
+export interface MergeAssetGroupReceipt {
+  sourceAssetId: string;
+  status: 'merged' | 'skipped' | 'failed';
+  targetVersion?: string;
+  reason?: MergeAssetGroupSkipReason;
+}
+
+export interface MergeAssetGroupResult {
+  ok: boolean;
+  targetAssetId: string;
+  targetVersion?: string;
+  receipts: MergeAssetGroupReceipt[];
+}
+
+/** Merge several sources into one target under a single cognition transition.
+ * Compatibility and expected versions are checked before the first write, so a
+ * version conflict never leaves a half-done group. `allowPartial` is for the
+ * overflow cleanup path: incompatible sources are reported, never coerced. */
+export async function mergeAbilityAssetGroup(
+  userId: string,
+  input: {
+    sourceAssetIds: string[];
+    targetAssetId: string;
+    expectedVersions?: Record<string, string>;
+    expectedTargetVersion?: string;
+    allowPartial?: boolean;
+  },
+  action: AbilityAssetUserActionInput,
+): Promise<MergeAssetGroupResult> {
+  const sourceIds = [...new Set(input.sourceAssetIds.map(String))];
+  const targetAssetId = String(input.targetAssetId || '');
+  if (!safeId(targetAssetId) || sourceIds.some(id => !safeId(id)) || sourceIds.length === 0
+    || sourceIds.includes(targetAssetId)) {
+    return { ok: false, targetAssetId, receipts: sourceIds.map(sourceAssetId => ({
+      sourceAssetId, status: 'skipped' as const, reason: 'not_found' as const })) };
+  }
+  return withCognitionTransition(userId, async () => {
+    const target = await readAbilityAsset(userId, targetAssetId);
+    try {
+      if (!target) throw Object.assign(new Error('target not found'), { reason: 'not_found' });
+      assertMutableAbilityAsset(target);
+      if (target.mergedIntoAssetId) throw Object.assign(new Error('target already merged'), { reason: 'already_merged' });
+      if (input.expectedTargetVersion && activeVersionOf(target) !== input.expectedTargetVersion)
+        throw Object.assign(new Error('target version changed'), { reason: 'version_conflict' });
+
+      const preflight = await Promise.all(sourceIds.map(async sourceAssetId => {
+        try {
+          const source = await readAbilityAsset(userId, sourceAssetId);
+          if (!source) throw Object.assign(new Error('source not found'), { reason: 'not_found' });
+          assertMutableAbilityAsset(source);
+          if (source.mergedIntoAssetId) throw Object.assign(new Error('source already merged'), { reason: 'already_merged' });
+          if (input.expectedVersions?.[sourceAssetId]
+            && activeVersionOf(source) !== input.expectedVersions[sourceAssetId])
+            throw Object.assign(new Error('source version changed'), { reason: 'version_conflict' });
+          if (source.type !== target.type)
+            throw Object.assign(new Error('type mismatch'), { reason: 'type_mismatch' });
+          assertSameMergeBoundary(source, target);
+          return { sourceAssetId, record: source };
+        } catch (error) {
+          const reason = ((error as { reason?: MergeAssetGroupSkipReason }).reason
+            || (/same scope and access policy/.test(String((error as Error).message)) ? 'boundary_mismatch' : 'merge_failed')) as MergeAssetGroupSkipReason;
+          return { sourceAssetId, error: reason };
+        }
+      }));
+
+      const blocked = preflight.flatMap(row => 'error' in row ? [{ sourceAssetId: row.sourceAssetId,
+        status: 'skipped' as const, reason: row.error }] : []);
+      if (blocked.length && !input.allowPartial) {
+        return { ok: false, targetAssetId, targetVersion: activeVersionOf(target), receipts: blocked };
+      }
+
+      const receipts: MergeAssetGroupReceipt[] = [...blocked];
+      let latest = target;
+      for (const row of preflight) {
+        if ('error' in row) continue;
+        try {
+          latest = await mergeAbilityAssetsInTransition(userId, row.sourceAssetId, targetAssetId, action);
+          receipts.push({ sourceAssetId: row.sourceAssetId, status: 'merged', targetVersion: activeVersionOf(latest) });
+        } catch (error) {
+          const reason = /same type|same scope and access policy/i.test(String((error as Error).message))
+            ? 'boundary_mismatch' as const : 'merge_failed' as const;
+          receipts.push({ sourceAssetId: row.sourceAssetId, status: 'failed', reason });
+        }
+      }
+      return {
+        ok: receipts.every(row => row.status === 'merged'),
+        targetAssetId,
+        targetVersion: activeVersionOf(latest),
+        receipts,
+      };
+    } catch (error) {
+      const reason = ((error as { reason?: MergeAssetGroupSkipReason }).reason || 'merge_failed') as MergeAssetGroupSkipReason;
+      return { ok: false, targetAssetId, receipts: sourceIds.map(sourceAssetId => ({
+        sourceAssetId, status: 'skipped' as const, reason })) };
+    }
+  });
 }
 
 async function mergeAbilityAssetsInTransition(

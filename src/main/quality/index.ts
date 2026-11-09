@@ -414,3 +414,82 @@ function _finalize(violations: Violation[]): ValidationReport {
     validator_version: VALIDATOR_VERSION,
   };
 }
+
+// ── Verdict interpretation ──────────────────────────────────────────────
+
+/**
+ * Does this violation refuse an install/marketplace admission?
+ *
+ * Reads through the context demotion (`original_level`) because a `tests/` or
+ * `vendor/` path is a place a payload can still run from — the effective level is
+ * the right answer for "how loudly do we report this", the pre-demotion level for
+ * "may this install".
+ *
+ * With one exception, and it is positional rather than locational: a hit inside a
+ * **comment or docstring** cannot execute. Recovering its pre-demotion level does
+ * not close a hole; it re-opens the false positive the demotion existed to fix.
+ *
+ * Verified on our own product content: `seo-crawl`'s SSRF guard names
+ * `169.254.169.254` in a comment and a docstring *because it rejects it*. The
+ * validator demoted it correctly, the old predicate promoted it back to EXTREME,
+ * and 1 of 83 official skills could not be imported or edited (red-team F-13).
+ *
+ * `test` context needs one more thing, and it is the other half of that same
+ * finding: **corroboration**. Reading through the demotion is what stops a
+ * payload from simply moving into `tests/`, so it cannot be dropped wholesale —
+ * but a lone indicator there is usually the opposite of a payload. `seo-crawl`
+ * names the metadata address inside a negative assertion
+ * (`assertFalse(is_safe_ip("169.254.169.254"))`) to prove it is *rejected*; the
+ * demotion was right, the read-through turned it into a second EXTREME, and
+ * import broke again (retest 2026-11-05, N-04).
+ *
+ * The measured separator is how many distinct escalating rules the report holds:
+ *
+ *   * `seo-crawl`                     1 rule  (`no_cloud_metadata_access`)
+ *   * `tests/t.sh` with a real payload 2 rules (`no_credential_path_read`
+ *                                              + `no_exfiltration_of_local_files`)
+ *
+ * A lone indicator is descriptive; two independent rules firing together is the
+ * composition that has no benign reading. Mirrors `scan_gate.py`'s
+ * instruction-corroboration rule rather than inventing a new policy.
+ *
+ * The default keeps the strict answer for a single-violation caller with no
+ * report context — failing closed is the right default for a gate, and the
+ * refinement belongs to the one function that can actually count. This lives
+ * here, as one function, because the same expression had been copied into six
+ * call sites and only some of them were gates. A copy that disagrees with this
+ * one is how the same skill gets admitted by one door and refused by another.
+ */
+export function isInstallBlockingViolation(
+  violation: Violation,
+  /** Distinct escalating rules in the same report (this one included). */
+  escalatingRuleCount: number = Number.POSITIVE_INFINITY,
+): boolean {
+  if (violation.context === 'comment') return false;
+  if ((violation.original_level || violation.level) !== 'EXTREME') return false;
+  if (violation.context !== 'test') return true;
+  return escalatingRuleCount >= TEST_CORROBORATION_RULES;
+}
+
+/**
+ * Distinct escalating rules a `test`-context hit needs before it may gate.
+ *
+ * Two means "one other rule corroborates it". Raising it would let a real
+ * composition hide behind a short report; lowering it to 1 is the F-13/N-04
+ * regression.
+ */
+const TEST_CORROBORATION_RULES = 2;
+
+/** Every violation that should refuse an install, in report order. */
+export function installBlockingViolations(report: ValidationReport): Violation[] {
+  const escalatingRules = new Set(
+    report.violations
+      // Comment hits are excluded from the count as well as from the verdict: a
+      // docstring naming an address cannot corroborate a test-file finding when
+      // it could not block on its own.
+      .filter((v) => v.context !== 'comment')
+      .filter((v) => (v.original_level || v.level) === 'EXTREME')
+      .map((v) => v.rule),
+  );
+  return report.violations.filter((v) => isInstallBlockingViolation(v, escalatingRules.size));
+}

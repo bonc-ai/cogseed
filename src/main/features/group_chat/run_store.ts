@@ -150,6 +150,9 @@ export interface RunRecord {
    * report→dispatch→report cycle cannot flap.
    */
   actor_report_enqueued?: boolean;
+  /** An asynchronous Commander dispatch explicitly owes a reporting round.
+   * Direct user → Agent runs and legacy unknown ownership must stay silent. */
+  actor_report_requested?: boolean;
   summary?: RunSummary;
   summary_publication?: RunSummaryPublication;
 }
@@ -440,6 +443,7 @@ function normalizeRecord(raw: unknown, expected?: { cid: string; runId: string }
     actors.push(actor);
   }
   if (raw.actor_report_enqueued !== undefined && typeof raw.actor_report_enqueued !== 'boolean') return null;
+  if (raw.actor_report_requested !== undefined && typeof raw.actor_report_requested !== 'boolean') return null;
   let summary: RunSummary | undefined;
   if (raw.summary !== undefined) {
     const decoded = normalizeSummary(raw.summary);
@@ -483,6 +487,7 @@ function normalizeRecord(raw: unknown, expected?: { cid: string; runId: string }
     status: raw.status as RunRecord['status'],
     ...(raw.interruption_reason === 'application_interrupted' ? { interruption_reason: 'application_interrupted' as const } : {}),
     ...(raw.actor_report_enqueued === true ? { actor_report_enqueued: true } : {}),
+    ...(raw.actor_report_requested === true ? { actor_report_requested: true } : {}),
     ...(summary ? { summary } : {}),
     ...(summaryPublication ? { summary_publication: summaryPublication } : {}),
   };
@@ -621,6 +626,7 @@ export async function createRun(input: CreateRunInput): Promise<RunRecord | null
  * this agent uses for its own sub-agents (dispatch returns a handle; completion
  * wakes the parent; the parent reports). Therefore:
  *
+ *   - no explicit asynchronous parent report request → do not wake Commander;
  *   - any actor still `pending`  → not yet: keep waiting (the run is not owed a
  *     report while a worker can still deliver);
  *   - all actors terminal, but nothing contributed → nothing to report;
@@ -631,7 +637,7 @@ export async function createRun(input: CreateRunInput): Promise<RunRecord | null
  * to apply the existing idle/turn budgets rather than a wall-clock timeout.
  */
 export function shouldEnqueueActorReport(record: RunRecord | null | undefined): boolean {
-  if (!record || record.actor_report_enqueued) return false;
+  if (!record || record.actor_report_requested !== true || record.actor_report_enqueued) return false;
   const actors = Array.isArray(record.actors) ? record.actors : [];
   if (actors.length === 0) return false;
   if (actors.some((actor) => actor.terminal === 'pending')) return false;
@@ -642,6 +648,19 @@ export function shouldEnqueueActorReport(record: RunRecord | null | undefined): 
   return actors.some((actor) => (
     (actor.produced?.messages ?? 0) > 0 || (actor.produced?.artifacts?.length ?? 0) > 0
   ));
+}
+
+/** Persist report ownership before an asynchronous Commander dispatch starts. */
+export async function requestActorReport(
+  uid: string,
+  cid: string,
+  runId: string,
+  projectHint?: string | null,
+): Promise<RunRecord | null> {
+  return updateRun(uid, cid, runId, (record) => {
+    if (record.status !== 'running') return record;
+    return { ...record, actor_report_requested: true };
+  }, projectHint);
 }
 
 /** Latch the reporting round so one dispatch batch reports once (R-11). */

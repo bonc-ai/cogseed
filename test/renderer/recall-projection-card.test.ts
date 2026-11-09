@@ -629,4 +629,24 @@ describe('「本轮资产检索与带入状态」卡折叠热区与默认收起�
     // 即时同步只在真实 DOM 生效；重画路径的 aria 已在上面断过）。
     expect(loaded.context.window.recallCardToggleCollapsed(loaded.host)).toBe(false);
   });
+
+  it('keeps the committed-projection fallback note when the merged card re-renders', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') {
+        return {
+          ok: true,
+          card: { ...previewCard, status: 'confirmed', authorization: 'model_selected', purpose: 'model_selected' },
+        };
+      }
+      return { ok: true, assets: [] };
+    });
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, {
+      cid: 'cid-a',
+      onlyModelSelected: true,
+      citations: [{ asset_id: 'asset-1', title: 'Saved item', type: 'rule', scope: 'general', version: '1', projection_id: 'proj-a', match_method: 'manual' }],
+      fallback: { projectionId: 'proj-a', reason: 'projection_asset_version_changed' },
+    });
+    expect(host.innerHTML).toContain('chat-recall-fallback-note');
+    expect(host.innerHTML).toContain('已确认的关联内容之后被修改过，本轮未按确认版本带入，已改用自动检索。');
+  });
 });

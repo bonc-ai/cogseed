@@ -20,12 +20,18 @@ const chineseTable = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/lo
 const runtimeManifest = JSON.parse(fs.readFileSync(path.join(root, 'src/main/features/connectors/cli-runtime-manifest.json'), 'utf8'));
 const hasPinnedRuntime = id => !!(runtimeManifest[id] && runtimeManifest[id].assets[`${process.platform}-${process.arch}`]);
 let completeBoot;
+const openedSetupUrls = [];
 const bootReady = new Promise(resolve => { completeBoot = resolve; });
 ipcMain.handle('cogseed.env', () => ({ ok: true, platform: process.platform, isDev: true }));
 ipcMain.handle('cogseed.ping', () => ({ ok: true, pong: 'pong' }));
 ipcMain.on('cogseed:bootI18n', event => { event.returnValue = { ok: true, lang: 'en', tables: { en: table, zh: chineseTable } }; });
 ipcMain.handle('cogseed.invoke', async (_event, { channel, payload }) => {
   try {
+    if (channel === 'auth.openExternal') {
+      openedSetupUrls.push(payload.url);
+      return { ok: true };
+    }
+    if (channel === 'fixture.setup_urls') return { ok: true, urls: [...openedSetupUrls] };
     // Token-form submission exercises real Renderer/preload IPC with a controlled failure.
     // No provider endpoint or user credential is used for this layout/retry check.
     if (channel === 'connectors.connect_interactive_token' && payload?.credential === 'fixture-invalid-token') {
@@ -82,6 +88,48 @@ app.whenReady().then(async () => {
         'tencent-docs','feishu','dingtalk','wecom','wps'];
       assert('real IPC catalog', (await window.cogseed.invoke('connectors.catalog', {})).ok);
       assert('ten cards', ids.every(id => document.querySelector('.connector-card[data-id="' + id + '"]')));
+      for (const appleId of ['apple-reminders', 'apple-notes']) {
+        const entry = _connectorsState.catalog.find(row => row.id === appleId);
+        assert(appleId + ' optional catalog entry', !!entry && !_connectorsState.instances.some(row => row.id === appleId));
+        assert(appleId + ' production card', !!document.querySelector('.connector-card[data-id="' + appleId + '"]'));
+        const unsupported = { ...entry, availability: 'visible_disabled', disabled_reason: 'macos_only' };
+        const disabledCard = _renderCatalogCard(unsupported, null);
+        assert(appleId + ' macOS-only disabled action', disabledCard.querySelector('[data-act="unsupported-connect"]')?.disabled && disabledCard.textContent.includes(t('connectors.apple.macos_only')));
+        const available = { ...entry, availability: undefined, disabled_reason: undefined };
+        const availableCard = _renderCatalogCard(available, null);
+        assert(appleId + ' opt-in connect action', !!availableCard.querySelector('[data-act="connect"]') && !availableCard.querySelector('[data-act="connect"]').disabled);
+        document.querySelector('.connector-card[data-id="' + appleId + '"] [data-act="open-popup"]').click();
+        await settle();
+        const appleDialog = document.getElementById('connector-use-popup');
+        assert(appleId + ' shared details and setup', !!appleDialog?.querySelector('[data-act="open-setup-docs"]'));
+        assert(appleId + ' named examples', [...appleDialog.querySelectorAll('[data-act="example"]')].length === 2 && [...appleDialog.querySelectorAll('[data-act="example"]')].every(button => button.textContent.trim() && button.disabled));
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await settle();
+        assert(appleId + ' details Escape', !document.getElementById('connector-use-popup'));
+        const catalogIndex = _connectorsState.catalog.findIndex(row => row.id === appleId);
+        const missing = { ...entry, availability: 'visible_disabled', disabled_reason: 'cli_missing' };
+        _connectorsState.catalog[catalogIndex] = missing;
+        const missingCard = _renderCatalogCard(missing, null);
+        document.getElementById('connectors-grid-available').appendChild(missingCard);
+        missingCard.querySelector('.connector-card-foot [data-act="open-popup"]').click();
+        await settle();
+        const setupDialog = document.getElementById('connector-use-popup');
+        assert(appleId + ' missing dependency guidance expanded', !!setupDialog.querySelector('.ui-accordion__item[open]'));
+        assert(appleId + ' missing dependency prevents connection', setupDialog.querySelector('.ui-modal__footer [data-act="connect"]')?.disabled);
+        setupDialog.querySelector('[data-act="open-install-docs"]').click();
+        setupDialog.querySelector('[data-act="open-setup-docs"]').click();
+        await settle();
+        const opened = await window.cogseed.invoke('fixture.setup_urls', {});
+        assert(appleId + ' official install and permission URLs', opened.urls.includes(entry.setup.install_url) && opened.urls.includes(entry.setup.docs_url));
+        await setLang('zh');
+        await settle();
+        assert(appleId + ' localized install and permission steps', setupDialog.textContent.includes(entry.setup.install_label_zh) && setupDialog.textContent.includes('隐私与安全性'));
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await settle();
+        missingCard.remove();
+        _connectorsState.catalog[catalogIndex] = entry;
+        await setLang('en');
+      }
       await Promise.all([...document.querySelectorAll('.connector-card-icon img')].map(img => img.decode()));
       assert('bundled marks loaded', [...document.querySelectorAll('.connector-card-icon img')].every(img => img.naturalWidth > 0));
       const grid = document.getElementById('connectors-grid-available');

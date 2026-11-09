@@ -986,6 +986,148 @@
     });
     return outputs;
   }
+  /* ── 多条关联内容：合并旧内容后重判 / 保留全部 ──────────────
+   * 归并目标只列当前仍可读（active）的关联条目：拿不到内容的条目无法核对，
+   * 也不该被静默并走。合并是写操作，确认文案必须说清"其余条目会归档"。 */
+  const relatedMergeReasonText = (reason) => (NS.relatedMergeReasonText
+    ? NS.relatedMergeReasonText(reason)
+    : T('cognition.formation_related_reason_unknown', '当前无法合并'));
+  const RELATED_REFORMATION_ERROR_TEXTS = {
+    capture_reformation_unavailable: ['cognition.formation_related_reformation_unavailable', '没能启动重新核对'],
+    capture_reformation_failed: ['cognition.formation_related_reformation_failed_generic', '本次重新核对失败'],
+    model_not_configured: ['cognition.formation_related_reformation_model', '当前没有可用模型'],
+    source_unavailable: ['cognition.formation_related_reformation_source', '原文或来源暂不可用'],
+    source_removed: ['cognition.formation_related_reformation_source', '原文或来源暂不可用'],
+    source_paused: ['cognition.formation_related_reformation_source', '原文或来源暂不可用'],
+    capture_disabled: ['cognition.formation_related_reformation_disabled', '会话整理已停用'],
+    formation_checkpoint_stale: ['cognition.formation_related_reformation_stale', '原文已变化，需要重新核对来源'],
+  };
+  function relatedReformationErrorText(code) {
+    const entry = RELATED_REFORMATION_ERROR_TEXTS[String(code || '')];
+    return entry ? T(entry[0], entry[1]) : T('cognition.formation_related_reformation_failed_generic', '本次重新核对失败');
+  }
+  /** 已归并/已保留的状态说明。状态来自主进程按整理任务现算的
+   *  `relatedFormation`，渲染层不自行推断"重判完成"。 */
+  function relatedResolutionStatusText(candidate, resolution, formation) {
+    const target = (S.assets || []).find(item => String(item.id) === String(resolution.targetAssetId));
+    const targetLabel = target?.title || T('cognition.formation_related_merge_target_fallback', '所选旧内容');
+    if (resolution.action === 'kept') return T('cognition.formation_related_kept', '已核对：保留这些旧内容，没有合并。');
+    if (!formation || formation.status === 'idle') {
+      return T('cognition.formation_related_merged_pending', '已归并到「{title}」，等待按合并后的内容重新核对这条建议。', { title: targetLabel });
+    }
+    if (formation.status === 'running') {
+      return T('cognition.formation_related_reforming', '已归并到「{title}」，正在按合并后的内容重新核对…', { title: targetLabel });
+    }
+    if (formation.status === 'failed') {
+      return T('cognition.formation_related_reformation_failed', '已归并到「{title}」，但重新核对没有完成：{reason}。旧建议仍保留，可以重试。', {
+        title: targetLabel, reason: relatedReformationErrorText(formation.error),
+      });
+    }
+    return T('cognition.formation_related_reformed', '已归并到「{title}」，已按合并后的内容重新核对。', { title: targetLabel });
+  }
+  function oldContentPlanHtml(candidate, options) {
+    const plan = candidate.oldContentPlan;
+    const record = candidate.oldContentPlanRecord;
+    const receipt = candidate.oldContentReceipt;
+    const state = candidate.oldContentPlanState || (receipt ? 'applied' : plan.status);
+    const assetTitle = assetId => (S.assets || []).find(asset => String(asset.id) === String(assetId))?.title
+      || T('cognition.old_content_plan_asset_fallback', '旧内容 {id}', { id: String(assetId) });
+    const actionLabel = {
+      merge: T('cognition.old_content_plan_action_merge', '合并'),
+      keep: T('cognition.old_content_plan_action_keep', '保留'),
+      archive: T('cognition.old_content_plan_action_archive', '归档'),
+      delete: T('cognition.old_content_plan_action_delete', '删除'),
+    };
+    const statusText = {
+      ready: T('cognition.old_content_plan_status_ready', '方案已完成校验，确认后按下列动作处理旧内容。'),
+      needs_review: T('cognition.old_content_plan_status_needs_review', '方案包含需要你裁定的内容，暂不能确认。'),
+      blocked: T('cognition.old_content_plan_status_blocked', '方案所需内容发生变化，需要重新核对后才能执行。'),
+      executing: T('cognition.old_content_plan_status_executing', '旧内容正在处理，请勿重复提交。'),
+      applied: T('cognition.old_content_plan_status_applied', '旧内容已按方案处理。'),
+      undone: T('cognition.old_content_plan_status_undone', '本次旧内容处理已撤销。'),
+      dismissed: T('cognition.old_content_plan_status_dismissed', '本次旧内容整理已放弃。'),
+      unavailable: T('cognition.old_content_plan_status_unavailable', '本次旧内容整理没有形成可用方案。'),
+    }[state] || T('cognition.old_content_plan_status_unavailable', '本次旧内容整理没有形成可用方案。');
+    const canAdjust = !options.terminal && options.canEdit === true && !receipt
+      && ['ready', 'needs_review'].includes(state);
+    const items = record ? record.items.map(item => ({
+      ...item, displayAction: item.state === 'excluded' ? 'keep' : item.action,
+      displayState: item.state,
+    })) : plan.items.map(item => ({ ...item, displayAction: item.action, displayState: 'included' }));
+    const rows = items.map(item => {
+      const names = item.assetIds.map(assetId => `${assetTitle(assetId)} · v${plan.baselineVersions?.[assetId] || '?'}`).join('、');
+      const target = item.displayAction === 'merge' && item.targetAssetId
+        ? `<p class="note">${esc(T('cognition.old_content_plan_target', '合并目标：{target}', { target: assetTitle(item.targetAssetId) }))}</p>` : '';
+      const merged = item.merged?.statement
+        ? `<details><summary>${esc(T('cognition.old_content_plan_merged_body', '查看合并后的正文'))}</summary><div class="content-text">${esc(item.merged.statement)}</div></details>` : '';
+      const excluded = item.displayState === 'excluded'
+        ? `<p class="note">${esc(T('cognition.old_content_plan_item_excluded', '已改为保留，不执行原整理动作。'))}</p>` : '';
+      const keep = canAdjust && item.displayState === 'included' && item.displayAction !== 'keep'
+        ? btn(T('cognition.old_content_plan_keep_item', '保留，不执行'), 'old-content-item-keep', {
+          id: candidate.id, data: { 'item-id': item.itemId }, small: true, className: 'o',
+        }) : '';
+      return `<li data-old-item="${esc(item.itemId)}"><strong>${esc(actionLabel[item.displayAction] || item.displayAction)}</strong> ${esc(names)}${target}<p>${esc(item.reason)}</p>${merged}${excluded}${keep}</li>`;
+    }).join('');
+    const unresolvedItems = record ? record.unresolved : plan.unresolved;
+    const unresolved = unresolvedItems?.length
+      ? `<div class="note"><strong>${esc(T('cognition.old_content_plan_unresolved_title', '需要你核对'))}</strong><ul>${unresolvedItems.map(item =>
+        `<li>${esc(item.assetIds.map(assetTitle).join('、'))}：${esc(item.reason)}</li>`).join('')}</ul>${canAdjust
+        ? `<div class="actions">${btn(T('cognition.old_content_plan_keep_unresolved', '全部保留，不再裁定'), 'old-content-keep-unresolved', {
+          id: candidate.id, small: true, className: 'o',
+        })}</div>` : ''}</div>` : '';
+    const receiptHtml = receipt
+      ? `<p class="note" role="status">${esc(T('cognition.old_content_plan_receipt_done', '已按方案处理 {n} 项旧内容。', { n: String(receipt.items.length) }))}</p>`
+      : state === 'ready'
+        ? `<p class="note">${esc(T('cognition.old_content_plan_confirm_together', '确认保存这条建议时，会一并按方案处理旧内容；旧内容处理失败则本次保存不生效。'))}</p>` : '';
+    const openPlan = candidate.oldContentPlanId
+      ? `<div class="actions">${btn(T('cognition.old_content_plan_open', '打开独立方案'), 'open-old-content-plan', {
+        id: candidate.oldContentPlanId, small: true, className: 'o',
+      })}${canAdjust && state === 'ready' ? btn(T('cognition.old_content_plan_old_only', '只处理旧内容，稍后处理建议'),
+        'old-content-finalize-old', { id: candidate.id, small: true, className: 'o' }) : ''}</div>` : '';
+    const finalization = candidate.oldContentFinalization;
+    const twoPhase = finalization?.phase === 'new_failed' && !options.terminal
+      ? `<div class="ca-review-notice" role="status"><strong>${esc(T('cognition.old_content_plan_new_failed_title', '旧内容已完成，新内容待保存'))}</strong><p>${esc(T('cognition.old_content_plan_new_failed_hint', '旧内容已经按方案处理；这条建议还没有保存。重试只会保存新内容，不会重复处理旧内容。'))}</p>${btn(T('cognition.old_content_plan_new_retry', '重试保存新内容'), 'old-content-finalize-retry', {
+        id: candidate.id, small: true, className: 'o',
+      })}</div>` : '';
+    return `${twoPhase}<div class="ca-review-notice" data-old-content-plan><strong>${esc(T('cognition.old_content_plan_title', '旧内容整理方案'))}</strong><p>${esc(statusText)}</p><ul>${rows}</ul>${unresolved}${receiptHtml}${openPlan}</div>`;
+  }
+  function relatedGroupHtml(candidate, relatedAssets, options) {
+    if (candidate.oldContentPlan) return oldContentPlanHtml(candidate, options);
+    const resolution = candidate.relatedResolution;
+    const formation = candidate.relatedFormation;
+    const active = [];
+    const rows = relatedAssets.map((related, index) => {
+      const record = !S.assetsError && (S.assets || []).find(item => String(item.id) === String(related.assetId));
+      const asset = record && record.status === 'active' ? record : undefined;
+      if (asset) active.push(asset);
+      const label = record?.title || T('cognition.formation_related_item', '关联内容 {n}', { n: String(index + 1) });
+      const version = T('cognition.formation_related_version', '判断时使用 v{version}', { version: String(related.version || '') });
+      return `<li>${esc(label)} · ${esc(version)}${asset ? ` ${btn(T('cognition.formation_related_open', '去认知详情核对'), 'open-asset', { id: asset.id, small: true })}` : ` · ${esc(T('cognition.formation_related_unavailable', '当前无法核对'))}`}</li>`;
+    }).join('');
+    const canResolve = !options.terminal && options.canEdit === true && !resolution;
+    const targetId = String(resolution?.targetAssetId || '') || String(active[0]?.id || '');
+    const targetControl = canResolve && active.length > 1 ? `<label class="field"><span>${esc(T('cognition.formation_related_target', '保留哪一条作为合并目标'))}</span>${window.uiSelect({
+      id: `ca-related-target-${candidate.id}`, native: true, value: targetId,
+      ariaLabel: T('cognition.formation_related_target', '保留哪一条作为合并目标'),
+      options: active.map(asset => ({ value: String(asset.id), label: String(asset.title || asset.id) })),
+      attrs: { 'data-related-target': 'true' },
+    })}</label>` : '';
+    const unavailableNote = canResolve && active.length < 2
+      ? `<p class="note">${esc(T('cognition.formation_related_cannot_merge', '当前只有一条关联内容可以核对，暂时不能合并。'))}</p>`
+      : '';
+    const actions = canResolve ? `<div class="actions">${active.length > 1 ? btn(T('cognition.formation_related_merge', '合并这些旧内容并重新核对'), 'related-resolve-merge', { id: candidate.id, primary: true }) : ''}${btn(T('cognition.formation_related_keep', '保留全部'), 'related-resolve-keep', { id: candidate.id, className: 'o' })}</div>` : '';
+    const retry = !options.terminal && resolution?.action === 'merged' && formation?.status === 'failed' && formation.retryable
+      ? `<div class="actions">${btn(T('cognition.formation_related_retry', '重试重新核对'), 'related-resolve-retry', { id: candidate.id, small: true })}</div>` : '';
+    const status = resolution ? `<p class="note" role="status">${esc(relatedResolutionStatusText(candidate, resolution, formation))}</p>` : '';
+    const failedRows = resolution?.action === 'merged' && Array.isArray(resolution.receipts)
+      ? resolution.receipts.filter(row => row && row.status !== 'merged')
+      : [];
+    const failures = failedRows.length
+      ? `<ul class="note">${failedRows.map(row => `<li>${esc(T('cognition.formation_related_failed_item', '有一条没有归并：{reason}', { reason: relatedMergeReasonText(row.reason) }))}</li>`).join('')}</ul>`
+      : '';
+    return `<div class="ca-review-notice" data-related-group><strong>${esc(T('cognition.formation_related_title', '这条建议涉及多条已有内容'))}</strong><p>${esc(T('cognition.formation_related_hint', '请先核对各条内容及版本；合并由你决定。'))}</p><ul>${rows}</ul>${targetControl}${unavailableNote}${actions}${status}${failures}${retry}</div>`;
+  }
+
   function candidateFormBody(candidate, options = {}) {
     if (candidate.contentOrganization) return organizationForm(candidate, options);
 
@@ -1039,7 +1181,12 @@
     const display = savedDecision?.content || { ...baseline, ...candidate, statement: candidate.judgment, scope: candidate.suggestedScope,
       applicableWhen: candidate.applicableWhen ?? baseline?.applicableWhen, forbiddenWhen: candidate.forbiddenWhen ?? baseline?.forbiddenWhen,
       evidenceRefs: [...(baseline?.evidenceRefs || []), ...refs] };
-    const canPromote = (!options.compact || !mutating || !!baseline) && !!caps.canPromote && !rechecking && !(candidate.ontologyFormation?.blockedReasons || []).length;
+    // A plan that still needs arbitration (or is blocked/recovering) must be
+    // handled in its own block before this suggestion can be saved.
+    const oldContentPending = ['needs_review', 'blocked', 'executing']
+      .includes(String(candidate.oldContentPlanState || ''));
+    const canPromote = (!options.compact || !mutating || !!baseline) && !!caps.canPromote && !rechecking
+      && !oldContentPending && !(candidate.ontologyFormation?.blockedReasons || []).length;
     const canReject = !!caps.canReject && !rechecking;
     const edit = canEdit && (!options.compact || !!options.editing);
     const field = (label, inner) => `<label class="field"><span>${esc(label)}</span>${inner}</label>`;
@@ -1051,12 +1198,9 @@
     // 不再叠加一份「复盘依据」，避免同屏两处同内容。
     const comparison = candidate.formationComparison;
     const relatedAssets = Array.isArray(comparison?.relatedAssets) ? comparison.relatedAssets : [];
-    const relatedHtml = relatedAssets.length > 1 ? `<div class="ca-review-notice"><strong>${esc(T('cognition.formation_related_title', '这条建议涉及多条已有内容'))}</strong><p>${esc(T('cognition.formation_related_hint', '请先核对各条内容及版本；合并由你决定。'))}</p><ul>${relatedAssets.map((related, index) => {
-      const asset = !S.assetsError && (S.assets || []).find(item => String(item.id) === String(related.assetId) && item.status === 'active');
-      const label = asset?.title || T('cognition.formation_related_item', '关联内容 {n}', { n: String(index + 1) });
-      const version = T('cognition.formation_related_version', '判断时使用 v{version}', { version: String(related.version || '') });
-      return `<li>${esc(label)} · ${esc(version)}${asset ? ` ${btn(T('cognition.formation_related_open', '去认知详情核对'), 'open-asset', { id: asset.id, small: true })}` : ` · ${esc(T('cognition.formation_related_unavailable', '当前无法核对'))}`}</li>`;
-    }).join('')}</ul></div>` : '';
+    const relatedHtml = relatedAssets.length > 1 ? relatedGroupHtml(candidate, relatedAssets, {
+      terminal, canEdit: !!caps.canEdit,
+    }) : '';
     const comparisonHtml = comparison ? `<p class="note"><strong>${esc(T('cognition.formation_comparison', '与已有内容比较'))}</strong>：${esc(comparison.reason)}${comparison.targetVersion ? ` · v${esc(comparison.targetVersion)}` : ''}</p>
       ${comparison.targetQuote ? `<p class="content-text">${esc(comparison.targetQuote)}</p>` : ''}
       ${comparison.coverage?.truncated || comparison.coverage?.unavailable ? `<p class="note">${esc(T('cognition.formation_comparison_partial', '比较覆盖尚不完整，不能据此自动新增或覆盖。'))}</p>` : ''}${relatedHtml}` : '';

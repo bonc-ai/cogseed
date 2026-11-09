@@ -457,7 +457,9 @@ export async function runStockOrganization(userId: string, settings: RecallCaptu
     const matches = await (await import('./capture-existing-assets')).selectCaptureExistingAssets(userId, {
       approvedEvidence: [{ quote: unit.asset.statement }], targetAssetIds: [unit.asset.id, ...(unit.asset.relations || []).map(ref => ref.assetId)], maxAssets: 6, maxChars: 128_000 });
     peers.set(unit.key, matches.assets.flatMap(match => {
-      const other = units.find(row => row.asset?.id === match.id);
+      // Claimed assets stay available as comparison peers; they are never jobs,
+      // so stock can surface a semantic conflict that discovery must re-judge.
+      const other = allUnits.find(row => row.asset?.id === match.id);
       return other && other.key !== unit.key && other.asset?.type === unit.asset!.type
         && other.asset?.scope === unit.asset!.scope && other.asset?.spaceId === unit.asset!.spaceId
         && isDeepStrictEqual(other.asset?.scopePolicy, unit.asset!.scopePolicy) ? [other] : [];
@@ -559,6 +561,12 @@ export async function runStockOrganization(userId: string, settings: RecallCaptu
         let draft: StockDraft;
         try {
           draft = draftSchema.parse(parseCaptureAssessmentJson(response));
+          // Claimed assets may inform reviewIssues, but stock must never modify
+          // the targets discovery already owns.
+          if (options.excludeRefs && (draft.organization?.sourceAssetIds.some(id => options.excludeRefs!.has(id))
+            || (draft.ontologyChanges as { actions?: Array<{ recordId?: string }> } | undefined)?.actions
+              ?.some(action => typeof action?.recordId === 'string' && options.excludeRefs!.has(action.recordId))))
+            throw new Error('claimed asset cannot be reorganized');
           if (draft.reviewIssues?.length) {
             if (!job.unit.asset) throw new Error('independent ontology cannot issue an asset comparison');
             const inputs = [job.unit, ...related].filter(unit => unit.asset);

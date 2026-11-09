@@ -20,7 +20,8 @@ function seedProjections(rows: Record<string, string>) {
 
 let testUid = '';
 let prevWorkspaceRoot: string | undefined;
-let testVariant = '';
+let previousBaseDir: string | undefined;
+let scratchBase = '';
 
 describe('P3394 node -> AI team projection', () => {
   let tmpDir: string;
@@ -28,13 +29,16 @@ describe('P3394 node -> AI team projection', () => {
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-proj-'));
     prevWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+    previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
     process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
     // Agent 目录缓存按用户隔离；每例使用唯一 uid，避免上一个用例的缓存
     // 继续参与下一例的 existing-agent 查重。
     testUid = 'u-projection-' + Math.random().toString(36).slice(2, 10);
-    // 每次运行唯一变体：投影状态文件按变体目录隔离，杜绝跨测试/跨运行污染。
-    testVariant = 'p3394-proj-test-' + Math.random().toString(36).slice(2, 10);
-    process.env.COGSEED_RUNTIME_VARIANT = testVariant;
+    // 投影状态文件按变体目录隔离：整棵变体树指到一次性临时根
+    // （runtime-paths 现在校验变体名），杜绝跨测试/跨运行污染。
+    scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-proj-test-'));
+    process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+    process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 
     // 设置引导为已完成状态，允许 CLI Agent 投影
     const onboardingState = await import('../../../../src/main/features/onboarding_state');
@@ -43,10 +47,12 @@ describe('P3394 node -> AI team projection', () => {
 
   afterEach(() => {
     if (prevWorkspaceRoot !== undefined) process.env.COGSEED_WORKSPACE_ROOT = prevWorkspaceRoot;
+    if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+    else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
+    delete process.env.COGSEED_RUNTIME_VARIANT;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     try {
-      const variantDir = path.join(os.homedir(), '.cogseed', 'runtime-variants', testVariant);
-      fs.rmSync(variantDir, { recursive: true, force: true });
+      fs.rmSync(scratchBase, { recursive: true, force: true });
     } catch { /* best effort */ }
   });
 

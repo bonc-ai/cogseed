@@ -220,10 +220,10 @@
     const incomingCards = incoming.map((request) => {
       if (typeof root.uiResourceCard !== 'function') return '';
       return root.uiResourceCard({
-        title: String(request.peerName || request.peer_name || request.phone_masked || tr('contacts.unknown_peer', '未知联系人')),
+        title: String(request.peerName || request.peer_name || request.phoneMasked || tr('contacts.unknown_peer', '未知联系人')),
         description: request.note ? String(request.note) : '',
         icon: 'user',
-        bodyHtml: `<div class="contact-meta"><span class="mono">${esc(request.phone_masked || '')}</span><span>${esc(String(request.createdAt || '').slice(0, 16).replace('T', ' '))}</span></div>`,
+        bodyHtml: `<div class="contact-meta"><span class="mono">${esc(request.phoneMasked || '')}</span><span>${esc(String(request.createdAt || '').slice(0, 16).replace('T', ' '))}</span></div>`,
         actions: [
           { label: tr('contacts.reject', '拒绝'), role: 'secondary', attrs: { 'data-request-reject': request.id } },
           { label: tr('contacts.accept', '通过'), role: 'primary', attrs: { 'data-request-accept': request.id } },
@@ -236,7 +236,7 @@
       const state = requestStateText(request);
       const tone = request.state === 'pending' ? 'attention' : (request.state === 'accepted' ? 'success' : 'neutral');
       return root.uiResourceCard({
-        title: String(request.peerName || request.peer_name || request.phone_masked || tr('contacts.unknown_peer', '未知联系人')),
+        title: String(request.peerName || request.peer_name || request.phoneMasked || tr('contacts.unknown_peer', '未知联系人')),
         icon: 'user',
         status: { label: state, tone },
         attrs: { 'data-request-row': request.id },

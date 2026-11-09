@@ -256,23 +256,35 @@ export function prefilterInstructionRisk(skillDir: string): SuspectSegment[] {
         if (fs.statSync(full).size > MAX_FILE_BYTES) continue;
         content = fs.readFileSync(full, 'utf8');
       } catch { continue; }
-      for (const para of paragraphs(content)) {
-        if (found.length >= MAX_SEGMENTS) return;
-        const signal = classify(para.text);
-        if (!signal) continue;
-        found.push({
-          file: rel,
-          line: para.line,
-          text: para.text.length > MAX_SEGMENT_CHARS
-            ? `${para.text.slice(0, MAX_SEGMENT_CHARS)}…`
-            : para.text,
-          signal,
-        });
-      }
+      found.push(...prefilterInstructionText(content, rel, MAX_SEGMENTS - found.length));
+      if (found.length >= MAX_SEGMENTS) return;
     }
   };
 
   walk(skillDir, '');
+  return found;
+}
+
+/**
+ * The same recall over one in-memory text — e.g. a Hub template's space instructions
+ * or task content, which never exist as a skill tree. `file` labels the segments;
+ * at most `limit` segments come back. Deterministic, no network, never throws.
+ */
+export function prefilterInstructionText(content: string, file: string, limit = MAX_SEGMENTS): SuspectSegment[] {
+  const found: SuspectSegment[] = [];
+  for (const para of paragraphs(String(content ?? ''))) {
+    if (found.length >= limit) break;
+    const signal = classify(para.text);
+    if (!signal) continue;
+    found.push({
+      file,
+      line: para.line,
+      text: para.text.length > MAX_SEGMENT_CHARS
+        ? `${para.text.slice(0, MAX_SEGMENT_CHARS)}…`
+        : para.text,
+      signal,
+    });
+  }
   return found;
 }
 

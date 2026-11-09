@@ -16,6 +16,7 @@
 
 import { appendJsonl, readJson, safeId, writeJson } from '../../storage';
 import { createLogger } from '../../logger';
+import { fileEditLock } from '../../util/locks';
 import { currentHubIdentity, isHubIdentityCurrent } from '../hub_account/transport';
 import {
   userContactHistoryFile,
@@ -194,8 +195,9 @@ async function readRequestsFile(userId: string): Promise<RequestsFile> {
   };
 }
 
-async function writeRequestsFile(userId: string, requests: ContactRequestRecord[]): Promise<void> {
-  await writeJson(userContactRequestsFile(assertUserId(userId)), { version: CONTACTS_VERSION, requests });
+/** Caller holds the request-file mutex across the complete read/modify/write. */
+async function writeRequestsFile(userId: string, requests: ContactRequestRecord[], isCurrent?: () => boolean): Promise<void> {
+  await writeJson(userContactRequestsFile(assertUserId(userId)), { version: CONTACTS_VERSION, requests }, isCurrent);
 }
 
 /** Merge one authoritative Hub snapshot into the local cache. Extracted so the
@@ -347,63 +349,72 @@ export async function requestAdd(
 ): Promise<ContactRequestRecord> {
   const phone = normalizePhone(input.phone);
   if (!phone) throw new Error('phone is required');
-  const file = await readRequestsFile(userId);
-  const duplicate = file.requests.find((row) => (
-    row.direction === 'out'
-    && row.state === 'pending'
-    && (input.peerUserId
-      ? row.peerUserId === input.peerUserId
-      : row.phoneMasked === maskPhone(phone))
-  ));
-  if (duplicate) return duplicate;
-  // Hub 是申请权威：配置了就由服务端去重、校验「已联系/不可被搜」。
-  // 服务端**明确拒绝**必须原样抛给用户（AC-06 的「开关关闭直接拒」）；只有送不达
-  // （Hub 不可达/5xx）才沿用既有回落，避免把离线误报成对方拒绝。
-  if (hubConfigured(userId)) {
-    const remote = await hubSendRequestDetailed(userId, phone, input.note);
-    if (remote.ok === false) {
-      // 服务端明确拒绝 → 原样告诉用户（AC-06：开关关闭就直接拒）。
-      // 只是送不达（网络/5xx）→ 沿用既有「回落本地」的行为，不把离线说成被拒。
-      if (EXPLICIT_REQUEST_REFUSALS.has(String(remote.code || '').toUpperCase())) {
-        throw Object.assign(new Error(requestAddFailureMessage(remote.code)), { code: remote.code });
+  return fileEditLock(userContactRequestsFile(assertUserId(userId))).runExclusive(async () => {
+    const file = await readRequestsFile(userId);
+    const duplicate = file.requests.find((row) => (
+      row.direction === 'out'
+      && row.state === 'pending'
+      && (input.peerUserId
+        ? row.peerUserId === input.peerUserId
+        : row.phoneMasked === maskPhone(phone))
+    ));
+    if (duplicate) return duplicate;
+    // Hub 是申请权威：配置了就由服务端去重、校验「已联系/不可被搜」。
+    // 服务端**明确拒绝**必须原样抛给用户（AC-06 的「开关关闭直接拒」）；只有送不达
+    // （Hub 不可达/5xx）才沿用既有回落，避免把离线误报成对方拒绝。
+    if (hubConfigured(userId)) {
+      const remote = await hubSendRequestDetailed(userId, phone, input.note);
+      if (remote.ok === false) {
+        // 服务端明确拒绝 → 原样告诉用户（AC-06：开关关闭就直接拒）。
+        // 只是送不达（网络/5xx）→ 沿用既有「回落本地」的行为，不把离线说成被拒。
+        if (EXPLICIT_REQUEST_REFUSALS.has(String(remote.code || '').toUpperCase())) {
+          throw Object.assign(new Error(requestAddFailureMessage(remote.code)), { code: remote.code });
+        }
+      } else {
+        const file = await readRequestsFile(userId);
+        const record: ContactRequestRecord = {
+          id: remote.requestId,
+          direction: 'out',
+          phoneMasked: maskPhone(phone),
+          ...(input.note ? { note: input.note } : {}),
+          state: 'pending',
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + CONTACT_REQUEST_TTL_MS).toISOString(),
+        };
+        await writeRequestsFile(userId, [...file.requests, record]);
+        return record;
       }
-    } else {
-      const file = await readRequestsFile(userId);
-      const record: ContactRequestRecord = {
-        id: remote.requestId,
-        direction: 'out',
-        phoneMasked: maskPhone(phone),
-        ...(input.note ? { note: input.note } : {}),
-        state: 'pending',
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + CONTACT_REQUEST_TTL_MS).toISOString(),
-      };
-      await writeRequestsFile(userId, [...file.requests, record]);
-      return record;
     }
-  }
-  const now = new Date().toISOString();
-  const masked = maskPhone(phone);
-  const record: ContactRequestRecord = {
-    id: `creq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    direction: 'out',
-    phoneMasked: masked,
-    ...(input.peerUserId ? { peerUserId: input.peerUserId } : {}),
-    ...(input.peerName ? { peerName: input.peerName } : {}),
-    ...(input.note ? { note: input.note } : {}),
-    state: 'pending',
-    createdAt: now,
-    expiresAt: new Date(Date.parse(now) + CONTACT_REQUEST_TTL_MS).toISOString(),
-  };
-  await writeRequestsFile(userId, [...file.requests, record]);
-  notifyRequestArrived(userId, record);
-  return record;
+    const now = new Date().toISOString();
+    const masked = maskPhone(phone);
+    const record: ContactRequestRecord = {
+      id: `creq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      direction: 'out',
+      phoneMasked: masked,
+      ...(input.peerUserId ? { peerUserId: input.peerUserId } : {}),
+      ...(input.peerName ? { peerName: input.peerName } : {}),
+      ...(input.note ? { note: input.note } : {}),
+      state: 'pending',
+      createdAt: now,
+      expiresAt: new Date(Date.parse(now) + CONTACT_REQUEST_TTL_MS).toISOString(),
+    };
+    await writeRequestsFile(userId, [...file.requests, record]);
+    return record;
+  });
 }
 
 export async function listRequests(userId: string): Promise<ContactRequestRecord[]> {
-  // Hub 优先：服务端已经按视角投影好 direction 与过期状态。
-  const remote = await hubListRequests(userId);
-  if (remote) {
+  const scope = currentHubIdentity(userId);
+  const isCurrent = () => !!scope && isHubIdentityCurrent(userId, scope);
+  // Serialize fetch + compare + commit + arrival against the persisted mirror.
+  // Capturing identity before the lock also fences callers waiting during logout.
+  const applied = await fileEditLock(userContactRequestsFile(assertUserId(userId))).runExclusive(async () => {
+    if (!isCurrent()) return null;
+    // Hub projects direction and expiry; local fallback still expires lazily.
+    const remote = await hubListRequests(userId);
+    if (!remote || !isCurrent()) return null;
+    const previous = await readJson<RequestsFile>(userContactRequestsFile(userId));
+    if (!isCurrent()) return null;
     const rows: ContactRequestRecord[] = remote.map((row) => ({
       id: row.requestId,
       direction: row.direction,
@@ -415,9 +426,29 @@ export async function listRequests(userId: string): Promise<ContactRequestRecord
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
     }));
-    await writeRequestsFile(userId, rows);
+    try {
+      await writeRequestsFile(userId, rows, isCurrent);
+    } catch (error) {
+      if (!isCurrent()) return null;
+      throw error;
+    }
+    if (!isCurrent()) return null;
+    // No mirror (first sync / unreadable cache): establish a silent baseline
+    // instead of replaying historical requests. An existing empty mirror counts.
+    if (Array.isArray(previous?.requests)) {
+      const known = new Set(previous.requests.map((row) => row?.id));
+      for (const row of rows) {
+        if (!isCurrent()) return null;
+        if (known.has(row.id)) continue;
+        known.add(row.id);
+        if (row.direction === 'in' && row.state === 'pending' && !isRequestExpired(row)) {
+          notifyRequestArrived(userId, row);
+        }
+      }
+    }
     return rows;
-  }
+  });
+  if (applied) return applied;
   const file = await readRequestsFile(userId);
   const now = Date.now();
   return file.requests
@@ -467,32 +498,37 @@ export async function acceptRequest(
     }
     return { id: requestId, direction: 'in', state: 'accepted', createdAt: new Date().toISOString() };
   }
-  const file = await readRequestsFile(userId);
-  const request = file.requests.find((row) => row.id === requestId);
-  if (!request) return null;
-  if (request.state !== 'pending' || isRequestExpired(request)) {
-    return { ...request, state: request.state === 'pending' ? 'expired' : request.state };
-  }
-  const now = new Date().toISOString();
-  const updated: ContactRequestRecord = { ...request, state: 'accepted', updatedAt: now };
-  await writeRequestsFile(userId, file.requests.map((row) => (row.id === requestId ? updated : row)));
-  if (request.peerUserId) {
+  const outcome = await fileEditLock(userContactRequestsFile(assertUserId(userId))).runExclusive(async () => {
+    const file = await readRequestsFile(userId);
+    const request = file.requests.find((row) => row.id === requestId);
+    if (!request) return { changed: false as const, record: null };
+    if (request.state !== 'pending' || isRequestExpired(request)) {
+      return { changed: false as const, record: { ...request, state: request.state === 'pending' ? 'expired' as const : request.state } };
+    }
+    const updated = { ...request, state: 'accepted' as const, updatedAt: new Date().toISOString() };
+    await writeRequestsFile(userId, file.requests.map((row) => (row.id === requestId ? updated : row)));
+    return { changed: true as const, record: updated };
+  });
+  if (!outcome.changed) return outcome.record;
+  // Contact reconciliation runs after releasing the request-file mutex.
+  const updated = outcome.record;
+  if (updated.peerUserId) {
     const contacts = await readContactsFile(userId);
     const contact: ContactRecord = {
-      userId: request.peerUserId,
-      name: request.peerName || request.peerUserId,
-      ...(request.phoneMasked ? { phoneMasked: request.phoneMasked } : {}),
-      addedAt: now,
+      userId: updated.peerUserId,
+      name: updated.peerName || updated.peerUserId,
+      ...(updated.phoneMasked ? { phoneMasked: updated.phoneMasked } : {}),
+      addedAt: updated.updatedAt,
     };
-    const transition = await beginContactReAdd(userId, request.peerUserId, contact);
+    const transition = await beginContactReAdd(userId, updated.peerUserId, contact);
     await deps.afterReAddStage?.('journal');
-    await retryContactCleanup(userId, request.peerUserId);
+    await retryContactCleanup(userId, updated.peerUserId);
     await deps.afterReAddStage?.('cleanup');
-    if (!contacts.contacts.some((row) => row.userId === request.peerUserId)) {
+    if (!contacts.contacts.some((row) => row.userId === updated.peerUserId)) {
       await writeContactsFile(userId, [...contacts.contacts, contact]);
     }
     await deps.afterReAddStage?.('contact');
-    await completeContactReAdd(userId, request.peerUserId, transition.generation);
+    await completeContactReAdd(userId, updated.peerUserId, transition.generation);
     await deps.afterReAddStage?.('clear');
   }
   return updated;
@@ -502,12 +538,14 @@ export async function rejectRequest(userId: string, requestId: string): Promise<
   if (await hubDecideRequest(userId, requestId, false)) {
     return { id: requestId, direction: 'in', state: 'rejected', createdAt: new Date().toISOString() };
   }
-  const file = await readRequestsFile(userId);
-  const request = file.requests.find((row) => row.id === requestId);
-  if (!request) return null;
-  const updated: ContactRequestRecord = { ...request, state: 'rejected', updatedAt: new Date().toISOString() };
-  await writeRequestsFile(userId, file.requests.map((row) => (row.id === requestId ? updated : row)));
-  return updated;
+  return fileEditLock(userContactRequestsFile(assertUserId(userId))).runExclusive(async () => {
+    const file = await readRequestsFile(userId);
+    const request = file.requests.find((row) => row.id === requestId);
+    if (!request) return null;
+    const updated: ContactRequestRecord = { ...request, state: 'rejected', updatedAt: new Date().toISOString() };
+    await writeRequestsFile(userId, file.requests.map((row) => (row.id === requestId ? updated : row)));
+    return updated;
+  });
 }
 
 async function cleanupDeletedContact(
@@ -675,7 +713,7 @@ async function readTextSafe(file: string): Promise<string> {
 /** 测试用：清空本机三份数据。 */
 export async function resetContactsStore(userId: string): Promise<void> {
   await writeContactsFile(userId, []);
-  await writeRequestsFile(userId, []);
+  await fileEditLock(userContactRequestsFile(assertUserId(userId))).runExclusive(() => writeRequestsFile(userId, []));
 }
 
 export const __paths = {

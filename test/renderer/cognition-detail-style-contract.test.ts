@@ -30,11 +30,14 @@ it('contains compact spacing in the two list-side details and activity styling i
     expect(rule).toContain('.ca-detail-card:is(.ca-activity-detail,.ca-library-detail)');
   }
   expect(compact).not.toMatch(/font-size:|line-height:|width:|height:|display:|background:|color:/);
-  const rules = css.split('/* System activity adopts')[1];
+  const rules = css.split('/* System activity adopts')[1].split('/* Expanded detail header')[0];
   expect(rules).toBeTruthy();
   for (const rule of rules.split('}').filter(rule=>rule.includes('{'))) expect(rule).toContain('.ca-activity-detail.ca-detail-card');
   expect(rules).toContain('background: transparent');
   expect(rules).not.toMatch(/font-size:\s*\d|grid-template-columns|--detail-title:/);
+  const expandedRules = css.split('/* Expanded detail header')[1];
+  expect(expandedRules).toBeTruthy();
+  for (const rule of expandedRules.split('}').filter(rule => rule.includes('{'))) expect(rule).toContain('.ca-detail-expand');
 });
 
 it('limits native disclosure styling to the two inspectors without changing typography', () => {

@@ -40,10 +40,28 @@ describe('本轮处理结果', () => {
           items: { 'asset-a': { status: 'failed', errorCode: 'stock_model_unavailable' } } },
         receipt: { ...receipt, items: [{ captureId: 'failed-1', status: 'failed', errorCode: 'invalid_model_output' },
           { captureId: 'ok', status: 'completed' }, { captureId: 'later', status: 'pending' }] } } } }, { name: 'settings' });
-    const html = loaded.render();
-    for (const text of ['部分完成', '完成 1，失败 1，待处理 1', '会议讨论', '模型结果无法识别', '立即扫描', '检查期间内容发生变化', '累计检查 4/10 条', '剩余 6 条', '其中 1 条不可读取', '旧会议要求', '未查的要求', '累计已检查', '本次检查', '尚未检查', '未显示名称', '模型连接失败', '2 段进入处理', '查看本轮建议', '查看全部建议']) expect(html).toContain(text);
-    expect(html).not.toContain('不可读取的要求');
-    expect(html).not.toContain('生成 2 条建议');
+    // 概览页签：横幅给出部分完成与续做方式，指标、覆盖与巡检错误各归其位。
+    const overview = loaded.render();
+    for (const text of ['部分完成', '3 场对话', '初筛保留 2 场继续价值判断', '本轮未全部完成',
+      '检查对话', '形成建议', '整理已有内容', '2 段进入处理', '检查期间内容发生变化',
+      '累计检查 4/10 条', '剩余 6 条', '其中 1 条不可读取', '查看本轮建议', '查看全部建议']) expect(overview).toContain(text);
+    expect(overview).not.toContain('生成 2 条建议');
+    expect(overview).not.toContain('不可读取的要求');
+    // 已有内容页签：失败的存量项保留原因，未处理的资产名不再铺开成清单。
+    loaded.ns.assetSettings.setRunTab('existing');
+    const existing = loaded.render();
+    for (const text of ['存量整理', '0/1', '旧会议要求', '模型连接失败']) expect(existing).toContain(text);
+    expect(existing).not.toContain('未查的要求');
+    expect(existing).not.toContain('不可读取的要求');
+    // 对话页签：逐条状态用表格，不再拼一句“完成 1，失败 1，待处理 1”。
+    loaded.ns.assetSettings.setRunTab('conversations');
+    const conversations = loaded.render();
+    for (const text of ['会议讨论', '失败', '待处理', '已完成']) expect(conversations).toContain(text);
+    expect(conversations).not.toContain('完成 1，失败 1，待处理 1');
+    // 失败页签：逐条原因与阶段。
+    loaded.ns.assetSettings.setRunTab('failures');
+    const failures = loaded.render();
+    for (const text of ['会议讨论', '对话处理', '模型结果无法识别', '失败项会在下次运行继续']) expect(failures).toContain(text);
   });
   it('实际路由在选择、切换视图、筛选、翻页与搜索后保留本轮范围', async () => {
     const loaded = loadCognitionAssets({ candidates: [candidate('in-run', '本轮会议要求'), candidate('other', '其他对话要求')],
@@ -73,10 +91,11 @@ describe('本轮处理结果', () => {
       phase: 'partial_complete', reconcile: { error: 'reconcile_failed' }, lastResult: { failed: 1 },
       receipt: { ...receipt, items: [{ captureId: 'failure', status: 'failed', errorCode }] },
     } } }, { name: 'settings' });
-    const html = loaded.render();
-    expect(html).toContain(message);
-    expect(html).toContain('结果汇总未完成');
-    expect(html).toContain('点击“立即扫描”继续');
+    const overview = loaded.render();
+    expect(overview).toContain('结果汇总未完成');
+    expect(overview).toContain('点击“立即扫描”继续');
+    loaded.ns.assetSettings.setRunTab('failures');
+    expect(loaded.render()).toContain(message);
   });
   it('单场对话部分完成时保留已形成建议，并逐项说明失败原因', () => {
     const partial = { captureId: 'partial-1', status: 'partial', candidateIds: ['in-run'], failures: [
@@ -86,8 +105,11 @@ describe('本轮处理结果', () => {
     const loaded = loadCognitionAssets({ captureSettings: { enabled: true }, candidates: [candidate('in-run', '已保留的建议')],
       captures: [{ id: 'partial-1', conversationTitle: '会议记录' }], captureStats: { sweep: { phase: 'partial_complete',
         receipt: { ...receipt, items: [partial] }, lastResult: { failed: 1 } } } }, { name: 'settings' });
-    const html = loaded.render();
-    for (const text of ['部分完成 1', '会议记录：部分完成', '已保留 1 条建议', '第 1 项 · 依据核对', '关联认知超过当前处理上限', '第 3 项 · 不确定内容核对', '模型暂不可用', '点击“立即扫描”继续']) expect(html).toContain(text);
+    const overview = loaded.render();
+    for (const text of ['部分完成', '点击“立即扫描”继续']) expect(overview).toContain(text);
+    loaded.ns.assetSettings.setRunTab('failures');
+    const failures = loaded.render();
+    for (const text of ['会议记录', '依据核对', '不确定内容核对', '关联认知超过当前处理上限', '模型暂不可用', '1 条']) expect(failures).toContain(text);
     loaded.ns.router.go({ name: 'activity', activityRunId: 'run-1' });
     expect(loaded.render()).toContain('已保留的建议');
   });

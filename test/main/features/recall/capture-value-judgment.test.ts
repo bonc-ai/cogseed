@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { captureValueJudgmentInput, parseCaptureValueJudgment } from '../../../../src/main/features/recall/capture-value-judgment';
+import { captureValueJudgmentInput, captureValueRepairInstruction,
+  parseCaptureValueJudgment } from '../../../../src/main/features/recall/capture-value-judgment';
 import type { CaptureContextSummary } from '../../../../src/main/features/recall/capture-context-summary';
 
 const messages = [
@@ -43,6 +44,21 @@ describe('independent capture value decision', () => {
   ])('rejects extraction-shaped, fabricated, or assistant-only evidence: %j', result => {
     expect(() => parseCaptureValueJudgment(JSON.stringify(result), messages)).toThrow();
   });
+  it('only repairs output-contract errors once, never transport or unsafe content', () => {
+    const repair = captureValueRepairInstruction(new SyntaxError(
+      "Expected ',' or ']' after array element in JSON at position 194 (line 1 column 195)"));
+    expect(repair).toContain('one JSON object');
+    expect(repair).toContain('separate array elements with commas');
+    for (const message of ['invalid capture value judgment', 'invalid value evidence',
+      'unsupported capture value evidence', 'positive value judgment requires user evidence'])
+      expect(captureValueRepairInstruction(new Error(message))).toBe(repair);
+    for (const message of ['capture analysis did not complete', 'forbidden to persist',
+      'summary required before value decision', 'unexpected response from provider',
+      'Expected 200 but received 502', 'position unavailable'])
+      expect(captureValueRepairInstruction(new Error(message))).toBeUndefined();
+    expect(captureValueRepairInstruction(undefined)).toBeUndefined();
+  });
+
   it('accepts a negative decision without requiring invented evidence', () => {
     expect(parseCaptureValueJudgment('```json\n{"eligible":false,"reason":"一次临时操作","evidence":[]}\n```', messages))
       .toMatchObject({ eligible: false, reason: '一次临时操作', evidence: [] });

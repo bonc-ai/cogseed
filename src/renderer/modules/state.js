@@ -21,6 +21,12 @@ const pendingConvs = new Map();
 // controller. Keep it in the same pending predicate so delegated agents keep
 // the send button in "replying/stop" mode until the whole turn is quiescent.
 const groupBusyConvs = new Map();
+// Cancelling an observation stream does not acknowledge the host's stop.
+// Keep admission closed until the conversation-level stop request settles.
+const conversationStopRequests = new Map();
+// A rejected stop is not proof of idle. Only a successful retry or a host
+// history response explicitly reporting idle may release this guard.
+const unconfirmedConversationStops = new Set();
 
 function isGroupConversationBusy(cid) { return groupBusyConvs.has(cid); }
 
@@ -31,7 +37,8 @@ function setGroupConversationBusy(cid, busy) {
 }
 
 function isConvPending(cid) {
-  return pendingConvs.has(cid) || isGroupConversationBusy(cid);
+  return pendingConvs.has(cid) || isGroupConversationBusy(cid)
+    || conversationStopRequests.has(cid) || unconfirmedConversationStops.has(cid);
 }
 
 function _isPlainComposerEnter(e) {
@@ -179,6 +186,17 @@ function startPolling(cid) {
       const runtimeBusy = hasServerRuntime
         ? data.conversation.processing === true
         : isGroupConversationBusy(cid);
+
+      if (unconfirmedConversationStops.has(cid)) {
+        // An explicit idle response repairs a failed stop, including an empty
+        // transcript. A reply or missing runtime field cannot acknowledge it
+        // or close the only recovery poll after an observation stream ends.
+        if (data.conversation?.processing !== false) return;
+        unconfirmedConversationStops.delete(cid);
+        stopPolling(cid);
+        _onPolledResponse(cid, last || '');
+        return;
+      }
 
       if (lastKey && lastKey !== known && _isPolledAssistantMsg(last)) {
         // New visible assistant message arrived. While the commander is
@@ -425,6 +443,10 @@ function bindStaticHandlers() {
   // "Done" button (only visible while editing) — exits edit mode.
   document.getElementById('new-chat-external-agent-btn')?.addEventListener('click', () => {
     setView('agents', null, { entryPoint: 'new_chat_external_agent' });
+    // This shortcut enters the external-Agent home, not the previous scoped
+    // Mine/Installed search. Otherwise Cancel exposes a list excluding the
+    // already-added external Agents even though their registry is unchanged.
+    _setAgentsSubView('home');
     openAgentModal({ initialTab: 'external' });
   });
   document.getElementById('create-agent-btn')?.addEventListener('click', () => {

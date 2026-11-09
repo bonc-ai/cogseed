@@ -2,8 +2,8 @@
  * EXTREME red-flag patterns scanned across skill scripts + SKILL.md embedded
  * code blocks + agent.json paths.
  *
- * Each rule = one regex against the textual content. The 9-rule list is the
- * sole authority; new rules append here, no other file changes.
+ * Each rule = one regex against the textual content. This list is the sole
+ * authority; new rules append here, no other file changes.
  *
  * Why static patterns: deterministic, no LLM judgment, < 1ms per file. This
  * is a "block 60-80% of explicit malice" tool — runtime path-sandbox is the
@@ -247,6 +247,33 @@ export const RED_FLAGS: ReadonlyArray<RuleDef> = [
     // with an argument list, which is the correct form and not matched here.
     pattern: /\bshell\s*=\s*True\b|\bos\.system\s*\(|\bos\.popen\s*\(|\bcommands\.getoutput\s*\(|\bchild_process\b[^\n]{0,40}\b(?:exec|execSync)\s*\(|\brequire\s*\(\s*['"]child_process['"]\s*\)\s*\.\s*(?:exec|execSync)\s*\(/,
     suggested_fix: 'Do not execute command strings through a shell. Pass an argument array (e.g. subprocess.run([...]) or execFile) so arguments cannot be reinterpreted.',
+  },
+  {
+    id: 'no_socket_shell_attach',
+    level: 'EXTREME',
+    appliesTo: ['script', 'skill_md'],
+    // The socket form of a reverse shell: create a socket, attach it to a shell,
+    // hand the user a stdin/stdout that is really a remote peer.
+    //
+    // Why a separate rule: `no_shell_string_execution` matches `os.system(...)`
+    // and `shell=True`, but a reverse shell normally does neither — it passes
+    // `['/bin/sh', '-i']` as a LIST to `subprocess.Popen`, which is the "safe"
+    // form that rule deliberately exempts. Measured (red-team F-01, sample
+    // `C1-test-revshell`): socket + `os.dup2` + `Popen(['/bin/sh','-i'])` was
+    // caught by no local rule at all, which is why a build without the deep
+    // scanner had nothing to fall back on.
+    //
+    // Requires the combination (socket constructor + fd/shell attach + a shell
+    // path) inside a bounded window, so `socket` alone — an HTTP client, a test
+    // server — stays clean. Python-only: the JS equivalents are covered by
+    // `no_shell_string_execution`.
+    //
+    // Not `neverDemote`: this is still a literal-combination rule, and the
+    // import gate already reads `original_level` through a `tests/` demotion.
+    demoteInComments: true,
+    langs: ['python'],
+    pattern: /(?=[\s\S]{0,3000}\bsocket\.socket\s*\()(?=[\s\S]{0,3000}\b(?:dup2\s*\(|pty\.spawn\s*\())[\s\S]{0,3000}(?:\/bin\/(?:ba|da|z|k)?sh\b|\/bin\/env\s+\w*sh\b)/,
+    suggested_fix: 'Do not attach a socket to a shell. A skill has no reason to create an interactive remote shell; remove it, or run the remote work through an explicit, auditable API call.',
   },
   {
     id: 'no_runtime_code_construction',

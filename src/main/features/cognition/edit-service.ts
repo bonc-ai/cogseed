@@ -241,12 +241,20 @@ function patchText(current: string, patch: CognitionEditInput['replaceText']): s
     throw new OntologyError('invalid_input', '原片段必须在当前正文中精确且唯一匹配；没有改动');
   return current.replace(patch.before, () => patch.after);
 }
-function explicitEdit(host: CognitionEditHost): boolean {
+/** 明确否定才整组拒绝。词面不确定不替用户关门——编辑流的确认卡片
+ *  （mustConfirm）承担"授权由用户拍板"；免卡精确写入另有 exactValues 的
+ *  严格白名单，不会因入口放宽而静默落盘。裸「别」后接「人」不算否定
+ *  （「别人修改过的条目也能再改」是描述不是否决）。 */
+function editInstructionNegated(host: CognitionEditHost): boolean {
   // A scoped preservation clause is not a veto of the preceding body edit.
   // Strip only named condition/scope preservation, never "do not edit A".
   const text = normalize(host.taskText).replace(/(?:不要|不许|禁止|请勿)\s*(?:改变|改动|修改|更新|调整)(?:当前|现有|原有|其他)?的?(?:适用(?:和|与|及|、)禁用条件|适用条件|禁用条件|适用场景|禁用场景|作用范围|条件)(?=[，,。；;！？!?]|$)/g, '');
-  return !/(?:不要|不许|禁止|请勿|别|暂不|do not|don't|n[aã]o|nunca)\s*[^。；;]{0,15}(?:改|更新|编辑|edit|change|altere|mude|atualize|substitua|corrija|edite|modifique)|(?:変更|修正|更新|編集|書き換え|置き換え)(?:しないで|ないで)/i.test(text)
-    && /改成|改为|修改|更新|更正|纠正|替换|编辑|优化|调整|润色|change|update|correct|replace|edit|revise|変更|修正|書き換|置き換|訂正|編集|altere|mude|atualize|substitua|corrija|edite|modifique/i.test(text);
+  return /(?:不要|不许|禁止|请勿|别(?!人)|暂不|do not|don't|n[aã]o|nunca)\s*[^。；;]{0,15}(?:改|更新|编辑|edit|change|altere|mude|atualize|substitua|corrija|edite|modifique)|(?:変更|修正|更新|編集|書き換え|置き換え)(?:しないで|ないで)/i.test(text);
+}
+/** 免卡精确写入的严格前提：除未被否定外，用户原话还须带明确编辑动词。 */
+function explicitEdit(host: CognitionEditHost): boolean {
+  return !editInstructionNegated(host)
+    && /改成|改为|修改|更新|更正|纠正|替换|编辑|优化|调整|润色|change|update|correct|replace|edit|revise|変更|修正|書き換|置き換|訂正|編集|altere|mude|atualize|substitua|corrija|edite|modifique/i.test(normalize(host.taskText));
 }
 function exactValues(host: CognitionEditHost, fields: Record<string, unknown>, patch: CognitionEditInput['replaceText'], target: { id: string; title?: string; name?: string; kind?: OntologyRecord['kind'] }): boolean {
   if (!explicitEdit(host)) return false;
@@ -327,7 +335,7 @@ export async function editCognition(userId: string, context: Omit<CognitionEditH
   const host: CognitionEditHost = { ...context, userId };
   assertCognitionManagementActive(host);
   realUser(host);
-  if (!explicitEdit(host)) throw new OntologyError('not_authorized', '当前用户没有要求修改已有认知');
+  if (editInstructionNegated(host)) throw new OntologyError('not_authorized', '当前用户没有要求修改已有认知');
   if (!input.reason?.trim() || input.reason.length > 1000 || !input.target || ('assetId' in input.target) === ('ontologyRecordId' in input.target))
     throw new OntologyError('invalid_input', '需要唯一已有目标及修改依据');
   if (input.mode !== undefined && !['propose', 'apply_if_authorized'].includes(input.mode)) throw new OntologyError('invalid_input', '无效修改模式');

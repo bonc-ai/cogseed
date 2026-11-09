@@ -4228,7 +4228,6 @@ async function useAgent(agentId, managementOpenGesture, initialMessage) {
     return;
   }
   const cachedAgent = _agentsCache?.find((a) => a.agent_id === agentId);
-  if (cachedAgent?.enabled === false) return;
   const cachedCanonicalExpenseAgent = cachedAgent
     && cachedAgent.interaction_mode === 'management_only'
     && cachedAgent.management_surface === 'expense_workbench'
@@ -4302,12 +4301,18 @@ async function useAgent(agentId, managementOpenGesture, initialMessage) {
 }
 
 async function useSkill(skillId, skillName, initialMessage) {
+  const liveStatus = await window.cogseed.invoke(
+    'marketplace.refreshContentStatus', { kind: 'skill', id: skillId },
+  ).catch(() => null);
+  if (liveStatus && liveStatus.disabled === true) return;
   if (typeof _skillsCache !== 'undefined'
-      && _skillsCache?.some((s) => s.id === skillId && (s.enabled === false || (s.source === 'marketplace' && HubContentStatus.isHubContentDisabled(s))))) return;
+      && _skillsCache?.some((s) => s.id === skillId && (s.enabled === false
+        || (!liveStatus && s.source === 'marketplace' && HubContentStatus.isHubContentDisabled(s))))) return;
   // Open-tier skills (external packages / global folders) live in their own
   // cache; a disabled one must not run from its card's play button either.
   if (typeof _openSkillsCache !== 'undefined' && Array.isArray(_openSkillsCache)
-      && _openSkillsCache.some((s) => s.id === skillId && (s.enabled === false || (s.source === 'marketplace' && HubContentStatus.isHubContentDisabled(s))))) return;
+      && _openSkillsCache.some((s) => s.id === skillId && (s.enabled === false
+        || (!liveStatus && s.source === 'marketplace' && HubContentStatus.isHubContentDisabled(s))))) return;
   // Skill "use" flow: navigate to the new-chat page with the skill
   // pre-selected and wait for user input.
   _agentsLog.info('use skill', { skill_id: skillId, skill_name: skillName || skillId });

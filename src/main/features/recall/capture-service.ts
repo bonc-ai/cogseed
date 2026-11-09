@@ -6,7 +6,8 @@ import { queuedNightlyFeedback, feedbackObservation, admitNightlyFeedback, type 
 import { isContentCategory, type CognitionContentCategory } from './content-category';
 import { RECALL_TEXT_LIMITS } from './content-contract';
 import { parseFormationProposalEnvelope } from './formation-proposal';
-import { captureValueJudgmentInput, parseCaptureValueJudgment, type CaptureValueJudgment } from './capture-value-judgment';
+import { captureValueJudgmentInput, captureValueRepairInstruction, parseCaptureValueJudgment,
+  type CaptureValueJudgment } from './capture-value-judgment';
 import { captureSummaryDecisionDigest } from './capture-provenance';
 import { assessFormationBatch, analyzeFormationDependencies, FormationBatchUnavailableError, type FormationBatchCheckpoint } from './formation-batch-assessment';
 import { captureSourcePassages } from './capture-context-payload';
@@ -49,12 +50,13 @@ import {
 } from '../group_chat/bus';
 import { readMembers } from '../group_chat/state';
 import type { GroupMessage } from '../group_chat/visibility';
-import { readAbilityAsset, readAbilityAssetVersionSnapshot } from './asset-service';
+import { readAbilityAsset, readAbilityAssets, matchesAbilityAssetActiveVersion, readAbilityAssetVersionSnapshot } from './asset-service';
 import { assertFeedbackResultContextsCurrent, readFeedbackResultContext, readFeedbackVersionContext, type FeedbackResultContext } from './feedback-version-context';
 import {
   isAutoCaptureEligible,
   findCaptureCandidateReceipt,
   confirmRecallOntologyCandidate,
+  ignoreRecallCandidate,
   listRecallCandidates,
   promoteRecallCandidate,
   readRecallAssetHandoffReceipt,
@@ -146,6 +148,14 @@ export interface RecallCaptureModelUsage {
   totalTokens?: number;
 }
 
+export interface CaptureRelatedResolution {
+  action: 'merged' | 'kept';
+  targetAssetId?: string;
+  targetVersion?: string;
+  at: string;
+  receipts?: Array<{ sourceAssetId: string; status: 'merged' | 'skipped' | 'failed'; reason?: string; targetVersion?: string }>;
+}
+
 export interface RecallCaptureRecord extends RecallJsonRecord {
   id: string;
   taxonomyVersion: 2;
@@ -200,7 +210,8 @@ export interface RecallCaptureRecord extends RecallJsonRecord {
   uncertaintyAssessments?: Array<CaptureUncertaintyAssessment & { candidateIndex: number }>;
   /** Evaluation availability is separate from an explicit unsupported verdict.
    * These observations carry no source text or publication authority. */
-  candidateSupportUnavailable?: Array<{ candidateIndex: number; stage: 'grounding' | 'uncertainty'; reason: string; candidateHash: string; relatedAssetIds?: string[] }>;
+  candidateSupportUnavailable?: Array<{ candidateIndex: number; stage: 'grounding' | 'uncertainty'; reason: string; candidateHash: string; relatedAssetIds?: string[];
+    relatedResolution?: CaptureRelatedResolution }>;
   candidateSupportUnavailableCount?: number;
   valueJudgment?: CaptureValueJudgment;
   contextSummary?: CaptureContextSummary;
@@ -225,6 +236,8 @@ export interface RecallCaptureFormationCheckpoint {
   version: 1; sourceDigest: string; summaryDigest: string; judgedAt: string; completedAt: string;
   sourceScope: { projectId?: string; workspaceId?: string; conversationKind?: string };
   groups: Array<{ index: number; input: SaveRecallCandidateInput; savedCandidateId?: string; omitted?: boolean; submissionStarted?: true;
+    /** Parsed source proposal kept beside the saved write so a reformation can rejudge it without a fresh extraction. */
+    draft?: ParsedCandidate;
     ruleSourceAssessment?: { policyVersion: 3; sourceFingerprint: string; batchFingerprint: string; finalInputFingerprint: string;
       conclusions: SourceRuleConclusion[]; resultingContracts: FormationRuleRevision[] } }>;
   /** Frozen, safe parsed groups still needing support; absent on legacy complete checkpoints. */
@@ -239,6 +252,18 @@ export interface RecallCaptureFormationCheckpoint {
   assetBaselineDigest?: string;
   assetBaselineRefreshes?: 0 | 1;
   formationNeedsRefresh?: boolean;
+  /** Source-checked semantic findings supplied by the same sweep or a related merge. */
+  supplementalFindings?: Array<{ key?: string; category: 'duplicate' | 'conflict' | 'outdated';
+    assetIds: string[]; assetVersions: Record<string, string>; detail: string }>;
+  /** Candidate ids that lose to the freshly reformed candidate. */
+  supersedeCandidateIds?: string[];
+  /** Group index of each superseded candidate; the replacement is the group saved at the same index. */
+  supersedeCandidateIndexes?: Record<string, number>;
+  reformationReason?: 'semantic_findings' | 'related_merge' | 'related_overflow';
+  reformationRequestedAt?: string;
+  reformationError?: string;
+  /** Semantic finding keys already used for this capture. */
+  appliedFindingKeys?: string[];
   parsedCount: number; emittedCount: number; noCandidateReason?: string; modelUsage?: RecallCaptureModelUsage;
 }
 
@@ -1093,13 +1118,14 @@ function assertSafeCaptureSummary(value: unknown): void {
 }
 
 async function judgeCaptureValue(
-  userId: string, capture: RecallCaptureRecord, messages: CapturePromptMessage[], signal?: AbortSignal, shouldContinue?: () => Promise<boolean>,
+  userId: string, capture: RecallCaptureRecord, messages: CapturePromptMessage[], signal?: AbortSignal,
+  shouldContinue?: () => Promise<boolean>, repairInstruction?: string,
 ): Promise<string> {
   if (!capture.contextSummary) throw new CaptureFailure('summary_failed', 'summary required before value decision');
   // The summary keeps context and corrections; the attached quotations let the
   // judge check claims against actual source text without re-truncating it.
   const input = captureValueJudgmentInput(capture.contextSummary, messages);
-  return runCaptureAnalysisModel(userId, capture, 'value', JSON.stringify(input), signal, shouldContinue);
+  return runCaptureAnalysisModel(userId, capture, 'value', JSON.stringify(input), signal, shouldContinue, repairInstruction);
 }
 
 export async function readRecallCapture(userId: string, id: string): Promise<RecallCaptureRecord> {
@@ -2485,19 +2511,36 @@ export async function runRecallCapture(
       throw new CaptureFailure('formation_checkpoint_stale', 'prepared value decision changed');
     if (!capture.valueJudgment?.eligible || capture.valueJudgment.summaryDigest !== judgmentSummaryDigest) {
       capture = await setCaptureStage(userId, id, 'value_judgment');
-      let judgment: CaptureValueJudgment;
-      try {
-        judgment = { ...parseCaptureValueJudgment(await judgeCaptureValue(userId, capture, promptMessages, signal, canContinue),
-          promptMessages.map(message => ({ ...message, sourceId: cognitionMessageSourceId(capture.conversationId, message.id) })), validSummary),
-          summaryDigest: judgmentSummaryDigest };
-        assertNotForbiddenToPersist([judgment.reason, ...judgment.evidence.map(item => item.quote)]);
-      } catch (error) {
+      const readValueJudgment = async (repairInstruction?: string): Promise<CaptureValueJudgment> => {
+        const parsed = { ...parseCaptureValueJudgment(
+          await judgeCaptureValue(userId, capture, promptMessages, signal, canContinue, repairInstruction),
+          promptMessages.map(message => ({ ...message, sourceId: cognitionMessageSourceId(capture.conversationId, message.id) })),
+          validSummary), summaryDigest: judgmentSummaryDigest };
+        assertNotForbiddenToPersist([parsed.reason, ...parsed.evidence.map(item => item.quote)]);
+        return parsed;
+      };
+      const failValueJudgment = async (error: unknown): Promise<RecallCaptureRecord> => {
         if (signal?.aborted || (error as { code?: string })?.code === 'ABORT_ERR') return settleInterruptedCapture(userId, id);
         if (error instanceof CaptureFailure) throw error;
-        if ((error as { code?: string }).code === 'capture_model_not_configured') throw new CaptureFailure('model_not_configured', 'capture model configuration is required');
+        if ((error as { code?: string }).code === 'capture_model_not_configured')
+          throw new CaptureFailure('model_not_configured', 'capture model configuration is required');
         log.warn('recall capture value judgment failed', { captureId: capture.id,
           reason: (error as Error)?.message?.slice(0, 300) || String(error).slice(0, 300) });
         throw new CaptureFailure('value_judgment_failed', 'value judgment failed validation');
+      };
+      let judgment: CaptureValueJudgment;
+      try {
+        judgment = await readValueJudgment();
+      } catch (error) {
+        const repair = captureValueRepairInstruction(error);
+        if (!repair) return await failValueJudgment(error);
+        log.warn('recall capture value judgment repair retry', { captureId: capture.id,
+          reason: (error as Error)?.message?.slice(0, 300) || String(error).slice(0, 300) });
+        try {
+          judgment = await readValueJudgment(repair);
+        } catch (retryError) {
+          return await failValueJudgment(retryError);
+        }
       }
       if (signal?.aborted) return settleInterruptedCapture(userId, id);
       capture = await updateCapture(userId, id, current => current.status !== 'extracting' ? current : {
@@ -2656,6 +2699,10 @@ export async function runRecallCapture(
         sessionId: `memory-extract-${repair ? 'repair' : 'recall'}-${capture.id}`,
         cliContext: { conversationId: capture.conversationId, agentId: 'recall-capture-extractor', agentName: 'Capture Extractor' },
         budget: { jobId: capture.id, stage: 'extraction' },
+        // 提取是全链路里输出体量最大的 JSON 合同：不锁 json 模式时模型可能在
+        // 信封外补写说明或续写，解析重试也无法恢复完整结构。输出预算需覆盖
+        // 多提案信封，避免截断；实际上限仍由 runner 按模型能力收敛。
+        responseFormat: 'json_object', maxOutputTokens: 16384,
         systemPrompt: extractionSystemPrompt() + (repair ? `\n\n${schemaRepairInstruction}` : ''), modelCandidates,
         message: extractionInput(conversation.title, promptMessages, recallView, [],
           capture.contextSummary, capture.valueJudgment?.evidence, ontologyContext, {
@@ -2831,8 +2878,12 @@ export async function runRecallCapture(
         const { collectInspectionFindings } = await import('./asset-inspection-service');
         const admitted = extractionAssetPool.entries.map(({ record, snapshot }) => ({ ...record, ...snapshot }));
         const initialIds = new Set(extractionAssets.map(asset => asset.id));
+        const supplementalFindings = (pendingPreparation.supplementalFindings || []).filter(finding =>
+          finding.assetIds.every(id => extractionAssetPool.entries.some(entry =>
+            entry.snapshot.id === id && entry.snapshot.version === finding.assetVersions[id])));
         const observations = collectInspectionFindings(admitted, new Date(), initialIds);
-        const relatedIds = [...new Set(observations.flatMap(finding => finding.assetIds))];
+        const relatedIds = [...new Set([...observations.flatMap(finding => finding.assetIds),
+          ...supplementalFindings.flatMap(finding => finding.assetIds)])];
         const requestedIds = [...new Set([...extractionAssets.map(asset => asset.id), ...relatedIds,
           ...ambiguity.flatMap(item => item.candidate.targetAssetId ? [item.candidate.targetAssetId] : [])])];
         const complete = comparisonCoverage.truncated || requestedIds.some(id => !initialIds.has(id))
@@ -2841,8 +2892,12 @@ export async function runRecallCapture(
           : { assets: extractionAssets, coverage: comparisonCoverage, baselineDigest: extractionAssetPool.baselineDigest };
         formationAssets = complete.assets;
         const formationIds = new Set(formationAssets.map(asset => asset.id));
-        const relatedFindings = observations.filter(finding => finding.assetIds.every(id => formationIds.has(id)))
-          .map(({ category, assetIds, detail }) => ({ category, assetIds, detail }));
+        const findingMap = new Map<string, { category: 'duplicate' | 'conflict' | 'outdated'; assetIds: string[]; detail: string }>();
+        for (const finding of observations) findingMap.set(`${finding.category}:${[...finding.assetIds].sort().join('+')}`,
+          { category: finding.category, assetIds: finding.assetIds, detail: finding.detail });
+        for (const finding of supplementalFindings) findingMap.set(`${finding.category}:${[...finding.assetIds].sort().join('+')}`,
+          { category: finding.category, assetIds: finding.assetIds, detail: finding.detail });
+        const relatedFindings = [...findingMap.values()].filter(finding => finding.assetIds.every(id => formationIds.has(id)));
         if (ontologyContext.truncated) ontologyContext = await buildSourceQualifiedOntologyFormationContext(userId, ontologyDocument, {
           scopeBound: true, projectId: conversation.project_id || undefined, workspaceId: conversation.space_id || undefined,
           queryText: ambiguity.map(item => item.candidate.judgment).join('\n'), maxChars: 96_000 });
@@ -2920,6 +2975,9 @@ export async function runRecallCapture(
       });
     };
     for (const { index, candidate } of drafts) {
+      // Keep the source proposal as extracted: a later reformation must redo the
+      // full comparison instead of resuming host annotations from this round.
+      const frozenDraft = structuredClone(candidate);
       const itemUnavailableReason = itemFailures.get(index);
       const evidenceMessages = candidate.evidence.map((label) => byLabel.get(label)!);
       if (capture.executionPolicy !== 'manual' && (isTaskLocalRuleProposal(candidate, evidenceMessages) || nonRetainableActivityContent(candidate.judgment))) {
@@ -3079,6 +3137,7 @@ export async function runRecallCapture(
           ...(ontologyFormation ? { ontologyFormation } : {}),
           ...(candidate.uncertainty ? { uncertainty: candidate.uncertainty } : {}),
           ...(candidate.comparison ? { formationComparison: candidate.comparison } : {}),
+          ...(assessment?.oldContentPlan ? { oldContentPlan: assessment.oldContentPlan } : {}),
           suggestedType: candidate.suggestedType,
           ...(candidate.contentCategory !== undefined ? { contentCategory: candidate.contentCategory } : {}),
           suggestedScope: candidate.suggestedScope,
@@ -3090,7 +3149,11 @@ export async function runRecallCapture(
           ...(Object.keys(sourceScopePolicy).length ? { scopePolicy: sourceScopePolicy } : {}),
           ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
           ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
-          captureKey: `capture-${capture.id}-${extractionIdentity}-${candidate.formationProposalId ? `v2-${candidate.formationProposalId}` : `legacy-${index}`}`,
+          // A rejudged group is a new proposal, not a replay of the superseded
+          // one: it needs its own capture identity so the old candidate can be
+          // superseded instead of deduplicating the rejudgment back into it.
+          captureKey: `capture-${capture.id}-${extractionIdentity}-${candidate.formationProposalId ? `v2-${candidate.formationProposalId}` : `legacy-${index}`}`
+            + (pendingPreparation.reformationReason ? `-reform-${pendingPreparation.formationGeneration || 1}` : ''),
           ...(captureSpaceId ? { spaceId: captureSpaceId } : {}),
           taskRunId: capture.terminalRunId,
           captureProvenance: { pipeline: 'nightly_conversation', captureId: capture.id, messageIds: capture.messageIds,
@@ -3108,7 +3171,10 @@ export async function runRecallCapture(
         };
         assertSafeCaptureSummary(preparedInput);
         const ruleSourceAssessment = preparedRuleSourceAssessment(userId, preparedInput, capture, index, ontologyDocument);
-        prepared.push({ index, input: preparedInput, ...(ruleSourceAssessment ? { ruleSourceAssessment } : {}) });
+        const preparedGroup: RecallCaptureFormationCheckpoint['groups'][number] = { index, input: preparedInput,
+          ...(ruleSourceAssessment ? { ruleSourceAssessment } : {}),
+          ...(pendingPreparation.sourceProposalVersion === 1 ? { draft: frozenDraft } : {}) };
+        prepared.push(preparedGroup);
       } catch (error) {
         const messageText = error instanceof Error ? error.message : String(error);
         // 凭据等 L3 敏感内容由 saveRecallCandidate 拦截，且不得落盘。
@@ -3234,6 +3300,189 @@ export async function runRecallCapture(
 const scheduledCaptures = new Map<string, ScheduledBootBackgroundTask>();
 const captureScheduleAdmissions = new Set<string>();
 let captureSchedulingEnabled = true;
+
+export interface CaptureReformationOptions {
+  candidateIds?: string[];
+  groupIndexes?: number[];
+  findings?: NonNullable<RecallCaptureFormationCheckpoint['supplementalFindings']>;
+  reason: NonNullable<RecallCaptureFormationCheckpoint['reformationReason']>;
+  runNow?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface CaptureReformationResult {
+  ok: boolean;
+  capture: RecallCaptureRecord;
+  supersededCandidateIds: string[];
+  error?: string;
+}
+
+/** Re-open formation for selected groups after a related merge or a same-round
+ * semantic observation. Old candidates stay readable until a replacement is
+ * saved; failures leave them pending and the request retryable. */
+export async function requestCaptureReformation(
+  userId: string,
+  captureId: string,
+  options: CaptureReformationOptions,
+): Promise<CaptureReformationResult> {
+  const before = await readRecallCapture(userId, captureId);
+  if (!['review_ready', 'completed', 'partial', 'failed', 'no_candidate'].includes(before.status))
+    throw new Error('capture is not in a reformable state');
+  if (before.reformationRequestedAt && ['queued', 'extracting', 'writing'].includes(before.status))
+    throw new Error('capture reformation is already running');
+  const original = before.formationCheckpoint;
+  if (!original || original.sourceProposalVersion !== 1)
+    throw new Error('capture has no source-proposal formation checkpoint');
+  const candidateIds = [...new Set((options.candidateIds || []).map(String))];
+  const groupIndexes = [...new Set((options.groupIndexes || []).map(Number).filter(Number.isInteger))];
+  if (!candidateIds.length && !groupIndexes.length) throw new Error('reformation requires candidates or groups');
+  const checkpoint = structuredClone(original) as RecallCaptureFormationCheckpoint;
+  const supersede = new Set<string>(checkpoint.supersedeCandidateIds || []);
+  const supersedeIndexes: Record<string, number> = { ...(checkpoint.supersedeCandidateIndexes || {}) };
+  const drafts = new Map<number, ParsedCandidate>();
+  const selectGroup = (group: RecallCaptureFormationCheckpoint['groups'][number]) => {
+    // A replacement needs the frozen proposal (evidence labels included); a
+    // checkpoint written before drafts were kept cannot rejudge honestly.
+    if (!group.draft) throw new Error('capture reformation has no frozen proposal');
+    group.savedCandidateId = undefined;
+    group.submissionStarted = undefined;
+    drafts.set(group.index, structuredClone(group.draft));
+  };
+  for (const candidateId of candidateIds) {
+    if (!safeId(candidateId)) throw new Error('invalid candidate id');
+    const candidate = await readRecallCandidate(userId, candidateId);
+    if (!['pending_review', 'deferred'].includes(candidate.status))
+      throw new Error('only pending candidates can be reformed');
+    if (candidate.captureProvenance?.captureId && candidate.captureProvenance.captureId !== captureId)
+      throw new Error('candidate belongs to another capture');
+    if (!(before.candidateIds || []).includes(candidateId))
+      throw new Error('candidate does not belong to this capture');
+    const group = checkpoint.groups.find(row => row.savedCandidateId === candidateId
+      || (candidate.captureKey && row.input.captureKey === candidate.captureKey));
+    if (!group) throw new Error('candidate has no formation group');
+    selectGroup(group);
+    supersede.add(candidateId);
+    supersedeIndexes[candidateId] = group.index;
+  }
+  for (const index of groupIndexes) {
+    const group = checkpoint.groups.find(row => row.index === index);
+    if (!group) throw new Error('formation group not found');
+    if (group.savedCandidateId) {
+      supersede.add(group.savedCandidateId);
+      supersedeIndexes[group.savedCandidateId] = group.index;
+    }
+    selectGroup(group);
+  }
+  checkpoint.supersedeCandidateIds = [...supersede];
+  checkpoint.supersedeCandidateIndexes = Object.keys(supersedeIndexes).length ? supersedeIndexes : undefined;
+  if (drafts.size) {
+    checkpoint.pendingCandidates = [
+      ...(checkpoint.pendingCandidates || []).filter(item => !drafts.has(item.index)),
+      ...[...drafts].map(([index, candidate]) => ({ index, candidate })),
+    ];
+  }
+  checkpoint.supplementalFindings = options.findings?.length ? structuredClone(options.findings) : undefined;
+  checkpoint.reformationReason = options.reason;
+  checkpoint.reformationRequestedAt = new Date().toISOString();
+  checkpoint.reformationError = undefined;
+  checkpoint.formationGeneration = (checkpoint.formationGeneration || 0) + 1;
+  checkpoint.formationNeedsRefresh = true;
+  checkpoint.assetBaselineRefreshes = 1;
+  checkpoint.supportPendingIndexes = [];
+  const pool = await withCognitionTransition(userId, () => loadCaptureExistingAssetPool(userId, {
+    sourceScope: checkpoint.sourceScope,
+  }));
+  checkpoint.assetBaselineDigest = pool.baselineDigest;
+  checkpoint.assetBaselineAttempt = before.attempt;
+
+  const updated = await updateCapture(userId, captureId, current => current.status !== before.status ? current : {
+    ...current,
+    status: 'queued', stage: undefined, errorCode: undefined, reasonCode: undefined,
+    reviewSnapshot: undefined, startedAt: undefined, finishedAt: undefined, durationMs: undefined,
+    formationCheckpoint: checkpoint, formationBatchAssessment: undefined,
+    uncertaintyAssessments: undefined, updatedAt: new Date().toISOString(),
+  });
+  if (updated.status !== 'queued') throw new Error('capture reformation could not be queued');
+  if (!options.runNow) {
+    void executeCaptureReformation(userId, captureId, checkpoint, options.signal)
+      .catch((error) => log.warn('capture reformation failed in background', {
+        userId: maskId(userId), captureId, error: (error as Error).message.slice(0, 300),
+      }));
+    return { ok: true, capture: updated, supersededCandidateIds: [...supersede] };
+  }
+  const result = await executeCaptureReformation(userId, captureId, checkpoint, options.signal);
+  return {
+    ok: ['review_ready', 'completed', 'no_candidate'].includes(result.status),
+    capture: result,
+    supersededCandidateIds: [...supersede],
+    ...(['failed', 'configuration_required', 'cancelled'].includes(result.status)
+      ? { error: result.errorCode || 'capture_reformation_failed' } : {}),
+  };
+}
+
+async function executeCaptureReformation(userId: string, captureId: string,
+  checkpoint: RecallCaptureFormationCheckpoint, signal?: AbortSignal): Promise<RecallCaptureRecord> {
+  let result = await runRecallCapture(userId, captureId, signal);
+  const latest = await readRecallCapture(userId, captureId);
+  const latestCheckpoint = latest.formationCheckpoint;
+  if (['review_ready', 'completed', 'no_candidate', 'partial'].includes(result.status) && latestCheckpoint) {
+    const oldIds = checkpoint.supersedeCandidateIds || [];
+    for (const oldId of oldIds) {
+      const old = await readRecallCandidate(userId, oldId).catch(() => undefined);
+      if (!old || !['pending_review', 'deferred'].includes(old.status)) continue;
+      // A rejudged group writes a fresh capture identity, so resolve its
+      // replacement by the group index recorded with the request.
+      const index = checkpoint.supersedeCandidateIndexes?.[oldId];
+      const group = index !== undefined
+        ? latestCheckpoint.groups.find(row => row.index === index && row.savedCandidateId)
+        : latestCheckpoint.groups.find(row => old.captureKey && row.input.captureKey === old.captureKey
+          && row.savedCandidateId);
+      if (group?.savedCandidateId) {
+        await supersedeRecallCandidate(userId, oldId, group.savedCandidateId, '被本轮重新核对取代').catch(() => undefined);
+      } else if (result.status === 'no_candidate' || result.status === 'completed') {
+        await ignoreRecallCandidate(userId, oldId, '重新核对后不再形成建议').catch(() => undefined);
+      }
+    }
+    const findingKeys = (checkpoint.supplementalFindings || []).flatMap(finding => finding.key ? [finding.key] : []);
+    const applied = [...new Set([...(latestCheckpoint.appliedFindingKeys || []), ...findingKeys])];
+    result = await updateCapture(userId, captureId, current => ({
+      ...current,
+      formationCheckpoint: current.formationCheckpoint ? {
+        ...current.formationCheckpoint,
+        supplementalFindings: undefined,
+        supersedeCandidateIds: undefined,
+        supersedeCandidateIndexes: undefined,
+        reformationReason: undefined,
+        reformationRequestedAt: undefined,
+        reformationError: undefined,
+        appliedFindingKeys: applied.length ? applied : undefined,
+      } : current.formationCheckpoint,
+    }));
+  } else if (['failed', 'configuration_required', 'cancelled'].includes(result.status)) {
+    result = await updateCapture(userId, captureId, current => current.formationCheckpoint ? {
+      ...current,
+      formationCheckpoint: { ...current.formationCheckpoint,
+        reformationError: current.errorCode || 'capture_reformation_failed' },
+    } : current);
+  }
+  return result;
+}
+
+/** Record how an overflow group was resolved without creating a fake candidate. */
+export async function markRelatedOverflowResolution(
+  userId: string,
+  captureId: string,
+  candidateIndex: number,
+  resolution: CaptureRelatedResolution,
+): Promise<void> {
+  if (!Number.isInteger(candidateIndex) || candidateIndex < 0) throw new Error('invalid candidate index');
+  await updateCapture(userId, captureId, current => ({
+    ...current,
+    candidateSupportUnavailable: (current.candidateSupportUnavailable || []).map(row =>
+      row.candidateIndex === candidateIndex ? { ...row, relatedResolution: structuredClone(resolution) } : row),
+    updatedAt: new Date().toISOString(),
+  }));
+}
 
 async function nightlyCaptureCanStart(userId: string, allowOutsideWindow = false): Promise<boolean> {
   const settings = await readRecallCaptureSettings(userId);
@@ -3553,6 +3802,12 @@ export interface RecallNightlySweepReceipt {
   inspectionRunId?: string;
   findingKeys: string[];
   items: RecallNightlySweepItem[];
+  /** Captures whose formation this round rejudged with the round's own semantic findings. */
+  reformedCaptureIds?: string[];
+  /** Matched captures left for the next round because the per-round budget ran out. */
+  deferredReformations?: Array<{ captureId: string; findingKeys: string[] }>;
+  /** Non-blocking reformation failures; the old candidates stay pending. */
+  reformationErrors?: Array<{ captureId: string; errorCode: string }>;
 }
 
 export interface RecallNightlySweepRecord extends RecallJsonRecord {
@@ -3814,7 +4069,7 @@ async function collectNightlyClaims(userId: string, captureIds: ReadonlySet<stri
     for (const candidateId of capture.candidateIds || []) {
       let candidate: RecallCandidateRecord;
       try { candidate = await readRecallCandidate(userId, candidateId); } catch { continue; }
-      if (candidate.status === 'rejected' || candidate.status === 'ignored'
+      if (candidate.status === 'rejected' || candidate.status === 'ignored' || candidate.status === 'superseded'
         || candidate.status === 'expired' || candidate.status === 'failed') continue;
       const claim: RecallNightlyClaim = { captureId, candidateId, at: new Date().toISOString() };
       const assetIds = [
@@ -3846,6 +4101,27 @@ function mergeNightlyClaims(base: RecallNightlyClaims | undefined, next: RecallN
   for (const [key, claim] of Object.entries(next.assets)) merged.assets[key] ||= claim;
   for (const [key, claim] of Object.entries(next.ontology)) merged.ontology[key] ||= claim;
   return merged;
+}
+
+/** Drop only the claims owned by re-formed captures so the following
+ * inspection excludes their fresh targets instead of the superseded ones. */
+function removeCaptureNightlyClaims(
+  claims: RecallNightlyClaims | undefined,
+  captureIds: ReadonlySet<string>,
+): RecallNightlyClaims | undefined {
+  if (!claims || !captureIds.size) return claims;
+  const keep = (rows: Record<string, RecallNightlyClaim>) => Object.fromEntries(
+    Object.entries(rows).filter(([, row]) => !captureIds.has(row.captureId)));
+  const heldAssets = { ...(claims.heldAssets || {}) };
+  for (const [assetId, hold] of Object.entries(heldAssets)) {
+    hold.captureIds = hold.captureIds.filter(id => !captureIds.has(id));
+    if (!hold.captureIds.length) delete heldAssets[assetId];
+  }
+  return {
+    assets: keep(claims.assets),
+    heldAssets,
+    ontology: keep(claims.ontology),
+  };
 }
 
 function nightlyClaimRefs(claims: RecallNightlyClaims | undefined): Set<string> {
@@ -4001,6 +4277,9 @@ export async function runNightlyCaptureSweep(
       receipt = structuredClone(sweep.receipt);
       for (const id of receipt.captureIds) processedCaptureIds.add(id);
     }
+    // Reformations deferred by the budget carry across nights; the finding
+    // itself stays unresolved in the inspection progress.
+    const carriedReformations = receipt.deferredReformations || sweep?.receipt?.deferredReformations || [];
     phase = 'inventory';
     discoveryProgress = undefined;
     inspectionProgress = undefined;
@@ -4214,23 +4493,25 @@ export async function runNightlyCaptureSweep(
     }));
     const rejectedCaptureIds = new Set(discoverySettled.flatMap((row, index) =>
       row.status === 'rejected' ? [discoveryTasks[index][0]] : []));
+    const sweepItemFor = (row: RecallCaptureRecord, captureId: string): RecallNightlySweepItem => {
+      const failures = (row.candidateSupportUnavailable || []).map(({ candidateIndex, stage, reason, relatedAssetIds }) => ({
+        candidateIndex, stage, reason, ...(relatedAssetIds?.length ? { relatedAssetIds } : {}),
+      }));
+      const overflow = failures.find(item => item.reason === 'related_assets_overflow');
+      const failed = row.status === 'failed' || row.status === 'configuration_required' || failures.length > 0
+        || (!signal?.aborted && rejectedCaptureIds.has(captureId));
+      const status: RecallNightlySweepItem['status'] = failed ? (row.candidateIds?.length ? 'partial' : 'failed')
+        : ['queued', 'extracting', 'writing', 'paused', 'scheduled'].includes(row.status) ? 'pending'
+        : row.status === 'cancelled' || row.screeningStatus === 'filtered' ? 'skipped' : 'completed';
+      const errorCode = overflow ? 'related_assets_overflow' : row.errorCode
+        || (failures.length ? 'candidate_support_unavailable' : !signal?.aborted && rejectedCaptureIds.has(captureId) ? 'capture_task_failed' : undefined);
+      return { captureId, conversationId: row.conversationId, status, ...(errorCode ? { errorCode } : {}),
+        ...(overflow?.relatedAssetIds ? { relatedAssetIds: overflow.relatedAssetIds } : {}),
+        ...(failures.length ? { failures } : {}), candidateIds: row.candidateIds || [] };
+    };
     const captureResults = await Promise.all([...processedCaptureIds].map(async captureId => {
       try {
-        const row = await readRecallCapture(userId, captureId);
-        const failures = (row.candidateSupportUnavailable || []).map(({ candidateIndex, stage, reason, relatedAssetIds }) => ({
-          candidateIndex, stage, reason, ...(relatedAssetIds?.length ? { relatedAssetIds } : {}),
-        }));
-        const overflow = failures.find(item => item.reason === 'related_assets_overflow');
-        const failed = row.status === 'failed' || row.status === 'configuration_required' || failures.length > 0
-          || (!signal?.aborted && rejectedCaptureIds.has(captureId));
-        const status: RecallNightlySweepItem['status'] = failed ? (row.candidateIds?.length ? 'partial' : 'failed')
-          : ['queued', 'extracting', 'writing', 'paused', 'scheduled'].includes(row.status) ? 'pending'
-          : row.status === 'cancelled' || row.screeningStatus === 'filtered' ? 'skipped' : 'completed';
-        const errorCode = overflow ? 'related_assets_overflow' : row.errorCode
-          || (failures.length ? 'candidate_support_unavailable' : !signal?.aborted && rejectedCaptureIds.has(captureId) ? 'capture_task_failed' : undefined);
-        return { captureId, conversationId: row.conversationId, status, ...(errorCode ? { errorCode } : {}),
-          ...(overflow?.relatedAssetIds ? { relatedAssetIds: overflow.relatedAssetIds } : {}),
-          ...(failures.length ? { failures } : {}), candidateIds: row.candidateIds || [] };
+        return sweepItemFor(await readRecallCapture(userId, captureId), captureId);
       } catch {
         return { captureId, conversationId: '', status: 'failed' as const, errorCode: 'capture_unavailable', candidateIds: [] };
       }
@@ -4255,6 +4536,20 @@ export async function runNightlyCaptureSweep(
     claims = mergeNightlyClaims(claims, await collectNightlyClaims(userId, processedCaptureIds));
     remainingTasks = 0;
     await persist();
+
+    // Semantic observations written by this stock pass belong to the proposals
+    // formed by the same round; the earlier key set keeps older findings out.
+    const readSemanticFindings = async (): Promise<Array<{ key: string; assetIds: string[]; assetVersions: Record<string, string>;
+      detail: string; at: string }> | undefined> => {
+      try {
+        const { listSemanticInspectionFindings } = await import('./asset-inspection-service');
+        return await listSemanticInspectionFindings(userId);
+      } catch (error) {
+        log.warn('nightly semantic findings read failed', { userId: maskId(userId), error: (error as Error).message.slice(0, 300) });
+        return undefined;
+      }
+    };
+    const semanticFindingsBeforeStock = await readSemanticFindings();
 
     const reportStock = async (stock: StockOrganizationProgress) => {
       stockProgress = stock;
@@ -4282,6 +4577,106 @@ export async function runNightlyCaptureSweep(
       }));
       stockFailed = settled.some(row => row.status === 'rejected') || Boolean(stockProgress?.failed);
       receipt.candidateIds = [...new Set([...receipt.candidateIds, ...(stockProgress?.candidateIds || [])])];
+    }
+
+    // Same-round reformation: a semantic conflict discovered while organizing
+    // stock invalidates proposals formed from the same conversations before the
+    // user ever sees them. Old candidates stay pending until a replacement is
+    // saved; failures are recorded and never block the rest of the round.
+    const reformedCaptureIds = new Set<string>();
+    let deferredReformations: Array<{ captureId: string; findingKeys: string[] }> = [];
+    const reformationErrors: Array<{ captureId: string; errorCode: string }> = [];
+    if (semanticFindingsBeforeStock && await canContinue()) {
+      const afterStock = await readSemanticFindings();
+      if (afterStock) {
+        const carried = carriedReformations;
+        const carriedKeys = new Set(carried.flatMap(item => item.findingKeys));
+        const findingPool = afterStock.filter(finding => carriedKeys.has(finding.key)
+          || !semanticFindingsBeforeStock.some(before => before.key === finding.key));
+        if (findingPool.length) {
+          const readable = new Map((await readAbilityAssets(userId,
+            [...new Set(findingPool.flatMap(finding => finding.assetIds))])).map(asset => [asset.id, asset]));
+          const matchable = findingPool.filter(finding => finding.assetIds.every(id => {
+            const asset = readable.get(id);
+            return Boolean(asset && asset.status === 'active'
+              && matchesAbilityAssetActiveVersion(asset, finding.assetVersions?.[id]));
+          }));
+          const planned: Array<{ captureId: string; candidateIds: string[]; findings: typeof matchable }> = [];
+          for (const captureId of [...new Set([...processedCaptureIds, ...carried.map(item => item.captureId)])]) {
+            if (!await canContinue()) break;
+            let capture: RecallCaptureRecord;
+            try { capture = await readRecallCapture(userId, captureId); } catch { continue; }
+            if (!['review_ready', 'completed', 'partial', 'failed', 'no_candidate'].includes(capture.status)) continue;
+            const appliedKeys = new Set(capture.formationCheckpoint?.appliedFindingKeys || []);
+            const candidateIds: string[] = [];
+            const matched = new Map<string, (typeof matchable)[number]>();
+            for (const candidateId of capture.candidateIds || []) {
+              let candidate: RecallCandidateRecord;
+              try { candidate = await readRecallCandidate(userId, candidateId); } catch { continue; }
+              if (!candidate || !['pending_review', 'deferred'].includes(candidate.status)) continue;
+              const assetIds = new Set<string>([candidate.targetAssetId, candidate.mergedIntoAssetId,
+                ...(candidate.contentOrganization?.draft.sourceAssetIds || []),
+                ...(candidate.formationComparison?.relatedAssets || []).map(item => item.assetId)]
+                .filter((id): id is string => typeof id === 'string' && id.length > 0));
+              if (!assetIds.size) continue;
+              const relevant = matchable.filter(finding => !appliedKeys.has(finding.key)
+                && finding.assetIds.some(id => assetIds.has(id)));
+              if (!relevant.length) continue;
+              candidateIds.push(candidateId);
+              for (const finding of relevant) matched.set(finding.key, finding);
+            }
+            if (candidateIds.length) planned.push({ captureId, candidateIds, findings: [...matched.values()] });
+          }
+          const budget = 5;
+          const attempted = planned.slice(0, budget);
+          deferredReformations = planned.slice(budget).map(row => ({
+            captureId: row.captureId, findingKeys: row.findings.map(finding => finding.key),
+          }));
+          for (const [position, plan] of attempted.entries()) {
+            if (!await canContinue()) {
+              deferredReformations.push(...planned.slice(position).map(row => ({
+                captureId: row.captureId, findingKeys: row.findings.map(finding => finding.key),
+              })));
+              break;
+            }
+            try {
+              const result = await requestCaptureReformation(userId, plan.captureId, {
+                candidateIds: plan.candidateIds,
+                findings: plan.findings.map(finding => ({ key: finding.key, category: 'conflict' as const,
+                  assetIds: [...finding.assetIds], assetVersions: { ...finding.assetVersions }, detail: finding.detail })),
+                reason: 'semantic_findings', runNow: true, signal,
+              });
+              const superseded = new Set(result.supersededCandidateIds);
+              const refreshed = sweepItemFor(result.capture, plan.captureId);
+              const item = receipt.items.find(entry => entry.captureId === plan.captureId);
+              if (item) Object.assign(item, refreshed);
+              if (result.ok) {
+                receipt.candidateIds = [...new Set([...receipt.candidateIds.filter(id => !superseded.has(id)),
+                  ...(refreshed.candidateIds || [])])];
+                reformedCaptureIds.add(plan.captureId);
+              } else reformationErrors.push({ captureId: plan.captureId, errorCode: result.error || 'capture_reformation_failed' });
+            } catch (error) {
+              reformationErrors.push({ captureId: plan.captureId, errorCode: 'capture_reformation_failed' });
+              log.warn('nightly capture reformation failed', { userId: maskId(userId), captureId: plan.captureId,
+                error: (error as Error).message.slice(0, 300) });
+            }
+          }
+          if (deferredReformations.length) log.info('nightly semantic reformation deferred', {
+            userId: maskId(userId), deferred: deferredReformations.length, planned: planned.length,
+          });
+          if (reformationErrors.length) log.warn('nightly semantic reformation incomplete', {
+            userId: maskId(userId), failed: reformationErrors.length, reformed: reformedCaptureIds.size,
+          });
+        }
+        if (reformedCaptureIds.size) {
+          claims = removeCaptureNightlyClaims(claims, reformedCaptureIds);
+          claims = mergeNightlyClaims(claims, await collectNightlyClaims(userId, reformedCaptureIds));
+        }
+        receipt.reformedCaptureIds = reformedCaptureIds.size
+          ? [...new Set([...(receipt.reformedCaptureIds || []), ...reformedCaptureIds])] : receipt.reformedCaptureIds;
+        receipt.deferredReformations = deferredReformations.length ? deferredReformations : undefined;
+        receipt.reformationErrors = reformationErrors.length ? reformationErrors : undefined;
+      }
     }
     phase = signal?.aborted ? 'stopped' : 'inspection';
     remainingTasks = 0;

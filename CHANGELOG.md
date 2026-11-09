@@ -7,6 +7,36 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-09
+
+### Security
+
+- **Skill 安全准入贯通到安装、复验与回执（skill-sentry 2.4 / 2.4.1）**：扫描结论随安装落盘并回灌复验，
+  没被读完的内容（超出体积上限、超出总量预算、无法解码）不再记成 `pass`，而是点名 finding 并压到
+  `restricted`；归档、PDF 与编码探测进入同一条载体分类管线，`.rtf` / `.vbs` / `.jsp` 与无扩展名文本
+  一并覆盖。组合判定改按逻辑句，bullet、表格行与 JSON 字段不再能把一条判定拆开。
+
+### Changed
+
+- **认知读取去模式化**：本体查询与资产管家读取拆除读取授权门，本人资产正文直接放开；空查询或只带
+  过滤参数的全量读取仍被拒绝，语义校验失败透出字段级原因。
+- **本体权限与星图**：模块页支持批量放开与闭环验证，放开传参收敛、部分失败如实提示；本体图显示关系
+  标签并保留模型给出的布局。
+- **Hub 模板**：内置模板清单与 Hub 目录契约对齐，模板创建、占位符替换与正文摘要校验按冻结契约实现。
+- **认知存储读取**：规范化本体按文件版本缓存，激活时清理读缓存，候选编辑前先克隆共享快照。
+- **提示缓存与工具执行**：改善前缀缓存复用与工具执行路径，Apple MCP 连接器纳入统一连接器契约。
+- **认知回执与资产页**：回执卡折叠态信息密度收敛、计数并入头部行；发现巡检改为「最近一次运行」指标
+  加分页结果，窗口与模型顺序常驻显示，合并正文可在清理前改写。
+- **回收站与认知树**：恢复后显示真实条目标题并刷新列表；恢复此前被禁用的认知树页签。
+
+### Fixed
+
+- **会议流程**：未确认的会话停止后仍保留恢复轮询；任务完成状态稳定，联系人导航提前到可见位置。
+- **认知链路**：不确定措辞的创建与编辑改走确认卡；提交投影回退在当轮回执上可见且可审计；死源资产
+  按条降级，不再让整批注入失败；运行期忙碌准入延迟封顶 10 分钟。
+- **缓存与 A2A**：缓存计量、工具执行与 A2A 咨询加固，保留中继鉴权错误，工具目录契约对齐。
+- **界面细节**：认知详情展开态卡头标签行移入标题行右侧。
+
 ## [1.4.0] - 2026-10-28
 
 ### Added
@@ -30,6 +60,86 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   压缩策略改为在会话内触发。
 - **本地智能体与 p3394 桥接**：截止时间命中的 CLI 运行可转后台继续，退出时回收句柄，
   桥接启动重放未投递的后台作业。
+- **Skill 安全准入的 2.4.1 收口（复测 N-01～N-06）**：2.4.0 关掉了 33 个冻结样本，
+  同一通道的变体却仍在放行——根因是「没被读到」被记成了「干净」。扩展名白名单之外补
+  内容探测（NUL / UTF-8 / 可打印占比），`.rtf` / `.vbs` / `.jsp` 与无扩展名文本进入同一条
+  管线；文本因体积上限或总量预算没读完时产出点名 finding 并把 `pass` 压到 `restricted`，
+  归档的 `archive_*` / `carrier_*` 分级不变。组合层改按**逻辑句**判定（句读符与 Markdown
+  块边界切分、续行合并），绕过成本不再是一个换行；新增 `bulk_collection_to_network`、
+  `keystroke_capture_egress` 两组组合，键盘钩子仍按 `restricted` 而非 `blocked` 落。
+  官方语料的 `test/` 上下文改为要求第二条独立规则共现，发布门禁补一条：每个官方 skill
+  必须能过安装谓词，而不只是 `report.ok`。
+- **Skill 安全准入的载体取证（skill-sentry 2.4.0）**：同一段越权文本此前改名成 `.txt` 会被
+  判 `restricted`，留在 `.svg` / `.html` / `.ipynb` / `.pdf` / `.png` / `.zip` 里却是
+  `pass / ALLOW / 100`——缺的是收集，不是检测。现在 `TEXT_EXT` 覆盖纯文本载体，PDF 抽取
+  未加密内容流的文本层，PNG 抽取 `tEXt`/`zTXt`/`iTXt` 文本块，归档（zip / tar.* /
+  gz·bz2·xz / docx·xlsx·pptx·whl）递归读取成员并以 `外层::内部` 合成路径进入同一条规则
+  管线。全部有硬上限（2 层 / 200 成员 / 单成员 2 MiB / 总解压 8 MiB / 压缩比 200），
+  触顶产出 `archive_*` / `carrier_*` 发现项而不是静默截断。
+- **本地红线 `no_socket_shell_attach`**：socket + `dup2`/`pty.spawn` + shell 的组合。
+  此前 `no_shell_string_execution` 只匹配 `os.system` / `shell=True`，而反弹 shell 通常
+  把 `['/bin/sh','-i']` 当参数列表传给 `Popen`——正是那条规则刻意豁免的安全写法，于是
+  瘦身构建下这条载荷没有任何本地防线。
+- **`.gitmodules` 供应链指针**：无扩展名的文本文件名（`.gitmodules` / `Dockerfile` /
+  `Pipfile` 等）现在会被收集并按文本扫描；`.gitmodules` 另报 `git_submodule` 发现项，
+  因为其实际内容取决于另一个仓库的当前提交；含 `.gitmodules` 的技能供应链可复现性
+  （SR-06）转为 required，至少 CAUTION。
+- **原生二进制按魔数识别**：`bin/helper` 这类**没有扩展名**的 ELF/PE/Mach-O 此前
+  `executable_count` 报 0、结构层完全看不见；现在按文件头判定并报 `executable_payload`。
+  归档内的二进制成员也不再凭空消失，另报 `archive_binary_members` 覆盖缺口。
+- **导入规范化披露（`normalization`）**：文件夹导入会过滤 `package.json`、锁文件与
+  符号链接，扫描器跑的是**副本**——所以 `pass` 可能只代表「危险文件被剥离了」。
+  现在回执记录被过滤的清单，含安全相关项时裁决落 `risk`（`topRule: import_normalized`），
+  不再把子集扫描记成干净通过。
+- **散文越权指令的两条确定性判据**：①「拦截语境 + 校验对象 + 关闭动作」三信号同行的
+  `guardrail_bypass_on_block`（critical / high 置信，可单独拒装）；②散文指令类 critical
+  叠加 `credential_access`/`data_egress` 证据时的组合阻断（`scan_gate._instruction_with_evidence`）。
+
+### Changed
+
+- **门禁按「类别」而不是「目录」判定**：`scan_gate.BLOCKING_CATEGORIES` 从 3 类扩到 10 类
+  （新增 reverse_shell / crypto_miner / command_exec / destructive /
+  unauthorized_download / obfuscation / persistence）。此前这两类只靠
+  `deployment_recommendation` 兜底，而它读的是降权后的严重级——于是同一份反弹 shell 在
+  `scripts/` 判 `DO_NOT_INSTALL`、在 `tests/` 判 `CAUTION`，两个目录之差就是「拒装」与
+  「装进去」。有良性读法的类别（privilege / surveillance / mcp_config / network）刻意不收。
+- **行为类 finding 不随目录降权**：`context.BEHAVIOUR_CATEGORIES` 在上述类别上跳过上下文
+  降权（散文与注释除外），引擎自述与门禁结论因此一致，风险卡不再出现「已拦截」配「LOW /
+  86 分」。
+- **散文封顶只对作者叙述生效**：`CONTEXT_PROSE` 的上限（low）是在 Markdown / 纯文本语料
+  上标定的，外推到 `.svg` / `.html` / `.pdf` / `.ipynb` 等于给载体一张免检通行证。
+- **高危依赖公告至少 CAUTION**：`requests==2.0.0`（1 条 high + 5 条 medium GHSA）此前是
+  `MEDIUM / 42 分 / ALLOW`，现在给出风险卡片。
+- **安装回执保留原始裁决**：`blocked` 不再被映射成 `pass`；`scanner_absent`（只有本地红线）
+  落 `risk` 而不是 `pass`；本地导入在同意的路径上写 `userOverride`。加载门因此可以区分
+  「扫描器放过」与「用户看过并选择继续」——后者仍可加载，且任何字节改动都会让同意失效。
+- **回执 `topRule` 优先取安全发现**：此前取质量报告，于是被拦的反弹 shell 样本把
+  `shape_trigger_missing`（结构提示）记成最高风险。
+- **模型判定 `suspicious` 不再落成 `pass`**：指令型攻击需要用户配合，模型结论本身不阻断
+  安装（这是既有产品决定），但把「模型认为可疑」记成干净通过是过度声明——现在落
+  `restricted`，装得上、有风险卡。`unavailable` 仍保持 `pass`：召回层刻意放宽，
+  安全教学类内容也会被召回，把它降级等于惩罚最该存在的文档，面板已逐条展示原文。
+- **导入扫描取 `detail`**：回执的 `topRule` 是事后解释风险徽章的唯一信息来源，
+  不取 findings 时 `restricted` 只能用质量报告的结构提示解释（红队 F-11）。导入是
+  用户一次性动作，多付一次载荷比长期误标便宜。
+- `VALIDATOR_VERSION` 0.6.1 → 0.6.2：规则表变化 + 让存量回执作废，已安装内容会在下次
+  加载时按新引擎重扫（这是既有机制，不是副作用）。
+
+### Fixed
+
+- **防御性代码不再被自家门禁拦住**：`seo-crawl` 的 SSRF 守卫在注释与断言里点名
+  `169.254.169.254`，因为它的作用就是拒绝该地址；本地校验器已正确降级，但导入门禁与深扫的
+  本地红线各自又按 `original_level` 把它提升回 `EXTREME`，导致 83 个官方 skill 里有 1 个
+  无法重新导入或编辑。现在两处共用 `quality.isInstallBlockingViolation`，注释/文档字符串
+  上下文不再构成拒装理由（`test/`、`vendor/` 的读穿保持不变）。
+- **`scan_gate.py --detail` 在多 Skill 包上崩溃**：`_detail_payload` 读取了一个只存在于
+  单 Skill 扫描作用域的局部变量，聚合报告没有 `scan_tier` 时抛 `NameError`，整包被判
+  `unknown`（fail-closed 但无解释）。
+- **`security_bypass` 在形容词列表上误报**：英文分支原本是「24 个字符内出现安全名词」，
+  在 `Disabled, permission-gated, offline, and mobile-collapsed states are required…`
+  上命中，把一句界面状态说明判成「要求关闭权限检查」，官方 83 个 skill 里唯一的 CAUTION
+  就来自这里。改为及物形式（动词 + 限定语 + 安全名词）后，官方语料变成 **83/83 ALLOW**。
+
 - **S4 智能体 / 技能页改版**：首页按主智能体 / 外接智能体 / 平台分组，统一详情弹窗展示
   「能做什么 / 示例 / 标签 / 会用到的技能」，新增「已安装」管理页与分类筛选；平台内容统一
   从 Hub 目录读取，默认安装走 `/marketplace/defaults`。

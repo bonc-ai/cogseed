@@ -17,24 +17,30 @@ import { P3394PeerRegistry } from '../../../../src/main/features/p3394_bridge/re
 import { listExternalGateways, startExternalGateway, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 
-// 独立 runtime variant：本测试会真实 spawn/kill gateway 子进程，必须与
+// 独立变体树：本测试会真实 spawn/kill gateway 子进程，必须与
 // 其他共享 p3394 state 文件（external-gateways.test.ts 等）的测试隔离。
+// runtime-paths 现在校验变体名，隔离改为把整棵变体树指到一次性临时目录。
 let previousVariant: string | undefined;
+let previousBaseDir: string | undefined;
 let previousWs: string | undefined;
-let variant = '';
+let scratchBase = '';
 beforeAll(() => {
-  variant = 'p3394-wd-' + Math.random().toString(36).slice(2, 8);
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-wd-'));
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
   previousWs = process.env.COGSEED_WORKSPACE_ROOT;
-  process.env.COGSEED_RUNTIME_VARIANT = variant;
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
   process.env.COGSEED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-wd-ws-'));
 });
 afterAll(() => {
   if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
   if (previousWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousWs;
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variant), { recursive: true, force: true }); } catch { /* best effort */ }
+  try { fs.rmSync(scratchBase, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
 function makeRegistryAutoRegister(registry: P3394PeerRegistry) {

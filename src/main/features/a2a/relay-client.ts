@@ -105,6 +105,8 @@ export async function sendRelayMessageDetailed(userId: string, input: {
   kind: RelayMessage['kind'];
   text: string;
   requestId?: string;
+  /** Host-owned freshness fence, checked again after token refresh awaits. */
+  isCurrent?: () => boolean;
 }): Promise<{ ok: true; messageId: string } | { ok: false; code: string }> {
   const to = String(input.to || '').trim();
   const text = String(input.text || '').trim();
@@ -116,13 +118,18 @@ export async function sendRelayMessageDetailed(userId: string, input: {
     return { ok: false, code: 'INVALID_MESSAGE' };
   }
   if (!uid) return { ok: false, code: 'HUB_NOT_CONFIGURED' };
+  if (input.isCurrent && !input.isCurrent()) return { ok: false, code: 'HUB_NOT_CONFIGURED' };
 
   // Freeze the idempotent envelope before any session/refresh await.
   const body = JSON.stringify({ to, conversationId, kind: input.kind, text, ...(requestId ? { requestId } : {}) });
-  const outcome = await withHubSession(uid, async ({ baseUrl, token }) => {
+  let unconfirmedAttempt = false;
+  let acknowledged: { ok: true; messageId: string } | undefined;
+  const outcome = await withHubSession(uid, async ({ baseUrl, token, isCurrent }) => {
+    if (!isCurrent() || (input.isCurrent && !input.isCurrent())) return { ok: false as const, code: 'HUB_NOT_CONFIGURED' };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
+      unconfirmedAttempt = true;
       const res = await fetch(`${baseUrl}/api/v1/a2a/relay/messages`, {
         method: 'POST',
         headers: {
@@ -133,6 +140,10 @@ export async function sendRelayMessageDetailed(userId: string, input: {
         body,
         signal: controller.signal,
       });
+      // A 401 explicitly rejects this POST: it did not create a message. A
+      // refresh failure or identity change before the next POST must retain
+      // the normal auth/session error rather than invent delivery uncertainty.
+      if (res.status === 401) unconfirmedAttempt = false;
       const json = (await res.json().catch(() => null)) as
         | { ok?: boolean; data?: { messageId?: string }; error?: { code?: string } }
         | null;
@@ -144,7 +155,8 @@ export async function sendRelayMessageDetailed(userId: string, input: {
           code: String(json?.error?.code || (res.ok ? 'HUB_BAD_RESPONSE' : `HUB_${res.status}`)),
         };
       }
-      return { ok: true as const, messageId };
+      acknowledged = { ok: true, messageId };
+      return acknowledged;
     } catch (error) {
       if (error instanceof HubApiError) throw error;
       return { ok: false as const, code: 'HUB_UNREACHABLE' };
@@ -152,7 +164,13 @@ export async function sendRelayMessageDetailed(userId: string, input: {
       clearTimeout(timer);
     }
   });
-  if ('reason' in outcome) return { ok: false, code: sessionFailureCode(outcome.reason) };
+  if ('reason' in outcome) {
+    // A stale session must prevent new effects, but cannot undo a POST already
+    // issued with the original frozen envelope. Preserve its acknowledgement;
+    // otherwise retain uncertainty instead of enabling a duplicate-send retry.
+    if (acknowledged) return acknowledged;
+    return { ok: false, code: unconfirmedAttempt ? 'HUB_ACKNOWLEDGEMENT_UNKNOWN' : sessionFailureCode(outcome.reason) };
+  }
   return outcome.value;
 }
 

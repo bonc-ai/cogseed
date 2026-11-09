@@ -158,7 +158,7 @@ export function resolveToolResultRef(
 }
 function resolveResultRef(toolResultsDir: string, ref: string, seen: Set<string>): { ok: true; path: string } | { ok: false; code: string; message: string } {
   const sourceRequired = () => ({ ok: false as const, code: 'E_RESULT_SOURCE_RECHECK_REQUIRED',
-    message: 'This historical cognition result requires a fresh domain read. Use cognition_ontology_query or read_ability_asset with the original task mode/query, or a currently authorized manage/inventory read. Current source permissions and version must be checked again; a historical ref does not grant management authority.' });
+    message: 'This historical cognition result requires a fresh domain read. Use cognition_ontology_query with a topic query or recordId, or read_ability_asset with the assetId. Current source permissions and version must be checked again; a historical ref does not grant write authority.' });
   if (isGovernedCognitionResult(ref.split('.')[0])) return sourceRequired();
   if (seen.has(ref) || seen.size >= 32) return sourceRequired();
   seen.add(ref);

@@ -16,6 +16,7 @@
  */
 
 import { createLogger } from '../../logger';
+import { hasConsultationRequestForReception } from './consultation-service';
 import { createHash } from 'node:crypto';
 import { safeId } from '../../storage';
 import { userA2AReceptionLedgerFile } from '../../paths';
@@ -60,7 +61,7 @@ export interface ReceptionQuestion {
   fromName?: string;
 }
 
-export type ReceptionRunStatus = 'answered' | 'failed' | 'not_active' | 'duplicate' | 'skipped' | 'uncertain';
+export type ReceptionRunStatus = 'answered' | 'failed' | 'not_active' | 'duplicate' | 'skipped' | 'uncertain' | 'awaiting_owner';
 
 export interface ReceptionRunResult {
   status: ReceptionRunStatus;
@@ -311,6 +312,7 @@ export async function recoverClaimedReceptions(
         await quarantineReception(userId, entry.messageId, 'invalid or legacy reception identity');
         return null;
       }
+      if (await hasConsultationRequestForReception(userId, entry.conversationId, entry.messageId)) return null;
       if (entry.status === 'uncertain') return null;
       if (entry.status === 'answered' || entry.status === 'failed') {
         await clearReceptionBinding(userId, entry, isCurrent);
@@ -663,6 +665,7 @@ async function runReceptionOnce(
   if (existing?.status === 'expired') return { status: 'skipped', error: 'reception expired' };
   if (matching.length !== 1 || !matchesReception(existing, identity)) return { status: 'skipped', error: 'reception identity mismatch' };
   if (existing.admission !== 'committed') return { status: 'skipped', error: 'reception not admitted' };
+  if (await hasConsultationRequestForReception(userId, cid, messageId)) return { status: 'awaiting_owner' };
   if (existing.status === 'uncertain') return { status: 'uncertain', error: existing.error };
   if (existing.status === 'answered' || existing.status === 'failed') {
     await clearReceptionBinding(userId, existing, isCurrent);
@@ -762,6 +765,7 @@ async function runReceptionOnce(
       cid,
       error: error instanceof Error ? error.message : String(error),
     });
+    if (await hasConsultationRequestForReception(userId, cid, messageId)) return { status: 'awaiting_owner' };
     const current = (await readReceptionLedger(userId)).find((entry) => entry.messageId === messageId);
     if (current?.stage === 'dispatching' || current?.stage === 'enqueued') {
       await quarantineReception(userId, messageId, 'model dispatch interrupted; execution may have occurred');
@@ -771,6 +775,12 @@ async function runReceptionOnce(
     waiter?.cancel();
   }
 
+  // The tool stores the private consultation before ending the model turn.
+  // Never forward the model final/proposal, even if the owner already decided.
+  if (await hasConsultationRequestForReception(userId, cid, messageId)) {
+    await clearReceptionBinding(userId, reserved, isCurrent);
+    return { status: 'awaiting_owner' };
+  }
   const ok = !!answer;
   const outbound = answer || receptionFailureText();
   const stored = await updateReceptionEntry(userId, identity, (entry) => ({

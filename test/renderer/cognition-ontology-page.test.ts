@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
-function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults?: Array<Record<string, unknown>>, candidateFixture?: Record<string, any>, options: { holdSnapshot?: boolean } = {}) {
+function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults?: Array<Record<string, unknown>>, candidateFixture?: Record<string, any>, options: { holdSnapshot?: boolean; graphSnapshots?: Record<string, any> } = {}) {
   let releaseSnapshot: (() => void) | null = null;
   const snapshotGate = options.holdSnapshot ? new Promise<void>(resolve => { releaseSnapshot = resolve; }) : null;
   const file = path.join(__dirname, '../../src/renderer/modules/cognition-ontology.js');
@@ -13,6 +13,7 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
     moduleId: string;
     records: Record<string, unknown>;
     initialSelection: any;
+    layout?: any;
     onSelect: Function;
     onInspectorClose?: Function;
     onOpenModuleGraph?: Function;
@@ -23,6 +24,9 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
   let failNextGraph = false;
   let exportResponse: Record<string, unknown> = { ok: true, canceled: false, filePath: '/tmp/cogseed-ontology-export.json', bytes: 256 };
   let confirmResult = true;
+  let confirmMessages: string[] = [];
+  let selectValues: Record<string, string> = {};
+  let promoteResponse: Record<string, unknown> = { ok: true, promoted: { modules: 2, records: 2 }, skippedAlreadyTask: 0, blocked: [], batches: [], retries: 0, revision: 1, partial: false };
   let candidate = candidateFixture ? structuredClone(candidateFixture) : null;
   let modalClick: Function | null = null;
   let nextFormValues: Record<string, string> = {};
@@ -63,8 +67,8 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
     cogseed: { async invoke(channel: string, payload: Record<string, unknown> = {}) {
       calls.push({ channel, payload });
       if (channel === 'cognition.ontology.snapshot') {
-        if (!snapshotGate) return { ok: true, ontology: doc };
-        return snapshotGate.then(() => ({ ok: true, ontology: doc }));
+        if (!snapshotGate) return { ok: true, ontology: doc, graphSnapshots: options.graphSnapshots || {} };
+        return snapshotGate.then(() => ({ ok: true, ontology: doc, graphSnapshots: options.graphSnapshots || {} }));
       }
       if (channel === 'cognition.ontology.document.edit') {
         const record = (doc.records as Record<string, any>)[String(payload.recordId)];
@@ -83,6 +87,7 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
       if (channel === 'personalOntology.candidates.list') return { ok: true, candidate_updates: [] };
       if (channel === 'cognition.ontology.export') return { ...exportResponse };
       if (channel === 'cognition.ontology.history.archive') return { ok: true, archivedHistory: 2, archivedReceipts: 1, archivePath: '/tmp/ontology.archive.jsonl' };
+      if (channel === 'cognition.ontology.graph.generate') return { ok: true, entry: { status: 'running', ontologyRevision: doc.revision, updatedAt: new Date().toISOString() } };
       if (channel === 'cognition.ontology.graph.query') {
         if (failNextGraph) { failNextGraph = false; return { ok: false, error: 'temporary graph failure' }; }
         const focusId = String(payload.focusId || '');
@@ -98,6 +103,8 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
       if (channel === 'cognition.ontology.history.get') return { ok: true, history: [] };
       if (channel === 'recall.candidates.save') return { ok: true, candidate: { id: 'candidate-1' } };
       if (channel === 'recall.candidates.read') return candidate ? { ok: true, candidate: structuredClone(candidate) } : { ok: false, error: 'candidate unavailable' };
+      if (channel === 'cognition.ontology.access.preview') return { ok: true, closure: ['private-module', 'ref-private-module'], modules: [{ id: 'private-module', name: '私密本体' }, { id: 'ref-private-module', name: '引用本体' }], counts: { modules: 2, records: 2, byKind: { module: 2, definition: 0, entity: 1, assertion: 1, rule: 0, reference: 0 } }, blocked: [] };
+      if (channel === 'cognition.ontology.access.promote') return { ...promoteResponse };
       throw new Error(`unexpected channel ${channel}`);
     } },
     uiButton(options: any) {
@@ -121,7 +128,7 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
       }
       return '<div></div>';
     },
-    async uiConfirm() { return confirmResult; },
+    async uiConfirm(message: string) { confirmMessages.push(message); return confirmResult; },
     uiModal({ bodyHtml }: any) {
       const controls = [...bodyHtml.matchAll(/data-ontology-field="([^"]+)"/g)].map(match => ({ dataset: { ontologyField: match[1] }, value: nextFormValues[match[1]] || '' }));
       const selects = [...bodyHtml.matchAll(/<div id="([^"]+)" data-ui-select data-ui-select-config='([^']*)'/g)].map(match => ({ id: match[1], dataset: { uiSelectConfig: match[2] } }));
@@ -139,7 +146,7 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
       return promise;
     },
     hydrateUiFormSelects(_form: unknown, callbacks: Record<string, (value: string) => void>) {
-      for (const select of [...bodySelects]) callbacks[select.id]?.(select.value);
+      for (const select of [...bodySelects]) callbacks[select.id]?.(selectValues[select.id] ?? select.value);
     },
     uiSegmentedControl({ items, ariaLabel }: any) { return `<div role="group" aria-label="${ariaLabel}">${items.map((item: any) => `<button type="button" data-ontology-action="${item.attrs['data-ontology-action']}" data-layout="${item.attrs['data-layout']}" aria-pressed="${item.value === 'radial'}">${item.label}</button>`).join('')}</div>`; },
     uiTabs({ items, attrs = {} }: any) { return `<div class="ui-tabs" data-ui-tabs ${Object.entries(attrs).map(([k,v]) => `${k}="${v}"`).join(' ')}>${items.map((item: any) => `<button data-ui-tab="${item.value}">${item.label}</button>`).join('')}</div>`; },
@@ -150,6 +157,7 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
       moduleId: options.moduleId,
       records: options.doc.records,
       initialSelection: options.initialSelection,
+      ...(options.layout ? { layout: options.layout } : {}),
       onSelect: options.onSelect,
       onInspectorClose: options.onInspectorClose,
       onOpenModuleGraph: options.onOpenModuleGraph,
@@ -158,7 +166,7 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
   } };
   const bodySelects: Array<{ id: string; value: string }> = [];
   root.hydrateUiFormSelects = (_form: unknown, callbacks: Record<string, (value: string) => void>) => {
-    for (const select of bodySelects) callbacks[select.id]?.(select.value);
+    for (const select of bodySelects) callbacks[select.id]?.(selectValues[select.id] ?? select.value);
     bodySelects.length = 0;
   };
   const context: any = { window: root, document: {}, console, Date, Intl, Map, Set, String, Number, Math, JSON, setTimeout, clearTimeout };
@@ -166,7 +174,9 @@ function pageHarness(extraRecords: Record<string, any> = {}, customSearchResults
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', name), 'utf8'), context, { filename: name });
   }
   vm.runInNewContext(source, context, { filename: file });
-  return { context, container, calls, graphMounts, graphUpdates, buttonCalls, toasts, module, doc, failNextGraph() { failNextGraph = true; }, setFormValues(values: Record<string, string>) { nextFormValues = values; },
+  return { context, container, calls, graphMounts, graphUpdates, buttonCalls, toasts, module, doc, confirmMessages, failNextGraph() { failNextGraph = true; }, setFormValues(values: Record<string, string>) { nextFormValues = values; },
+    setSelectValues(values: Record<string, string>) { selectValues = values; },
+    setPromoteResponse(value: Record<string, unknown>) { promoteResponse = value; },
     setConfirmResult(value: boolean) { confirmResult = value; },
     releaseSnapshot() { releaseSnapshot?.(); },
     dispatchWindowEvent(type: string) { root.dispatchEvent({ type }); },
@@ -307,6 +317,53 @@ describe('本体工作台页面层级与接线', () => {
     expect(f.container.innerHTML).toContain('data-ontology-action="directory-view"');
     expect(f.container.innerHTML).not.toContain('ont-module-cards');
   });
+  it('shows saved graph status and passes model layout to the graph component', async () => {
+    const snapshot = {
+      schemaVersion: 1, ownerId: 'test-user', scope: 'global', ontologyRevision: 1,
+      at: '2026-11-03', contentScale: 'instances', nodes: [{
+        id: 'project-module', recordId: 'project-module', version: 1, label: 'CogSeed项目',
+        kind: 'module', x: 123, y: 456, source: { kind: 'user', label: '用户确认' },
+      }], edges: [{
+        id: 'edge-1', from: 'project-module', to: 'project-module', label: '模块引用',
+        kind: 'reference', recordId: 'project-module', version: 1, formal: true,
+      }], suggestions: [], generatedAt: '2026-11-03T00:00:00.000Z',
+      generator: { kind: 'model', promptVersion: 'v1' }, validation: { valid: true, checkedRecordVersions: { 'project-module': 1 } },
+    };
+    const f = pageHarness({}, undefined, undefined, {
+      graphSnapshots: {
+        global: { status: 'running', ontologyRevision: 1, updatedAt: '2026-11-03T00:00:00.000Z', snapshot },
+      },
+    });
+    await f.context.window.mountCognitionOntology(f.container);
+    click(f.container, 'directory-view', '', { view: 'graph' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(f.container.innerHTML).toContain('data-graph-status="running"');
+    expect(f.graphMounts.at(-1)?.layout?.positions['project-module']).toEqual({ x: 123, y: 456 });
+    expect(f.graphMounts.at(-1)?.layout?.edgeLabels['edge-1']).toBe('模块引用');
+  });
+
+  it('shows a failed graph with a retry action', async () => {
+    const snapshot = {
+      schemaVersion: 1, ownerId: 'test-user', scope: 'global', ontologyRevision: 1,
+      at: '2026-11-03', contentScale: 'instances', nodes: [], edges: [], suggestions: [],
+      generatedAt: '2026-11-03T00:00:00.000Z', generator: { kind: 'model', promptVersion: 'v1' },
+      validation: { valid: true, checkedRecordVersions: {} },
+    };
+    const f = pageHarness({}, undefined, undefined, {
+      graphSnapshots: {
+        global: { status: 'failed', ontologyRevision: 1, updatedAt: '2026-11-03T00:00:00.000Z', error: 'synthetic', snapshot },
+      },
+    });
+    await f.context.window.mountCognitionOntology(f.container);
+    click(f.container, 'directory-view', '', { view: 'graph' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(f.container.innerHTML).toContain('data-graph-status="failed"');
+    expect(f.container.innerHTML).toContain('data-ontology-action="retry-graph"');
+    click(f.container, 'retry-graph');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(f.calls.some(call => call.channel === 'cognition.ontology.graph.generate')).toBe(true);
+  });
+
   it('关系图中输入搜索会回到卡片搜索结果', async () => {
     const f = pageHarness();
     await f.context.window.mountCognitionOntology(f.container);
@@ -723,6 +780,47 @@ describe('i18n-change 在快照未落地时只重绘加载骨架（语言切换�
     f.dispatchWindowEvent('i18n-change');
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(container.innerHTML).toContain('ont-module-cards');
+  });
+});
+
+describe('本体权限批量放开', () => {
+  const privateModule = { id: 'private-module', kind: 'module', version: 1, status: 'active', access: 'owner_only',
+    createdAt: null, updatedAt: null, source: { kind: 'user', label: '用户确认' }, name: '私密本体', description: '私密内容', scope: { kind: 'personal' } };
+  async function openPrivateModule() {
+    const f = pageHarness({ 'private-module': privateModule });
+    await f.context.window.mountCognitionOntology(f.container);
+    click(f.container, 'open-module', 'private-module');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    f.setFormValues({ name: '私密本体', description: '私密内容', scopeId: '' });
+    f.setSelectValues({ access: 'task' });
+    click(f.container, 'edit-module');
+    return f;
+  }
+  it('从仅自己切换为可用于任务时先预览再批量放开', async () => {
+    const f = await openPrivateModule();
+    await f.saveDialog();
+
+    expect(f.confirmMessages.some(message => message.includes('私密本体') && message.includes('2'))).toBe(true);
+    expect(f.calls.find(call => call.channel === 'cognition.ontology.access.preview')?.payload.moduleIds).toEqual(['private-module']);
+    // promote 只传所选模块：闭包由后端重算，前端透传整个闭包会撞 IPC 的 20 模块上限。
+    expect(f.calls.find(call => call.channel === 'cognition.ontology.access.promote')?.payload.moduleIds).toEqual(['private-module']);
+    expect(f.calls.some(call => call.channel === 'cognition.ontology.command.commit')).toBe(false);
+    expect(f.toasts.some(toast => String(toast.message).includes('已放开'))).toBe(true);
+  });
+  it('取消确认时不调用批量放开', async () => {
+    const f = await openPrivateModule();
+    f.setConfirmResult(false);
+    await f.saveDialog();
+    expect(f.calls.some(call => call.channel === 'cognition.ontology.access.promote')).toBe(false);
+  });
+  it('部分失败时改报未完成且不关对话框，可再次保存重试', async () => {
+    const f = await openPrivateModule();
+    f.setPromoteResponse({ ok: true, promoted: { modules: 1, records: 0 }, skippedAlreadyTask: 0, blocked: [], batches: [{ commandId: 'ont-access-promo-x', revision: 1, changedIds: ['private-module'] }], retries: 0, revision: 1, partial: true, errorCode: 'unexpected' });
+    await f.saveDialog();
+    expect(f.toasts.some(toast => toast.options?.variant === 'success')).toBe(false);
+    expect(f.toasts.some(toast => String(toast.message).includes('未全部完成') && toast.options?.variant === 'error')).toBe(true);
+    await f.saveDialog();
+    expect(f.calls.filter(call => call.channel === 'cognition.ontology.access.promote')).toHaveLength(2);
   });
 });
 

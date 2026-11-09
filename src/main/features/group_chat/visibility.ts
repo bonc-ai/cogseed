@@ -44,6 +44,14 @@ export interface RecallMessageCitation {
   match_method: 'semantic' | 'ontology' | 'semantic_ontology' | 'recency_fallback' | 'manual' | 'standing_preference';
 }
 
+/** The confirmed projection was not applied to this turn; automatic retrieval
+ *  supplied the context instead. Reason is a knowledge-boundary code, never a
+ *  raw error message. */
+export interface RecallFallbackInfo {
+  projectionId: string;
+  reason: string;
+}
+
 /** Immutable snapshot of one visible message referenced from another task.
  * The main process resolves these fields from the source JSONL; renderer
  * callers submit only source conversation/message locators. */
@@ -93,6 +101,11 @@ export interface GroupMessageMetrics {
   firstTokenAt: number | null;
   completedAt: number;
   usage?: {
+    /** Authoritative complete prompt input including caches; absent is unknown. */
+    totalInputTokens?: number;
+    requestedModel?: string;
+    /** Last-call response identity only; never an identity for every turn call. */
+    reportedModel?: string;
     inputTokens?: number;
     outputTokens?: number;
     cacheReadTokens?: number;
@@ -100,6 +113,7 @@ export interface GroupMessageMetrics {
     /** 最后一次调用的 prompt 侧用量（2026-09-11）：当前上下文占用的权威
      *  口径；上方字段为整轮累加（消耗口径，每步重发的历史被求和）。 */
     lastCallUsage?: {
+      totalInputTokens?: number;
       inputTokens?: number;
       outputTokens?: number;
       cacheReadTokens?: number;
@@ -110,13 +124,21 @@ export interface GroupMessageMetrics {
     costUsd?: number;
   };
   toolCalls?: number;
+  /** Measured execution phases, absent on legacy/unsupported runtimes. */
+  timings?: {
+    providerMs?: number;
+    toolMs?: number;
+    compactionMs?: number;
+    retryWaitMs?: number;
+    otherMs?: number;
+  };
   /** 该回合实际使用的模型 id（CLI 自报或主机下发值）——会话统计的上下文
    *  分母按它解析，CLI 回合不再错用 CogSeed 当前选中模型的窗口。 */
   model?: string;
 }
 
 export interface GroupMessage {
-  terminal_status?: 'completed' | 'failed' | 'waiting_input';
+  terminal_status?: 'completed' | 'failed' | 'cancelled' | 'waiting_input';
   /** Stable per-message id (not jsonl line index). Used by visibility +
    * dedupe. */
   id: string;
@@ -148,6 +170,8 @@ export interface GroupMessage {
   projection_receipt?: { projectionId: string; authorization: string };
   /** Host-verified Recall assets supplied to the model for this persisted reply. */
   recall_citations?: RecallMessageCitation[];
+  /** Confirmed projection fallback for this reply; absent when the committed baseline applied. */
+  recall_fallback?: RecallFallbackInfo;
   /** KSTAR lightweight review confirmation card; raw evidence stays in main storage. */
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   asset_change_approval_card?: { kind: 'asset_change_approval'; proposalId: string; assetId: string; assetTitle: string; baselineVersion: string; diff: { before: string; after: string; fields: string[] }; reason: string; actions: Array<'confirm' | 'defer' | 'reject'> };

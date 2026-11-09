@@ -25,10 +25,9 @@ function recoveryHint(code: string): string {
     case 'baseline_changed':
     case 'inventory_snapshot_changed':
     case 'invalid_cursor':
-      return 'Restart the original authorized read without a stale cursor or expectedRevision. Use the newly returned revision and cursors; do not mix snapshots or guess a revision.';
+      return 'Restart the original read without a stale cursor or expectedRevision. Use the newly returned revision and cursors; do not mix snapshots or guess a revision.';
     case 'not_authorized':
-    case 'inventory_intent_required':
-      return 'Do not repeat the denied read unchanged or broaden its scope. Stay within the current task permissions; management reads require the user to explicitly name the target, and inventory requires an explicit full-inventory instruction.';
+      return 'Do not repeat the denied read unchanged or broaden its scope. A denial reflects owner, source or task-scope state, not missing content; correct the target or stay within the current permissions.';
     case 'not_found':
       return 'Recheck the exact target ID or name within the authorized scope. This does not prove that the entire library lacks the content.';
     case 'source_unavailable':

@@ -524,7 +524,7 @@ describe('confirmed Recall projection prompt injection', () => {
     ]);
   });
 
-  it('rejects committed injection when a frozen asset version changed', async () => {
+  it('continues without committed injection when a frozen asset version changed', async () => {
     const selected = await createAssetWith({
       judgment: 'Review OAuth callback state.',
       summary: 'OAuth callback state',
@@ -540,10 +540,15 @@ describe('confirmed Recall projection prompt injection', () => {
       statement: 'Changed after Forecast.', actor: 'user', reason: 'test drift',
     });
 
-    await expect(promptInjection.buildRecallTurnPromptContext('user-a', {
+    // 版本漂移不再拖垮整轮注入（回退自动投影路径），但冻结的旧正文与新正文
+    // 都不得凭 committed 基线混入。
+    const turn = await promptInjection.buildRecallTurnPromptContext('user-a', {
       cid: 'cid-drift', taskRunId: 'turn-drift', taskText: 'Review OAuth',
       committedProjectionId: confirmed.id,
-    })).rejects.toMatchObject({ code: 'projection_asset_version_changed' });
+    });
+    expect(turn.promptBlock).not.toContain('Review OAuth callback state.');
+    expect(turn.promptBlock).not.toContain('Changed after Forecast.');
+    expect(turn.committedFallbackReason).toBe('projection_asset_version_changed');
   });
 
   it('injects an asset only once when it sits in both the committed and the conversation projection', async () => {
@@ -1098,4 +1103,15 @@ it('omits complete dispatched cognition records when the shared prompt budget is
   for (let index = 0; index < ids.length; index++) {
     expect(result.promptBlock.includes(`局限末尾标记${index}`)).toBe(result.assetIds.includes(ids[index]));
   }
+});
+
+describe('committed fallback reason normalization', () => {
+  it('keeps knowledge-boundary codes and collapses everything else', async () => {
+    const { normalizeCommittedFallbackReason } = await import('../../../../src/main/features/recall/prompt-injection');
+    expect(normalizeCommittedFallbackReason(Object.assign(new Error('expired'), { code: 'projection_expired' })))
+      .toBe('projection_expired');
+    expect(normalizeCommittedFallbackReason(Object.assign(new Error('read failed'), { code: 'ENOENT' })))
+      .toBe('committed_assembly_failed');
+    expect(normalizeCommittedFallbackReason(new Error('boom'))).toBe('committed_assembly_failed');
+  });
 });

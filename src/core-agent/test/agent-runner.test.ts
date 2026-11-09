@@ -1019,8 +1019,12 @@ describe("AgentRunner", () => {
 
     const result2 = await runner.run({ message: "Second message" });
     expect(result2.text).toContain("Response 2");
-    // Second call should see previous messages in session
-    expect(result2.text).toContain("saw 3"); // user1, assistant1, user2
+    // The transport also carries a host-state snapshot, which is not a real
+    // user turn. Assert durable history independently of transport controls.
+    expect(result2.text).toContain("saw 4");
+    expect(runner.getSession().getMessages().map(message => message.role))
+      .toEqual(["user", "assistant", "user", "assistant"]);
+    expect(JSON.stringify(runner.getSession().getMessages())).not.toContain("Host execution state snapshot");
   });
 
   it("registers host-verified history resources from run params", async () => {
@@ -3117,9 +3121,9 @@ describe("AgentRunner", () => {
   });
 
   it("interrupt-steer: no drainSteer / empty steer leaves the run unchanged", async () => {
-    // Same shape, but drainSteer returns [] — round 2 must not gain any extra
-    // user message beyond the tool_result.
+    // Empty steer adds no human continuation; host state is transport-only.
     const userTextCounts: number[] = [];
+    const requestBodies: string[] = [];
     let streamCalls = 0;
     const provider: LLMProvider = {
       id: "mock",
@@ -3127,6 +3131,7 @@ describe("AgentRunner", () => {
       async complete(): Promise<CompletionResult> { throw new Error("unused"); },
       async *stream(params: CompletionParams) {
         streamCalls++;
+        requestBodies.push(JSON.stringify(params.messages));
         userTextCounts.push(
           params.messages.filter((m) => m.role === "user"
             && m.content.some((c) => c.type === "text")).length,
@@ -3174,9 +3179,11 @@ describe("AgentRunner", () => {
 
     expect(streamCalls).toBe(2);
     // No steer is folded. The second round adds only deterministic, view-only
-    // host state: the completed-work ledger and execution objective anchor.
+    // host state: one snapshot with both ledger and execution objective.
     expect(userTextCounts[0]).toBe(1);
-    expect(userTextCounts[1]).toBe(3);
+    expect(userTextCounts[1]).toBe(2);
+    expect(requestBodies[1]).toContain('Completed work ledger');
+    expect(requestBodies[1]).toContain('Execution plan anchor');
   });
 
   it("injects run-scoped Maps shared across tool rounds", async () => {

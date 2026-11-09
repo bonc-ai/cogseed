@@ -42,6 +42,7 @@ import {
   listTasks,
   nextDueAtForTest,
   runTaskNow,
+  setTaskEnabled,
   stopScheduler,
   subscribeFires,
   updateTask,
@@ -54,6 +55,19 @@ import {
 } from '../../../src/main/features/auto_tasks';
 import { setCurrentLang, setCurrentUiLang } from '../../../src/main/i18n';
 import { _setDeviceFingerprintForTests } from '../../../src/main/util/device';
+
+// S5：执行前复查动态引入 template_refs；用可变表模拟本机就绪状态（未列出 = ready）。
+const previewRefStates = vi.hoisted(() => new Map<string, string>());
+vi.mock('../../../src/main/features/template_refs', () => ({
+  resolveTemplateRequirements: (
+    _uid: string,
+    refs: Array<{ kind: string; id: string }>,
+    connectors: string[],
+  ) => ({
+    items: refs.map((ref) => ({ ref, state: previewRefStates.get(`${ref.kind}:${ref.id}`) ?? 'ready' })),
+    connectors: connectors.map((t) => ({ connector_type: t, state: previewRefStates.get(`connector:${t}`) ?? 'ready' })),
+  }),
+}));
 
 const autoRuntime = vi.hoisted(() => ({
   createConversation: vi.fn(),
@@ -1280,5 +1294,226 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
     });
     expect(dispatchRuntime.dispatchToFeishuHome).not.toHaveBeenCalled();
     expect(events[0]).toMatchObject({ type: 'conv_created', task_id: taskId });
+  });
+});
+
+describe('auto_tasks › 模板任务（S5）', () => {
+  const origin = { template_id: 'task-tpl-b', version: '1.0.0', request_id: 'req_tpl_0001' };
+
+  it('returns the existing task when the same request_id is created twice', async () => {
+    const first = await createTask(TEST_UID, {
+      id: 'at_aaa00001', content: 'x', enabled: false,
+      schedule: { type: 'daily', hour: 9, minute: 0 }, template_origin: origin,
+    });
+    const second = await createTask(TEST_UID, {
+      id: 'at_aaa00002', content: 'y', enabled: false,
+      schedule: { type: 'daily', hour: 9, minute: 0 }, template_origin: origin,
+    });
+    expect(first.ok).toBe(true);
+    expect(second).toMatchObject({ ok: true, task: { id: 'at_aaa00001' } });
+    expect(await listTasks(TEST_UID)).toHaveLength(1);
+  });
+
+  it('rejects a template one-time task whose time has passed, when creating and when enabling', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T12:00:00.000Z'));
+    const created = await createTask(TEST_UID, {
+      id: 'at_aaa00003', content: 'x', enabled: false,
+      schedule: { type: 'one_time', at: '2026-05-22T10:00:00.000Z' }, template_origin: origin,
+    });
+    expect(created).toMatchObject({ ok: false, error: 'one_time_expired' });
+
+    const future = await createTask(TEST_UID, {
+      id: 'at_aaa00004', content: 'x', enabled: false,
+      schedule: { type: 'one_time', at: '2026-05-22T18:00:00.000Z' },
+      template_origin: { ...origin, request_id: 'req_tpl_0002' },
+    });
+    expect(future.ok).toBe(true);
+    vi.setSystemTime(new Date('2026-05-22T19:00:00.000Z'));
+    expect(await setTaskEnabled(TEST_UID, 'at_aaa00004', true))
+      .toMatchObject({ ok: false, error: 'one_time_expired' });
+    vi.useRealTimers();
+  });
+
+  it('starts a re-enabled weekly template task at the next occurrence, not right away', async () => {
+    vi.useFakeTimers();
+    // 2026-05-18 周一创建并停用，2026-05-22 周五过了当周时间点才启用。
+    vi.setSystemTime(new Date('2026-05-18T08:00:00.000Z'));
+    await createTask(TEST_UID, {
+      id: 'at_aaa00005', content: 'x', enabled: false,
+      schedule: { type: 'weekly', weekday: 1, hour: 10, minute: 0 }, template_origin: origin,
+    });
+    vi.setSystemTime(new Date('2026-05-22T12:00:00.000Z'));
+    expect(await setTaskEnabled(TEST_UID, 'at_aaa00005', true)).toMatchObject({ ok: true });
+    const now = new Date('2026-05-22T12:00:00.000Z');
+    const saved = (await getTask(TEST_UID, 'at_aaa00005'))!;
+    expect(typeof saved.enabled_at).toBe('string');
+    const next = nextDueAtForTest(saved, now);
+    expect(next && next.getTime()).toBeGreaterThan(now.getTime());
+    vi.useRealTimers();
+  });
+
+  it('keeps the hand-made catch-up behavior unchanged when re-enabled', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-18T08:00:00.000Z'));
+    // 用「当天已过的整点」当调度时间，避免测试依赖本机时区。
+    const reEnableAt = new Date('2026-05-22T12:00:00.000Z');
+    await createTask(TEST_UID, {
+      id: 'at_aaa00006', content: 'x', enabled: false,
+      schedule: { type: 'daily', hour: reEnableAt.getHours(), minute: 0 },
+    });
+    vi.setSystemTime(reEnableAt);
+    await setTaskEnabled(TEST_UID, 'at_aaa00006', true);
+    const now = reEnableAt;
+    const saved = (await getTask(TEST_UID, 'at_aaa00006'))!;
+    expect(saved.enabled_at).toBeUndefined();
+    const next = nextDueAtForTest(saved, now);
+    expect(next && next.getTime()).toBeLessThanOrEqual(now.getTime());
+    vi.useRealTimers();
+  });
+
+  it('ignores template_origin and requirements written through the commander container', async () => {
+    const { containers } = extractAutoTaskContainers([
+      '<auto-task>',
+      '<action>create</action><content>hi</content>',
+      '<schedule>{"type":"daily","hour":9,"minute":0}</schedule>',
+      '<template_origin>{"template_id":"t","version":"1","request_id":"r"}</template_origin>',
+      '<requirements>{"skills":[]}</requirements>',
+      '</auto-task>',
+    ].join(''));
+    const res = await applyAutoTaskContainerFromCommander(TEST_UID, containers[0]);
+    expect(res.ok).toBe(true);
+    expect(res.task?.template_origin).toBeUndefined();
+    expect(res.task?.requirements).toBeUndefined();
+  });
+
+  it('rejects content over the 8000 limit instead of truncating it', async () => {
+    const res = await createTask(TEST_UID, {
+      id: 'at_aaa00007', content: 'x'.repeat(8001), enabled: false,
+      schedule: { type: 'daily', hour: 9, minute: 0 },
+      template_origin: { ...origin, request_id: 'req_tpl_0003' },
+    });
+    expect(res).toMatchObject({ ok: false, error: 'invalid_content' });
+    expect(await getTask(TEST_UID, 'at_aaa00007')).toBeNull();
+  });
+});
+
+describe('auto_tasks › 模板任务执行前复查（S5 / US3）', () => {
+  // 依赖是否就绪由 previewRefStates 控制（照 spaces.test.ts 的模板引用桩）。
+  const missingSkillKey = 'skill:aaaaaaaaaaa1';
+  const readyRef = { source: 'builtin' as const, kind: 'role_template' as const, id: 'student' };
+  const hubSkill = { source: 'hub' as const, kind: 'skill' as const, id: 'aaaaaaaaaaa1' };
+  const origin = { template_id: 'task-tpl-b', version: '1.0.0', request_id: 'req_guard_0001' };
+
+  // 到点时间取「触发那一刻的整点」，否则边界在建任务之前就过去了，根本不会 due。
+  const fireHour = (at: Date) => at.getHours();
+
+  function templateTask(over: Record<string, unknown> = {}, hour = new Date().getHours()) {
+    return {
+      id: 'at_cccc0001', content: 'x', enabled: true,
+      schedule: { type: 'daily' as const, hour, minute: 0 },
+      template_origin: origin,
+      requirements: { skills: [hubSkill], connector_types: [] as string[] },
+      ...over,
+    };
+  }
+
+  it('skips the run, records last_skip and keeps the task enabled when a requirement is missing', async () => {
+    vi.useFakeTimers();
+    const fireAt = new Date('2026-05-22T12:00:00.000Z');
+    vi.setSystemTime(new Date(fireAt.getTime() - 60_000));
+    await createTask(TEST_UID, templateTask({}, fireHour(fireAt)));
+    previewRefStates.set(missingSkillKey, 'needs_fetch');
+    const events: any[] = [];
+    const unsub = subscribeFires((ev) => events.push(ev));
+
+    vi.setSystemTime(fireAt);
+    await _onTimerFireForTest(TEST_UID, 'at_cccc0001');
+    unsub();
+
+    const saved = (await getTask(TEST_UID, 'at_cccc0001'))!;
+    expect(saved.enabled).toBe(true);
+    expect(saved.last_run_at).toBeUndefined();
+    expect(saved.last_skip).toMatchObject({ reason: 'requirements_not_ready' });
+    expect(saved.last_skip?.items?.map((i) => [i.ref.kind, i.ref.id]))
+      .toEqual([['skill', 'aaaaaaaaaaa1']]);
+    expect(autoRuntime.send).not.toHaveBeenCalled();
+    expect(autoRuntime.createConversation).not.toHaveBeenCalled();
+    // 不改派：收件人保持原样，不会被换成主智能体。
+    expect(saved.recipient).toBeUndefined();
+    expect(events.map((e) => e.type)).toContain('fire_skipped');
+    vi.useRealTimers();
+  });
+
+  it('runs at the next occurrence once the requirement is ready and clears last_skip', async () => {
+    vi.useFakeTimers();
+    const fireAt = new Date('2026-05-22T12:00:00.000Z');
+    vi.setSystemTime(new Date(fireAt.getTime() - 60_000));
+    previewRefStates.set(missingSkillKey, 'needs_fetch');
+    await createTask(TEST_UID, templateTask({ id: 'at_cccc0002' }, fireHour(fireAt)));
+
+    vi.setSystemTime(fireAt);
+    await _onTimerFireForTest(TEST_UID, 'at_cccc0002');
+    expect((await getTask(TEST_UID, 'at_cccc0002'))?.last_skip).toBeTruthy();
+
+    // 依赖补齐（换成随包智能体，本机就绪）后，下一个时间点正常执行。
+    previewRefStates.delete(missingSkillKey);
+    await updateTask(TEST_UID, 'at_cccc0002', {
+      requirements: { agent: readyRef, skills: [], connector_types: [] },
+      enabled: false,
+    });
+    await setTaskEnabled(TEST_UID, 'at_cccc0002', true);
+    const next = new Date('2026-05-23T12:00:00.000Z');
+    vi.setSystemTime(next);
+    await _onTimerFireForTest(TEST_UID, 'at_cccc0002');
+
+    const saved = (await getTask(TEST_UID, 'at_cccc0002'))!;
+    expect(saved.last_skip).toBeUndefined();
+    expect(typeof saved.last_run_at).toBe('string');
+    expect(autoRuntime.send).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('rejects manual run and enable with the missing items', async () => {
+    previewRefStates.set(missingSkillKey, 'needs_fetch');
+    await createTask(TEST_UID, templateTask({ id: 'at_cccc0003', enabled: false }));
+    await expect(runTaskNow(TEST_UID, 'at_cccc0003')).resolves.toMatchObject({
+      ok: false, error: 'requirements_not_ready',
+    });
+    const run = await runTaskNow(TEST_UID, 'at_cccc0003');
+    expect(run).toMatchObject({ error: 'requirements_not_ready' });
+    if (!run.ok) expect(run.items?.[0]?.ref.id).toBe('aaaaaaaaaaa1');
+
+    await expect(setTaskEnabled(TEST_UID, 'at_cccc0003', true)).resolves.toMatchObject({
+      ok: false, error: 'requirements_not_ready',
+    });
+  });
+
+  it('ignores legacy task-template connector requirements because connector access follows the execution Agent', async () => {
+    previewRefStates.set('connector:tencent-meeting', 'missing');
+    await createTask(TEST_UID, templateTask({
+      id: 'at_cccc0005',
+      enabled: false,
+      requirements: { skills: [], connector_types: ['tencent-meeting'] },
+    }));
+
+    await expect(runTaskNow(TEST_UID, 'at_cccc0005')).resolves.toMatchObject({ ok: true });
+    expect(autoRuntime.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves tasks without requirements untouched', async () => {
+    vi.useFakeTimers();
+    const fireAt = new Date('2026-05-22T12:00:00.000Z');
+    vi.setSystemTime(new Date(fireAt.getTime() - 60_000));
+    await createTask(TEST_UID, {
+      id: 'at_cccc0004', content: 'x', enabled: true,
+      schedule: { type: 'daily', hour: fireHour(fireAt), minute: 0 },
+    });
+    vi.setSystemTime(fireAt);
+    await _onTimerFireForTest(TEST_UID, 'at_cccc0004');
+    const saved = (await getTask(TEST_UID, 'at_cccc0004'))!;
+    expect(saved.last_skip).toBeUndefined();
+    expect(typeof saved.last_run_at).toBe('string');
+    vi.useRealTimers();
   });
 });

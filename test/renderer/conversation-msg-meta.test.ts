@@ -157,6 +157,56 @@ describe('conversation message metrics line', () => {
     expect((meta.children as Array<Record<string, unknown>>).length).toBe(4);
   });
 
+  it('cache accounting: actual message meta hides incomplete ratios while retaining labeled observations', () => {
+    const mount = loadMountMsgMeta();
+    const ph = makeNode() as { children: Array<Record<string, unknown>> };
+    mount(ph, { ...FULL_METRICS, usage: { inputTokens: 50, outputTokens: 10, cacheReadTokens: 100 } });
+    const meta = (ph.children[0].children as Array<Record<string, unknown>>)[0];
+    expect(meta.textContent).toContain('chat.metrics.tokensV|{"i":"≥150","o":"10"}');
+    expect(meta.textContent).not.toContain('tokensVCache');
+    expect(meta.textContent).not.toContain('0%');
+    expect(meta.textContent).not.toContain('null');
+    expect(meta.title).toContain('未缓存输入 50 tok');
+    expect(meta.title).toContain('缓存读取 100 tok');
+    expect(meta.title).not.toContain('缓存命中');
+    expect(meta.title).not.toContain('缓存写');
+    // Same real mount path on history/finalize refresh recovers precise usage.
+    mount(ph, { ...FULL_METRICS, usage: { inputTokens: 50, outputTokens: 10, cacheReadTokens: 100, cacheWriteTokens: 50 } });
+    expect(meta.textContent).toContain('"h":"50%"');
+    expect(meta.textContent).toContain('tokensVCache');
+  });
+
+  it('authoritative complete input: real message meta shows a >50% badge without write and removes it when read disappears', () => {
+    const mount = loadMountMsgMeta();
+    const ph = makeNode() as { children: Array<Record<string, unknown>> };
+    mount(ph, { ...FULL_METRICS, usage: { totalInputTokens: 200, outputTokens: 10, cacheReadTokens: 120 } });
+    const meta = (ph.children[0].children as Array<Record<string, unknown>>)[0];
+    expect(meta.textContent).toContain('chat.metrics.tokensV|{"i":"200","o":"10"}');
+    expect(meta.textContent).toContain('缓存 60%');
+    expect(meta.textContent).not.toContain('tokensVCache');
+    expect(meta.title).not.toContain('未缓存输入');
+    expect(meta.title).not.toContain('缓存写');
+    mount(ph, { ...FULL_METRICS, usage: { totalInputTokens: 200, outputTokens: 10 } });
+    expect(meta.textContent).toContain('"i":"200"');
+    expect(meta.textContent).not.toContain('缓存 60%');
+    expect(meta.title).toBe('');
+  });
+
+  it('recovered SDK input: real message shows raw total and 80% without claiming fresh input', () => {
+    const mount = loadMountMsgMeta();
+    const ph = makeNode() as { children: Array<Record<string, unknown>> };
+    mount(ph, { ...FULL_METRICS, usage: { inputTokens: 100, totalInputTokens: 100, cacheReadTokens: 80, outputTokens: 10 } });
+    const meta = (ph.children[0].children as Array<Record<string, unknown>>)[0];
+    expect(meta.textContent).toContain('chat.metrics.tokensV|{"i":"100","o":"10"}');
+    expect(meta.textContent).toContain('缓存 80%');
+    expect(meta.textContent).not.toContain('tokensVCache');
+    expect(meta.title).not.toContain('未缓存输入');
+    expect(meta.title).not.toContain('缓存写');
+    mount(ph, { ...FULL_METRICS, usage: { totalInputTokens: 100, outputTokens: 10 } });
+    expect(meta.title).toBe('');
+    expect(meta.textContent).not.toContain('缓存 80%');
+  });
+
   it('produces no msg-meta node for messages without metrics', () => {
     const mount = loadMountMsgMeta();
     const ph = makeNode() as { children: Array<Record<string, unknown>> };

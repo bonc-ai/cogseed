@@ -17,7 +17,8 @@
     const key = node.kind === 'assertion' ? 'graphAssertionKind' : node.kind === 'entity' ? 'graphEntityKind' : node.kind;
     const fallback = node.kind === 'module' ? '本体' : node.kind;
     const label = typeof translate === 'function' ? translate(key, fallback) : fallback;
-    return node.box ? `${node.box} · ${label}` : label;
+    const base = node.box ? `${node.box} · ${label}` : label;
+    return node.group ? `${base} · ${node.group}` : base;
   };
   const fitScale = (fitted, global) => global ? Math.min(1.2, fitted * 1.2) : fitted;
   const today = () => {
@@ -225,10 +226,74 @@
   };
   const STAR_CAPS = { entity: 60, assertion: 80, definition: 40, rule: 24, reference: 12, attribute: 40 };
   const starClamp = (value, min, max) => Math.max(min, Math.min(max, value));
-  const starMatchesLens = (node, value) => value === 'all' || node.box === value
-    || (value === 'R' && node.kind === 'definition' && (node.record.cardinality || node.record.subjectTypes?.length || node.record.objectTypes?.length));
   const starTextWidth = (value, size) => Math.max(size, [...String(value || '')]
     .reduce((sum, character) => sum + (/[\u2e80-\uffff]/.test(character) ? 1 : .56), 0) * size);
+  const starEdgeText = (edge, layout, translate) => {
+    const t = typeof translate === 'function' ? translate : (_key, fallback) => fallback;
+    const base = layout?.edgeLabels?.[edge.id] || (edge.labelKey ? t(edge.labelKey, edge.label) : edge.label);
+    return `${short(base)}${edge.unknownDate ? ` ${t('graphTimeUnknownShort', '时?')}` : ''}${edge.certainty === 'inferred' ? ` ${t('graphInferredShort', '推')}` : edge.certainty === 'unknown' ? ` ${t('graphCertaintyUnknownShort', '未?')}` : ''}`;
+  };
+  const starEdgeLabelVisible = (edge, state = {}) => {
+    const selected = state.selection;
+    if (selected?.kind === 'edge' && selected.id === edge.id) return true;
+    if (selected?.kind === 'node' && (selected.id === edge.from || selected.id === edge.to)) return true;
+    if (state.hoveredEdge === edge.id) return true;
+    if (state.hoveredNode && (state.hoveredNode === edge.from || state.hoveredNode === edge.to)) return true;
+    return Boolean(state.focusId && (state.focusId === edge.from || state.focusId === edge.to));
+  };
+  function starEdgeLabelAnchor(edge, positions, byId, label, nodes = [], occupied = []) {
+    const trim = starTrimEdge(edge, positions, byId);
+    if (!trim) return null;
+    const width = starTextWidth(label, 9) + 10, height = 16;
+    const point = t => {
+      const mt = 1 - t;
+      return { x: mt * mt * trim.start.x + 2 * mt * t * trim.control.x + t * t * trim.end.x,
+        y: mt * mt * trim.start.y + 2 * mt * t * trim.control.y + t * t * trim.end.y };
+    };
+    const tangent = t => {
+      const mt = 1 - t;
+      return { x: 2 * mt * (trim.control.x - trim.start.x) + 2 * t * (trim.end.x - trim.control.x),
+        y: 2 * mt * (trim.control.y - trim.start.y) + 2 * t * (trim.end.y - trim.control.y) };
+    };
+    const candidates = [];
+    for (const t of [.5, .3, .7, .2, .8]) {
+      const at = point(t), delta = tangent(t), length = Math.hypot(delta.x, delta.y) || 1;
+      for (const offset of [12, 20]) for (const side of [1, -1]) candidates.push({
+        x: at.x - delta.y / length * side * offset, y: at.y + delta.x / length * side * offset, width, height,
+      });
+    }
+    const boxes = [];
+    for (const node of nodes) {
+      const position = positions.get(node.id);
+      if (!position) continue;
+      boxes.push({ x: position.x, y: position.y, r: (node.r || 4) + 6 });
+      if (node.labelVisible && Number.isFinite(node.labelX) && Number.isFinite(node.labelWidth) && Number.isFinite(node.labelHeight))
+        boxes.push({ left: node.labelX - node.labelWidth / 2, top: node.labelY - node.labelHeight / 2, width: node.labelWidth, height: node.labelHeight });
+    }
+    const overlapsCircle = (candidate, box) => {
+      const dx = Math.max(Math.abs(candidate.x - box.x) - candidate.width / 2, 0);
+      const dy = Math.max(Math.abs(candidate.y - box.y) - candidate.height / 2, 0);
+      return Math.hypot(dx, dy) < box.r;
+    };
+    const overlapsBox = (candidate, box) => Math.abs(candidate.x - box.x) < (candidate.width + box.width) / 2 + 2
+      && Math.abs(candidate.y - box.y) < (candidate.height + box.height) / 2 + 2;
+    const chosen = candidates.find(candidate => !boxes.some(box => box.r ? overlapsCircle(candidate, box) : overlapsBox(candidate, box))
+      && !occupied.some(box => overlapsBox(candidate, box)));
+    if (!chosen) return null;
+    occupied.push(chosen);
+    return chosen;
+  }
+  function starBaseline(layout) {
+    const positions = new Map();
+    for (const [id, position] of Object.entries(layout?.positions || {})) {
+      if (Number.isFinite(position?.x) && Number.isFinite(position?.y)) positions.set(id, { x: position.x, y: position.y });
+    }
+    return positions;
+  }
+  function starRestore(target, baseline) {
+    for (const [id, position] of baseline || []) target.set(id, { x: position.x, y: position.y });
+    return target;
+  }
 
   function starProject(doc, moduleId, at, translate) {
     const records = doc?.records || {};
@@ -441,8 +506,8 @@
     return { positions, centerId: center.id };
   }
 
-  function visibleStar(projected, focusId, lens) {
-    const eligible = projected.nodes.filter(node => starMatchesLens(node, lens));
+  function visibleStar(projected, focusId) {
+    const eligible = projected.nodes;
     if (!eligible.length) return { nodes: [], edges: [], hidden: 0, focusId: '' };
     let focus = eligible.find(node => node.id === focusId)
       || eligible.filter(node => node.kind === 'entity').sort((a, b) => (b.r || 0) - (a.r || 0) || compare(a, b))[0]
@@ -484,30 +549,47 @@
     let current = { ...options }, destroyed = false, projected, shown;
     let routes = new Map(), routeKey = "";
     let layoutFocus = '';
-    let selection = null, collapsed = true, focusId = '', lens = 'all', neighborhood = 1, scale = 1, pan = { x: 0, y: 0 }, drag = null;
-    let readingIndex = -1, hovered = '', expandedInspectorId = '';
+    let selection = null, collapsed = true, focusId = '', neighborhood = 1, scale = 1, pan = { x: 0, y: 0 }, drag = null;
+    let readingIndex = -1, hovered = '', hoveredEdge = '', expandedInspectorId = '';
     if (options.initialSelection && ['node', 'edge'].includes(options.initialSelection.kind) && options.initialSelection.id) {
       selection = { kind: options.initialSelection.kind, id: String(options.initialSelection.id) };
       collapsed = false;
     }
-    const saved = new Map(), text = (key, fallback, vars) => typeof current.text === 'function' ? current.text(key, fallback, vars) : fallback;
+    const saved = new Map(), modelPositions = new Map(), text = (key, fallback, vars) => typeof current.text === 'function' ? current.text(key, fallback, vars) : fallback;
     const read = id => current.doc?.records?.[id];
     const button = (label, className, attrs, role = 'secondary') => root.uiButton({ label, role, className, attrs });
+    const restoreModelPositions = () => { if (modelPositions.size) starRestore(saved, modelPositions); };
+    const applyLayout = layout => {
+      if (!layout) { modelPositions.clear(); return; }
+      modelPositions.clear();
+      starRestore(modelPositions, starBaseline(layout));
+      saved.clear();
+      restoreModelPositions();
+    };
+    const applyGroups = model => {
+      const groups = current.layout?.groups || {};
+      const labels = current.layout?.nodeLabels || {};
+      for (const node of model.nodes || []) {
+        if (groups[node.id]) node.group = groups[node.id];
+        if (labels[node.id]) { node.label = labels[node.id]; node.fullLabel = labels[node.id]; }
+      }
+      return model;
+    };
+    applyLayout(options.layout);
     function projection() {
-      if (!current.prototype) return project(current.doc, current.moduleId || '', current.at || today());
+      if (!current.prototype) return applyGroups(project(current.doc, current.moduleId || '', current.at || today()));
       if (!current.moduleId) {
         const records = Object.values(current.doc?.records || {});
         const nodes = records.filter(record => record.kind === 'module').sort(compare).map(record => ({ id: record.id, record, label: displayModuleName(record.name), fullLabel: record.name, kind: 'module' }));
         const ids = new Set(nodes.map(node => node.id));
         const edges = records.filter(record => record.kind === 'reference' && record.status === 'active' && ids.has(record.moduleId) && ids.has(record.targetModuleId)).map(record => ({ id: record.id, from: record.moduleId, to: record.targetModuleId, record, label: text('reference', '引用'), kind: 'reference' }));
-        return { nodes, edges, literalFacts: new Map() };
+        return applyGroups({ nodes, edges, literalFacts: new Map() });
       }
-      return starProject(current.doc, current.moduleId, current.at || today(), text);
+      return applyGroups(starProject(current.doc, current.moduleId, current.at || today(), text));
     }
-    const matchesLens = (node, value) => value === 'all' || node.box === value || (value === 'R' && node.kind === 'definition' && (node.record.cardinality || node.record.subjectTypes?.length || node.record.objectTypes?.length));
     function visibleSemantic(model) {
       if (!current.prototype || !current.moduleId) return visibleProjection(model, focusId);
-      const result = visibleStar(model, focusId, lens);
+      const result = visibleStar(model, focusId);
       if (result.focusId) focusId = result.focusId;
       return { nodes: result.nodes, edges: result.edges, hidden: result.hidden };
     }
@@ -529,7 +611,8 @@
       return shown.map((part, index) => `<tspan x="0" y="${(index - (shown.length - 1) / 2) * 16}">${escapeHtml(part)}</tspan>`).join('');
     };
     const relationLabel = edge => edge.labelKey ? text(edge.labelKey, edge.label) : edge.label;
-    const edgeLabel = edge => `${short(relationLabel(edge))}${edge.unknownDate ? ` ${text('graphTimeUnknownShort', '时?')}` : ''}${edge.certainty === 'inferred' ? ` ${text('graphInferredShort', '推')}` : edge.certainty === 'unknown' ? ` ${text('graphCertaintyUnknownShort', '未?')}` : ''}`;
+    const visualEdgeLabel = edge => short(current.layout?.edgeLabels?.[edge.id] || relationLabel(edge));
+    const edgeLabel = edge => starEdgeText(edge, current.layout, text);
     function routeGeometry() {
       const key = shown.nodes.map(node => { const p = saved.get(node.id); return `${node.id}:${p.x},${p.y}`; }).join('|')
         + shown.edges.map(edge => `${edge.id}:${edge.from}:${edge.to}:${edgeLabel(edge)}`).join('|');
@@ -575,17 +658,18 @@
     }
 
     function starEdgeMarkup(edge) {
-      return `<g class="cog-og-edge cog-og-edge--${escapeHtml(edge.kind)}${edge.uncertain ? ' is-uncertain' : ''}" data-og-edge="${escapeHtml(edge.id)}" tabindex="0" role="button" aria-label="${escapeHtml(edgeLabel(edge))}"><path class="cog-og-edge-hit"/><path class="cog-og-edge-line"/></g>`;
+      const label = edgeLabel(edge);
+      return `<g class="cog-og-edge cog-og-edge--${escapeHtml(edge.kind)}${edge.uncertain ? ' is-uncertain' : ''}" data-og-edge="${escapeHtml(edge.id)}" tabindex="0" role="button" aria-label="${escapeHtml(label)}"><path class="cog-og-edge-hit"/><path class="cog-og-edge-line"/><g class="cog-og-star-edge-label" data-og-edge-label="${escapeHtml(edge.id)}" pointer-events="none" aria-hidden="true"><rect x="0" y="-8" width="0" height="16" rx="4"/><text x="0" y="0" text-anchor="middle" dominant-baseline="middle">${escapeHtml(label)}</text></g></g>`;
     }
 
     function starLegendMarkup() {
       const groups = new Map();
       shown.edges.filter(edge => edge.kind === 'assertion').forEach(edge => {
-        const key = relationLabel(edge);
+        const key = visualEdgeLabel(edge);
         groups.set(key, (groups.get(key) || 0) + 1);
       });
       const items = [...groups.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
-        .map(([label, count]) => `<span class="cog-og-star-legend-item"><i></i>${escapeHtml(short(label))} <b>${count}</b></span>`);
+        .map(([label, count]) => `<span class="cog-og-star-legend-item"><i></i>${escapeHtml(label)} <b>${count}</b></span>`);
       const rules = shown.nodes.filter(node => node.kind === 'rule').length;
       const definitions = shown.nodes.filter(node => node.kind === 'definition').length;
       const references = shown.nodes.filter(node => node.kind === 'reference').length;
@@ -683,6 +767,16 @@
       }
     }
 
+    function syncStarEdgeLabels() {
+      const labels = new Map([...container.querySelectorAll('[data-og-edge-label]')].map(element => [element.dataset.ogEdgeLabel, element]));
+      const state = { focusId, selection, hoveredNode: hovered, hoveredEdge };
+      for (const edge of shown.edges) {
+        const element = labels.get(edge.id);
+        if (!element) continue;
+        element.classList.toggle('is-visible', element.dataset.ogAnchored === '1' && starEdgeLabelVisible(edge, state));
+      }
+    }
+
     function paintStar() {
       const world = container.querySelector('.cog-og-world');
       if (!world) return;
@@ -705,6 +799,11 @@
           centerLabel.setAttribute('y', String(position.y + (centerNode.labelDy || 0)));
         }
       }
+      const occupied = [], labelPositions = new Map(saved), labelTasks = [];
+      for (const node of shown.nodes) {
+        const position = starPosition(node, byId);
+        if (position) labelPositions.set(node.id, position);
+      }
       for (const edge of shown.edges) {
         const element = edgeElements.get(edge.id);
         const geometry = starTrimEdge(edge, saved, byId);
@@ -719,7 +818,23 @@
           if (selected) line.setAttribute('marker-end', 'url(#cog-og-arrow)');
           else line.removeAttribute('marker-end');
         }
+        const labelElement = element.querySelector('[data-og-edge-label]');
+        if (labelElement) labelTasks.push({ edge, labelElement });
       }
+      const labelState = { focusId, selection, hoveredNode: hovered, hoveredEdge };
+      labelTasks.sort((a, b) => Number(starEdgeLabelVisible(b.edge, labelState)) - Number(starEdgeLabelVisible(a.edge, labelState)));
+      for (const { edge, labelElement } of labelTasks) {
+        const anchor = starEdgeLabelAnchor(edge, labelPositions, byId, edgeLabel(edge), shown.nodes, occupied);
+        if (!anchor) { labelElement.removeAttribute('data-og-anchored'); continue; }
+        labelElement.setAttribute('transform', `translate(${anchor.x} ${anchor.y})`);
+        const rectangle = labelElement.querySelector('rect');
+        if (rectangle) {
+          rectangle.setAttribute('x', String(-anchor.width / 2));
+          rectangle.setAttribute('width', String(anchor.width));
+        }
+        labelElement.dataset.ogAnchored = '1';
+      }
+      syncStarEdgeLabels();
       const zoom = container.querySelector('[data-og-zoom-value]');
       if (zoom) zoom.textContent = `${Math.round(scale * 100)}%`;
     }
@@ -884,7 +999,7 @@
       if (selection && !shown.nodes.some(node => selection.kind === 'node' && node.id === selection.id)
         && !shown.edges.some(edge => selection.kind === 'edge' && edge.id === selection.id)) selection = null;
       if (!selection) collapsed = true;
-      if (current.prototype && layoutFocus !== focusId) { saved.clear(); layoutFocus = focusId; }
+      if (current.prototype && layoutFocus !== focusId) { saved.clear(); restoreModelPositions(); layoutFocus = focusId; }
       if (star) {
         const laidOut = starLayout(shown, focusId, saved);
         if (laidOut.centerId) focusId = laidOut.centerId;
@@ -906,8 +1021,7 @@
       const limit = shown.hidden
         ? `<div class="cog-og-limit" role="status">${escapeHtml(text('graphLimited', '图谱共 {total} 个节点，当前显示 {shown} 个；其余内容请在本体列表中查找。', { total: projected.nodes.length, shown: shown.nodes.length }))}</div>`
         : '';
-      const lensMarkup = `<div class="ont-graph-lenses" aria-label="${escapeHtml(text('graphContents', '选择本体内容'))}">${[['all', text('all', '全部')], ['T', 'T · ' + text('concepts', '概念')], ['R', 'R · ' + text('graphRulesLegend', '规则 / 约束')], ['A', 'A · ' + text('graphObjectsLegend', '对象 / 断言')]].map(([value, label]) => root.uiButton({ label: label + (value === 'all' ? '' : ' ' + projected.nodes.filter(node => matchesLens(node, value)).length), role: 'ghost', size: 'sm', attrs: { 'data-og-lens': value, 'aria-pressed': String(lens === value) } })).join('')}</div>`;
-      const focusMarkup = `<label class="cog-og-star-focus">${escapeHtml(text('focus', '聚焦'))}${root.uiSelect({ id: 'cog-og-focus', native: true, value: focusId, ariaLabel: text('chooseGraphFocus', '选择要聚焦的记录'), attrs: { 'data-og-center': '' }, options: projected.nodes.filter(node => matchesLens(node, lens)).map(node => ({ value: node.id, label: node.label })) })}</label>`;
+      const focusMarkup = `<label class="cog-og-star-focus">${escapeHtml(text('focus', '聚焦'))}${root.uiSelect({ id: 'cog-og-focus', native: true, value: focusId, ariaLabel: text('chooseGraphFocus', '选择要聚焦的记录'), attrs: { 'data-og-center': '' }, options: projected.nodes.map(node => ({ value: node.id, label: node.label })) })}</label>`;
       const overview = current.prototype && current.moduleId ? button(text('graphReturnOverview', '返回概览'), 'cog-og-control', { 'data-og-control': 'overview' }, 'ghost') : '';
       const zoomOut = button('−', 'cog-og-control', { 'data-og-control': 'out', 'aria-label': text('zoomOut', '缩小') }, 'ghost');
       const zoomIn = button('+', 'cog-og-control', { 'data-og-control': 'in', 'aria-label': text('zoomIn', '放大') }, 'ghost');
@@ -915,16 +1029,15 @@
       const detailsButton = current.prototype ? '' : button(collapsed ? text('showDetails', '展开详情') : text('hideDetails', '收起详情'), 'cog-og-control', { 'data-og-control': 'details', 'aria-expanded': String(!collapsed) }, 'ghost');
       const controls = `${overview}${zoomOut}<span data-og-zoom-value></span>${zoomIn}${fitButton}${detailsButton}`;
       const legacyToolbar = `<div class="cog-og-toolbar"><span>${current.prototype ? `<strong>${escapeHtml(text(current.moduleId ? 'internalGraphTitle' : 'modulesGraphTitle', current.moduleId ? '本体内部图' : '本体间引用'))}</strong> <small>${escapeHtml(shown.nodes.find(node => node.id === focusId)?.label || count)} · ${escapeHtml(text('graphOverviewShort', '简图'))}</small>` : escapeHtml(count)}</span><div class="cog-og-toolbar-actions">${controls}</div></div>`;
-      const navigator = !star && current.prototype && current.moduleId ? `<div class="ont-graph-navigator">${lensMarkup}${focusMarkup}</div>` : '';
       const entityCount = projected.nodes.filter(node => node.kind === 'entity').length;
       const factCount = projected.nodes.filter(node => node.kind === 'assertion' || node.kind === 'attribute').length;
       const starToolbar = star
-        ? `<div class="cog-og-star-toolbar"><div class="cog-og-star-title"><b>${escapeHtml(text('graph', '关系图'))}</b><span>${entityCount} ${escapeHtml(text('objectsShort', '对象'))} · ${factCount} ${escapeHtml(text('facts', '事实'))}</span></div>${lensMarkup}${focusMarkup}<div class="cog-og-star-actions">${controls}</div></div>`
+        ? `<div class="cog-og-star-toolbar"><div class="cog-og-star-title"><b>${escapeHtml(text('graph', '关系图'))}</b><span>${entityCount} ${escapeHtml(text('objectsShort', '对象'))} · ${factCount} ${escapeHtml(text('facts', '事实'))}</span></div>${focusMarkup}<div class="cog-og-star-actions">${controls}</div></div>`
         : '';
       const toolbar = star ? starToolbar : legacyToolbar;
       const canvasMarkup = star ? starCanvasMarkup() : legacyCanvasMarkup();
       const inspectorAside = star ? '' : `<aside class="cog-og-inspector" aria-label="${escapeHtml(text('graphDetails', '所选内容'))}"></aside>`;
-      container.innerHTML = `<div class="cog-og${globalGraph ? ' cog-og--global' : ''}${star ? ' cog-og--star' : ''}">${toolbar}${limit}${navigator}<div class="cog-og-body${collapsed ? ' is-collapsed' : ''}">${canvasMarkup}${inspectorAside}</div>${!shown.nodes.length ? `<p class="cog-og-empty">${escapeHtml(text('graphEmpty', '还没有可展示的关系。'))}</p>` : ''}</div>`;
+      container.innerHTML = `<div class="cog-og${globalGraph ? ' cog-og--global' : ''}${star ? ' cog-og--star' : ''}">${toolbar}${limit}<div class="cog-og-body${collapsed ? ' is-collapsed' : ''}">${canvasMarkup}${inspectorAside}</div>${!shown.nodes.length ? `<p class="cog-og-empty">${escapeHtml(text('graphEmpty', '还没有可展示的关系。'))}</p>` : ''}</div>`;
       canvasObserver?.disconnect();
       const canvasElement = container.querySelector('.cog-og-canvas');
       if (canvasElement) canvasObserver?.observe(canvasElement);
@@ -983,14 +1096,12 @@
       }
       const reading = event.target.closest('[data-og-reading]');
       if (reading) { const value = reading.dataset.ogReading; setReading(value === 'all' ? -1 : Number(value)); return; }
-      const lensButton = event.target.closest('[data-og-lens]');
-      if (lensButton) { lens = lensButton.dataset.ogLens; focusId = ''; neighborhood = 1; selection = null; readingIndex = -1; render(); return; }
       const focus = event.target.closest('[data-og-focus]');
       if (focus) { if (focusId === focus.dataset.ogFocus) neighborhood = Math.min(4, neighborhood + 1); else { focusId = focus.dataset.ogFocus; neighborhood = 1; } readingIndex = -1; render(); return; }
       const control = event.target.closest('[data-og-control]');
       if (control) {
         const action = control.dataset.ogControl;
-        if (action === 'overview') { focusId = ''; neighborhood = 1; saved.clear(); selection = null; readingIndex = -1; collapsed = true; render(); fit(); return; }
+        if (action === 'overview') { focusId = ''; neighborhood = 1; saved.clear(); restoreModelPositions(); selection = null; readingIndex = -1; collapsed = true; render(); fit(); return; }
         if (action === 'details') { collapsed = !collapsed; render(); }
         else if (action === 'fit') fit();
         else { scale = Math.max(.16, Math.min(3, scale * (action === 'in' ? 1.2 : 1 / 1.2))); paint(); }
@@ -1057,7 +1168,7 @@
       let main = node.fullLabel || node.label;
       if (node.kind === 'assertion') {
         const edge = shown.edges.find(item => item.id === node.id && item.kind === 'assertion');
-        if (edge) main = `${read(edge.from)?.name || ''} → ${relationLabel(edge)} → ${read(edge.to)?.name || ''}`;
+        if (edge) main = `${read(edge.from)?.name || ''} → ${edgeLabel(edge)} → ${read(edge.to)?.name || ''}`;
       } else if (node.kind === 'attribute') {
         main = [read(record?.subjectId)?.name, read(record?.definitionId)?.name || node.label, record?.object?.value].filter(Boolean).join(' · ');
       } else if (node.kind === 'reference') {
@@ -1070,7 +1181,7 @@
         : node.kind === 'reference' ? text('reference', '引用')
         : node.kind === 'assertion' ? text('facts', '事实')
         : text('attributes', '属性');
-      return { main, kind };
+      return { main, kind: node.group ? `${kind} · ${node.group}` : kind };
     }
     function showStarTip(id, element) {
       const tip = container.querySelector('[data-og-star-tip]');
@@ -1096,34 +1207,63 @@
     function onPointerOver(event) {
       if (!isStar() || drag) return;
       const node = event.target.closest('[data-og-node]');
-      if (!node) return;
-      const prior = container.querySelector('.cog-og-node.is-hovered');
-      if (prior && prior !== node) prior.classList.remove('is-hovered');
-      node.classList.add('is-hovered');
-      hovered = node.dataset.ogNode;
-      showStarTip(node.dataset.ogNode, node);
+      if (node) {
+        const prior = container.querySelector('.cog-og-node.is-hovered');
+        if (prior && prior !== node) prior.classList.remove('is-hovered');
+        node.classList.add('is-hovered');
+        hovered = node.dataset.ogNode;
+        hoveredEdge = '';
+        showStarTip(node.dataset.ogNode, node);
+        syncStarEdgeLabels();
+        return;
+      }
+      const edge = event.target.closest('[data-og-edge]');
+      if (!edge) return;
+      hoveredEdge = edge.dataset.ogEdge;
+      syncStarEdgeLabels();
     }
     function onPointerOut(event) {
       const node = event.target.closest('[data-og-node]');
-      if (!node) return;
-      if (event.relatedTarget && node.contains(event.relatedTarget)) return;
-      node.classList.remove('is-hovered');
-      if (hovered === node.dataset.ogNode) hovered = '';
-      hideStarTip();
+      if (node) {
+        if (event.relatedTarget && node.contains(event.relatedTarget)) return;
+        node.classList.remove('is-hovered');
+        if (hovered === node.dataset.ogNode) hovered = '';
+        hideStarTip();
+        syncStarEdgeLabels();
+        return;
+      }
+      const edge = event.target.closest('[data-og-edge]');
+      if (!edge) return;
+      if (event.relatedTarget && edge.contains(event.relatedTarget)) return;
+      if (hoveredEdge === edge.dataset.ogEdge) hoveredEdge = '';
+      syncStarEdgeLabels();
     }
     function onFocusIn(event) {
       if (!isStar()) return;
       const node = event.target.closest('[data-og-node]');
-      if (!node) return;
-      node.classList.add('is-hovered');
-      showStarTip(node.dataset.ogNode, node);
+      if (node) {
+        node.classList.add('is-hovered');
+        hovered = node.dataset.ogNode;
+        hoveredEdge = '';
+        showStarTip(node.dataset.ogNode, node);
+        syncStarEdgeLabels();
+        return;
+      }
+      const edge = event.target.closest('[data-og-edge]');
+      if (edge) { hoveredEdge = edge.dataset.ogEdge; syncStarEdgeLabels(); }
     }
     function onFocusOut(event) {
       if (!isStar()) return;
       const node = event.target.closest('[data-og-node]');
-      if (!node) return;
-      node.classList.remove('is-hovered');
-      hideStarTip();
+      if (node) {
+        node.classList.remove('is-hovered');
+        if (hovered === node.dataset.ogNode) hovered = '';
+        hideStarTip();
+        syncStarEdgeLabels();
+        return;
+      }
+      const edge = event.target.closest('[data-og-edge]');
+      if (edge && hoveredEdge === edge.dataset.ogEdge) { hoveredEdge = ''; syncStarEdgeLabels(); }
     }
     container.addEventListener('change', onCenterChange);
     container.addEventListener('click', onClick);
@@ -1146,14 +1286,21 @@
         if (destroyed) return;
         const nextModule = next.moduleId === undefined ? current.moduleId : next.moduleId;
         const changedModule = nextModule !== current.moduleId;
-        if (changedModule) { saved.clear(); selection = null; focusId = ''; readingIndex = -1; }
+        const layoutChanged = Boolean(next.layout && next.layout.revision !== current.layout?.revision);
+        if (changedModule) {
+          saved.clear();
+          if (!next.layout) modelPositions.clear();
+          selection = null; focusId = ''; readingIndex = -1; layoutFocus = '';
+        }
         const priorNodeIds = shown.nodes.map(node => node.id).join('\u0000');
         const priorEdgeIds = shown.edges.map(edge => edge.id).join('\u0000');
         const priorLabels = shown.nodes.map(node => `${node.id}:${node.label}`).join('\u0000');
         current = { ...current, ...next };
+        if (changedModule && !next.layout) current.layout = undefined;
+        if (layoutChanged || (changedModule && next.layout)) applyLayout(next.layout);
         const nextProjection = projection();
         const nextShown = visibleSemantic(nextProjection);
-        const sameStructure = !changedModule && priorNodeIds === nextShown.nodes.map(node => node.id).join('\u0000')
+        const sameStructure = !changedModule && !layoutChanged && priorNodeIds === nextShown.nodes.map(node => node.id).join('\u0000')
           && priorEdgeIds === nextShown.edges.map(edge => edge.id).join('\u0000')
           && priorLabels === nextShown.nodes.map(node => `${node.id}:${node.label}`).join('\u0000');
         if (!sameStructure) { render(!changedModule); return; }
@@ -1211,5 +1358,6 @@
     _project: project, _visibleProjection: visibleProjection, _positionsFor: positionsFor, _edgeRoutes: edgeRoutes, _editableRecord: editableRecord, _today: today,
     _displayModuleName: displayModuleName, _nodeSubtitle: nodeSubtitle, _fitScale: fitScale,
     _starProject: starProject, _starLayout: starLayout, _visibleStar: visibleStar, _starTrimEdge: starTrimEdge, _starBeadPoint: starBeadPoint, _readingPoints: readingPoints,
+    _starEdgeText: starEdgeText, _starEdgeLabelVisible: starEdgeLabelVisible, _starEdgeLabelAnchor: starEdgeLabelAnchor, _starBaseline: starBaseline, _starRestore: starRestore,
   };
 })(window);

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -9,6 +10,17 @@ import { normalizeRuntimePath } from './permissions';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
 import { runWithRuntimeActionApproval, runWithRuntimeActionApprovalGrant } from './action-approval';
 import { wrapBashForOsSandbox } from './os-sandbox';
+import { containsProtectedPathHint, runtimeProtectedRoots } from './protected-paths';
+
+function linuxSandboxAvailable(): boolean {
+  return ['/usr/bin/bwrap', '/bin/bwrap', '/usr/local/bin/bwrap'].some(candidate => fs.existsSync(candidate));
+}
+
+function osSandboxAvailable(): boolean {
+  if (process.platform === 'darwin') return fs.existsSync('/usr/bin/sandbox-exec');
+  if (process.platform === 'linux') return process.env.COGSEED_OS_SANDBOX === '1' || linuxSandboxAvailable();
+  return false;
+}
 
 function formatError(code: string, message: string): RuntimeToolResult {
   return { content: `[${code}] ${message}`, isError: true };
@@ -128,8 +140,18 @@ export async function runRuntimeBashTool(
         return formatError('E_RUNTIME_PATH_DENIED', (error as Error).message);
       }
     }
+    const canWrite = ctx.toolPolicy.fileWrite === 'all' || ctx.toolPolicy.fileWrite === 'explicit_writable_roots';
+    const sandboxTemp = canWrite
+      ? path.join(ctx.workspaceRoot || ctx.writableRoots[0] || ctx.allowedRoots[0] || os.tmpdir(), '.cogseed-tmp')
+      : os.tmpdir();
+    if (canWrite) {
+      try { fs.mkdirSync(sandboxTemp, { recursive: true }); } catch { /* shell temp is best effort */ }
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      TMPDIR: sandboxTemp,
+      TMP: sandboxTemp,
+      TEMP: sandboxTemp,
       COGSEED_NODE: process.execPath,
       COGSEED_PC_DIR: ctx.pcDir,
       COGSEED_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
@@ -137,15 +159,23 @@ export async function runRuntimeBashTool(
       COGSEED_UID: ctx.userId,
       ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || '1',
     };
-    const osSandboxRequested = process.env.COGSEED_OS_SANDBOX === '1' && ctx.toolPolicy.fileWrite !== 'all';
-    if (osSandboxRequested && process.platform === 'win32') {
+    const sandboxRequested = osSandboxAvailable();
+    if (!sandboxRequested && containsProtectedPathHint(ctx.userId, command)) {
+      return formatError('E_RUNTIME_COGNITION_PATH', 'shell command references CogSeed private cognition data');
+    }
+    if (process.platform === 'win32' && process.env.COGSEED_OS_SANDBOX === '1') {
       return formatError('E_RUNTIME_OS_SANDBOX_UNSUPPORTED', 'OS sandbox is not available on Windows; refusing to run bash unconfined');
     }
-    const wrapped = osSandboxRequested
+    const wrapped = sandboxRequested
       ? wrapBashForOsSandbox(command, {
         ...(ctx.workspaceRoot ? { workspaceRoot: ctx.workspaceRoot } : {}),
         writableRoots: ctx.writableRoots,
-        ...(ctx.workspaceRoot ? { protectedPaths: [path.join(ctx.workspaceRoot, '.git')] } : {}),
+        protectedPaths: [
+          ...runtimeProtectedRoots(ctx.userId),
+          ...(ctx.workspaceRoot ? [path.join(ctx.workspaceRoot, '.git')] : []),
+        ],
+        tempRoots: canWrite ? [sandboxTemp] : [],
+        allowAllWrites: ctx.toolPolicy.fileWrite === 'all',
       })
       : null;
     const preflight: (RuntimeToolResult & { approvalRequestId?: string }) | undefined = ctx.beforeAction

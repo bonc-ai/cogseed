@@ -3,7 +3,10 @@
  * 槽位（Tutti 式 "@" 引用经 P3394 可达）：快照落位、数量/文本截断、与
  * goal 共存、无引用时不产生 metadata.references。
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 const mocks = vi.hoisted(() => ({
   getP3394BridgeInfo: vi.fn(),
@@ -17,8 +20,15 @@ vi.mock('../../../../src/main/features/p3394_bridge/app-wiring', () => ({
   resolveP3394Peer: mocks.resolveP3394Peer,
 }));
 
-// isolate: session-store 写 COGSEED_RUNTIME_VARIANT 之下，指向 scratch 变体
-process.env.COGSEED_RUNTIME_VARIANT = 'p3394-host-adapter-ref-test-' + Math.random().toString(36).slice(2, 8);
+// isolate: session-store 写 per-variant 状态目录；把整棵变体树指到
+// scratch 临时目录（runtime-paths 现在会校验变体名）。
+const SCRATCH_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-host-adapter-ref-test-'));
+process.env.COGSEED_VARIANT_BASE_DIR = SCRATCH_BASE;
+process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
+
+afterAll(() => {
+  fs.rmSync(SCRATCH_BASE, { recursive: true, force: true });
+});
 
 import { buildP3394OutboundEnvelope } from '../../../../src/main/features/cogseed_backend/p3394-host-adapter';
 

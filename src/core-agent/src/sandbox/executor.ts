@@ -4,7 +4,7 @@
  * Provides resource limits, directory restrictions, command filtering,
  * and timeout enforcement. Inspired by OpenClaw's sandbox execution layer.
  */
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
@@ -1055,7 +1055,7 @@ export class SandboxExecutor {
       if (invocation.envPatch) {
         Object.assign(env, invocation.envPatch);
       }
-      let child: ChildProcess;
+      let child: ChildProcessWithoutNullStreams;
       try {
         child = spawn(invocation.command, invocation.args, {
           cwd,

@@ -469,6 +469,48 @@ describe('skill trust › deep re-verification', () => {
     expect(deep.decision).toBe('pass');
   }, 200_000);
 
+  // The load gate is the second line of defence, so it has to agree with the
+  // install gate about consent. Red-team F-05 (2026-11-04): an overridden install
+  // wrote `decision: pass`, which made this question moot — the receipt claimed
+  // the scan had cleared content it had refused.
+  //
+  // Now the receipt keeps `blocked` and carries `userOverride`, and the gate's
+  // rule is: a refusal with a recorded override for THESE bytes still loads.
+  // Without that, "install anyway" would install a skill the agent can never see.
+  describe('a recorded override', () => {
+    const BLOCKED = { ...CLEAN };
+
+    function writeBlockedReceipt(id: string, extra: { override?: boolean }): void {
+      const dir = mkSkill(id, BLOCKED);
+      writeReceipt(UID, id, {
+        payloadHash: skillPayloadHash(dir)!,
+        decision: 'blocked',
+        violationCount: 0,
+        scanner: 'deep',
+        verdictSource: 'deep',
+        ...(extra.override
+          ? { userOverride: { outcome: 'blocked', at: 1_700_000_000_000 } }
+          : {}),
+      });
+    }
+
+    it('withholds a blocked receipt that has no override', () => {
+      writeBlockedReceipt('no-consent', {});
+
+      expect(isSkillTrustedForLoad(UID, 'no-consent'))
+        .toMatchObject({ trusted: false, decision: 'blocked' });
+    });
+
+    it('loads the same bytes when the user accepted the refusal', () => {
+      writeBlockedReceipt('consented', { override: true });
+
+      // `decision` stays honest — the panel still shows that the scanner refused
+      // — while `trusted` follows the user's decision about these exact bytes.
+      expect(isSkillTrustedForLoad(UID, 'consented'))
+        .toMatchObject({ trusted: true, decision: 'blocked' });
+    });
+  });
+
   // Without this, a `local` receipt written by the sync path (or by a build
   // predating deep re-verification) would satisfy the deep path's cache check and
   // permanently short-circuit deep scanning for that skill — reopening the hole

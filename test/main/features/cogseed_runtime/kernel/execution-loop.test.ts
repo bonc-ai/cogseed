@@ -187,6 +187,9 @@ describe('CogSeed Runtime native execution loop', () => {
       },
     }]);
     expect(model.seen[1].message).toContain('TOOL: alpha=42');
+    expect(model.seen[1].message.startsWith(model.seen[0].message)).toBe(true);
+    expect(model.seen[1].systemPrompt).toBe(model.seen[0].systemPrompt);
+    expect(model.seen[1].tools).toEqual(model.seen[0].tools);
     // The model sees the call it made, not only the result.
     expect(model.seen[1].message).toContain('<runtime-tool-call id="call-1" name="lookup">{"q":"alpha"}</runtime-tool-call>');
 
@@ -484,7 +487,7 @@ describe('CogSeed Runtime native execution loop', () => {
     const model = adapterFromRuns([
       [
         { type: 'tool_call', call: { id: 'm1', name: 'read_file', arguments: { path: '/w/a.md' } } },
-        { type: 'usage', usage: { inputTokens: 120, outputTokens: 8, totalTokens: 128 } },
+        { type: 'usage', usage: { inputTokens: 120, outputTokens: 8, totalTokens: 128, cacheReadTokens: 80, cacheWriteTokens: 0 } },
         { type: 'done' },
       ],
       [{ type: 'delta', text: 'done' }, { type: 'done' }],
@@ -502,7 +505,9 @@ describe('CogSeed Runtime native execution loop', () => {
     const rounds = rows.filter((row) => row.kind === 'round');
     const tools = rows.filter((row) => row.kind === 'tool');
     expect(rounds).toHaveLength(2);
-    expect(rounds[0]).toMatchObject({ round: 0, tool_calls: 1, input_tokens: 120, output_tokens: 8 });
+    expect(rounds[0]).toMatchObject({ round: 0, tool_calls: 1, input_tokens: 120, output_tokens: 8, cache_read_tokens: 80, cache_write_tokens: 0, usage_schema_version: 2 });
+    expect(rounds[1]).not.toHaveProperty('cache_read_tokens');
+    expect(rounds[1]).not.toHaveProperty('cache_write_tokens');
     expect(rounds[1]).toMatchObject({ round: 1, tool_calls: 0 });
     expect(rounds[0].prompt_chars).toBeGreaterThan(0);
     expect(rounds[0]).toMatchObject({ trace_id: 'cogseed-task-trace' });
@@ -612,7 +617,11 @@ describe('CogSeed Runtime native execution loop', () => {
     const model: RuntimeModelAdapter = {
       async *stream() {
         calls += 1;
-        if (calls === 1) { await new Promise<void>(() => {}); return; }
+        if (calls === 1) {
+          yield { type: 'usage', usage: { inputTokens: 100, cacheReadTokens: 80, cacheWriteTokens: 10 } };
+          await new Promise<void>(() => {});
+          return;
+        }
         yield { type: 'delta', text: 'recovered' };
         yield { type: 'done' };
       },
@@ -630,6 +639,13 @@ describe('CogSeed Runtime native execution loop', () => {
     expect(calls).toBe(2);
     expect(events.at(-1)).toMatchObject({ type: 'result', text: 'recovered' });
     expect(events.some((event) => event.type === 'error')).toBe(false);
+    const rows = fs.readFileSync(path.join(paths.cogseedRuntimeRoot(UID), 'metrics.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line));
+    const metric = rows.find((row) => row.kind === 'round');
+    expect(metric).toMatchObject({ usage_schema_version: 2 });
+    expect(metric).not.toHaveProperty('input_tokens');
+    expect(metric).not.toHaveProperty('cache_read_tokens');
+    expect(metric).not.toHaveProperty('cache_write_tokens');
   });
 
   it('does not retry after partial output, so the user never sees duplicated text', async () => {

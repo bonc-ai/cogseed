@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectTaskIntent, isClosingIntent, taskIntentHint } from '../../../../src/main/features/kstar/task-intent';
+import { detectTaskIntent, isClosingIntent, taskIntentHint, isExplicitTaskContinuation } from '../../../../src/main/features/kstar/task-intent';
 
 describe('KStar host task-intent detection (layer 1)', () => {
   it('detects ordinary task-shaped requests without formal phrasing', () => {
@@ -118,4 +118,9 @@ describe('KStar host task-intent detection (layer 1)', () => {
       expect(isAnswerLikeConfirmation(text as string | undefined), String(text)).toBe(false);
     }
   });
+});
+
+ describe('explicit continuation routing', () => {
+  it.each(['继续修复当前任务', '继续处理这个任务', '接着完成上面的任务', 'Continue the current task.'])('recognizes unambiguous continuation: %s', text => expect(isExplicitTaskContinuation(text)).toBe(true));
+  it.each(['继续开发另一个系统', '换个话题，继续当前任务', '继续', '修复当前任务并创建新任务', '例如：继续处理这个任务', '“继续处理这个任务”', 'Continue the current task and start a new project'])('keeps ambiguity on model routing: %s', text => expect(isExplicitTaskContinuation(text)).toBe(false));
 });

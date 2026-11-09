@@ -22,8 +22,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { listExternalGateways, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 
-const VARIANT = 'p3394-boot-' + Math.random().toString(36).slice(2, 8);
+const SCRATCH_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-boot-'));
 let previousVariant: string | undefined;
+let previousBaseDir: string | undefined;
 let previousWs: string | undefined;
 let bridgeHandle: { close: () => Promise<void> } | null = null;
 
@@ -36,8 +37,10 @@ function freePort(): Promise<number> {
 
 beforeAll(async () => {
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
   previousWs = process.env.COGSEED_WORKSPACE_ROOT;
-  process.env.COGSEED_RUNTIME_VARIANT = VARIANT;
+  process.env.COGSEED_VARIANT_BASE_DIR = SCRATCH_BASE;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
   // paths.ts 要求：index.ts 启动时设置；测试环境需显式给出隔离工作区。
   process.env.COGSEED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-boot-ws-'));
   process.env.COGSEED_P3394_PORT = String(await freePort());
@@ -65,10 +68,12 @@ afterAll(async () => {
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
   if (previousWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousWs;
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
   delete process.env.COGSEED_P3394_PORT;
   delete process.env.COGSEED_P3394_TOKEN;
   delete process.env.COGSEED_P3394_CONVERSATION;
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', VARIANT), { recursive: true, force: true }); } catch { /* best effort */ }
+  try { fs.rmSync(SCRATCH_BASE, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
 describe('P3394 managed-gateway boot recovery (real bridge, P1-1)', () => {

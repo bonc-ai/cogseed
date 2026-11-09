@@ -68,20 +68,36 @@ function requireRecord(doc: OntologyDocument, id: string, kind?: OntologyRecord[
   if (!record || (kind && record.kind !== kind)) throw new OntologyError('not_found', 'ontology record unavailable', { recordId: id });
   return record;
 }
-export function moduleCanUse(doc: OntologyDocument, moduleId: string, record: OntologyRecord): boolean {
+/** Cross-module visibility needs the referencing module's reference records.
+ * Query loops used to rescan every record per checked record (superlinear in
+ * document size); callers that check many records now pass this one-pass
+ * index instead. Buckets key on the referenced module id. */
+export type OntologyReferenceIndex = Map<string, Extract<OntologyRecord, { kind: 'reference' }>[]>;
+export function buildOntologyReferenceIndex(doc: OntologyDocument, moduleId: string): OntologyReferenceIndex {
+  const index: OntologyReferenceIndex = new Map();
+  for (const ref of Object.values(doc.records)) {
+    if (ref.kind !== 'reference' || ref.moduleId !== moduleId) continue;
+    const bucket = index.get(ref.targetModuleId);
+    if (bucket) bucket.push(ref); else index.set(ref.targetModuleId, [ref]);
+  }
+  return index;
+}
+export function moduleCanUse(doc: OntologyDocument, moduleId: string, record: OntologyRecord, referenceIndex?: OntologyReferenceIndex): boolean {
   if (record.kind === 'module') return moduleId === record.id;
   if (record.moduleId === moduleId) return true;
   const sourceModule = doc.records[record.moduleId];
   const current = doc.records[record.id];
   if (record.access !== 'task' || current?.status !== 'active' || current.access !== 'task'
     || sourceModule?.kind !== 'module' || sourceModule.status !== 'active' || sourceModule.access !== 'task') return false;
-  return Object.values(doc.records).some(ref => ref.kind === 'reference' && ref.status === 'active' && ref.access === 'task'
-    && ref.moduleId === moduleId && ref.targetModuleId === record.moduleId
+  const grants = (ref: Extract<OntologyRecord, { kind: 'reference' }>) => ref.status === 'active' && ref.access === 'task'
     && (!ref.targetRecordId || ref.targetRecordId === record.id)
     && (ref.versionPolicy === 'current' || (ref.targetRecordId
       ? ref.targetVersion === record.version || doc.history.some(entry => entry.after.id === record.id && entry.after.version === ref.targetVersion)
       : ref.targetVersion === doc.records[record.moduleId]?.version
-        || doc.history.some(entry => entry.after.id === record.moduleId && entry.after.version === ref.targetVersion))));
+        || doc.history.some(entry => entry.after.id === record.moduleId && entry.after.version === ref.targetVersion)));
+  if (referenceIndex) return (referenceIndex.get(record.moduleId) ?? []).some(grants);
+  return Object.values(doc.records).some(ref => ref.kind === 'reference' && ref.moduleId === moduleId
+    && ref.targetModuleId === record.moduleId && grants(ref));
 }
 /** Resolve the exact record version a module is allowed to reference. */
 export function resolveOntologyRecordForModule(doc: OntologyDocument, moduleId: string, recordId: string): OntologyRecord | undefined {
@@ -108,11 +124,12 @@ function usable(doc: OntologyDocument, moduleId: string, id: string, kind: Ontol
 }
 const intervalStart = (value: string | null) => value === null ? '' : value.length === 7 ? value + '-01' : value;
 const intervalEnd = (value: string | null) => value === null ? '9999-12-31' : value.length === 7 ? value + '-01' : value;
-export function intervalsOverlap(a: OntologyAssertion, b: OntologyAssertion): boolean {
+export interface OntologyValiditySpan { validity: { from: string | null; until: string | null } }
+export function intervalsOverlap(a: OntologyValiditySpan, b: OntologyValiditySpan): boolean {
   return intervalStart(a.validity.from) < intervalEnd(b.validity.until)
     && intervalStart(b.validity.from) < intervalEnd(a.validity.until);
 }
-function sameValue(a: OntologyValue, b: OntologyValue): boolean { return canonical(a) === canonical(b); }
+export function sameValue(a: unknown, b: unknown): boolean { return canonical(a) === canonical(b); }
 /** One bucket per module + predicate; rebuilt per command and maintained by
  * save(). Conflict checks stay linear instead of scanning every record. */
 interface AssertionIndex {

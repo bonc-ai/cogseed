@@ -87,7 +87,7 @@ function renderAssets(route: Record<string, unknown>, patch: (store: any) => voi
   NS.store.candidates = [];
   NS.store.loaded = true;
   NS.store.loading = false;
-  NS.store.blockStatus = Object.fromEntries(['assets', 'inbox', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'ontology'].map((name) => [name, { loaded: true, loading: false }]));
+  NS.store.blockStatus = Object.fromEntries(['assets', 'inbox', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'ontology', 'oldContentPlans'].map((name) => [name, { loaded: true, loading: false }]));
   NS.store.errors = [];
   NS.store.route = route;
   patch(NS.store);

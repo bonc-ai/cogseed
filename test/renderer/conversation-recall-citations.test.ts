@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/
 const cardModuleSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/recall-projection-card.js'), 'utf8');
 const uiButtonSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/ui-button.js'), 'utf8');
 
-function renderCitations(citations: unknown[]): string {
+function renderCitations(citations: unknown[], fallback?: { projectionId: string; reason: string }): string {
   // 合并卡（拍板项 #8）：引用行的渲染实现已随两卡合并迁入
   // recall-projection-card.js（conversation.js 只留同步入口委托）。
   const escape = (value: unknown) => String(value ?? '')
@@ -30,7 +30,7 @@ function renderCitations(citations: unknown[]): string {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(cardModuleSource, context, { filename: 'recall-projection-card.js' });
-  return context.window.recallMemoryCardHtml(citations);
+  return context.window.recallMemoryCardHtml(citations, fallback);
 }
 
 type AssetCitationClickRun = {
@@ -100,7 +100,7 @@ describe('conversation Recall citations', () => {
     expect(source).toContain('data-recall-feedback');
     expect(source).toContain('recall.usage.feedback');
     // 渲染实现收在 recall-projection-card.js，conversation.js 只留委托入口。
-    expect(source).toContain('window.recallMemoryCardHtml(citations)');
+    expect(source).toContain('window.recallMemoryCardHtml(citations, fallback)');
   });
 
   it('骨架认知卡默认收起，与挂载后的缺省折叠态一致', () => {
@@ -114,7 +114,7 @@ describe('conversation Recall citations', () => {
     // must mount the same memory card immediately instead of requiring a
     // conversation reload before cited assets become visible.
     expect(source).toContain('function _mountFinalRecallMemoryCard(ph, gm, cid)');
-    expect(source).toContain('_renderRecallCitationsHtml(gm.recall_citations)');
+    expect(source).toContain('_renderRecallCitationsHtml(gm.recall_citations, gm.recall_fallback)');
     expect(source).toContain('_hydrateRecallCitations(ph, cid, gm.id)');
     expect(source).toContain('citations: Array.isArray(gm.recall_citations) ? gm.recall_citations : []');
     expect(source).toContain('_mountFinalRecallMemoryCard(ph, gm, cid);');
@@ -126,9 +126,12 @@ describe('conversation Recall citations', () => {
     expect(html).toContain('data-asset-citation="asset-1"');
     expect(html).toContain('chat-recall-citation-open');
     expect(html).toContain('>项目复盘规则</button>');
-    // 运行回执只证明资产已进入模型上下文，不证明最终回答实际采用了它。
-    expect(html).toContain('已进入模型上下文');
-    expect(html).toContain('进入模型上下文不代表最终回答实际采用');
+    // 运行回执只证明资产已进入模型上下文，不证明最终回答实际采用了它；
+    // 口径由头部计数（折叠态也可见）承担，行内不再逐行重复；
+    // 「注入≠采用」说明句已整体下线（2026-11-06），不得回流。
+    expect(html).toContain('已进入模型上下文 1 条');
+    expect(html).toContain('<span>rule · project</span>');
+    expect(html).not.toContain('进入模型上下文不代表最终回答实际采用');
     expect(source).toContain("closest('[data-asset-citation]')");
     expect(source).toContain('window.openCognitionAssetById(assetId)');
   });
@@ -149,10 +152,9 @@ describe('conversation Recall citations', () => {
     expect(pairs).toEqual([
       'asset-1:positive', 'asset-1:negative', 'asset-2:positive', 'asset-2:negative',
     ]);
-    // 卡尾反馈区只剩提示句/投影操作的位置，不再承载消息级按钮。
-    const footer = html.match(/<div class="chat-recall-feedback-actions">[\s\S]*?(<\/div>)\s*(<\/section>|$)/);
-    expect(footer).toBeTruthy();
-    expect(footer![0]).not.toContain('data-recall-feedback');
+    // 纯引用形态连尾行都不渲染（2026-11-06 收敛：原先空 div 的 border-top
+    // 会在卡底留悬空分隔线），卡尾不再承载任何消息级按钮。
+    expect(html).not.toContain('chat-recall-feedback-actions');
     // 逐行交互契约：conversation.js 侧按按钮自带的资产定向调用反馈通道。
     expect(source).toContain("const assetId = String(button.dataset.recallAssetId || '')");
     expect(source).toContain('recall.usage.feedback');
@@ -230,5 +232,38 @@ describe('conversation asset approval card (specs/008 US-406)', () => {
     expect(cardSource).toContain('uiTextarea({');
     expect(cardSource).toContain('uiTag({');
     expect(cardSource).not.toContain('<button data-asset-approval');
+  });
+
+  it('shows the confirmed-projection fallback note beside brought-in assets', () => {
+    const html = renderCitations(
+      [{ asset_id: 'a1', title: 'Saved item', type: 'cognition', scope: 'general' }],
+      { projectionId: 'proj-1', reason: 'projection_asset_version_changed' },
+    );
+    expect(html).toContain('chat-recall-fallback-note');
+    expect(html).toContain('已确认的关联内容之后被修改过，本轮未按确认版本带入，已改用自动检索。');
+    expect(html).toContain('data-asset-citation="a1"');
+  });
+
+  it('renders a note-only recall card when a fallback produced no citations', () => {
+    const html = renderCitations([], { projectionId: 'proj-1', reason: 'projection_source_unavailable' });
+    expect(html).toContain('<section class="chat-recall-citations is-collapsed">');
+    expect(html).toContain('已确认的关联内容的来源已不可用，本轮未带入，已改用自动检索。');
+    expect(html).not.toContain('data-asset-citation');
+    // 0 条不出「带入 0 条」计数，未带入的原因交给回退备注讲。
+    expect(html).not.toContain('已进入模型上下文 0 条');
+  });
+
+  it('maps an unknown fallback code to the generic note without leaking the code', () => {
+    const html = renderCitations([], { projectionId: 'proj-1', reason: 'ENOENT_INTERNAL' });
+    expect(html).toContain('已确认的关联内容本轮未生效，已改用自动检索。');
+    expect(html).not.toContain('ENOENT_INTERNAL');
+  });
+
+  it('carries recall_fallback through persisted messages and the streaming mount', () => {
+    expect(source).toContain('recall_fallback: gm.recall_fallback');
+    expect(source).toContain('_renderRecallCitationsHtml(gm.recall_citations, gm.recall_fallback)');
+    expect(source).toContain('fallback: gm.recall_fallback');
+    expect(source).toContain('_renderRecallCitationsHtml(message.recall_citations, message.recall_fallback)');
+    expect(source).toContain('fallback: message.recall_fallback');
   });
 });

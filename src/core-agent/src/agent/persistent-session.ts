@@ -396,7 +396,15 @@ export class PersistentSession extends Session {
     // Preserve the rolling summary + resources across the merge — clearing and
     // re-adding would null turnState and drop them (see method doc). On the load
     // path turnState is still null here, so this is a plain message swap.
-    this.replaceMessagesPreservingContext(fixed);
+    this.replaceMessagesPreservingContext(fixed, {
+      // Counts alone cannot prove equivalence: ordering or image placement may
+      // also change during a merge. Session verifies the complete ordered
+      // projection before retaining any memory-only foreground request bytes.
+      preserveForegroundForParallelResultMerge: report.mergedParallelResultMessages > 0
+        && report.synthesizedOrphanResults === 0
+        && report.droppedUnmatchedResults === 0
+        && report.deduplicatedResults === 0,
+    });
     return true;
   }
 

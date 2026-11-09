@@ -1,7 +1,10 @@
 import { changeOntologyModuleLifecycle, commitOntologyCommand, previewOntologyCommand, readOntologyView, archiveOntologyHistory } from '../features/cognition/ontology/service';
+import { previewOntologyAccessPromotion, promoteOntologyAccess } from '../features/cognition/ontology/access-promotion';
 import { editOntologyDocument } from '../features/cognition/ontology/document-edit';
 import { buildOntologyExport } from '../features/cognition/ontology/export';
 import { listOntologyUsageReceipts } from '../features/cognition/ontology/usage-receipt';
+import { listGraphSnapshotEntries, type OntologyGraphScope } from '../features/cognition/ontology/graph-snapshot';
+import { requestGraphGeneration } from '../features/cognition/ontology/graph-generation';
 import { ontologyRecordsKnownAt, searchOntologyRecords } from '../features/cognition/ontology/query';
 import { OntologyError } from '../features/cognition/ontology/model';
 import { getCurrentUiLang, getRendererTables } from '../i18n';
@@ -56,6 +59,10 @@ function ontologyText(value: unknown, field: string, max = 500): string {
   if (typeof value !== 'string' || value.trim().length > max) throw new OntologyError('invalid_input', `invalid ${field}`);
   return value.trim();
 }
+function ontologyModuleIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20) throw new OntologyError('invalid_input', 'invalid ontology module selection');
+  return [...new Set(value.map(id => ontologyId(id, 'ontology module id')))];
+}
 
 function ontologyRevision(value: unknown): number {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -75,7 +82,24 @@ export const invokeHandlers = {
       throw new OntologyError('invalid_input', 'invalid module lifecycle request');
     return changeOntologyModuleLifecycle(ctx.userId, { moduleId: payload.moduleId, intent: payload.intent, expectedRevision: payload.expectedRevision, expectedVersion: payload.expectedVersion });
   },
-  'cognition.ontology.snapshot': async (_payload: Payload, ctx: IpcContext) => ({ ontology: await readOntologyView(ctx.userId) }),
+  'cognition.ontology.snapshot': async (_payload: Payload, ctx: IpcContext) => ({
+    ontology: await readOntologyView(ctx.userId),
+    graphSnapshots: await listGraphSnapshotEntries(ctx.userId),
+  }),
+  'cognition.ontology.graph.snapshot': async (_payload: Payload, ctx: IpcContext) => ({
+    entries: await listGraphSnapshotEntries(ctx.userId),
+  }),
+  'cognition.ontology.graph.generate': async (payload: Payload, ctx: IpcContext) => {
+    const scope: OntologyGraphScope = payload.scope === 'global'
+      ? { kind: 'global' }
+      : payload.scope === 'module'
+        ? { kind: 'module', moduleId: ontologyId(payload.moduleId, 'module id') }
+        : (() => { throw new OntologyError('invalid_input', 'invalid ontology graph scope'); })();
+    const at = payload.at === undefined ? undefined : ontologyText(payload.at, 'graph date', 10);
+    const contentScale = payload.contentScale === 'schema' ? 'schema' : 'instances';
+    const entry = await requestGraphGeneration({ userId: ctx.userId, scope, ...(at ? { at } : {}), contentScale });
+    return { entry };
+  },
   'cognition.ontology.document.edit': async (payload: Payload, ctx: IpcContext) => editOntologyDocument(ctx.userId, payload),
   'cognition.ontology.search': async (payload: Payload, ctx: IpcContext) => ({
     results: searchOntologyRecords(await readOntologyView(ctx.userId), ontologyText(payload.query, 'query', 200),
@@ -110,6 +134,8 @@ export const invokeHandlers = {
       changes: outcome.receipt.changedIds.map(id => outcome.document.records[id]) };
   },
   'cognition.ontology.command.commit': async (payload: Payload, ctx: IpcContext) => commitOntologyCommand(ctx.userId, payload.command),
+  'cognition.ontology.access.preview': async (payload: Payload, ctx: IpcContext) => previewOntologyAccessPromotion(ctx.userId, ontologyModuleIds(payload.moduleIds)),
+  'cognition.ontology.access.promote': async (payload: Payload, ctx: IpcContext) => promoteOntologyAccess(ctx.userId, ontologyModuleIds(payload.moduleIds)),
   'cognition.ontology.export': async (payload: Payload, ctx: IpcContext) => {
     const moduleId = payload.moduleId !== undefined ? ontologyId(payload.moduleId, 'ontology module id') : undefined;
     const { json, bytes } = await buildOntologyExport(ctx.userId, moduleId);

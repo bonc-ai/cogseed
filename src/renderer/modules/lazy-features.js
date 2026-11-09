@@ -25,6 +25,8 @@ const _rendererFeatureManifest = Object.freeze({
   ],
   agents: [],
   auto: [
+    // S5：模板一步创建的共享确认框（auto.js 与 workspace.js 共用），须先于使用方加载。
+    { src: './modules/template-install.js' },
     { src: './modules/auto.js' },
   ],
   'run-center': [
@@ -81,6 +83,7 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/cognition-ontology.js' },
   ],
   workspace: [
+    { src: './modules/template-install.js' },
     { src: './modules/workspace.js' },
   ],
   contacts: [

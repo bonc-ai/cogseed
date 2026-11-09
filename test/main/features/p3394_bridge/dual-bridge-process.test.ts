@@ -27,7 +27,8 @@ import type { P3394RuntimeAdapter, P3394RuntimeEvent, P3394RuntimeSessionBinding
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 let previousRuntimeVariant: string | undefined;
-let variantName: string;
+let previousBaseDir: string | undefined;
+let scratchBase = '';
 const children: ChildProcess[] = [];
 const openChannels: P3394HttpChannel[] = [];
 
@@ -35,11 +36,14 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-dual-bridge-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
-  // p3394StateFile 走 COGSEED_RUNTIME_VARIANT（非 COGSEED_WORKSPACE_ROOT）：
-  // 用一次性 variant 隔离 outbox/cursor 等状态文件，避免污染真实 cogseed variant。
-  variantName = 'p3394-dual-' + Math.random().toString(36).slice(2, 8);
+  // p3394StateFile 走变体目录（非 COGSEED_WORKSPACE_ROOT）：把整棵变体树
+  // 指到一次性临时根（runtime-paths 现在校验变体名），隔离
+  // outbox/cursor 等状态文件，避免污染真实 cogseed variant。
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-dual-'));
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
   previousRuntimeVariant = process.env.COGSEED_RUNTIME_VARIANT;
-  process.env.COGSEED_RUNTIME_VARIANT = variantName;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 });
 
 afterEach(async () => {
@@ -51,8 +55,10 @@ afterEach(async () => {
   else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   if (previousRuntimeVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousRuntimeVariant;
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
   fs.rmSync(tmpDir, { recursive: true, force: true });
-  fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true });
+  fs.rmSync(scratchBase, { recursive: true, force: true });
 });
 
 function freePort(): Promise<number> {
@@ -252,7 +258,7 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
     expect(exitCode, 'child stderr: ' + childErr).toBe(0);
 
     // C-07 出站事务闭环：reverse 任务在 outbox 里完整走过 submitted → sent → completed。
-    const outboxFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName, 'p3394-outbox.jsonl');
+    const outboxFile = path.join(scratchBase, 'runtime-variants', 'cogseed', 'p3394-outbox.jsonl');
     expect(fs.existsSync(outboxFile)).toBe(true);
     const outboxLines = fs.readFileSync(outboxFile, 'utf8').split('\n').filter((line) => line.trim());
     const reverseMessageId = (JSON.parse(fs.readFileSync(reverseResult, 'utf8')) as { reply_to: string }).reply_to;
@@ -278,7 +284,7 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
     const reverseResult2 = path.join(tmpDir, 'child-reverse-result-2.json');
     // S-05 三方同框：模拟上次进程遗留的 outbox submitted 信封（未确认出站），
     // 重启后由 replayOutbox 重放——与游标续读恢复（R-08）同框。
-    const outboxLegacyFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName, 'p3394-outbox.jsonl');
+    const outboxLegacyFile = path.join(scratchBase, 'runtime-variants', 'cogseed', 'p3394-outbox.jsonl');
     fs.mkdirSync(path.dirname(outboxLegacyFile), { recursive: true });
     const legacyMessageId = 'msg-outbox-legacy-1';
     fs.appendFileSync(outboxLegacyFile, JSON.stringify({ at: new Date().toISOString(), message_id: legacyMessageId, status: 'submitted' }) + '\n');

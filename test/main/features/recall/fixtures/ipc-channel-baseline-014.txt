@@ -285,6 +285,7 @@ marketplace.listProjects
 marketplace.listSkills
 marketplace.mergeListingsCache
 marketplace.reconcileStatus
+marketplace.refreshContentStatus
 marketplace.requestCheck
 marketplace.setListingsCache
 marketplace.sweepCache

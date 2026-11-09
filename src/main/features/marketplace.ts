@@ -311,7 +311,19 @@ export function apiBase(): string {
 // ── envelope ──────────────────────────────────────────────────────────────
 interface Envelope { code: number; msg?: string; [k: string]: unknown }
 
-export async function postJson<T>(p: string, body: unknown): Promise<T> {
+interface MarketplaceJsonRequestOptions {
+  timeoutMs?: number;
+  retries?: number;
+}
+
+export async function postJson<T>(
+  p: string,
+  body: unknown,
+  opts: MarketplaceJsonRequestOptions = {},
+): Promise<T> {
+  const timeoutMs = Number.isFinite(opts.timeoutMs)
+    ? Math.max(1, Number(opts.timeoutMs))
+    : MARKETPLACE_JSON_TIMEOUT_MS;
   const res = await fetchWithRetry(`marketplace:${p}`, `${apiBase()}${p}`, {
     method: 'POST',
     headers: withCommonHeaders({
@@ -320,8 +332,9 @@ export async function postJson<T>(p: string, body: unknown): Promise<T> {
     }),
     body: JSON.stringify(body || {}),
   }, {
-    timeoutMs: MARKETPLACE_JSON_TIMEOUT_MS,
-    timeoutMessage: `marketplace:${p} timed out after ${Math.round(MARKETPLACE_JSON_TIMEOUT_MS / 1000)}s`,
+    timeoutMs,
+    ...(Number.isInteger(opts.retries) ? { retries: Math.max(0, Number(opts.retries)) } : {}),
+    timeoutMessage: `marketplace:${p} timed out after ${Math.round(timeoutMs / 1000)}s`,
   });
   const text = await res.text();
   let data: Envelope;

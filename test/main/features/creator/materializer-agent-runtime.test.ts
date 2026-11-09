@@ -27,6 +27,7 @@ import {
   type CreatorVerificationReport,
 } from '../../../../src/main/features/creator/verification-service';
 import { buildRunner } from '../../../../src/main/model/core-agent/runner';
+import { drainTrustRefreshForTest } from '../../../../src/main/model/core-agent/skill-registry';
 import { activateUser } from '../../../../src/main/features/users';
 import { agentDefinitionFile, userSkillsDir } from '../../../../src/main/paths';
 import { drainReportWrites } from '../../../../src/main/quality/report';
@@ -175,6 +176,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Prompt assembly starts background skill verification that can recreate local/skill_trust.
+  // Drain it before removing the workspace, independently of quality-report writes.
+  await drainTrustRefreshForTest();
   await drainReportWrites();
   await fs.rm(path.join(workspaceRoot, userId), { recursive: true, force: true });
 });

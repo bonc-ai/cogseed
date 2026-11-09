@@ -122,6 +122,44 @@ it('reforms against the version approved during formation and persists an update
   } finally { releaseFirstBatch?.(); stop(); }
 });
 
+it('retries one malformed value judgment with the same input and continues', async () => {
+  const uid = 'capture-user';
+  const settings = await import('../../../../src/main/features/recall/capture-settings');
+  const capture = await import('../../../../src/main/features/recall/capture-service');
+  const paths = await import('../../../../src/main/features/recall/paths');
+  await settings.updateRecallCaptureSettings(uid, { autoApproval: false });
+  const quote = '会议目标、背景事实、三个待决策问题、负责人和下一步行动';
+  const validJudgment = JSON.stringify({ eligible: true, reason: '可复用的会议准备模板',
+    evidence: [{ messageId: 'message-user', quote }] });
+  // Two evidence objects without a comma: valid-looking JSON that fails parse.
+  const malformed = `{"eligible":true,"reason":"可复用的会议准备模板","evidence":[
+    {"messageId":"message-user","quote":"${quote}"}
+    {"messageId":"message-user","quote":"${quote}"}]}`;
+  mocks.runSummary.mockImplementation(input => captureSummaryModelResponse(input));
+  mocks.run.mockReset()
+    .mockResolvedValueOnce({ text: malformed, meta: {} })
+    .mockResolvedValueOnce({ text: validJudgment, meta: {} })
+    .mockResolvedValueOnce({ text: JSON.stringify({ candidates: [{ judgment: `会议准备模板：${quote}。`,
+      value: '供后续项目会议复用。', summary: '项目会议议程', suggestedType: 'template', suggestedScope: 'general',
+      suggestedAction: 'create', risk: 'low', evidence: ['m1'] }] }), meta: {} });
+  const stop = capture.startRecallCaptureOrchestrator();
+  try {
+    await capture.runNightlyCaptureSweep(uid, new Date().toISOString(), await settings.readRecallCaptureSettings(uid));
+    const directory = path.dirname(paths.recallJsonRecordPath(uid, 'captures', 'placeholder'));
+    const rows = await Promise.all(fs.readdirSync(directory).filter(name => name.endsWith('.json'))
+      .map(name => capture.readRecallCapture(uid, name.slice(0, -5))));
+    const queued = rows.find(row => row.conversationId === 'conv-night' && row.status === 'queued');
+    expect(queued).toBeDefined();
+    const result = await capture.runRecallCapture(uid, queued!.id);
+    expect(result.status).toBe('review_ready');
+    const valueBuilds = mocks.buildRunner.mock.calls
+      .filter(([options]) => String(options.sessionId).startsWith('memory-value-recall-'));
+    expect(valueBuilds).toHaveLength(2);
+    expect(String(valueBuilds[1][0].systemPrompt)).toContain('previous output was not valid');
+    expect(mocks.runSummary).toHaveBeenCalledTimes(1);
+  } finally { stop(); }
+});
+
 it('rejects an unnormalized singleton related asset at the candidate write entry', async () => {
   await expect(createNightlyCandidateFixture('capture-user', { rawStatement: true,
     judgment: 'Retain the newly stated reporting requirement for later decisions.',

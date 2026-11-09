@@ -542,9 +542,6 @@ function setView(view, cid, opts = {}) {
   document.getElementById(panelId).classList.add('active');
 
   document.getElementById('new-chat-btn')?.classList.toggle('active', view === 'new-chat');
-  // 通讯录不是 rail 顶层模块（AppShell 没有对应 module），它挂在任务模块侧栏，
-  // 高亮只能在这里单独同步。
-  document.getElementById('contacts-btn')?.classList.toggle('active', view === 'contacts');
   // Rail highlight + contextual sidebar host (specs/008-shell-rail-layout).
   if (window.AppShell) window.AppShell.setShellView(view);
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。

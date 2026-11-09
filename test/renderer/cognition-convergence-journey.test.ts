@@ -23,6 +23,7 @@ afterEach(() => {
 describe('明确保存到任务读取再暂停的完整链路', () => {
   it('renderer action saves once, task records the exact version, pause blocks subsequent reads while history survives', async () => {
     const candidates = await import('../../src/main/features/recall/candidate-service');
+    const captures = await import('../../src/main/features/recall/capture-service');
     const assets = await import('../../src/main/features/recall/asset-service');
     const admission = await import('../../src/main/features/recall/prompt-injection');
     const accounting = await import('../../src/main/features/recall/agent-read-accounting');
@@ -32,7 +33,9 @@ describe('明确保存到任务读取再暂停的完整链路', () => {
     const candidate = await createNightlyCandidateFixture(uid, { summary: '报告文件格式', judgment: '团队报告统一使用 Markdown 格式。',
       value: '后续报告沿用统一格式', suggestedType: 'fact', suggestedScope: 'general', suggestedAction: 'create', sourceRefs: [] });
     const invoke = vi.fn(async (channel: string, args: any) => {
-      if (channel === 'recall.candidates.promote') return { ok: true, ...await candidates.promoteRecallCandidate(uid, args.candidateId, { actor: 'user' }) };
+      // Exercise the same capture dispatcher as the production promote IPC.
+      if (channel === 'recall.candidates.promote') return { ok: true,
+        ...await captures.promoteRecallCaptureCandidate(uid, args.candidateId) };
       return { ok: true };
     });
     const loaded = loadCognitionAssets({ candidates: [{ ...candidate, capabilities: { countsAsPending: true, canEdit: true, canPromote: true, canReject: true } }] }, { name: 'activity', candidateId: candidate.id }, { cogseed: { invoke } });

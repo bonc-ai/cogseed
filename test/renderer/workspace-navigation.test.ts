@@ -217,7 +217,11 @@ describe('workspace navigation and asynchronous ownership', () => {
     h.context.window.leaveWorkspace(); h.advanceTime(29000); h.invoke.mockClear(); await h.visit();
     expect(h.invoke.mock.calls.map(([channel]) => channel)).toEqual(['spaces.list']);
     h.context.window.leaveWorkspace(); h.advanceTime(1001); h.invoke.mockClear(); await h.visit(); await flush();
-    expect(h.invoke.mock.calls.map(([channel]) => channel)).toEqual(['personalOntology.templates.catalog', 'personalOntology.scenarios.list']);
+    expect(h.invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      'personalOntology.templates.catalog',
+      'personalOntology.scenarios.list',
+      'templates.catalog.list',
+    ]);
   });
 
   it('keeps configuration errors local and retries only the failed catalog', async () => {
@@ -303,14 +307,20 @@ describe('workspace navigation and asynchronous ownership', () => {
     expect(h.html()).toContain('AFTER_SAVE'); expect(h.html()).not.toContain('BEFORE_SAVE');
   });
 
-  it('rejects older template and Agent catalogs after a language refresh supersedes them', async () => {
+  it('rejects older Hub template and Agent catalogs after a language refresh supersedes them', async () => {
     const h = loadWorkspace(); const templates = deferred(); const agents = deferred();
-    h.answers.set('personalOntology.templates.catalog:', templates.promise);
+    h.answers.set('templates.catalog.list:', templates.promise);
     h.answers.set('agents.list:', agents.promise); await h.visit(); await h.click('create-space');
-    h.answers.set('personalOntology.templates.catalog:', { templates: [{ templateId: 'new', name: 'NEW_TEMPLATE' }] });
+    h.answers.set('templates.catalog.list:', {
+      ok: true,
+      items: [{ template_id: 'new', name: 'NEW_TEMPLATE', description: '', creatable: true }],
+    });
     h.answers.set('agents.list:', { agents: [{ agent_id: 'new-agent', name: 'NEW_AGENT' }] });
     h.events.get('i18n-change')?.(); await flush();
-    templates.resolve({ templates: [{ templateId: 'old', name: 'OLD_TEMPLATE' }] });
+    templates.resolve({
+      ok: true,
+      items: [{ template_id: 'old', name: 'OLD_TEMPLATE', description: '', creatable: true }],
+    });
     agents.resolve({ agents: [{ agent_id: 'old-agent', name: 'OLD_AGENT' }] }); await flush();
     expect(h.html()).toContain('NEW_TEMPLATE'); expect(h.html()).not.toContain('OLD_TEMPLATE');
     await h.click('open-ability', 'kind', 'task');

@@ -27,7 +27,8 @@ describe('cognition change rail', () => {
     expect(invoke).not.toHaveBeenCalled();
     ns.changeRailVisible(true);
     await ns.flushPendingRefresh();
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['recall.assets.list', 'recall.candidates.list', 'recall.captures.stats']);
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['recall.assets.list', 'recall.candidates.list',
+      'recall.captures.stats', 'recall.oldContent.plan.list']);
   });
 
   it('source pause and restore invalidate all loaded detail views, with no hidden reads', async () => {

@@ -245,6 +245,27 @@ def scan_supply_chain(skill_dir: Path, docs: list[tuple[str, str]],
         fctx = ctx_of.get(rel) or FileContext(rel, text)
         lower = rel.lower()
 
+        # ── Git 子模块 ──────────────────────────────────────────────
+        # 一个 Skill 带着 `.gitmodules` 时，它的实际内容取决于另一个仓库的当前
+        # 提交：用户装的是「这里」，跑的是「那里」。这正是供应链指针的定义。
+        # 红队样本 E2-gitmodules 在 2.4.0 之前拿到 pass/ALLOW/100——文件本身
+        # 甚至没被打开过（`.gitmodules` 没有扩展名）。现在它至少是 CAUTION：
+        # 不是阻断（子模块可以是合法的），而是「你知道它指向哪吗」。
+        if lower.endswith(".gitmodules"):
+            urls = [line.split("=", 1)[1].strip()
+                    for line in text.splitlines()
+                    if line.strip().lower().startswith("url")
+                    and "=" in line and line.split("=", 1)[1].strip()]
+            findings.append(make_finding(
+                "SR-SC", "git_submodule", "medium", "supply_chain", rel, None,
+                f"包含 {len(urls)} 个子模块引用：实际内容来自另一个仓库的当前提交"
+                + (f"（{urls[0][:80]}）" if urls else ""),
+                "移除子模块，或把依赖的内容以固定版本随包分发。",
+                source="supply-chain", context=fctx.file_ctx,
+                original_severity="medium", confidence="high", snippet=rel,
+            ))
+            continue
+
         # ── 安装钩子 ────────────────────────────────────────────────
         if lower.endswith("package.json"):
             hooks = _package_json_hooks(rel, text)

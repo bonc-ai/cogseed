@@ -155,12 +155,14 @@ describe('我的认知列表工作台', () => {
     expect(html).toContain('data-act="library-expand"');
     expect(html).toContain('data-act="library-close"');
     expect(html.indexOf('data-act="library-expand"')).toBeLessThan(html.indexOf('data-act="library-close"'));
+    expect(html.indexOf('ca-detail-title-actions')).toBeLessThan(html.indexOf('class="ca-library-facts"'));
     expect(html).not.toContain('ca-detail-expand');
     await loaded.ns.library.handleClick(click('library-expand'));
     html = loaded.render();
     expect(html).toContain('class="ca-detail-expand"');
     expect(html).toContain('data-detail-mirror="true"');
     expect(html).toContain('正文 a');
+    expect(html.indexOf('class="ca-library-facts"')).toBeLessThan(html.indexOf('ca-detail-title-actions'));
     await loaded.ns.library.handleClick(click('library-expand-close'));
     html = loaded.render();
     expect(html).not.toContain('ca-detail-expand');

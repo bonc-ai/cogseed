@@ -84,8 +84,8 @@ describe('Recall transfer and effectiveness proofs', () => {
     const closed = await receipts.readReceipt('user-a', receipt.executionId);
     expect(closed.status).toBe('completed');
     expect(closed.completedAt).toBeDefined();
-    // 幂等：再次 complete 同一回执不破坏（completeReceipt 对已 finalize 抛错，
-    // 但 completeTransferProofWithReceipt 不应因此失败——回执已 completed）。
+    // 幂等：回执层对同状态重放已按 no-op 成功返回（completeReceipt），
+    // proof 层仍拒绝重复完成同一迁移证明。
     await expect(proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'Evidence was injected.' })).rejects.toThrow(/already complete/i);
   });
 

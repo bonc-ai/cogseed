@@ -20,9 +20,11 @@
 import { EMAIL_ENTRIES } from './catalog-email';
 import { TENCENT_SURVEY_ENTRY } from './catalog-tencent-survey';
 import { GOOGLE_ENTRIES } from './catalog-google';
+import { APPLE_ENTRIES } from './catalog-apple';
 import type { CatalogEntry } from './types';
 
 export const CONNECTOR_CATALOG: CatalogEntry[] = [
+  ...APPLE_ENTRIES,
   TENCENT_SURVEY_ENTRY,
   ...EMAIL_ENTRIES,
   {

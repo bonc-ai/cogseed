@@ -105,9 +105,17 @@ describe('对话内「本轮资产检索与带入状态」卡（引用卡＋投�
     expect(block).not.toMatch(/font-size:\s*\d+px/);
     expect(styleSource).not.toMatch(/^\.chat-recall-feedback-btn \{$/m);
     expect(styleSource).toMatch(/^\.chat-recall-citations\.is-feedback-sent \.chat-recall-feedback-btn \{/m);
+    // 三轮收窄（2026-11-06）：展开态节奏收紧——头部下间距 4px、行间距 4px，
+    // 行内反馈按钮 scoped 24px/12px 图标（与尾行按钮同档，不动共享 sm 档 28px）。
+    expect(cssBlock('.chat-recall-citation-list')).toContain('gap: 4px;');
+    const rowButton = cssBlock('.chat-recall-feedback-row .ui-button');
+    expect(rowButton).toContain('height: 24px;');
+    const rowIcon = cssBlock('.chat-recall-feedback-row .ui-button .ui-button__icon');
+    expect(rowIcon).toContain('width: 12px;');
+    expect(rowIcon).toContain('height: 12px;');
   });
 
-  it('头部仍是同一份分组规则：head/icon/title/strong/small/status 同块', () => {
+  it('头部仍是同一份分组规则：head/icon/title/strong/status 同块', () => {
     // 合并卡的头部图标与实现都住在 recall-projection-card.js
     expect(cardSource).toContain("_headIconHtml('brain-circuit', 'chat-recall-citations-icon')");
     expect(cardSource).toContain('window.uiIconHtml');
@@ -119,14 +127,12 @@ describe('对话内「本轮资产检索与带入状态」卡（引用卡＋投�
       const block = cssBlock(projectionSel);
       expect(block, `${projectionSel} 与 ${citationsSel} 必须同块`).toContain(`\n${citationsSel} {`);
     }
-    // 标题排版同一份：caption + semibold + 1.35；投影摘要行（small）也进分组
+    // 标题排版同一份：caption + semibold + 1.35
     const strong = cssBlock('.chat-recall-projection-title strong');
     expect(strong).toContain('.chat-recall-citations-title strong {');
     expect(strong).toContain('font-size: var(--font-size-caption);');
     expect(strong).toContain('font-weight: var(--font-weight-semibold);');
     expect(strong).toContain('line-height: 1.35;');
-    const small = cssBlock('.chat-recall-projection-title small');
-    expect(small).toContain('.chat-recall-citations-title small {');
     // 头部图标一律 14px + --primary
     const icon = cssBlock('.chat-recall-projection-icon');
     expect(icon).toContain('.chat-recall-citations-icon {');
@@ -145,7 +151,7 @@ describe('对话内「本轮资产检索与带入状态」卡（引用卡＋投�
     expect(head).toContain('display: flex;');
     expect(head).toContain('align-items: flex-start;');
     expect(head).toContain('gap: 8px;');
-    expect(head).toContain('margin-bottom: 8px;');
+    expect(head).toContain('margin-bottom: 4px;');
   });
 
   it('头部 DOM 同构：图标位在标题块之前（实现随合并收进卡模块）', () => {
@@ -153,8 +159,9 @@ describe('对话内「本轮资产检索与带入状态」卡（引用卡＋投�
     expect(cardSource).toContain('chat-recall-citations-title');
     expect(cardSource.indexOf('chat-recall-citations-icon'))
       .toBeLessThan(cardSource.indexOf('chat-recall-citations-title'));
-    // conversation.js 只留同步入口委托，不再自带渲染实现
-    expect(conversationSource).toContain('window.recallMemoryCardHtml(citations)');
+    // conversation.js 只留同步入口委托，不再自带渲染实现（fallback 随
+    // 562ba47aa 进了签名，这里钉现签名，防止回退成旧两参形态）。
+    expect(conversationSource).toContain('window.recallMemoryCardHtml(citations, fallback)');
     expect(conversationSource).not.toContain('chat-recall-citations-icon');
     expect(styleSource).not.toContain('.chat-recall-citations-head > span:first-child');
   });
@@ -192,15 +199,24 @@ describe('对话内「本轮资产检索与带入状态」卡（引用卡＋投�
     expect(conversationSource).toContain('window.recallCardToggleCollapsed(host)');
     expect(conversationSource.indexOf("closest?.('.chat-recall-citations-head')"))
       .toBeLessThan(conversationSource.indexOf('[data-recall-feedback]'));
-    // 折叠只藏内容行（列表＋省略块），尾部反馈/提示句/撤销保持可见。
+    // 折叠只藏内容行（列表＋省略块）；合并态尾部反馈/撤销保持可见。纯引用
+    // 形态无尾行（2026-11-06 收敛：头部计数+副标题，卡尾长提示句已删）。
     const collapsed = cssBlock('.chat-recall-citations.is-collapsed .chat-recall-citation-list');
     expect(collapsed).toContain('.chat-recall-citations.is-collapsed .chat-recall-projection-omitted {');
     expect(collapsed).toContain('display: none;');
     expect(cssBlock('.chat-recall-feedback-actions')).toContain('align-items: center;');
-    // 提示句挪到撤销左侧（auto margin 独占中段）；计数上移内联在标题右侧。
+    // 备注句（回退备注/合并态状态说明）用 auto margin 右让位；计数在头部行
+    // 右侧、紧邻折叠箭头（三轮挪出标题：头部 flex 子元素顶对齐 +1px，与
+    // 图标/箭头同一行，间距由头部 8px gap 负责，不再用 margin-left）。
     expect(cssBlock('.chat-recall-citations-note')).toContain('margin-left: auto;');
-    expect(cssBlock('.chat-recall-citations-count')).toContain('margin-left: 6px;');
+    const count = cssBlock('.chat-recall-citations-count');
+    expect(count).toContain('flex: 0 0 auto;');
+    expect(count).toContain('margin-top: 1px;');
+    expect(count).not.toContain('margin-left');
     expect(cardSource).toContain('chat-recall-citations-count');
     expect(cardSource).toContain('chat-recall-citations-note');
+    // 折叠态头部下方无内容，head margin 收零（上下收窄）；展开态保留 8px 分隔。
+    const collapsedHead = cssBlock('.chat-recall-citations.is-collapsed .chat-recall-citations-head');
+    expect(collapsedHead).toContain('margin-bottom: 0;');
   });
 });

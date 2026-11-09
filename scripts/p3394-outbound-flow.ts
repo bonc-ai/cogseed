@@ -22,8 +22,11 @@ import { spawn } from 'node:child_process';
 
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-outbound-verify-'));
 process.env.COGSEED_WORKSPACE_ROOT = WORK;
-// 独立运行时变体：桥接状态/令牌/会话全部落在一次性目录，不触碰任何真实实例。
-process.env.COGSEED_RUNTIME_VARIANT = 'p3394-verify-' + fs.mkdtempSync(path.join(os.tmpdir(), 'v-')).split(path.sep).pop();
+// 独立变体树：桥接状态/令牌/会话全部落在一次性目录，不触碰任何真实实例
+// （runtime-paths 现在校验变体名，隔离改为重定向整棵变体树）。
+const VARIANT_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-verify-variants-'));
+process.env.COGSEED_VARIANT_BASE_DIR = VARIANT_BASE;
+process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 process.env.COGSEED_P3394_PORT = '18555';
 
 const GATEWAY_PORT = 19055;
@@ -110,7 +113,7 @@ async function main(): Promise<void> {
     { userId: 'p3394-verify-user', sourceKey: 'verify-step-4' },
   );
   assert(!third.isError, 'step 4 must succeed');
-  const sessionsFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', process.env.COGSEED_RUNTIME_VARIANT || '', 'p3394-sessions.json');
+  const sessionsFile = path.join(VARIANT_BASE, 'runtime-variants', 'cogseed', 'p3394-sessions.json');
   const sessions = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
   const bindings = Object.values(sessions.sessions as Record<string, string>);
   assert(bindings.length === 1, 'multi-turn collaboration must reuse ONE session per (scope, peer), got ' + bindings.length);
@@ -124,7 +127,7 @@ async function main(): Promise<void> {
     { userId: 'p3394-verify-user', sourceKey: 'verify-step-5' },
   );
   assert(failed.isError, 'step 5 must fail (gateway down)');
-  const outboxFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', process.env.COGSEED_RUNTIME_VARIANT || '', 'p3394-outbox.jsonl');
+  const outboxFile = path.join(VARIANT_BASE, 'runtime-variants', 'cogseed', 'p3394-outbox.jsonl');
   const outboxRaw = fs.readFileSync(outboxFile, 'utf8');
   const statuses = outboxRaw.split('\n').filter((line) => line.includes('"status"')).map((line) => (JSON.parse(line) as { status: string }).status);
   assert(statuses.includes('submitted') && statuses.includes('sent') && statuses.includes('completed') && statuses.includes('failed'), 'outbox must show submitted/sent/completed/failed lifecycle, got: ' + statuses.join(','));

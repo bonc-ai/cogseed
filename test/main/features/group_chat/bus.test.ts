@@ -23,6 +23,7 @@ const streamProbe = vi.hoisted(() => ({
   readOnlyRoots: [] as string[][],
   dispatchResults: [] as string[],
   maxToolLoops: [] as Array<number | undefined>,
+  turnPolicies: [] as any[],
   toolAccesses: [] as Array<string | undefined>,
   idleTimeouts: [] as Array<number | undefined>,
   streamIdleTimeouts: [] as Array<number | undefined>,
@@ -48,6 +49,7 @@ vi.mock('../../../../src/main/features/recall/context-projection', () => ({
 
 vi.mock('../../../../src/main/model/client', () => ({
   async *streamChatWithModel(_opts: any) {
+    streamProbe.turnPolicies.push({ maxToolCalls: _opts.maxToolCalls, toolDenylist: _opts.toolDenylist, suppressExecutionPlanInstructions: _opts.suppressExecutionPlanInstructions });
     streamProbe.messages.push(String(_opts?.message || ''));
     streamProbe.systemPrompts.push(String(_opts?.systemPrompt || ''));
     streamProbe.modelOverrides.push(_opts?.modelOverride);
@@ -215,6 +217,18 @@ vi.mock('../../../../src/main/model/client', () => ({
       yield { type: 'done' };
       return;
     }
+    if (String(_opts?.message || '').includes('COMPLETE_INPUT_EVENT_TEST')) {
+      yield { type: 'event', event: { stream: 'agent_run_result', data: {
+        duration_ms: 100, usage: {
+          totalInputTokens: 200, cacheReadTokens: 120, outputTokens: 10,
+          requestedModel: 'requested-alias', reportedModel: 'provider/model@v1',
+          lastCallUsage: { totalInputTokens: 80, cacheReadTokens: 60 },
+        },
+      } } };
+      yield { type: 'final', text: 'usage recorded' };
+      yield { type: 'done' };
+      return;
+    }
     if (String(_opts?.message || '').includes('TIMING_EVENT_TEST')) {
       yield {
         type: 'event',
@@ -317,11 +331,25 @@ vi.mock('../../../../src/main/features/local_agents/launch_confirm', () => ({
 //  ② recordProfileMemoryInjection：按开关拒绝，模拟收据流一条坏记录/瞬时
 //     IO 错（其余导出保持真实实现）。
 const profileLedgerProbe = vi.hoisted(() => ({ calls: 0, failNext: false }));
+const taskOntologyProbe = vi.hoisted(() => ({ calls: [] as any[] }));
+const ontologyReadReceiptProbe = vi.hoisted(() => ({ calls: [] as any[][] }));
 vi.mock('../../../../src/main/features/recall/prompt-injection', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../../src/main/features/recall/prompt-injection')>();
   return {
     ...actual,
     buildRecallTurnPromptContext: async (uid: string, input: any) => {
+      if (String(input?.taskText || '').includes('TASK_ONTOLOGY_TEST')) {
+        return {
+          promptBlock: '<asset-context>AUTHORIZED_ASSET_MARKER</asset-context>',
+          citations: [{
+            assetId: 'aa-asset-task-ontology', title: '测试资产', type: 'rule', version: '1',
+            scope: 'general', projectionId: 'projection-task-ontology', matchMethod: 'manual',
+          }],
+          profileMemoryEntries: [{ id: 'aa-profile-ontology-probe', source: 'USER.md', version: '1' }],
+          authorizedAssetsBlock: 'AUTHORIZED_ASSET_MARKER',
+          profileAssetsBlock: '',
+        };
+      }
       try {
         const result = await actual.buildRecallTurnPromptContext(uid, input);
         if (!String(input?.taskText || '').includes('PROFILE_MEMORY_LEDGER_TEST')) return result;
@@ -338,6 +366,40 @@ vi.mock('../../../../src/main/features/recall/prompt-injection', async (importOr
           profileMemoryEntries: [{ id: 'aa-profile-ledger-probe', source: 'USER.md', version: '1' }],
         } as any;
       }
+    },
+  };
+});
+vi.mock('../../../../src/main/features/cognition/ontology/task-context', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/features/cognition/ontology/task-context')>();
+  const empty = {
+    promptBlock: '', readRefs: [], mentions: [], ambiguousMentions: [], omitted: [],
+    truncated: { facts: 0, uncertainFacts: 0, rules: 0, modules: 0, records: 0 }, complete: true,
+  };
+  return {
+    ...actual,
+    buildTaskOntologyContext: async (input: any) => {
+      taskOntologyProbe.calls.push(input);
+      if (!String(input?.taskText || '').includes('TASK_ONTOLOGY_TEST')) return empty;
+      return {
+        ...empty,
+        promptBlock: '<task-ontology revision="3">TASK_ONTOLOGY_BLOCK [[ontology:module-a/fact-a@1]]</task-ontology>',
+        readRefs: [{
+          moduleId: 'module-a', recordId: 'fact-a', recordVersion: 1,
+          kind: 'assertion' as const, sourceKind: 'user' as const,
+        }],
+        mentions: ['CogSeed'],
+        complete: true,
+      };
+    },
+  };
+});
+vi.mock('../../../../src/main/features/cognition/ontology/query-receipt', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/features/cognition/ontology/query-receipt')>();
+  return {
+    ...actual,
+    recordOntologyQueryReadReceipt: async (...args: any[]) => {
+      ontologyReadReceiptProbe.calls.push(args);
+      return actual.recordOntologyQueryReadReceipt(args[0], args[1], args[2]);
     },
   };
 });
@@ -390,6 +452,8 @@ beforeEach(async () => {
   cliRunMock.nextResults.length = 0;
   profileLedgerProbe.calls = 0;
   profileLedgerProbe.failNext = false;
+  taskOntologyProbe.calls.length = 0;
+  ontologyReadReceiptProbe.calls.length = 0;
   ontologyUsageProbe.calls.length = 0;
   ontologyUsageProbe.failNext = false;
   streamProbe.messages.length = 0;
@@ -399,6 +463,7 @@ beforeEach(async () => {
   streamProbe.readOnlyRoots.length = 0;
   streamProbe.dispatchResults.length = 0;
   streamProbe.maxToolLoops.length = 0;
+  streamProbe.turnPolicies.length = 0;
   streamProbe.toolAccesses.length = 0;
   streamProbe.idleTimeouts.length = 0;
   streamProbe.streamIdleTimeouts.length = 0;
@@ -1161,6 +1226,27 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(findCommanderReply(lines)).toBeTruthy();
   });
 
+  it('injects the task ontology as an independent block after assets and records its read receipt', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cidbus-task-ontology';
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'TASK_ONTOLOGY_TEST 准备评审' });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const prompt = streamProbe.systemPrompts.find(value => value.includes('TASK_ONTOLOGY_BLOCK'));
+    expect(prompt).toBeTruthy();
+    expect(prompt!.match(/<asset-context>/g)).toHaveLength(1);
+    expect(prompt!.indexOf('AUTHORIZED_ASSET_MARKER')).toBeLessThan(prompt!.indexOf('<task-ontology'));
+    expect(prompt!.indexOf('<task-ontology')).toBeLessThan(prompt!.indexOf('TASK_ONTOLOGY_BLOCK'));
+    expect(taskOntologyProbe.calls).toHaveLength(1);
+    expect(taskOntologyProbe.calls[0].injectedAssetIds).toEqual(['aa-asset-task-ontology']);
+    expect(taskOntologyProbe.calls[0].injectedAssetIds).not.toContain('aa-profile-ontology-probe');
+    expect(ontologyReadReceiptProbe.calls).toHaveLength(1);
+    expect(ontologyReadReceiptProbe.calls[0][2]).toEqual([{
+      moduleId: 'module-a', recordId: 'fact-a', recordVersion: 1,
+      kind: 'assertion', sourceKind: 'user',
+    }]);
+  });
+
   it('finalizes ontology citations only for persisted replies carrying the marker and survives receipt failure', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const paths = await import('../../../../src/main/paths');
@@ -1261,6 +1347,32 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(events.some((e) => e.type === 'process' && e.data?.event?.stream === 'runtime')).toBe(true);
   });
 
+  it('forwards current user constraints into the model turn', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    await bus.enqueue({ uid: TEST_UID, cid: 'cid-explicit-tool-budget', fromActorId: 'user', text: '仅修登录空值错误，最多5次工具调用，不用计划工具' });
+    await waitForQuiescent(TEST_UID, 'cid-explicit-tool-budget');
+    expect(streamProbe.maxToolLoops).toContain(24);
+    expect(streamProbe.turnPolicies).toContainEqual({ maxToolCalls: 5, toolDenylist: ['manage_execution_plan'], suppressExecutionPlanInstructions: true });
+    await bus.enqueue({ uid: TEST_UID, cid: 'cid-explicit-tool-budget', fromActorId: 'user', text: '下一项开发一个仓库管理系统' });
+    await waitForQuiescent(TEST_UID, 'cid-explicit-tool-budget');
+    expect(streamProbe.maxToolLoops.at(-1)).toBe(120);
+    expect(streamProbe.turnPolicies.at(-1)).toEqual({ maxToolCalls: undefined, toolDenylist: undefined, suppressExecutionPlanInstructions: undefined });
+  });
+
+  it('authoritative complete input: persists raw total, nested pressure and bounded model observations in history', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-complete-input';
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'COMPLETE_INPUT_EVENT_TEST' });
+    await waitForQuiescent(TEST_UID, cid);
+    const lines = fs.readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(findCommanderReply(lines)?.metrics?.usage).toEqual({
+      totalInputTokens: 200, cacheReadTokens: 120, outputTokens: 10,
+      requestedModel: 'requested-alias', reportedModel: 'provider/model@v1',
+      lastCallUsage: { totalInputTokens: 80, cacheReadTokens: 60 },
+    });
+  });
+
   it('persists phase timing attribution in the final runtime process item', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const paths = await import('../../../../src/main/paths');
@@ -1273,6 +1385,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
     const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
     const reply = findCommanderReply(lines);
+    expect(reply?.metrics?.timings).toEqual({ providerMs: 40, toolMs: 20, compactionMs: 10, retryWaitMs: 5, otherMs: 3 });
     const runtime = reply?.process?.find((item: any) => item?.event?.stream === 'runtime');
     expect(runtime?.event?.data).toMatchObject({
       duration_ms: expect.any(Number),
@@ -1851,6 +1964,29 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(stats.deliveries).toBe(0);
     expect(stats.failures).toBe(1);
     expect(stats.errors).toBe(0);
+  });
+
+  it.each(['done', 'failed'])('does not wake Commander after a direct user Agent run ends: %s', async (outcome) => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const runStore = await import('../../../../src/main/features/group_chat/run_store');
+    const run = await runStore.createRun({
+      uid: TEST_UID, cid: TEST_CID,
+      submittedText: 'direct user request',
+      memberAgentIds: [AGENT_ID], mentionAgentIds: [AGENT_ID],
+    });
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: `@${AGENT_NAME} ${outcome === 'failed' ? 'FORCED_AGENT_STREAM_THROW' : 'direct user request'}`,
+      runId: run!.run_id,
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+    const recorded = await runStore.readRun(TEST_UID, TEST_CID, run!.run_id);
+    expect(recorded?.actors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agent_id: AGENT_ID, terminal: outcome }),
+    ]));
+    expect(recorded?.actor_report_enqueued).not.toBe(true);
+    expect(streamProbe.messages.some((message) => message.includes('汇总汇报'))).toBe(false);
+    expect(streamProbe.messages).toHaveLength(1);
   });
 
   it('enqueues a commander degradation report when a dispatched agent stream throws', async () => {

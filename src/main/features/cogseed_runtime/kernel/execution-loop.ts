@@ -3,7 +3,7 @@ import { assembleRuntimePrompt, type AssembledRuntimeContext } from './prompt-as
 import { DEFAULT_RUNTIME_KERNEL_CONFIG } from './config';
 import { assembleRuntimeContextForPrompt } from './context/importer';
 import { loadRuntimeMemorySummary } from './memory/injector';
-import type { RuntimeModelAdapter, RuntimeModelToolCall } from './model-adapter';
+import type { RuntimeModelAdapter, RuntimeModelToolCall, RuntimeModelUsage } from './model-adapter';
 import type { RuntimeToolRunner } from './tools/runner';
 import type { RuntimeToolResult } from './tools/file-tools';
 import type { RuntimeKernelEvent, RuntimeKernelRequest } from './types';
@@ -448,7 +448,7 @@ export async function* runRuntimeExecutionLoop(
     const textFilter = createHiddenMetadataFilter();
     const toolCalls: RuntimeModelToolCall[] = [];
     const roundStartedAt = Date.now();
-    const roundUsage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } = {};
+    const roundUsage: RuntimeModelUsage = {};
 
     const streamIdleTimeoutMs = deps.streamIdleTimeoutMs ?? DEFAULT_RUNTIME_KERNEL_CONFIG.streamIdleTimeoutMs;
     const maxModelRetries = deps.maxModelRetries ?? DEFAULT_RUNTIME_KERNEL_CONFIG.maxModelRetries;
@@ -511,6 +511,8 @@ export async function* runRuntimeExecutionLoop(
             if (usage.inputTokens !== undefined) roundUsage.inputTokens = usage.inputTokens;
             if (usage.outputTokens !== undefined) roundUsage.outputTokens = usage.outputTokens;
             if (usage.totalTokens !== undefined) roundUsage.totalTokens = usage.totalTokens;
+            if (usage.cacheReadTokens !== undefined) roundUsage.cacheReadTokens = usage.cacheReadTokens;
+            if (usage.cacheWriteTokens !== undefined) roundUsage.cacheWriteTokens = usage.cacheWriteTokens;
           } else if (modelEvent.type === 'error') {
             if (retryable()) {
               interrupted = true;
@@ -555,10 +557,13 @@ export async function* runRuntimeExecutionLoop(
       roundUsage.inputTokens = undefined;
       roundUsage.outputTokens = undefined;
       roundUsage.totalTokens = undefined;
+      roundUsage.cacheReadTokens = undefined;
+      roundUsage.cacheWriteTokens = undefined;
       await pause(200 * modelAttempt);
     }
     await appendRuntimeRoundMetric(request.userId, {
       kind: 'round',
+      usage_schema_version: 2,
       request_id: request.requestId,
       runtime_session_id: request.runtimeSessionId,
       ...(request.traceId ? { trace_id: request.traceId } : {}),
@@ -569,6 +574,8 @@ export async function* runRuntimeExecutionLoop(
       ...(roundUsage.inputTokens !== undefined ? { input_tokens: roundUsage.inputTokens } : {}),
       ...(roundUsage.outputTokens !== undefined ? { output_tokens: roundUsage.outputTokens } : {}),
       ...(roundUsage.totalTokens !== undefined ? { total_tokens: roundUsage.totalTokens } : {}),
+      ...(roundUsage.cacheReadTokens !== undefined ? { cache_read_tokens: roundUsage.cacheReadTokens } : {}),
+      ...(roundUsage.cacheWriteTokens !== undefined ? { cache_write_tokens: roundUsage.cacheWriteTokens } : {}),
       ...(request.agentId ? { agent_id: request.agentId } : {}),
       created_at: new Date().toISOString(),
     });

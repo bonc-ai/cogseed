@@ -14,6 +14,7 @@
  */
 
 import { createLogger } from '../../logger';
+import { recoverConsultations } from './consultation-service';
 import { pollRelayMessages, type RelayMessage } from './relay-client';
 import { expireStaleReceptions, handleInboundQuestion, previewReceptionWorkspace } from './reception-service';
 import { listWaitingInbox, settleInboxEntry, stageInboundMessages, type WaitingInboxEntry } from './relay-inbox-store';
@@ -301,6 +302,15 @@ export async function pumpOnce(deps: RelayPumpDeps = {}): Promise<number> {
         });
       });
     }
+    // Original durable timestamps survive boot/sign-in; the initial pump tick
+    // and later ticks recover private consultation nudges and prepared replies.
+    await recoverConsultations(uid).catch(() => {
+      // The private card store is not the relay inbox authority. Preserve its
+      // damaged bytes, but keep unrelated admission/polling live. The reception
+      // ledger still fences each affected model final. Never log private errors.
+      log.warn('consultation recovery unavailable', { code: 'E_CONSULTATION_RECOVERY' });
+    });
+    if (!isCurrent()) return 0;
     // T3.4：先补上一轮没处理完的暂存项（进程重启或 Hub 一度不可达留下的），
     // 再拉新消息。用既有轮询入口重试，不另立调度器。
     await admissionLock(uid).runExclusive(async () => {

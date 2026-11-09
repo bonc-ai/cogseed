@@ -7,6 +7,7 @@
 
   const RAIL_ITEMS = [
     { module: 'task', id: 'task-nav-btn', icon: 'message-square', labelKey: 'rail.task', fallback: '任务', badgeId: 'commander-running-chip' },
+    { module: 'contacts', id: 'contacts-btn', icon: 'users', labelKey: 'sidebar.contacts', fallback: '通讯录', badgeId: 'contacts-nav-badge' },
     { module: 'workspace', id: 'workspace-btn', icon: 'folder', labelKey: 'sidebar.workspace', fallback: '空间中心' },
     { module: 'kb', id: 'kb-btn', icon: 'book-open', labelKey: 'sidebar.kb', fallback: '知识库' },
     { module: 'recall', id: 'recall-btn', icon: 'git-branch', labelKey: 'sidebar.recall', fallback: '认知资产' },

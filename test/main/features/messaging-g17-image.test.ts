@@ -20,16 +20,20 @@ import type { MessagingAdapter, MessagingInstanceInternal } from '../../../src/m
 
 let tmpDir = '';
 let previousRoot: string | undefined;
-let testVariant = '';
+let previousBaseDir: string | undefined;
+let scratchBase = '';
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-messaging-g17-'));
   previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
-  // channel-peer-map.json 落在 per-variant 状态目录：每次运行唯一变体，
-  // 杜绝写进真实 ~/.cogseed/runtime-variants/cogseed。
-  testVariant = 'g17-test-' + Math.random().toString(36).slice(2, 10);
-  process.env.COGSEED_RUNTIME_VARIANT = testVariant;
+  // channel-peer-map.json 落在 per-variant 状态目录：把整棵变体树指到
+  // 一次性临时目录（runtime-paths 现在校验变体名），杜绝写进真实
+  // ~/.cogseed/runtime-variants/cogseed。
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-g17-test-'));
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
   vi.resetModules();
 });
 
@@ -37,11 +41,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
   if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
   delete process.env.COGSEED_RUNTIME_VARIANT;
   fs.rmSync(tmpDir, { recursive: true, force: true });
-  try {
-    fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', testVariant), { recursive: true, force: true });
-  } catch { /* best effort */ }
+  fs.rmSync(scratchBase, { recursive: true, force: true });
 });
 
 function feishuInstance(overrides: Partial<MessagingInstanceInternal> = {}): MessagingInstanceInternal {

@@ -86,7 +86,12 @@ _TEST_DIR_PARTS = {"test", "tests", "testing", "__tests__", "spec", "specs",
                    "__snapshots__", "benchmark", "benchmarks"}
 _VENDOR_DIR_PARTS = {"vendor", "vendored", "third_party", "thirdparty",
                      "node_modules", "dist", "build", "site-packages", "external"}
-_DOC_EXT = {".md", ".markdown", ".rst", ".txt", ".adoc"}
+_DOC_EXT = {".md", ".markdown", ".rst", ".txt", ".adoc", ".pdf", ".docx", ".xlsx",
+            ".pptx", ".odt", ".ods", ".odp", ".rtf", ".html", ".htm", ".xhtml",
+            ".svg", ".xml", ".xaml", ".ipynb", ".csv", ".tsv"}
+#: 会被当作「作者叙述」处理、因而适用散文封顶的扩展名。见
+#: ``context_for_line``：散文封顶是在这批语料上标定的，载体文件不在其中。
+_PROSE_EXT = {".md", ".markdown", ".rst", ".txt", ".adoc"}
 _DOC_DIR_PARTS = {"doc", "docs", "documentation", "examples", "example", "samples"}
 
 # 压缩/打包产物：单行极长 + .min. 命名。这类文件正则误报率极高且不可人工复核。
@@ -295,6 +300,38 @@ _SEVERITY_CAP: dict[str, str] = {
     CONTEXT_PROSE: "low",
 }
 
+#: 「行为类」类别：命中即描述**已经发生的动作**，不是对动作的提及。
+#:
+#: 上下文降权的整个假设是「同一段文字在不同位置含义不同」——测试里的
+#: ``169.254.169.254`` 是断言输入，注释里的 ``curl | sh`` 是在解释如何防御。
+#: 这个假设对下面这些类别不成立：
+#:
+#:   * ``socket.socket`` + ``dup2`` + ``/bin/sh`` 三者同时出现，没有一种读法是
+#:     「说明」；
+#:   * ``stratum+tcp://`` 与矿池域名也没有；
+#:   * ``rm -rf /`` / ``mkfs`` / fork bomb 同理。
+#:
+#: 红队 2026-11-04（F-01/F-06）实测的后果：同一份反弹 shell 在 ``scripts/``
+#: 判 DO_NOT_INSTALL、在 ``tests/`` 判 CAUTION，两个目录之差就是「拒装」与
+#: 「装进去」。降权本身没有错（它解决的是误报），错在让降权去决定一个
+#: **行为类**命中的裁决。
+#:
+#: 边界：``prose`` 不适用本表。散文是「关于安全的说教」，里面完全可以逐字写出
+#: 一条反弹 shell 配方而不带任何行为；这一类仍然按散文封顶处理。
+#:
+#: 刻意不收 ``credential_access`` / ``data_egress``：它们的「提及」面太宽
+#: （每份安全文档都在提凭据路径），而门禁层已经按 ``original_severity`` 读穿
+#: 降权，不需要在这里再复制一份更激进的策略。
+BEHAVIOUR_CATEGORIES = frozenset({
+    "reverse_shell",
+    "crypto_miner",
+    "command_exec",
+    "destructive",
+    "unauthorized_download",
+    "obfuscation",
+    "persistence",
+})
+
 
 def demote(severity: str, steps: int) -> str:
     """按档下调 severity，下界为 info。"""
@@ -307,13 +344,30 @@ def demote(severity: str, steps: int) -> str:
     return _ORDER[max(0, idx - steps)]
 
 
-def severity_for(severity: str, context: str, *, hard_block: bool = False) -> str:
+def severity_for(
+    severity: str,
+    context: str,
+    *,
+    hard_block: bool = False,
+    category: str | None = None,
+) -> str:
     """给定原始 severity 与上下文，返回生效 severity。
 
     ``hard_block`` 规则不降权：一票否决项的语义是「命中即需人工专项评估」，
     不因为出现在测试目录就可以放过（测试目录同样可以藏真实外传代码）。
+
+    ``category`` 用来识别**行为类**命中（见 ``BEHAVIOUR_CATEGORIES``）：它们
+    在除散文之外的任何上下文里都不降权，因为「换个目录」不改变一个
+    socket+dup2+shell 在做什么。审计字段仍然如实记录 ``context``。
     """
     if hard_block:
+        return severity
+    if (
+        category
+        and context != CONTEXT_PROSE
+        and context != CONTEXT_COMMENT
+        and category in BEHAVIOUR_CATEGORIES
+    ):
         return severity
     out = demote(severity, _DEMOTE_STEPS.get(context, 0))
     cap = _SEVERITY_CAP.get(context)
@@ -329,6 +383,7 @@ def context_for_line(
     lineno: int | None = None,
     block_lines: set[int] | None = None,
     fenced_lines: set[int] | None = None,
+    prose_capable: bool | None = None,
 ) -> str:
     """行级上下文。
 
@@ -336,9 +391,27 @@ def context_for_line(
       执行），围栏外的散文降为 ``CONTEXT_PROSE``（不可执行，仅作线索）。
     - 源码文件里的单行注释与 docstring/块注释归为 ``CONTEXT_COMMENT``。
     - test/vendor 文件不再细分，沿用文件级上下文。
+
+    ``prose_capable`` 只对**作者叙述性文档**（Markdown / 纯文本 / reST /
+    AsciiDoc）为真；省略时按扩展名推导（见 ``_PROSE_EXT``）。散文封顶是在这
+    类语料上标定的：它们的正文会写「不要用 ``curl | sh``」这类**禁止**，把禁止
+    读成行为是本层最初要解决的误报。
+
+    2.4.0 把这条边界收紧到它被标定过的范围：``.svg`` / ``.html`` / ``.pdf`` /
+    ``.ipynb`` 等载体文件同样是「文档」，但它们的正文不是安全守则叙述，而是
+    被模型读取的**内容**。沿用散文封顶等于给载体一条免费通道——红队
+    A1-svg-instruction 就是这样拿到 ``restricted`` 而不是 ``blocked`` 的，
+    尽管同一段文字在 ``scripts/*.py`` 里会被判 critical。
     """
     if file_ctx == CONTEXT_DOC:
-        if lineno is not None and fenced_lines is not None and lineno not in fenced_lines:
+        if prose_capable is None:
+            prose_capable = PurePosixPath(relpath.lower()).suffix in _PROSE_EXT
+        if (
+            prose_capable
+            and lineno is not None
+            and fenced_lines is not None
+            and lineno not in fenced_lines
+        ):
             return CONTEXT_PROSE
         return CONTEXT_DOC
     if file_ctx != CONTEXT_SOURCE:
@@ -368,17 +441,19 @@ class FileContext:
     匹配同阶，因此提前算好不会改变复杂度。
     """
 
-    __slots__ = ("rel", "file_ctx", "_block_lines", "_fenced_lines")
+    __slots__ = ("rel", "file_ctx", "_block_lines", "_fenced_lines", "prose_capable")
 
     def __init__(self, rel: str, text: str) -> None:
         self.rel = rel
         self.file_ctx = file_context(rel, text)
         self._block_lines = block_comment_lines(rel, text)
         self._fenced_lines = fenced_code_lines(text) if self.file_ctx == CONTEXT_DOC else set()
+        self.prose_capable = PurePosixPath(rel.lower()).suffix in _PROSE_EXT
 
     def at(self, lineno: int, line: str) -> str:
         return context_for_line(self.rel, line, self.file_ctx,
-                                lineno, self._block_lines, self._fenced_lines)
+                                lineno, self._block_lines, self._fenced_lines,
+                                self.prose_capable)
 
 
 def build_contexts(docs: list[tuple[str, str]]) -> dict[str, FileContext]:

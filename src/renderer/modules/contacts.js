@@ -26,37 +26,6 @@
   /** 上一次看到的待处理数量：变大时才提示（AC-01）。 */
   let lastPendingCount = 0;
 
-  function contactsNavLabel() {
-    const key = 'sidebar.contacts';
-    const translated = typeof window.t === 'function' ? window.t(key) : key;
-    return translated && translated !== key ? String(translated) : '通讯录';
-  }
-
-  function renderContactsNavButton() {
-    if (typeof document === 'undefined' || typeof window.uiButton !== 'function') return null;
-    const host = document.getElementById('contacts-nav-host');
-    if (!host) return null;
-    if (!document.getElementById('contacts-btn')) {
-      host.innerHTML = window.uiButton({
-        label: contactsNavLabel(),
-        icon: 'users',
-        role: 'ghost',
-        className: 'sidebar-btn',
-        attrs: { id: 'contacts-btn' },
-      });
-    }
-    const button = document.getElementById('contacts-btn');
-    const label = button && button.querySelector('.ui-button__label');
-    if (label) label.setAttribute('data-i18n', 'sidebar.contacts');
-    return button;
-  }
-
-  function refreshContactsNavLabel() {
-    const button = renderContactsNavButton();
-    const label = button && button.querySelector('.ui-button__label');
-    if (label) label.textContent = contactsNavLabel();
-  }
-
   function invoke(channel, payload) {
     const bridge = typeof window !== 'undefined' ? window.cogseed : null;
     if (!bridge || typeof bridge.invoke !== 'function') return Promise.reject(new Error('no ipc bridge'));
@@ -125,26 +94,12 @@
     return loadingPromise;
   }
 
-  /** 侧栏「通讯录」角标：有未处理申请时显示数量（AC-01 / FR-01）。 */
+  /** Rail「通讯录」角标：有未处理申请时显示数量（AC-01 / FR-01）。 */
   function updateNavBadge(count) {
-    const badgeHost = typeof document !== 'undefined' ? document.getElementById('contacts-btn') : null;
-    if (badgeHost) {
-      const existing = badgeHost.querySelector('[data-contacts-badge]');
-      if (!count) {
-        if (existing) existing.remove();
-      } else {
-        const html = typeof window.uiBadge === 'function'
-          ? window.uiBadge({ label: String(count), tone: 'info' })
-          : `<span>${count}</span>`;
-        if (existing) existing.innerHTML = html;
-        else {
-          const holder = document.createElement('span');
-          holder.className = 'sidebar-btn-badge';
-          holder.setAttribute('data-contacts-badge', '1');
-          holder.innerHTML = html;
-          badgeHost.appendChild(holder);
-        }
-      }
+    const badge = typeof document !== 'undefined' ? document.getElementById('contacts-nav-badge') : null;
+    if (badge) {
+      badge.textContent = count ? String(count) : '';
+      badge.hidden = !count;
     }
     if (count > lastPendingCount) {
       try {
@@ -287,7 +242,13 @@
 
   window.contacts = api;
   window.getComposerContactCandidates = getComposerContactCandidates;
-  renderContactsNavButton();
+  // The shared rail badge is a sibling hit target; use the existing entry's
+  // routing handler so clicking its count opens the same Contacts view.
+  if (typeof document !== 'undefined') {
+    document.getElementById('contacts-nav-badge')?.addEventListener('click', () => {
+      document.getElementById('contacts-btn')?.click();
+    });
+  }
 
   // 系统通知点击后跳转通讯录（FR-21）：主进程推送 —> 切视图。
   try {
@@ -315,6 +276,5 @@
       if (detail.view !== 'contacts') return;
       refresh().catch(() => { /* 失败保留旧数据 */ });
     });
-    window.addEventListener('i18n-change', refreshContactsNavLabel);
   } catch (_) { /* 无 DOM 环境忽略 */ }
 })();

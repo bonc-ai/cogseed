@@ -27,6 +27,18 @@ export interface TaskNotificationRuntime {
 
 type TaskTerminalSubscribe = (listener: TaskTerminalListener) => () => void;
 
+/** 「到点未执行」的通知文案：说明缺的是哪一项、去处理什么（FR-051）。
+ *  只由 main 调用，渲染层不参与，避免和任务行上的提示重复实现。 */
+export function skipNotificationCopy(input: { title?: string; count?: number }): { title: string; body: string } {
+  return {
+    title: t('notification.auto_skip.title'),
+    body: t('notification.auto_skip.body', {
+      title: input.title || '',
+      count: String(Math.max(0, Math.trunc(input.count || 0))),
+    }),
+  };
+}
+
 function copyFor(status: Exclude<TaskTerminalStatus, 'cancelled'>): { title: string; body: string } {
   return {
     title: t(`notification.task.${status}.title`),
@@ -38,9 +50,17 @@ function copyFor(status: Exclude<TaskTerminalStatus, 'cancelled'>): { title: str
  * Bridge privacy-safe bus terminal events to the operating system. The caller
  * owns all Electron dependencies so this feature stays independently testable.
  */
+export interface SkipNotificationOptions {
+  /** 定时任务到点未执行的事件源（`auto_tasks.subscribeFires`）；不传就不发这类通知。 */
+  subscribeFires?: (listener: (event: {
+    type: string; task_id?: string; title?: string; items?: unknown[];
+  }) => void) => () => void;
+}
+
 export function startTaskNotifications(
   runtime: TaskNotificationRuntime,
   subscribe: TaskTerminalSubscribe = subscribeTaskTerminals,
+  opts: SkipNotificationOptions = {},
 ): () => void {
   let unreadCount = 0;
 
@@ -61,6 +81,24 @@ export function startTaskNotifications(
   // Clear any stale OS-owned badge left behind by an unclean prior exit.
   updateBadge(0);
   const stopFocusListener = runtime.onDidFocus(clearUnread);
+  // 「到点未执行」：与群聊终态通知共用同一套开关、聚焦判断和系统通知通道。
+  const unsubscribeSkips = opts.subscribeFires ? opts.subscribeFires((event) => {
+    try {
+      if (event.type !== 'fire_skipped') return;
+      if (!runtime.isEnabled()) return;
+      if (runtime.hasFocusedWindow() || !runtime.isSupported()) return;
+      const copy = skipNotificationCopy({
+        title: event.title,
+        count: Array.isArray(event.items) ? event.items.length : 0,
+      });
+      const notification = runtime.createNotification(copy);
+      notification.onClick(() => { /* 没有会话可打开：点开只是收起系统通知 */ });
+      notification.show();
+    } catch (err) {
+      log.warn('skip notification failed', { error: (err as Error)?.message || String(err) });
+    }
+  }) : () => {};
+
   const unsubscribe = subscribe((event: TaskTerminalEvent) => {
     try {
       if (event.status === 'cancelled') return;
@@ -91,6 +129,7 @@ export function startTaskNotifications(
 
   return () => {
     unsubscribe();
+    unsubscribeSkips();
     stopFocusListener();
     clearUnread();
   };

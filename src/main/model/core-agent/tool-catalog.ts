@@ -88,6 +88,7 @@ export const DEEP_RESEARCH_AGENT_IDS = [
 ];
 
 export const TOOL_CATALOG: ToolCatalogEntry[] = [
+  { name: 'request_a2a_consultation', summary: 'Request the reception owner’s private decision and await their final wording.', group: 'meta' },
   // Files / workspace
   { name: 'background_list',   group: 'meta', summary: 'List CLI runs moved to the background because they hit their wall-clock or idle deadline; shows liveness and where the output goes.' },
   { name: 'background_output', group: 'meta', summary: 'Read the bounded tail of a background run output.' },
@@ -149,7 +150,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   // 个人字段读取与缺口检查；缺失字段在当前对话中补充。
   { name: 'personal_fields_check', group: 'recall', summary: 'Read which cognition slots a task type needs across three axes (personal fields / ontology facts and rules / method assets), which are bound, and which are missing (pack: weekly_report). Ask the user in the conversation for the missing ones.' },
   { name: 'transcript_corrections_query', group: 'recall', summary: 'Read confirmed conversation/ontology-scene transcript corrections and canonical names before revising a transcript; exclude uncertain identities.' },
-  { name: 'cognition_ontology_query', group: 'recall', summary: 'Read time-aware ontology facts and applicable rules through explicit module references, with source/version citations and private-scope filtering.' },
+  { name: 'cognition_ontology_query', group: 'recall', summary: 'Read ontology facts and rules by topic, one record by recordId, or the owner-wide paged inventory; topic queries keep private-scope filtering.' },
 
   // 任务经验：与资产**完全隔离**的第二套集合（exp- 前缀）。
   // 2 读 + 0 写、无 localExec（读写都在 <uid> 数据域内，不碰 shell/文件系统），
@@ -164,7 +165,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   // ownerAgent 限：主会话与 group_chat 各 actor 都能用（与 search_ability_assets 同）。
   // 顺序按"最常用优先"：先看全貌、再取正文，然后才是改动类动作。
   { name: 'list_ability_assets', group: 'recall', summary: 'Page through EVERY ability asset the user owns (title/type/status/tags + total), with optional type/status/space filters — deliberately not capped by the UI catalog page size.' },
-  { name: 'read_ability_asset', group: 'recall', summary: 'Read one ability asset by id in ≤2000-character chunks (use `chunk` to continue); reports deleted/paused/blocked state honestly instead of pretending it is missing.' },
+  { name: 'read_ability_asset', group: 'recall', summary: 'Read one ability asset by id in ≤2000-character chunks (use `chunk` to continue); paused/archived bodies are readable with status, while deleted/purged/revoked or source-invalid assets report state without body.' },
   { name: 'report_ability_asset_usage', group: 'recall', summary: 'Report adoption of one supplied asset version with an exact final-output excerpt; the host verifies the persisted message before recording adoption, never effectiveness.' },
   { name: 'list_asset_change_proposals', group: 'recall', summary: 'List AI-proposed asset changes still awaiting the user (approval cards): proposed values, current values, reason, state — read-only, because only the user may confirm/reject.' },
   { name: 'create_cognition', group: 'recall', summary: 'Create user-requested durable cognition, ontology records or a joint shared rule through one complete host confirmation and the governed storage pipeline; returns actual saved IDs and receipt.' },

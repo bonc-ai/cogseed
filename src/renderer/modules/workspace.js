@@ -80,7 +80,7 @@
     }
   }
 
-  /** 业务动作留桩：弹一个「待接入」轻提示，不碰任何后端。 */
+  /** 工作空间页的轻提示：只展示业务结果，不泄露开发阶段文案。 */
   function _stub(label) {
     let toast = document.getElementById('ws-toast');
     if (!toast) {
@@ -89,10 +89,7 @@
       toast.className = 'ws-toast';
       document.body.appendChild(toast);
     }
-    toast.textContent = _t('ws.stub_message', '{action}：{status}', {
-      action: label || _t('ws.feature', '该功能'),
-      status: _t('ws.stub_ready', 'UI 壳已就位，功能待接入'),
-    });
+    toast.textContent = label || _t('ws.feature', '该功能');
     toast.classList.add('show');
     clearTimeout(toast._timer);
     toast._timer = setTimeout(() => toast.classList.remove('show'), 1800);
@@ -432,6 +429,12 @@
   let _spaces = [];        // SpaceWithMeta[]
   let _templates = [];     // RoleTemplate[]
   let _scenarios = [];     // Scenario[]（教育/写作/职场/自定义，从模板创建区的场景入口）
+  // S5：Hub 空间模板，与内置场景同组、不打来源标签。独立于 _catalogs：Hub 出错不影响内置部分。
+  let _hubTemplates = { loaded: false, items: [], signedOut: false, hidden: false, fromCache: false, error: null };
+  let _hubTemplatesRequest = null;
+  // 从 Hub 模板打开新建弹窗时的上下文 { template, risk, requestId, missing:Set, unavailable:Map }；其它入口为 null。
+  let _createHub = null;
+  const _spaceOrigins = new Map(); // space_id → 模板来源（空间设置里显示一行）；null = 无来源
 
   // i18n key 由 PO contract 给出（nameKey / descriptionKey），这里只负责取值。
   // 收归前是 Workspace 自己拼 `ws.role_template.<id>.name` 前缀，等于在 PO 之外
@@ -642,6 +645,7 @@
         if (kind === 'templates') {
           _templates = results[0].templates.map(_localizeTemplate);
           _scenarios = results[1].scenarios.map(_localizeScenario);
+          void _loadHubTemplates({ force });
         } else if (kind === 'skills') {
           _skillCatalog = results[0].skills.map((s) => ({ id: s.id, name: s.name || s.id,
             desc: ((uiLang === 'zh' ? s.description_zh || s.description_en : s.description_en || s.description_zh) || '').trim(),
@@ -1004,14 +1008,16 @@
           <div class="ws-section-title"><h2>${_t('ws.from_template', '从模板创建')}</h2></div>
         </div>
         ${_catalogs.templates.error || !_catalogs.templates.loaded ? _catalogStatus('templates') : ''}
-        ${_catalogs.templates.loaded ? `${_scenarios.length
-          ? `<div class="ws-create-group-label">${_t('ws.scenes_group', '场景')}</div>
-             <div class="ws-template-grid ws-scene-grid ui-resource-grid">${_scenarios.map(_sceneCardHtml).join('')}</div>`
-          : ''}
-        ${_templates.length
-          ? `<div class="ws-create-group-label">${_t('ws.templates_group', '角色模板')}</div>
-             <div class="ws-template-grid ui-resource-grid">${_templates.map(_templateCardHtml).join('')}</div>`
-          : (!_scenarios.length ? window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_templates', '暂无可用空间模板。') }) : '')}` : ''}
+        ${_catalogs.templates.loaded ? (() => {
+          // 角色模板不再单列分组（S5 FR-003）：只作为能力配置里「角色」的可选资源。
+          const hubCards = _hubTemplates.hidden || _hubTemplates.signedOut ? [] : _hubTemplates.items;
+          const cards = [..._scenarios.map(_sceneCardHtml), ...hubCards.map(_hubTemplateCardHtml)];
+          return `${cards.length
+            ? `<div class="ws-create-group-label">${_t('ws.scenes_group', '场景')}</div>
+               <div class="ws-template-grid ws-scene-grid ui-resource-grid">${cards.join('')}</div>`
+            : window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_templates', '暂无可用空间模板。') })}
+          ${_hubTemplatesNoteHtml()}`;
+        })() : ''}
       </section>
       </div>
     </div>`;
@@ -1054,6 +1060,7 @@
     </article>`;
   }
 
+  // S5 FR-003 起「从模板创建」不再单列角色模板分组（依赖产品确认 P11-A）；保留此卡片以便产品选 B 时恢复。
   function _templateCardHtml(t) {
     const skillN = (t.bundle && t.bundle.skillIds ? t.bundle.skillIds.length : 0);
     const agentN = (t.bundle && t.bundle.agentIds ? t.bundle.agentIds.length : 0);
@@ -1096,6 +1103,295 @@
         ${window.uiButton({ label: _t('ws.use_scene', '用此场景创建'), role: 'ghost', size: 'sm', iconEnd: 'chevron-right', className: 'ws-card-action', attrs: { 'data-ws': 'use-scene', 'data-scene': sc.scenarioId } })}
       </div>
     </article>`;
+  }
+
+  // ── S5：Hub 空间模板 ──────────────────────────────────────────────────────
+
+  function _loadHubTemplates({ force = false } = {}) {
+    if (_hubTemplatesRequest && !force) return _hubTemplatesRequest;
+    const request = (async () => {
+      const res = await _invoke('templates.catalog.list', { type: 'workspace' });
+      if (request !== _hubTemplatesRequest) return;
+      _hubTemplates = res.error
+        ? { loaded: true, items: [], signedOut: false, hidden: false, fromCache: false, error: 'server_error' }
+        : {
+          loaded: true,
+          items: Array.isArray(res.items) ? res.items : [],
+          signedOut: !!res.signed_out,
+          hidden: !!res.hidden,
+          fromCache: !!res.from_cache,
+          error: res.ok === false ? (res.error || 'server_error') : null,
+        };
+    })().finally(() => {
+      if (_hubTemplatesRequest === request) { _hubTemplatesRequest = null; _reRender(); }
+    });
+    _hubTemplatesRequest = request;
+    return request;
+  }
+
+  /** 模板目录的错误码 → 提示文案（contracts/client-hub-templates.md §3）。 */
+  function _hubErrorText(code) {
+    switch (code) {
+      case 'signed_out': return _t('ws.hub_login_hint', '登录后查看更多平台模板；内置场景照常可用。');
+      case 'offline': return _t('ws.hub_offline', '网络不可用，暂时无法获取平台模板。');
+      case 'forbidden': return _t('ws.hub_forbidden', '没有权限获取平台模板。');
+      case 'not_found':
+      case 'disabled': return _t('ws.hub_tpl_gone', '该模板已下架。');
+      case 'invalid_template': return _t('ws.hub_tpl_invalid', '当前客户端无法使用这个模板，请更新客户端。');
+      default: return _t('ws.hub_unavailable', '暂时无法获取平台模板。');
+    }
+  }
+
+  function _hubTemplatesNoteHtml() {
+    const h = _hubTemplates;
+    if (!h.loaded || h.hidden) return '';
+    let text = '';
+    if (h.signedOut) text = _hubErrorText('signed_out');
+    else if (h.error && h.fromCache) text = _t('ws.hub_cached', '{reason} 下面是上次获取到的平台模板。', { reason: _hubErrorText(h.error) });
+    else if (h.error) text = _hubErrorText(h.error);
+    return text ? `<p class="ws-hub-note" data-ws-hub-note="${escapeHtml(h.signedOut ? 'signed_out' : h.error || '')}">${escapeHtml(text)}</p>` : '';
+  }
+
+  function _hubTemplateCardHtml(tpl) {
+    const blocked = tpl.creatable === false;
+    return `
+    <article class="ws-template-card ws-scene-card${blocked ? ' is-blocked' : ''}" data-ws="create-from-hub" data-hub-tpl="${escapeHtml(tpl.template_id)}">
+      <div class="ws-template-mark">${_icon('sparkles', 'ui-icon')}</div>
+      <h3>${escapeHtml(tpl.name)}</h3>
+      <p>${escapeHtml(tpl.summary || '')}</p>
+      <div class="ws-template-bottom">
+        <span>${escapeHtml(blocked
+          ? (tpl.blocked_reason === 'disabled' ? _t('ws.hub_tpl_gone', '该模板已下架。') : _t('ws.hub_tpl_needs_update', '需要更新客户端'))
+          : _t('ws.scene_tag', '场景'))}</span>
+        ${window.uiButton({ label: _t('ws.use_scene', '用此场景创建'), role: 'ghost', size: 'sm', iconEnd: 'chevron-right', className: 'ws-card-action', disabled: blocked, attrs: { 'data-ws': 'use-hub-tpl', 'data-hub-tpl': tpl.template_id } })}
+      </div>
+    </article>`;
+  }
+
+  /** Hub 的 `{{id}}` 占位在正文里显示为【标签】，用户直接在指令里改（评审会 10-26 定）。 */
+  function _hubFillLabel(tpl, id) {
+    const f = (tpl.fill_ins || []).find((x) => x.id === id);
+    if (!f) return id;
+    const lang = typeof getLang === 'function' ? getLang() : 'zh';
+    return (lang.startsWith('en') && f.label_en) || f.label_zh || id;
+  }
+
+  function _hubDisplayText(tpl, value) {
+    return String(value || '').replace(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g, (_, id) => `【${_hubFillLabel(tpl, id)}】`);
+  }
+
+  function _hubRemainingFills() {
+    if (!_createHub) return [];
+    const text = `${String(_createName || '')}\n${String(_createInstruction || '')}`;
+    return (_createHub.template.fill_ins || [])
+      .map((f) => _hubFillLabel(_createHub.template, f.id))
+      .filter((label, i, arr) => arr.indexOf(label) === i && text.includes(`【${label}】`));
+  }
+
+  function _hubFillHintInner() {
+    const left = _hubRemainingFills();
+    const risk = (_createHub && _createHub.risk) || [];
+    const parts = [];
+    if (left.length) {
+      parts.push(`<span>${escapeHtml(_t('ws.hub_fill_left', '还有 {count} 处待补充：', { count: left.length }))}${left.map((label) => window.uiButton({ label, role: 'ghost', size: 'sm', className: 'ws-fill-link', attrs: { 'data-ws': 'locate-fill', 'data-fill': label } })).join('、')}<small>${escapeHtml(_t('ws.hub_fill_note', '点名称定位；可先创建，进入空间后继续补充'))}</small></span>`);
+    }
+    if (risk.length) {
+      parts.push(`<span class="ws-hub-risk">${escapeHtml(_t('ws.hub_risk', '模板里有 {count} 处内容需要留意，请确认后再创建：', { count: risk.length }))}${risk.slice(0, 3).map((r) => `<q>${escapeHtml(r.text)}</q>`).join('')}</span>`);
+    }
+    return parts.join('');
+  }
+
+  function _hubChipTag(kind, id) {
+    if (!_createHub) return '';
+    const key = `${kind === 'task' ? 'agent' : kind === 'role' ? 'role_template' : 'skill'}:${id}`;
+    if (_createHub.missing.has(key)) return `<small class="ws-chip-state">${escapeHtml(_t('ws.not_installed', '未安装'))}</small>`;
+    if (_createHub.unavailable.has(key)) return `<small class="ws-chip-state is-bad">${escapeHtml(_t('ws.unavailable', '暂不可用'))}</small>`;
+    return '';
+  }
+
+  /** 模板引用里仍留在已选能力中的那些（用户在「调整」里删掉的不再检查，P8-A）。 */
+  function _hubRefsForPicks() {
+    if (!_createHub) return { role: [], agents: [], skills: [], all: [] };
+    const tpl = _createHub.template;
+    const roles = _abilityPicks.role || [];
+    const tasks = _abilityPicks.task || [];
+    const skills = _abilityPicks.skill || [];
+    const role = (tpl.role_templates || []).filter((r) => r.kind !== 'role_template' || roles.includes(r.id));
+    const agents = (tpl.extra_agents || []).filter((r) => tasks.includes(r.id));
+    // 客户端不认识的引用（kind 不是 agent / skill）始终保留，让解析报 unknown，不悄悄丢掉。
+    const skillRefs = (tpl.extra_skills || []).filter((r) => r.kind !== 'skill' || skills.includes(r.id));
+    return { role, agents, skills: skillRefs, all: [...role, ...agents, ...skillRefs] };
+  }
+
+  async function _refreshHubResolution() {
+    const ctx = _createHub;
+    if (!ctx) return null;
+    const res = await _invoke('templates.refs.resolve', {
+      refs: _hubRefsForPicks().all,
+      connector_types: ctx.template.connector_types || [],
+    });
+    if (ctx !== _createHub || res.error || !Array.isArray(res.items)) return null;
+    const key = (r) => `${r.ref.kind}:${r.ref.id}`;
+    ctx.missing = new Set(res.items.filter((r) => r.state === 'needs_fetch').map(key));
+    ctx.unavailable = new Map(res.items.filter((r) => r.state !== 'ready' && r.state !== 'needs_fetch').map((r) => [key(r), r.state]));
+    _reRender();
+    return { items: res.items, connectors: Array.isArray(res.connectors) ? res.connectors : [] };
+  }
+
+  function _newRequestId() {
+    const rand = Math.random().toString(36).slice(2, 10);
+    return `ws_${Date.now().toString(36)}_${rand}`;
+  }
+
+  async function _openCreateFromHub(templateId) {
+    const summary = _hubTemplates.items.find((x) => x.template_id === templateId);
+    if (summary && summary.creatable === false) {
+      _stub(summary.blocked_reason === 'disabled'
+        ? _t('ws.hub_tpl_gone', '该模板已下架。')
+        : _t('ws.hub_tpl_client_too_old', '这个模板需要更新的客户端，请先更新 CogSeed。'));
+      return;
+    }
+    const res = await _invoke('templates.catalog.detail', { type: 'workspace', template_id: templateId });
+    if (res.error || res.ok === false || !res.template) {
+      const code = res.ok === false ? res.error : 'server_error';
+      _stub(_hubErrorText(code));
+      if (code === 'not_found' || code === 'disabled') void _loadHubTemplates({ force: true });
+      return;
+    }
+    if (res.creatable === false) {
+      if (res.blocked_reason === 'disabled') {
+        _stub(_t('ws.hub_tpl_gone', '该模板已下架。'));
+        void _loadHubTemplates({ force: true });
+      } else {
+        _stub(res.blocked_reason === 'client_too_old'
+          ? _t('ws.hub_tpl_client_too_old', '这个模板需要更新的客户端，请先更新 CogSeed。')
+          : _hubErrorText('invalid_template'));
+      }
+      return;
+    }
+    const tpl = res.template;
+    const body = _hubDisplayText(tpl, [tpl.goal, tpl.instructions].filter(Boolean).join('\n\n'));
+    _createTemplate = null;
+    _createScenario = null;
+    _createHub = { template: tpl, risk: Array.isArray(res.risk) ? res.risk : [], requestId: _newRequestId(), missing: new Set(), unavailable: new Map() };
+    // 预填名称用 suggested_name（映射层已把 {{id}} 转成【…】）；tpl.name 是模板名，只进来源记录。
+    _createName = _hubDisplayText(tpl, tpl.suggested_name || tpl.name || '');
+    _createInstruction = body;
+    _createProjectDir = null;
+    _abilityPicks = {
+      role: (tpl.role_templates || []).filter((r) => r.kind === 'role_template').map((r) => r.id).slice(0, 3),
+      task: (tpl.extra_agents || []).map((r) => r.id),
+      skill: (tpl.extra_skills || []).filter((r) => r.kind === 'skill').map((r) => r.id),
+    };
+    _createOpen = true;
+    _abilityOpen = false;
+    _createAgentOpen = false;
+    _createAgentTouched = false;
+    _ensureConfigurationCatalogs();
+    _reRender();
+    void _refreshHubResolution();
+  }
+
+  /** Hub 模板的创建：严格解析 → 不可用的让用户选 → 缺的一键安装 → 主进程一次建好（FR-020/021/062）。 */
+  async function _createSpaceFromHub() {
+    const ctx = _createHub;
+    const tpl = ctx.template;
+    const name = String(_createName || '').trim();
+    if (!name) { _stub(_t('ws.name_required', '请填写空间名称')); return; }
+    if (!window.TemplateInstall) { _stub(_hubErrorText('server_error')); return; }
+    const resolution = await _refreshHubResolution();
+    if (!resolution) { _stub(_hubErrorText('server_error')); return; }
+    const { items, connectors } = resolution;
+    if (connectors.some((connector) => connector.state !== 'ready')) {
+      _stub(_t('ws.hub_connector_needed', '模板需要的连接器还没连接，请先去连接或重新授权。'));
+      return;
+    }
+    const { toInstall, unavailable } = window.TemplateInstall.splitResolution(items);
+    if (unavailable.length) {
+      const choice = await window.TemplateInstall.confirmDropUnavailable(unavailable, { what: _t('ws.what_space', '空间') });
+      if (choice !== 'drop') return;
+      // 去掉不可用的项：展开出来的（角色模板附带 / Agent 依赖）去掉其来源引用本身。
+      const drop = new Set(unavailable.map((u) => (u.via ? u.via.id : u.ref.id)));
+      _abilityPicks = {
+        role: (_abilityPicks.role || []).filter((id) => !drop.has(id)),
+        task: (_abilityPicks.task || []).filter((id) => !drop.has(id)),
+        skill: (_abilityPicks.skill || []).filter((id) => !drop.has(id)),
+      };
+      ctx.template = {
+        ...tpl,
+        role_templates: (tpl.role_templates || []).filter((r) => !drop.has(r.id)),
+        extra_agents: (tpl.extra_agents || []).filter((r) => !drop.has(r.id)),
+        extra_skills: (tpl.extra_skills || []).filter((r) => !drop.has(r.id)),
+      };
+      _reRender();
+    }
+    const doCreate = async () => {
+      const refs = _hubRefsForPicks();
+      const templateIds = new Set(refs.all.map((r) => r.id));
+      let name0 = name;
+      for (let i = 0; i < 50; i++) {
+        const res = await _invoke('spaces.createFromTemplate', {
+          request_id: ctx.requestId,
+          template: { template_id: tpl.template_id, name: _hubDisplayText(tpl, tpl.name), version: tpl.version, project_dir: tpl.project_dir },
+          name: name0,
+          instructions: String(_createInstruction || '').trim(),
+          ...(_createProjectDir ? { project_dir: _createProjectDir } : {}),
+          ...(_createBaseAgents && _createBaseAgents.length ? { base_agents: _createBaseAgents } : {}),
+          role_templates: refs.role,
+          extra_agents: refs.agents,
+          extra_skills: refs.skills,
+        });
+        if (res.ok && res.space) {
+          // 用户自己在「调整」里加的本机能力不属于模板引用，沿用普通新建的绑定方式；
+          // 角色模板自带的能力由后端按模板派生，不写进 extra（与 _createSpace 一致）。
+          const roleTmpls = _templates.filter((t) => (_abilityPicks.role || []).includes(t.templateId));
+          const bundled = new Set(roleTmpls.flatMap((t) => (t.bundle ? [...t.bundle.skillIds, ...t.bundle.agentIds] : [])));
+          const manual = (ids) => (ids || []).filter((x) => !templateIds.has(x) && !bundled.has(x));
+          for (const id of manual(_abilityPicks.skill)) await _invoke('spaces.resources.add', { spaceId: res.space.space_id, kind: 'skill', id });
+          for (const id of manual(_abilityPicks.task)) await _invoke('spaces.resources.add', { spaceId: res.space.space_id, kind: 'agent', id });
+          await _finishCreate(res.space);
+          return true;
+        }
+        if (res.code === 'name_dup') { name0 = `${name} ${i + 2}`; continue; }
+        const projectDirError = _projectDirErrorMessage(res.code);
+        if (projectDirError) { _stub(projectDirError); return false; }
+        if (res.code === 'refs_not_ready') { _stub(_t('ws.hub_refs_not_ready', '还有能力没有准备好：{items}', { items: (res.items || []).map((x) => x.ref && x.ref.id).join('、') })); return false; }
+        _stub(_t('ws.create_failed', '创建空间失败：{reason}', { reason: res.code || res.error || _t('ws.unknown_error', '未知错误') }));
+        return false;
+      }
+      _stub(_t('ws.duplicate_retry_exhausted', '创建空间失败：多次重名'));
+      return false;
+    };
+    if (toInstall.length) {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        // 需要下载依赖但已经断网：直接说清楚要联网，不进安装框。
+        _stub(_t('ws.need_online', '这一步要下载缺少的智能体或技能，请先联网。'));
+        return;
+      }
+      await window.TemplateInstall.installAndCreate({ toInstall, what: _t('ws.what_space', '空间'), onCreate: doCreate });
+      if (_createHub === ctx) void _refreshHubResolution();
+    } else {
+      await doCreate();
+    }
+  }
+
+  async function _finishCreate(space) {
+    _createProjectDir = null;
+    _createOpen = false;
+    _abilityOpen = false;
+    _createAgentOpen = false;
+    _createHub = null;
+    await _loadData();
+    // 新空间进侧栏缓存（否则该空间建了会话后侧栏组名显示不了）
+    if (typeof window.invalidateSidebarSpaces === 'function') window.invalidateSidebarSpaces();
+    _go('space', { spaceId: space.space_id });
+  }
+
+  async function _loadSpaceOrigin(spaceId) {
+    if (!spaceId || _spaceOrigins.has(spaceId)) return;
+    _spaceOrigins.set(spaceId, null);
+    const res = await _invoke('spaces.get', { spaceId });
+    if (!res.error && res.origin) { _spaceOrigins.set(spaceId, res.origin); _reRender(); }
   }
 
   // ── 空间详情 ──────────────────────────────────────────────────────────────
@@ -2295,6 +2591,15 @@
     </div>`;
   }
 
+  function _configAbilityChips(kind, names) {
+    if (!names.length) return `<em>${_t('ws.not_selected', '未选择')}</em>`;
+    const max = kind === 'role' ? 3 : kind === 'task' ? 1 : 2;
+    const shown = names.slice(0, max);
+    const rest = names.length - shown.length;
+    return shown.map((name, i) => `<span>${kind === 'role' && i === 0 ? `<b class="ws-chip-tag">${_t('ws.primary_mark', '主')}</b>` : ''}${escapeHtml(name)}</span>`).join('')
+      + (rest > 0 ? `<span class="ws-chip-more" aria-label="${escapeHtml(_t('ws.more_items', '还有 {count} 项', { count: rest }))}">+${rest}</span>` : '');
+  }
+
   function _renderConfigDrawer(sp) {
     const cap = {
       role: { label: _t('ws.kind_role', '角色'), icon: 'users' },
@@ -2338,23 +2643,32 @@
               <div class="ws-config-ability-icon">${_icon(cap[k].icon, 'ui-icon')}</div>
               <div class="ws-config-ability-content">
                 <div class="ws-config-ability-title"><strong>${cap[k].label}</strong><span>${pick[k].length}</span></div>
-                <div class="ws-config-ability-chips">${pick[k].length ? pick[k].map((n, i) => `<span>${k === 'role' && i === 0 ? `<b class="ws-chip-tag">${_t('ws.primary_mark', '主')}</b>` : ''}${escapeHtml(n)}</span>`).join('') : `<em>${_t('ws.not_selected', '未选择')}</em>`}</div>
+                <div class="ws-config-ability-chips">${_configAbilityChips(k, pick[k])}</div>
               </div>
               ${window.uiButton({ label: _t('ws.adjust', '调整'), size: 'sm', className: 'ws-ability-edit', attrs: { 'data-ws': k === 'role' ? 'edit-role' : 'edit-ability', 'data-kind': k } })}
             </div>`).join('')}
         </section>
-        <section><label>${_t('ws.main_skill', '主 Skill')}</label>
+        <section class="ws-config-inline"><label>${_t('ws.main_skill', '主 Skill')}</label>
           <div class="ws-config-row">
             <span class="ws-config-value">${mainSkill ? escapeHtml(mainSkill.name) : _t('ws.no_main_skill', '未设置')}</span>
             ${window.uiButton({ label: _t('ws.choose', '选择'), size: 'sm', attrs: { 'data-ws': 'pick-main-skill' } })}
           </div>
         </section>
-        <section><label>${_t('ws.invalid_refs', '失效引用')}</label>
+        <section class="ws-config-inline"><label>${_t('ws.invalid_refs', '失效引用')}</label>
           <div class="ws-config-row">
             <span class="ws-config-value">${invalidCount ? `${invalidCount} ${_t('ws.invalid_items', '项')}` : _t('ws.no_invalid', '无失效引用')}</span>
             ${invalidCount ? window.uiButton({ label: _t('ws.prune', '清理'), size: 'sm', attrs: { 'data-ws': 'prune-invalid' } }) : ''}
           </div>
         </section>
+        ${(() => {
+          // S5 FR-033：来源只在这里留一行，不显示版本、不提示更新。
+          const origin = _spaceOrigins.get(sp.space_id);
+          if (!origin) return '';
+          const date = String(origin.created_at || '').slice(0, 10);
+          return `<section class="ws-config-inline"><label>${_t('ws.origin', '来源')}</label>
+            <div class="ws-config-row"><span class="ws-config-value" data-ws-origin="${escapeHtml(origin.template_id)}">${escapeHtml(_t('ws.origin_value', '由「{name}」模板创建 · {date}', { name: origin.template_name || origin.template_id, date }))}</span></div>
+          </section>`;
+        })()}
         `}
       </div>
     </aside>`;
@@ -2376,6 +2690,15 @@
     return [...bundle, ...manual];
   }
 
+  function _createAbilityChips(kind, picked) {
+    if (!picked.length) return `<i>${_t('ws.not_selected', '未选择')}</i>`;
+    const max = kind === 'role' ? 3 : kind === 'task' ? 2 : 3;
+    const shown = picked.slice(0, max);
+    const rest = picked.length - shown.length;
+    return shown.map((o, i) => `<i>${kind === 'role' && i === 0 ? `<b class="ws-chip-tag">${_t('ws.primary_mark', '主')}</b>` : ''}${escapeHtml(o.name)}${_hubChipTag(kind, o.id)}</i>`).join('')
+      + (rest > 0 ? `<span class="ws-chip-more" aria-label="${escapeHtml(_t('ws.more_items', '还有 {count} 项', { count: rest }))}">+${rest}</span>` : '');
+  }
+
   function _renderCreateModal() {
     const tpl = _templates.find((t) => t.templateId === _createTemplate) || null;
     const cap = {
@@ -2388,7 +2711,7 @@
     <div class="ui-modal-overlay ws-scrim" data-ws="close-create">
       <section class="ui-modal ui-modal--lg ws-dialog" role="dialog" aria-modal="true" data-ws="noop">
         <header class="ui-modal__header ws-dialog-head">
-          <div><h2>${_t('ws.new_space', '新建空间')}</h2>${tpl ? `<span>${escapeHtml(_t('ws.template_suffix', '{name}模板', { name: tpl.name }))}</span>` : ''}</div>
+          <div><h2>${_t('ws.new_space', '新建空间')}</h2>${tpl || _createHub ? `<span>${escapeHtml(_t('ws.template_suffix', '{name}模板', { name: tpl ? tpl.name : _hubDisplayText(_createHub.template, _createHub.template.name) }))}</span>` : ''}</div>
           ${window.uiIconButton({ label: _t('ws.close', '关闭'), icon: 'x', attrs: { 'data-ws': 'close-create' } })}
         </header>
         <div class="ui-modal__body ws-dialog-body">
@@ -2406,6 +2729,7 @@
                      <span class="ws-import-change">${escapeHtml(_t('ws.project_dir_change', '更换'))}</span>`
                   : `<span class="ws-import-pick">${escapeHtml(_t('ws.project_dir_pick_short', '选择文件夹'))}</span>`}
               </div>
+              <small class="ws-project-dir-hint">${escapeHtml(_t('ws.project_dir_optional_hint', '不选择时，将使用 CogSeed 为该空间创建的内部工作目录。'))}</small>
             </label>
             <div class="ws-tool-strip">
               <div class="ws-tool-strip-head"><strong>${_t('ws.collaborating_agents', '可协作 AI 工具 Agent')}</strong><small>${_t('ws.collaborating_agents_hint', '任务中可通过 @ 明确调用')}</small></div>
@@ -2418,22 +2742,25 @@
                   : escapeHtml(_t('ws.no_local_agent', '未检测到本机 Agent')),
               })}
             </div>
-            <label class="full instruction"><span>${_t('ws.default_goal', '默认目标/指令')} <em>0 / 500</em></span>
-              ${_formTextarea({ id: 'ws-create-instruction', value: _createInstruction, placeholder: _t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等'), attrs: { 'data-ws': 'create-instruction', maxlength: '500', rows: '4', 'aria-label': _t('ws.default_goal', '默认目标/指令') } })}</label>
+            <label class="full instruction"><span>${_t('ws.default_goal', '默认目标/指令')} <em>${String(_createInstruction || '').length} / ${_createHub ? 4000 : 500}</em></span>
+              ${_formTextarea({ id: 'ws-create-instruction', value: _createInstruction, placeholder: _t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等'), attrs: { 'data-ws': 'create-instruction', maxlength: _createHub ? '4000' : '500', rows: _createHub ? '6' : '4', 'aria-label': _t('ws.default_goal', '默认目标/指令') } })}</label>
+            ${_createHub ? `<div class="full ws-hub-fill-hint" data-ws="hub-fill-hint" aria-live="polite">${_hubFillHintInner()}</div>` : ''}
           </div>
-          <div class="ws-cap-heading">
-            <div><h3>${_t('ws.ability_config', '能力配置')}</h3><p>${tpl ? _t('ws.template_synced_hint', '空间模板已同步预置指令与推荐能力，可按需调整。') : _t('ws.custom_ability_hint', '角色、Task Agent 与 Skill 均为可选，可按需添加。')}</p></div>
-          </div>
-          <div class="ws-cap-list">
-            ${Object.keys(cap).map((k) => `
-              <div class="ws-cap-row">
-                <div class="ws-cap-icon">${_icon(k === 'role' ? 'users' : k === 'task' ? 'terminal' : 'sparkles', 'ui-icon')}</div>
-                <div class="ws-cap-main">
-                  <div class="ws-cap-top"><strong>${cap[k].label}</strong><span>${cap[k].picked.length}</span></div>
-                  <div class="ws-chips">${cap[k].picked.length ? cap[k].picked.map((o, i) => `<i>${k === 'role' && i === 0 ? `<b class="ws-chip-tag">${_t('ws.primary_mark', '主')}</b>` : ''}${escapeHtml(o.name)}</i>`).join('') : `<i>${_t('ws.not_selected', '未选择')}</i>`}</div>
-                </div>
-                ${window.uiButton({ label: _t('ws.adjust', '调整'), size: 'sm', attrs: { 'data-ws': 'open-ability', 'data-kind': k } })}
-              </div>`).join('')}
+          <div class="ws-dialog-capabilities">
+            <div class="ws-cap-heading">
+              <div><h3>${_t('ws.ability_config', '能力配置')}</h3><p>${tpl || _createHub ? _t('ws.template_synced_hint', '空间模板已同步预置指令与推荐能力，可按需调整。') : _t('ws.custom_ability_hint', '角色、Task Agent 与 Skill 均为可选，可按需添加。')}</p></div>
+            </div>
+            <div class="ws-cap-list">
+              ${Object.keys(cap).map((k) => `
+                <div class="ws-cap-row">
+                  <div class="ws-cap-icon">${_icon(k === 'role' ? 'users' : k === 'task' ? 'terminal' : 'sparkles', 'ui-icon')}</div>
+                  <div class="ws-cap-main">
+                    <div class="ws-cap-top"><strong>${cap[k].label}</strong><span>${cap[k].picked.length}</span></div>
+                    <div class="ws-chips">${_createAbilityChips(k, cap[k].picked)}</div>
+                  </div>
+                  ${window.uiButton({ label: _t('ws.adjust', '调整'), size: 'sm', attrs: { 'data-ws': 'open-ability', 'data-kind': k } })}
+                </div>`).join('')}
+            </div>
           </div>
           `}
         </div>
@@ -2533,18 +2860,14 @@
     </div>`;
   }
 
-  /** 角色 tab 专用网格：已选按 picks 顺序（第 1 个 = 主角色）展示并带「主/副」徽标，
-   *  副角色卡提供「设为主」按钮；未选角色列在其后。卡片用 div 承载（内含按钮，
-   *  避免 button 嵌套），点击卡片 = 勾选/取消，与 task/skill 交互一致。 */
+  /** 角色 tab 专用网格：始终保持目录顺序，勾选后只在原位标记主/副角色。
+   *  picks 仍是有序的（第 1 个 = 主角色）；副角色可「设为主」。 */
   function _renderRoleOptionGrid(list, picked) {
-    const pickedSet = new Set(picked);
-    const byId = new Map(list.map((o) => [o.id, o]));
-    const pickedItems = picked.map((id) => byId.get(id)).filter(Boolean);
-    const availItems = list.filter((o) => !pickedSet.has(o.id));
-    if (!pickedItems.length && !availItems.length) {
+    if (!list.length) {
       return window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_role_templates', '暂无可用模板') });
     }
-    const card = (o, idx) => {
+    const card = (o) => {
+      const idx = picked.indexOf(o.id);
       const isPicked = idx >= 0;
       const isPrimary = isPicked && idx === 0;
       return `
@@ -2554,11 +2877,7 @@
         ${isPicked && !isPrimary ? window.uiButton({ label: _t('ws.make_primary', '设为主'), size: 'sm', className: 'ws-role-primary-btn', attrs: { 'data-ws': 'make-primary', 'data-id': o.id } }) : ''}
       </div>`;
     };
-    const pickedHtml = pickedItems.map((o, i) => card(o, i)).join('');
-    const availHtml = availItems.map((o) => card(o, -1)).join('');
-    return `
-      ${pickedHtml ? `<div class="ws-role-group-label">${_t('ws.role_picked_group', '已选（第 1 个为主角色）')}</div><div class="ws-option-grid">${pickedHtml}</div>` : ''}
-      ${availHtml ? `<div class="ws-role-group-label">${_t('ws.role_avail_group', '全部角色模板')}</div><div class="ws-option-grid">${availHtml}</div>` : ''}`;
+    return `<div class="ws-option-grid">${list.map(card).join('')}</div>`;
   }
 
   // ── 空间设置抽屉配套：能力调整 / 主技能 / 失效清理 / 重命名 ─────────────
@@ -3012,6 +3331,11 @@
     root.querySelectorAll('[data-ws="open-space"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="continue"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="create-from-tpl"], [data-ws="use-tpl"]').forEach((el) => el.addEventListener('click', () => _openCreate(el.dataset.tpl)));
+    root.querySelectorAll('[data-ws="create-from-hub"], [data-ws="use-hub-tpl"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (el.disabled) return;
+      void _openCreateFromHub(el.dataset.hubTpl);
+    }));
     root.querySelectorAll('[data-ws="create-from-scene"], [data-ws="use-scene"]').forEach((el) => el.addEventListener('click', () => {
       _openCreateFromScene(_scenarios.find((s) => s.scenarioId === el.dataset.scene));
     }));
@@ -3103,7 +3427,7 @@
     root.querySelectorAll('[data-ws="back-to-center"]').forEach((el) => el.addEventListener('click', () => _go('center')));
     root.querySelectorAll('[data-ws="space-settings"]').forEach((el) => el.addEventListener('click', () => {
       _configOpen = !_configOpen;
-      if (_configOpen) _ensureConfigurationCatalogs();
+      if (_configOpen) { _ensureConfigurationCatalogs(); void _loadSpaceOrigin(_detailSpaceId); }
       _reRender();
     }));
     root.querySelectorAll('[data-ws="config-close"]').forEach((el) => el.addEventListener('click', () => { _configOpen = false; _reRender(); }));
@@ -3220,14 +3544,22 @@
     root.querySelectorAll('[data-ws="ability-tab"]').forEach((el) => el.addEventListener('click', () => { _abilityKind = el.dataset.kind; _reRender(); }));
     root.querySelectorAll('[data-ws="confirm-create"]').forEach((el) => el.addEventListener('click', () => _createSpace()));
     root.querySelectorAll('[data-ws="toggle-ability"]').forEach((el) => el.addEventListener('click', () => _toggleAbility(el)));
-    root.querySelectorAll('[data-ws="save-ability"]').forEach((el) => el.addEventListener('click', () => { _abilityOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="save-ability"]').forEach((el) => el.addEventListener('click', () => {
+      _abilityOpen = false;
+      _reRender();
+      if (_createHub) void _refreshHubResolution();
+    }));
     root.querySelectorAll('[data-ws="make-primary"]').forEach((el) => el.addEventListener('click', (e) => {
       e.stopPropagation(); // 按钮嵌在角色卡片内，避免触发卡片 toggle
       _makeRolePrimary(el.dataset.id);
     }));
     // 表单输入持久化（调整能力会 _reRender，避免已填名称/指令被重置）
     const cnInput = root.querySelector('[data-ws="create-name"]');
-    if (cnInput) cnInput.addEventListener('input', () => { _createName = cnInput.value; });
+    if (cnInput) cnInput.addEventListener('input', () => {
+      _createName = cnInput.value;
+      const hint = root.querySelector('[data-ws="hub-fill-hint"]');
+      if (hint) hint.innerHTML = _hubFillHintInner();
+    });
     // 本地项目目录：选择 / 清除（整行为可点击选择区；取消对话框 → 保持未选择，不报错）
     root.querySelectorAll('[data-ws="pick-project-dir"]').forEach((el) => el.addEventListener('click', async () => {
       const res = await _invoke('common.pickDirectory', { title: _t('ws.project_dir_pick', '选择本地项目目录') });
@@ -3254,7 +3586,23 @@
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); _createProjectDir = null; _reRender(); }
     }));
     const ciInput = root.querySelector('[data-ws="create-instruction"]');
-    if (ciInput) ciInput.addEventListener('input', () => { _createInstruction = ciInput.value; });
+    if (ciInput) ciInput.addEventListener('input', () => {
+      _createInstruction = ciInput.value;
+      // 只刷新提示行，不整页重建（重建会夺走输入框焦点）。
+      const hint = root.querySelector('[data-ws="hub-fill-hint"]');
+      if (hint) hint.innerHTML = _hubFillHintInner();
+    });
+    root.addEventListener('click', (e) => {
+      const link = e.target && e.target.closest ? e.target.closest('[data-ws="locate-fill"]') : null;
+      if (!link) return;
+      const token = `【${link.dataset.fill}】`;
+      const controls = [root.querySelector('[data-ws="create-name"]'), root.querySelector('[data-ws="create-instruction"]')].filter(Boolean);
+      const control = controls.find((el) => String(el.value || '').includes(token)) || controls[0];
+      if (!control) return;
+      const at = String(control.value || '').indexOf(token);
+      control.focus();
+      if (at >= 0) control.setSelectionRange(at, at + token.length);
+    });
     // 基础 Agent 多选弹窗（新建空间内；勾选即时生效，保存=关闭）
     root.querySelectorAll('[data-ws="edit-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = true; _reRender(); }));
     // 可协作 AI 工具卡点选即切换（CogSeed 固定卡 disabled 不响应）
@@ -3277,7 +3625,7 @@
     root.querySelectorAll('[data-ws="save-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = false; _reRender(); }));
     root.querySelectorAll('[data-ws="clear-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createBaseAgents = []; _createAgentTouched = true; _reRender(); }));
 
-    // 所有「功能待接入」桩（创建/能力选择已接真，走 confirm-create/toggle-ability/save-ability）
+    // 其余占位动作统一给出当前业务提示。
     root.querySelectorAll('[data-ws^="stub-"]').forEach((el) => el.addEventListener('click', () => _stub(_stubLabel(el))));
   }
 
@@ -3313,6 +3661,7 @@
   /** 创建空间（真实 IPC：spaces.create + 额外资源绑定）。 */
   async function _createSpace() {
     if (!_configurationReady()) return;
+    if (_createHub) { await _createSpaceFromHub(); return; }
     const name = String(_createName || '').trim();
     if (!name) { _stub(_t('ws.name_required', '请填写空间名称')); return; }
     const instructions = String(_createInstruction || '').trim();
@@ -3414,6 +3763,7 @@
   }
 
   function _openCreate(tplId) {
+    _createHub = null;
     _createTemplate = tplId || null;
     _createScenario = null;
     // 从模板创建：模板本身即主角色（picks[0]），bundle 的 skill/agent 一并预选；
@@ -3439,6 +3789,7 @@
   /** 从场景入口打开新建弹窗：预填主+副角色模板（≤3），名称 = 场景名。 */
   function _openCreateFromScene(sc) {
     if (!sc) return;
+    _createHub = null;
     _createTemplate = null; // 场景是组合，不是单一模板（不套 bundle 预选）
     _createScenario = sc.scenarioId || null;
     _createName = sc.name || '';

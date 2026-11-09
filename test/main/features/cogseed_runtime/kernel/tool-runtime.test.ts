@@ -105,7 +105,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
       'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
       'cogseed_delegate', 'publish_outputs', 'cogseed_join', 'cogseed_tasks', 'cogseed_cancel', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow', 'cogseed_workflow',
       'messaging_list_targets', 'messaging_send', 'p3394_send',
-      'ontology_graph_read', 'ontology_projection_apply',
+      'ontology_graph_read', 'ontology_projection_apply', 'ontology_task_query', 'search_ability_assets',
     ]);
     expect(JSON.stringify(getRuntimeToolCatalog())).not.toMatch(/group|chat|memory/i);
   });
