@@ -52,7 +52,7 @@ export interface StreamEvent {
    *  context_status 等）不带此标记，行为不变。 */
   origin?: 'thinking';
   /** Structured source for terminal failures. */
-  failureKind?: 'model' | 'config';
+  failureKind?: 'model' | 'config' | 'dependency' | 'validation' | 'operation' | 'runtime';
   /** Stable low-cardinality reason paired with `failureKind`. */
   failureCode?: string;
   /** Runtime phase where the terminal failure occurred. */
@@ -172,6 +172,12 @@ export interface ChatOptions {
    *  which legitimately run long multi-step builds (e.g. DeepResearcher
    *  gathering); loop_detection still guards true runaway loops. */
   maxToolLoops?: number;
+  /** Per-turn tool invocation budget; zero explicitly allows no tool calls. */
+  maxToolCalls?: number;
+  /** Host-selected tool names to exclude from this invocation. */
+  toolDenylist?: readonly string[];
+  /** Omit execution-plan instructions when the host disables planning this turn. */
+  suppressExecutionPlanInstructions?: boolean;
   /**
    * Hard opt-out of every tool for this turn: no local tools, no file tools,
    * no MCP, no extras. For explain-only callers such as

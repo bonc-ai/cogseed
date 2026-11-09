@@ -58,6 +58,20 @@ _EXECUTABLE_EXT: dict[str, tuple[str, str]] = {
 #: 嵌套归档：扫描器不递归解包，因此它们是「内容不可见」区域。
 _ARCHIVE_EXT = {".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".zst"}
 
+#: 原生二进制的魔数。按**内容**判定而不是扩展名：红队样本 A3-binary 是一个
+#: 名为 `bin/helper` 的 ELF（没有扩展名），此前 `executable_count` 报 0、
+#: 结构层完全看不见它——一个无法人工复核的本机可执行文件以「两个文件的小技能」
+#: 出现在用户面前。扩展名只是约定，魔数是事实。
+_BINARY_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"\x7fELF", "ELF 可执行文件 / 共享对象"),
+    (b"MZ", "PE/DOS 可执行文件"),
+    (b"\xcf\xfa\xed\xfe", "Mach-O 64 位可执行文件"),
+    (b"\xce\xfa\xed\xfe", "Mach-O 32 位可执行文件"),
+    (b"\xca\xfe\xba\xbe", "Mach-O 通用二进制 / Java 类文件"),
+)
+#: 魔数判定只读这么多字节。
+_MAGIC_PROBE_BYTES = 8
+
 #: 体积上限。超过它说明该文件不是给人读的。
 _LARGE_FILE_BYTES = 8 * 1024 * 1024
 
@@ -174,6 +188,30 @@ def scan_structure(skill_dir: Path) -> dict[str, Any]:
                 original_severity="medium", confidence="medium", snippet=rel,
             ))
             continue
+
+        # 无扩展名 / 伪装扩展名的原生二进制：按魔数判定。
+        #
+        # 只在扩展名没有命中 `_EXECUTABLE_EXT` 时补判，因此 `.so`/`.exe` 不会
+        # 被计两次。文本文件（.md/.py/…）不读魔数——它们的首字节不可能是这些
+        # 二进制签名，白读一次 I/O 不值得。
+        if suffix not in _EXECUTABLE_EXT and suffix not in _ARCHIVE_EXT and stat.st_size >= 4:
+            try:
+                with path.open("rb") as handle:
+                    head = handle.read(_MAGIC_PROBE_BYTES)
+            except OSError:
+                head = b""
+            for magic, note in _BINARY_MAGIC:
+                if head.startswith(magic):
+                    executables += 1
+                    findings.append(make_finding(
+                        "SR-ST", "executable_payload", "high", "structural", rel, None,
+                        f"随包分发原生二进制（{note}，按文件内容识别，扩展名为空或无关）："
+                        "内容无法人工复核",
+                        "改发源码，或说明来源并在发布页给出校验和。",
+                        source="structural", context="source",
+                        original_severity="high", confidence="high", snippet=rel,
+                    ))
+                    break
 
         # 可执行位：文档型文件带执行权限说明实际用途与声明不符。
         if os.name != "nt" and stat.st_mode & 0o111:

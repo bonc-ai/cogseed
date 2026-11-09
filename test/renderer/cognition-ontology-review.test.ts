@@ -159,9 +159,12 @@ it.each(['baseline_changed', 'stock_organization_baseline_changed'])('refreshes 
   const card = { dataset: { candId: candidate.id, candType: 'cognition' } };
   loaded.ns.activityController.handleInput({ target: { dataset: { f: 'judgment' }, value: '保留合成编辑草稿。', closest: () => card } });
   const events: string[] = [];
-  loaded.ns.api.call = vi.fn(async (channel: string) => {
+  loaded.window.cogseed.invoke = vi.fn(async (channel: string) => {
     events.push(channel);
-    if (channel === 'recall.candidates.promote') throw Object.assign(new Error('synthetic internal record id'), { code });
+    if (channel === 'recall.candidates.promote') return {
+      ok: false, code, message: 'synthetic internal record id',
+      candidate: { ...candidate, updatedAt: '2026-10-21T00:00:00Z' },
+    };
     if (channel === 'recall.candidates.read') return { candidate: { ...candidate, updatedAt: '2026-10-21T00:00:00Z' } };
     if (channel === 'recall.reviewEvidence.read') return { items: [] };
     throw new Error('unexpected operation ' + channel);

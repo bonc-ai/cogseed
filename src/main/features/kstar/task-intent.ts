@@ -178,3 +178,12 @@ export function taskIntentHint(
     return '';
   }
 }
+
+/** Closed continuation grammar: only an explicit reference to the current task.
+ * The caller must also verify an open requirement. Any additional/new goal
+ * stays on model routing, including quoted examples and mixed requests. */
+export function isExplicitTaskContinuation(text: string | undefined): boolean {
+  const value = String(text || '').trim();
+  return /^(?:请)?(?:继续|接着)(?:处理|修复|完成|执行)?(?:当前|这个|上面的?)任务[。.!！]?$/u.test(value)
+    || /^continue (?:the )?current task[.!]?$/i.test(value);
+}

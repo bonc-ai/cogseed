@@ -51,6 +51,27 @@
       "pending": false
     },
     {
+      "act": "go-run-settings",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false
+    },
+    {
+      "act": "go-receipt",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false
+    },
+    {
+      "act": "go-processed",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false
+    },
+    {
       "act": "go-configure-model",
       "module": "cognition-assets",
       "ipc": null,
@@ -161,6 +182,125 @@
       "ipc": "recall.candidates",
       "write": true,
       "pending": true
+    },
+    {
+      "act": "related-resolve-merge",
+      "module": "cognition-assets",
+      "ipc": "recall.candidates.resolveRelated",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "related-resolve-keep",
+      "module": "cognition-assets",
+      "ipc": "recall.candidates.resolveRelated",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "related-resolve-retry",
+      "module": "cognition-assets",
+      "ipc": "recall.candidates.resolveRelated",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "open-old-content-plan",
+      "module": "cognition-assets",
+      "ipc": null,
+      "write": false,
+      "pending": false
+    },
+    {
+      "act": "old-content-item-keep",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.update",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-keep-unresolved",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.update",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-unresolved-keep",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.resolve",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-unresolved-archive",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.resolve",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-unresolved-merge",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.resolve",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-finalize-old",
+      "module": "cognition-assets",
+      "ipc": "recall.candidates.finalize",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-finalize-retry",
+      "module": "cognition-assets",
+      "ipc": "recall.candidates.finalize",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-plan-undo",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.undo",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-plan-execute",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.execute",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-plan-keep-unresolved",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.update",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-edit-merge-save",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.update",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "old-content-plan-reload",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.read",
+      "write": false,
+      "pending": false
+    },
+    {
+      "act": "old-content-plan-review-reload",
+      "module": "cognition-assets",
+      "ipc": "recall.oldContent.plan.review",
+      "write": false,
+      "pending": false
     },
     {
       "act": "asset-action",
@@ -322,6 +462,34 @@
       "ipc": "recall.captures.settings.update",
       "write": true,
       "pending": true
+    },
+    {
+      "act": "related-overflow-merge",
+      "module": "cognition-assets",
+      "ipc": "recall.captures.relatedOverflow.resolve",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "related-overflow-keep",
+      "module": "cognition-assets",
+      "ipc": "recall.captures.relatedOverflow.resolve",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "related-overflow-retry",
+      "module": "cognition-assets",
+      "ipc": "recall.captures.relatedOverflow.resolve",
+      "write": true,
+      "pending": true
+    },
+    {
+      "act": "related-overflow-reload",
+      "module": "cognition-assets",
+      "ipc": "recall.captures.relatedOverflow.list",
+      "write": false,
+      "pending": false
     },
     {
       "act": "nightly-toggle",

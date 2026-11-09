@@ -296,11 +296,15 @@ export type CustomProviderModelInput = 'text' | 'image' | 'video' | 'pdf';
 /** 模型能力（2026-09-13）：结构化输出 / 原生联网搜索 / 对话中系统消息。
  *  落库声明 + 供构造 Model 时映射 compat 开关（developer role / strict
  *  mode）；原生联网搜索按 api 注入（openai-responses），声明留档。 */
-export type CustomProviderModelCapability = 'structured_output' | 'native_web_search' | 'system_message';
+export type CustomProviderModelCapability = 'structured_output' | 'native_web_search' | 'system_message'
+  | 'prompt_cache_key' | 'session_affinity' | 'prompt_cache_retention_24h';
 
 export const CUSTOM_PROVIDER_MODEL_INPUTS: readonly CustomProviderModelInput[] = ['text', 'image', 'video', 'pdf'];
 export const CUSTOM_PROVIDER_MODEL_CAPABILITIES: readonly CustomProviderModelCapability[] = [
   'structured_output', 'native_web_search', 'system_message',
+  // Transport declarations only; the settings form retains its visible enum.
+  // A generic prompt_cache_retention parameter is not proof of 24h support.
+  'prompt_cache_key', 'session_affinity', 'prompt_cache_retention_24h',
 ];
 export const MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS = 8;
 export const MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH = 40;

@@ -1,0 +1,90 @@
+{
+  "list_response": {
+    "list": [
+      { "content_id": "ws-tpl-a", "version": "1.0.0", "status": "published", "min_app_version": "1.4.0", "name": "竞品研究空间", "summary": "跟踪竞品动态并定期输出对比结论" },
+      { "content_id": "ws-tpl-disabled", "version": "1.0.0", "status": "disabled", "disabled": true, "name": "已下架的空间模板", "summary": "停用后仍保留目录行" },
+      { "content_id": "ws-tpl-too-new", "version": "1.0.0", "status": "published", "min_app_version": "99.0.0", "name": "需要新版客户端的空间模板", "summary": "客户端版本过低时可见但不可创建" },
+      { "content_id": "ws-tpl-unknown", "version": "1.0.0", "status": "published", "name": "含未知引用的空间模板", "summary": "未知 kind / availability 按不可用处理" }
+    ]
+  },
+  "details": {
+    "ws-tpl-a": {
+      "content_id": "ws-tpl-a",
+      "version": "1.0.0",
+      "status": "published",
+      "min_app_version": "1.4.0",
+      "name": "竞品研究空间",
+      "config": {
+        "suggested_name": "竞品研究：{{competitor}}",
+        "goal_zh": "持续掌握{{competitor}}的产品动态",
+        "goal_en": "Track {{competitor}} product changes",
+        "instructions_zh": "关注{{competitor}}在{{market}}的新品与定价，每周输出一份对比结论。",
+        "project_dir": "required",
+        "prerequisites": [{ "connector_type": "tencent-meeting", "note_zh": "需要读取会议转写" }]
+      },
+      "fill_ins": [
+        { "id": "competitor", "label_zh": "竞品名称", "hint": "例如：某某公司" },
+        { "id": "market", "label_zh": "关注的市场" }
+      ],
+      "references": [
+        { "source": "builtin", "kind": "role_template", "id": "student", "usage": "primary_role", "availability": "available" },
+        { "source": "hub", "kind": "skill", "id": "aaaaaaaaaaa1", "usage": "extra", "min_version": "1.0.0", "availability": "available" }
+      ]
+    },
+    "ws-tpl-unknown": {
+      "content_id": "ws-tpl-unknown",
+      "version": "1.0.0",
+      "status": "published",
+      "name": "含未知引用的空间模板",
+      "config": { "suggested_name": "含未知引用的空间", "goal_zh": "未知引用", "instructions_zh": "未知引用" },
+      "fill_ins": [],
+      "references": [
+        { "source": "builtin", "kind": "role_template", "id": "student", "usage": "primary_role", "availability": "available" },
+        { "source": "hub", "kind": "workflow", "id": "bbbbbbbbbbb1", "usage": "extra", "availability": "available" },
+        { "source": "hub", "kind": "skill", "id": "bbbbbbbbbbb2", "usage": "extra", "availability": "quarantined" },
+        { "source": "hub", "kind": "skill", "id": "bbbbbbbbbbb3", "usage": "extra" }
+      ]
+    }
+  },
+  "contents": {
+    "ws-tpl-a": {
+      "content_id": "ws-tpl-a",
+      "version": "1.0.0",
+      "template_kind": "workspace",
+      "status": "published",
+      "min_app_version": "1.4.0",
+      "config_sha256": "587d21f59f9991ab2c033e6bb4fca70f79823672c60040fabf9c0dea19d9a490",
+      "config": {
+        "suggested_name": "竞品研究：{{competitor}}",
+        "goal_zh": "持续掌握{{competitor}}的产品动态",
+        "goal_en": "Track {{competitor}} product changes",
+        "instructions_zh": "关注{{competitor}}在{{market}}的新品与定价，每周输出一份对比结论。",
+        "project_dir": "required",
+        "prerequisites": [{ "connector_type": "tencent-meeting", "note_zh": "需要读取会议转写" }]
+      },
+      "fill_ins": [
+        { "id": "competitor", "label_zh": "竞品名称", "hint": "例如：某某公司" },
+        { "id": "market", "label_zh": "关注的市场" }
+      ],
+      "references": [
+        { "source": "builtin", "kind": "role_template", "id": "student", "usage": "primary_role", "availability": "available" },
+        { "source": "hub", "kind": "skill", "id": "aaaaaaaaaaa1", "usage": "extra", "min_version": "1.0.0", "availability": "available" }
+      ]
+    },
+    "ws-tpl-unknown": {
+      "content_id": "ws-tpl-unknown",
+      "version": "1.0.0",
+      "template_kind": "workspace",
+      "status": "published",
+      "config_sha256": "a2f4a277376afb1623b59b622607a1d8d2a8affe800e1a8db43b4298353d6139",
+      "config": { "suggested_name": "含未知引用的空间", "goal_zh": "未知引用", "instructions_zh": "未知引用" },
+      "fill_ins": [],
+      "references": [
+        { "source": "builtin", "kind": "role_template", "id": "student", "usage": "primary_role", "availability": "available" },
+        { "source": "hub", "kind": "workflow", "id": "bbbbbbbbbbb1", "usage": "extra", "availability": "available" },
+        { "source": "hub", "kind": "skill", "id": "bbbbbbbbbbb2", "usage": "extra", "availability": "quarantined" },
+        { "source": "hub", "kind": "skill", "id": "bbbbbbbbbbb3", "usage": "extra" }
+      ]
+    }
+  }
+}

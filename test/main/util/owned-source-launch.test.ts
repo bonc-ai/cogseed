@@ -262,6 +262,23 @@ describe('owned source launch boundary', () => {
     expect(record.args).toContain('COGSEED_SOURCE_RUNTIME_VARIANT=');
   });
 
+  it.skipIf(POSIX_LAUNCHER_ONLY).each(['', 'debug', 'info'])('forwards only an explicitly supplied log level through macOS open (%s)', level => {
+    const dir = fixture('cogseed');
+    const result = launch(dir, { COGSEED_LOG_LEVEL: level });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout.trim().split('\n').at(-1)!);
+    const index = record.args.findIndex((arg: string) => arg.startsWith('COGSEED_LOG_LEVEL='));
+    if (level) {
+      expect(index).toBeGreaterThan(0);
+      expect(record.args[index - 1]).toBe('--env');
+      expect(record.args[index]).toBe(`COGSEED_LOG_LEVEL=${level}`);
+    } else {
+      expect(index).toBe(-1);
+    }
+    expect(record.args).not.toContain('--inspect=');
+    expect(record.args.some((arg: string) => arg.startsWith('--remote-debugging-'))).toBe(false);
+  });
+
   it.skipIf(POSIX_LAUNCHER_ONLY)('defaults debugging off and rejects unsafe debug configuration before launch', () => {
     const dir = fixture('cogseed');
     const normal = launch(dir);

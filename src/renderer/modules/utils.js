@@ -41,6 +41,25 @@ function pickLocalizedName(obj, lang) {
   return pickLocalizedField(obj, 'name', lang);
 }
 
+/**
+ * Old S5 clients persisted Hub wire placeholders (for example
+ * `{{target_industry}}`) inside Space names. Keep the stored value intact,
+ * but never expose that wire syntax in the UI.
+ */
+function displayTemplatePlaceholders(value, translate) {
+  return String(value || '').replace(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g, (_, id) => {
+    const key = `ws.template_placeholder.${id}`;
+    let label = '';
+    if (typeof translate === 'function') {
+      try {
+        const translated = translate(key);
+        if (translated && translated !== key) label = String(translated);
+      } catch (_) { /* use readable id fallback */ }
+    }
+    return `【${label || String(id).replace(/[_-]+/g, ' ')}】`;
+  });
+}
+
 /** Resolve a Space name only when the persisted record carries a system marker. */
 function localizedSpaceName(space, translate) {
   if (!space) return '';
@@ -54,8 +73,8 @@ function localizedSpaceName(space, translate) {
       return value && value !== i18nKey ? String(value) : '';
     } catch (_) { return ''; }
   };
-  if (validKey) return resolve(key) || rawName;
-  return rawName;
+  const localized = validKey ? (resolve(key) || rawName) : rawName;
+  return displayTemplatePlaceholders(localized, translate);
 }
 
 /** Pick a skill / agent description for the active UI language with cross-
@@ -1515,6 +1534,7 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     _linkifyBareUrls,
     _linkifyBareEmails,
     normalizeDisplayText,
+    displayTemplatePlaceholders,
     localizedSpaceName,
     pickDesc,
     inlineFormat,

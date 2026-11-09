@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -14,8 +14,15 @@ import {
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 import { FILE_MODE_BITS_SUPPORTED } from '../../../helpers/fs-capabilities';
 
-const SCRATCH_VARIANT = 'p3394-outbox-test-' + Math.random().toString(36).slice(2, 8);
-process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
+// isolate: redirect the whole variant tree to a scratch base instead of
+// inventing variant names (runtime-paths validates them now).
+const SCRATCH_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-outbox-test-'));
+process.env.COGSEED_VARIANT_BASE_DIR = SCRATCH_BASE;
+process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
+
+afterAll(() => {
+  fs.rmSync(SCRATCH_BASE, { recursive: true, force: true });
+});
 
 function envelope(id: string): P3394Envelope {
   return {
@@ -33,7 +40,7 @@ function envelope(id: string): P3394Envelope {
 
 describe('p3394 transactional outbox', () => {
   beforeEach(() => {
-    const file = path.join(os.homedir(), '.cogseed', 'runtime-variants', SCRATCH_VARIANT, 'p3394-outbox.jsonl');
+    const file = path.join(SCRATCH_BASE, 'runtime-variants', 'cogseed', 'p3394-outbox.jsonl');
     try { fs.unlinkSync(file); } catch { /* absent */ }
   });
 

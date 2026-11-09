@@ -41,6 +41,12 @@ describe('single merged formation adjudication', () => {
     await assessFormationBatch('user-a', { ...changed, checkpoint });
     expect(run).toHaveBeenCalledTimes(2);
   });
+  it('accepts provider-echoed row excerpts without persisting them', async () => {
+    run.mockResolvedValue({ result: { text: JSON.stringify({ assessments: rows().map(row => ({ ...row, excerpts: ['provider echo'] })) }), meta: {} } });
+    const result = await assessFormationBatch('user-a', input());
+    expect(result.assessments).toHaveLength(2);
+    expect(JSON.stringify(result)).not.toContain('provider echo');
+  });
   it('cannot repair a missing/duplicate verdict or manufacture user assent from assistant text', async () => {
     run.mockResolvedValue({ result: { text: JSON.stringify({ assessments: [rows()[0], rows()[0]] }), meta: {} } });
     await expect(assessFormationBatch('user-a', input())).rejects.toThrow();
@@ -50,6 +56,15 @@ describe('single merged formation adjudication', () => {
   it('does not establish new identity from truncated context or a target from another object/version', () => {
     expect(() => validateFormationComparison({ relation: 'new', reason: 'unseen' }, [], { ...coverage, truncated: true })).toThrow();
     expect(() => validateFormationComparison({ relation: 'changed', reason: 'dated owner change', targetAssetId: 'same-name-other-project', targetVersion: '1', targetQuote: 'owner' }, [], coverage)).toThrow();
+  });
+  it('matches provider-retyped target quotes modulo whitespace but still rejects paraphrase', () => {
+    const statement = '用户自2026年10月11日起确立长期表达偏好：在回答用户的复杂问题时，先直接给出结论。';
+    const target = { id: 'asset-a', version: '1', title: '表达偏好', statement, type: 'cognition' as const, scope: 'general', evidenceRefs: [] };
+    const retyped = '用户自 2026 年 10 月 11 日起确立长期表达偏好：在回答用户的复杂问题时，先直接给出结论。';
+    expect(() => validateFormationComparison({ relation: 'exception', targetAssetId: target.id, targetVersion: target.version,
+      targetQuote: retyped, reason: '保留默认并补充例外。' }, [target], coverage)).not.toThrow();
+    expect(() => validateFormationComparison({ relation: 'exception', targetAssetId: target.id, targetVersion: target.version,
+      targetQuote: '用户希望回答先给结论再说理由', reason: '改写不是原文。' }, [target], coverage)).toThrow('comparison target evidence unavailable');
   });
   it('uses the complete summary and every original evidence passage when the full day exceeds the formation budget', async () => {
     const text = sources[0].text + '\n' + '长篇讨论。'.repeat(40_000) + '\n最后更正：仍保留临时简报的例外。';
@@ -498,4 +513,47 @@ describe('bounded formation JSON repair', () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it('binds a source-covered old-content plan to the exact related snapshot and replays it', async () => {
+    const related = [
+      { id: 'asset-a', title: '报告来源要求', statement: '提交报告前核对来源。', type: 'rule' as const, scope: 'report', version: '2', evidenceRefs: [] },
+      { id: 'asset-b', title: '报告结论要求', statement: '提交报告前写结论与下一步。', type: 'rule' as const, scope: 'report', version: '3', evidenceRefs: [] },
+    ];
+    const comparison = { relation: 'ambiguous' as const, reason: '两条旧内容需要一并核对。',
+      relatedAssets: related.map(asset => ({ assetId: asset.id, version: asset.version, quote: asset.statement })) };
+    const oldContentPlan = {
+      items: [{ action: 'merge', reasonCode: 'merge_complementary', assetIds: ['asset-a', 'asset-b'], targetAssetId: 'asset-a',
+        reason: '两条要求共同约束报告提交。', merged: { statement: '提交报告前核对来源，并写结论与下一步。',
+          excerpts: [{ assetId: 'asset-a', quote: '核对来源' }, { assetId: 'asset-b', quote: '写结论与下一步' }] } }],
+    };
+    run.mockResolvedValue({ result: { text: JSON.stringify({ assessments: [{ index: 0, checks,
+      uncertaintyDisposition: 'none', comparison, oldContentPlan }] }), meta: {} } });
+    const base = { ...input(), items: [item(0)], existing: { assets: related,
+      coverage: { total: 2, selected: 2, truncated: false, unavailable: 0 } } };
+    const first = await assessFormationBatch('user-a', base);
+    expect(first.assessments[0].oldContentPlan).toMatchObject({ status: 'ready',
+      baselineVersions: { 'asset-a': '2', 'asset-b': '3' },
+      items: [{ itemId: 'old-1', targetAssetId: 'asset-a', expectedVersions: { 'asset-a': '2', 'asset-b': '3' },
+        merged: { evidenceAssetIds: ['asset-a', 'asset-b'] } }] });
+    expect(JSON.stringify(first.assessments[0].oldContentPlan)).not.toContain('excerpts');
+    const replayed = await assessFormationBatch('user-a', { ...base, checkpoint: first });
+    expect(replayed).toEqual(first);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the new-content row when the old-content plan is malformed', async () => {
+    const related = [
+      { id: 'asset-a', title: '甲', statement: '甲正文', type: 'cognition' as const, scope: 'general', version: '1', evidenceRefs: [] },
+      { id: 'asset-b', title: '乙', statement: '乙正文', type: 'cognition' as const, scope: 'general', version: '1', evidenceRefs: [] },
+    ];
+    run.mockResolvedValue({ result: { text: JSON.stringify({ assessments: [{ index: 0, checks,
+      uncertaintyDisposition: 'none', comparison: { relation: 'ambiguous', reason: '需要核对。',
+        relatedAssets: related.map(asset => ({ assetId: asset.id, version: asset.version, quote: asset.statement })) },
+      oldContentPlan: { items: [{ action: 'delete', reasonCode: 'merge_complementary', assetIds: ['asset-a'], reason: '错误动作' }] } }] }), meta: {} } });
+    const result = await assessFormationBatch('user-a', { ...input(), items: [item(0)],
+      existing: { assets: related, coverage: { total: 2, selected: 2, truncated: false, unavailable: 0 } } });
+    expect(result.assessments).toHaveLength(1);
+    expect(result.assessments[0].checks.supported).toBe(true);
+    expect(result.assessments[0].oldContentPlan).toMatchObject({ status: 'unavailable', items: [],
+      unresolved: [{ reasonCode: 'evidence_insufficient', assetIds: ['asset-a', 'asset-b'] }] });
+  });
 });

@@ -18,11 +18,12 @@ import { tencentMeetingBinaryPath } from '../../paths';
 
 import { getGoogleConnectorsConfig, type ConnectorSwitchState } from '../client_config';
 import type { CatalogEntry } from './types';
+import { isAppleMcp, appleMcpDisabledReason } from './apple-mcp';
 import { managedConnectorBinary, canPrepareConnectorRuntime, connectorRuntimeProgress } from './cli-runtime';
 
 export type ConnectorAvailability = 'enabled' | 'hidden' | 'visible_disabled';
 
-type DisabledReason = 'unsupported' | 'cli_missing';
+type DisabledReason = 'unsupported' | 'cli_missing' | 'macos_only';
 
 const GOOGLE_CONNECTOR_IDS = new Set([
   'google-workspace',
@@ -211,6 +212,10 @@ export function isGoogleConnectorId(id: string): boolean {
 }
 
 function _decisionForId(uid: string, id: string): { availability: ConnectorAvailability; disabled_reason?: DisabledReason } {
+  if (isAppleMcp(id)) {
+    const disabled_reason = appleMcpDisabledReason(id);
+    return disabled_reason ? { availability: 'visible_disabled', disabled_reason } : { availability: 'enabled' };
+  }
   const cliProbe = LOCAL_CLI_PROBES[id];
   if (cliProbe) {
     const installed = _cliProbe ? _cliProbe() : (!!managedConnectorBinary(uid, id) || cliProbe());

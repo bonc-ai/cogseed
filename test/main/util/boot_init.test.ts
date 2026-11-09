@@ -123,7 +123,7 @@ describe('util/boot_init', () => {
     expect(order).toEqual(['ran']);
   });
 
-  it('never admits idle work while a conversation runtime is active', async () => {
+  it('holds idle work while a conversation runtime is active, then force-admits after the deferral cap', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-10T00:00:00Z'));
     const boot = await loadBootInit();
@@ -135,6 +135,32 @@ describe('util/boot_init', () => {
       preferIdle: true,
       recentActivityMs: 1,
       maxUserDeferralMs: 20,
+      maxRuntimeDeferralMs: 200,
+      admissionPollMs: 10,
+    });
+
+    await boot.runBootPhases(1);
+    // Busy window: user deadline alone does not admit while the runtime is active.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(ran).toBe(false);
+    // Deferral cap: continuously-busy runtime still cannot postpone forever.
+    await vi.advanceTimersByTimeAsync(120);
+    expect(ran).toBe(true);
+  });
+
+  it('admits idle work promptly once the runtime is no longer busy', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-10T00:00:00Z'));
+    const boot = await loadBootInit();
+    let runtimeBusy = true;
+    let ran = false;
+    boot.configureBootAdmission({ isRuntimeBusy: () => runtimeBusy });
+    boot.registerDeferred('runtime-aware', () => { ran = true; }, 'serial', 0, {
+      resourceClass: 'disk',
+      preferIdle: true,
+      recentActivityMs: 1,
+      maxUserDeferralMs: 20,
+      maxRuntimeDeferralMs: 5_000,
       admissionPollMs: 10,
     });
 

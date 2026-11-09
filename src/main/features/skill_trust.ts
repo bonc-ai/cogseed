@@ -208,6 +208,24 @@ export interface SecurityReceipt {
     at: number;
   };
   /**
+   * What the import path removed before scanning, when that changed coverage.
+   *
+   * Red-team F-10 (2026-11-04): a folder import copies the source through a
+   * filter (`packages.json`, lockfiles, symlinks, `dist/` … are dropped), and the
+   * deep scan runs on the *copy*. So `pass` can mean "the dangerous file was
+   * stripped", which reads as "we inspected it and it was fine". The two are
+   * different claims, and only one of them is true.
+   *
+   * `securityRelevant` lists the dropped entries that could have carried
+   * behaviour (`package.json` install hooks, lockfiles, symlinks). Non-empty
+   * means the verdict describes a SUBSET of what the user picked, so the receipt
+   * is `risk` rather than `pass` even when the scan cleared the copy.
+   */
+  normalization?: {
+    skipped: number;
+    securityRelevant: string[];
+  };
+  /**
    * Hash over the skill's DECLARED dependencies: the "External dependencies"
    * section of SKILL.md plus any dependency-manifest files (requirements.txt,
    * package.json, pyproject.toml, ...). Spec §4.4 binds the verdict to this
@@ -510,6 +528,18 @@ function _readUserOverride(raw: unknown): { userOverride?: SecurityReceipt['user
   return { userOverride: { outcome: o.outcome.slice(0, 64), at } };
 }
 
+function _readNormalization(raw: unknown): { normalization?: SecurityReceipt['normalization'] } {
+  if (!raw || typeof raw !== 'object') return {};
+  const o = raw as Record<string, unknown>;
+  const skipped = typeof o.skipped === 'number' && Number.isFinite(o.skipped) && o.skipped >= 0
+    ? Math.trunc(o.skipped) : 0;
+  const list = Array.isArray(o.securityRelevant)
+    ? o.securityRelevant.filter((v): v is string => typeof v === 'string').slice(0, 20)
+    : [];
+  if (!skipped && list.length === 0) return {};
+  return { normalization: { skipped, securityRelevant: list } };
+}
+
 /**
  * 一个 Agent 的私有 Skill 回执（`<agentId>__<skillId>.json`）的快照与还原。
  *
@@ -590,6 +620,7 @@ export function readReceipt(uid: string, skillId: string, agentId?: string): Sec
     ...(_readInstructionRisk(raw.instructionRisk)),
     ...(_readDeclarationCheck(raw.declarationCheck)),
     ...(_readUserOverride(raw.userOverride)),
+    ...(_readNormalization(raw.normalization)),
     ...(typeof raw.dependencyHash === 'string' && raw.dependencyHash
       ? { dependencyHash: raw.dependencyHash } : {}),
     ...(typeof raw.permissionHash === 'string' && raw.permissionHash
@@ -637,6 +668,7 @@ export function writeReceipt(
     instructionRisk?: SecurityReceipt['instructionRisk'];
     declarationCheck?: SecurityReceipt['declarationCheck'];
     userOverride?: SecurityReceipt['userOverride'];
+    normalization?: SecurityReceipt['normalization'];
     dependencyHash?: string;
     permissionHash?: string;
   },
@@ -665,6 +697,7 @@ export function writeReceipt(
     ...(input.instructionRisk ? { instructionRisk: input.instructionRisk } : {}),
     ...(input.declarationCheck ? { declarationCheck: input.declarationCheck } : {}),
     ...(input.userOverride ? { userOverride: input.userOverride } : {}),
+    ...(input.normalization ? { normalization: input.normalization } : {}),
     ...(input.dependencyHash ? { dependencyHash: input.dependencyHash } : {}),
     ...(input.permissionHash ? { permissionHash: input.permissionHash } : {}),
     scannedAt: nowIso(),
@@ -673,6 +706,43 @@ export function writeReceipt(
   fs.mkdirSync(path.dirname(file), { recursive: true });
   writeTextAtomicSync(file, JSON.stringify(receipt, null, 2));
   return receipt;
+}
+
+/**
+ * Map a scan outcome onto the decision a receipt records.
+ *
+ * The reason this is a function rather than an inline ternary: the receipt is the
+ * durable audit record, and the audit record must not be *happier* than the scan
+ * that produced it. It used to be `outcome === 'restricted' ? 'risk' : 'pass'`,
+ * which had two consequences (red-team F-05/F-07, 2026-11-04):
+ *
+ *   - a user who consciously overrode a *blocked* verdict got a receipt saying
+ *     `pass` — the record of what they accepted was erased by the act of
+ *     accepting it, and the load gate then treated the skill as clean;
+ *   - a `scanner_absent` build (local red lines only) also wrote `pass`. The
+ *     receipt did say `scanner: 'local'`, but nothing that reads `decision` —
+ *     badges, the security page, the load gate — could tell. Reduced coverage
+ *     now surfaces as `risk`, which is what it is.
+ *
+ * `blocked` is a legal receipt decision (`ReceiptDecision`) and the load gate is
+ * what acts on it. A blocked-with-override receipt therefore means "installed by
+ * explicit user decision; the content was refused by the scanner" — see
+ * `skill_reverify` for how the load gate distinguishes the two.
+ */
+function _receiptDecisionOf(outcome: string): ReceiptDecision {
+  switch (outcome) {
+    case 'blocked':
+      return 'blocked';
+    case 'restricted':
+    case 'scanner_absent':
+      return 'risk';
+    case 'pass':
+      return 'pass';
+    default:
+      // `unknown` is refused upstream and should not reach a receipt. If a new
+      // outcome appears, record the cautious value rather than inheriting `pass`.
+      return 'risk';
+  }
 }
 
 /**
@@ -703,6 +773,7 @@ export function writeInstallReceipt(
     attackSurface?: SecurityReceipt['attackSurface'];
     instructionRisk?: SecurityReceipt['instructionRisk'];
     userOverride?: SecurityReceipt['userOverride'];
+    normalization?: SecurityReceipt['normalization'];
   },
   violations: { violationCount: number; topRule?: string; topLevel?: 'EXTREME' | 'MEDIUM' | 'LOW' },
   agentId?: string,
@@ -711,11 +782,21 @@ export function writeInstallReceipt(
   try {
     return writeReceipt(uid, skillId, {
       payloadHash,
-      // The SCAN's verdict, not the structural report's. Callers only reach here
-      // on `pass` or `restricted` — `blocked` and `unknown` are refused upstream.
-      // `restricted` is the spec's Medium state: installed, but shown as a risk
-      // card rather than a clean badge.
-      decision: scan.outcome === 'restricted' ? 'risk' : 'pass',
+      // The SCAN's verdict, not the structural report's, mapped by
+      // `_receiptDecisionOf`. `restricted` is the spec's Medium state (installed,
+      // shown as a risk card); `blocked` is kept verbatim even when the user
+      // overrode it — `userOverride` is what records the decision, not a
+      // rewritten `decision`. `scanner_absent` is `risk`, because "local red
+      // lines only" is a weaker check, not a clean pass.
+      // A pass over a STRIPPED tree is not a pass over what the user selected.
+      // F-10: the import filter removes symlinks / package.json before scanning,
+      // so "we checked and it was clean" would be a claim about a subset. Record
+      // `risk` in that case — installable, but with a card that says the verdict
+      // does not cover everything the user picked.
+      decision: (scan.outcome === 'pass'
+        && (scan.normalization?.securityRelevant.length ?? 0) > 0)
+        ? 'risk'
+        : _receiptDecisionOf(scan.outcome),
       violationCount: violations.violationCount,
       ...(violations.topRule ? { topRule: violations.topRule } : {}),
       ...(violations.topLevel ? { topLevel: violations.topLevel } : {}),
@@ -733,6 +814,7 @@ export function writeInstallReceipt(
       ...(scan.attackSurface ? { attackSurface: { ...scan.attackSurface } } : {}),
       ...(scan.instructionRisk ? { instructionRisk: scan.instructionRisk } : {}),
       ...(scan.userOverride ? { userOverride: scan.userOverride } : {}),
+      ...(scan.normalization ? { normalization: scan.normalization } : {}),
       ...(skillDir ? { dependencyHash: currentDependencyHash(skillDir) } : {}),
       ...(skillDir ? { permissionHash: currentPermissionHash(skillDir) } : {}),
     }, agentId);

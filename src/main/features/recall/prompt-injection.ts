@@ -9,6 +9,7 @@ import {
   createStandingPreferenceContextProjection,
   readContextProjection,
   type ContextProjectionRecord,
+  type ProjectionKnowledgeErrorCode,
   type RecallAssetMatch,
   type RecallAssetMatchMethod,
   type ProjectionSemanticOptions,
@@ -94,6 +95,29 @@ export interface RecallPromptCitation {
   matchMethod: RecallAssetMatchMethod;
 }
 
+export type RecallCommittedFallbackReason = ProjectionKnowledgeErrorCode | 'committed_assembly_failed';
+
+/** Only knowledge-boundary codes reach the caller. Read or programming errors
+ *  collapse to the generic code so persistence never carries arbitrary internals. */
+const RECALL_COMMITTED_FALLBACK_REASONS: ReadonlySet<string> = new Set<RecallCommittedFallbackReason>([
+  'projection_not_committed',
+  'projection_expired',
+  'projection_versions_missing',
+  'projection_asset_missing',
+  'projection_asset_inactive',
+  'projection_asset_version_changed',
+  'projection_asset_ineligible',
+  'projection_source_unavailable',
+  'committed_assembly_failed',
+]);
+
+export function normalizeCommittedFallbackReason(error: unknown): RecallCommittedFallbackReason {
+  const code = (error as Error & { code?: string })?.code;
+  return code && RECALL_COMMITTED_FALLBACK_REASONS.has(code)
+    ? code as RecallCommittedFallbackReason
+    : 'committed_assembly_failed';
+}
+
 export interface RecallTurnPromptContext {
   promptBlock: string;
   citations: RecallPromptCitation[];
@@ -108,6 +132,9 @@ export interface RecallTurnPromptContext {
   authorizedAssetsBlock?: string;
   /** 裸画像块：标签+记录、无旧免责段——语义并入子区头。 */
   profileAssetsBlock?: string;
+  /** committed 基线装配失败、本轮已回退自动投影时的知识边界错误码。
+   *  调用方可据此记账或提示用户「本轮未使用已确认投影」；未降级时不存在。 */
+  committedFallbackReason?: RecallCommittedFallbackReason;
 }
 
 // <asset-context> 统一呈现授权资产、个人背景和目录，保留各通道的准入与回执语义。
@@ -964,6 +991,7 @@ export async function buildRecallTurnPromptContext(
 ): Promise<RecallTurnPromptContext> {
   // 会话确认投影与宿主 committed 基线共同装配，后者不替代会话中的用户选择。
   const projections: ProjectionForPrompt[] = [];
+  let committedFallbackReason: RecallCommittedFallbackReason | undefined;
   let manualProjectionIds: string[] = [];
   try {
     manualProjectionIds = await projectionIdsForConversation(userId, input.cid);
@@ -989,25 +1017,40 @@ export async function buildRecallTurnPromptContext(
       });
       if (standing) projections.push({ projection: standing, matchMethod: 'standing_preference' });
     } catch { log.warn('standing preference projection unavailable; continuing without it'); }
-    const committed = await buildPromptContextForCommittedProjection(userId, input);
-    if (!projections.length) return committed;
-    // 按 assetId 在装配层同步去重正文与 citations；不能按不同投影的 id 去重。
-    // 重叠资产以宿主 committed 基线的冻结内容为准。
-    const committedAssets = new Set(committed.citations.map((item) => item.assetId));
-    const committedFormalLength = Math.max(0, committed.promptBlock.length
-      - (committed.profileMemoryBlock ? committed.profileMemoryBlock.length + (committed.authorizedAssetsBlock ? 2 : 0) : 0));
-    const local = await buildPromptContextForProjections(userId, projections, input, committedAssets, {
-      maxRecords: Math.max(0, MAX_ASSETS - committed.citations.length),
-      maxChars: Math.max(0, MAX_BLOCK_LENGTH - committedFormalLength - (committedFormalLength ? 2 : 0)),
-    });
-    return {
-      ...committed,
-      promptBlock: [committed.promptBlock, local.promptBlock].filter(Boolean).join('\n\n'),
-      citations: [...committed.citations, ...local.citations],
-      ...(local.answerEvidence ? { answerEvidence: local.answerEvidence } : {}),
-      authorizedAssetsBlock: [committed.authorizedAssetsBlock, local.authorizedAssetsBlock]
-        .filter(Boolean).join('\n\n') || undefined,
-    };
+    // committed 基线整组失败（版本漂移等）不拖垮本轮注入：降级到自动投影装配。
+    // standing preference 已收集在 projections 里，降级路径会一并带上。
+    // 降级必须留可审标记：用户显式选定的已确认投影未生效，不能只落在日志里。
+    let committed: RecallTurnPromptContext | undefined;
+    try {
+      committed = await buildPromptContextForCommittedProjection(userId, input);
+    } catch (error) {
+      committedFallbackReason = normalizeCommittedFallbackReason(error);
+      log.warn('committed Recall projection assembly failed; continuing with automatic projection', {
+        committedProjectionId: input.committedProjectionId,
+        reason: committedFallbackReason,
+        error: (error as Error).message,
+      });
+    }
+    if (committed) {
+      if (!projections.length) return committed;
+      // 按 assetId 在装配层同步去重正文与 citations；不能按不同投影的 id 去重。
+      // 重叠资产以宿主 committed 基线的冻结内容为准。
+      const committedAssets = new Set(committed.citations.map((item) => item.assetId));
+      const committedFormalLength = Math.max(0, committed.promptBlock.length
+        - (committed.profileMemoryBlock ? committed.profileMemoryBlock.length + (committed.authorizedAssetsBlock ? 2 : 0) : 0));
+      const local = await buildPromptContextForProjections(userId, projections, input, committedAssets, {
+        maxRecords: Math.max(0, MAX_ASSETS - committed.citations.length),
+        maxChars: Math.max(0, MAX_BLOCK_LENGTH - committedFormalLength - (committedFormalLength ? 2 : 0)),
+      });
+      return {
+        ...committed,
+        promptBlock: [committed.promptBlock, local.promptBlock].filter(Boolean).join('\n\n'),
+        citations: [...committed.citations, ...local.citations],
+        ...(local.answerEvidence ? { answerEvidence: local.answerEvidence } : {}),
+        authorizedAssetsBlock: [committed.authorizedAssetsBlock, local.authorizedAssetsBlock]
+          .filter(Boolean).join('\n\n') || undefined,
+      };
+    }
   }
 
   try {
@@ -1029,7 +1072,8 @@ export async function buildRecallTurnPromptContext(
       error: (error as Error).message,
     });
   }
-  return buildPromptContextForProjections(userId, projections, input);
+  const context = await buildPromptContextForProjections(userId, projections, input);
+  return committedFallbackReason ? { ...context, committedFallbackReason } : context;
 }
 
 export async function _buildConfirmedProjectionPromptBlockForTest(userId: string, cid: string): Promise<string> {

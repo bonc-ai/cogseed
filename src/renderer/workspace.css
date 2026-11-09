@@ -209,12 +209,12 @@
 .ws-config-panel h2 { font-size: var(--font-size-ui); font-weight: var(--font-weight-medium); color: var(--text-heading); }
 .ws-drawer-close .ui-icon { width: 15px; height: 15px; }
 .ws-config-body { flex: 1; overflow: auto; padding: var(--space-4); }
-.ws-config-body section { margin-bottom: var(--space-4); padding-bottom: var(--space-4); border-bottom: 1px solid var(--line-default); }
+.ws-config-body section { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line-default); }
 .ws-config-body section:last-child { margin-bottom: 0; border-bottom: 0; }
 .ws-config-body label { display: block; margin-bottom: var(--space-2); color: var(--text-secondary); font-size: var(--font-size-1); font-weight: var(--font-weight-medium); }
 .ws-config-body p { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
 /* 设置抽屉可编辑：指令 textarea + 保存行 + 主技能/失效引用行 */
-.ws-config-body #ws-config-instructions { width: 100%; min-height: 96px; }
+.ws-config-body #ws-config-instructions { width: 100%; min-height: 64px; height: 76px; }
 .ws-config-actions { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-2); }
 .ws-config-hint { color: var(--text-muted); font-size: var(--font-size-1); }
 .ws-config-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
@@ -239,8 +239,8 @@
 .ws-view .ws-tool-tile.locked { cursor: default; }
 .ws-tool-logo { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; color: #fff; background: #2f8a5c; font-size: 11px; font-weight: 750; }
 .ws-tool-empty { font-size: 11px; color: #9aa39e; }
-.ws-config-ability { display: flex; flex-direction: column; gap: 8px; }
-.ws-config-ability-card { display: grid; grid-template-columns: 30px minmax(0,1fr) auto; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
+.ws-config-ability { display: flex; flex-direction: column; gap: 6px; }
+.ws-config-ability-card { display: grid; grid-template-columns: 30px minmax(0,1fr) auto; gap: var(--space-2); padding: 8px var(--space-3); border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-card); }
 .ws-config-ability-card .ws-ability-edit { align-self: center; margin-left: 0; }
 .ws-config-ability-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #208b58; background: #e9f7f0; }
 .ws-config-ability-icon .ui-icon { width: 15px; height: 15px; }
@@ -249,8 +249,10 @@
 .ws-config-ability-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .ws-config-ability-title strong { color: #4b5750; font-size: var(--font-size-1); font-weight: 650; }
 .ws-config-ability-title span { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; color: #527060; background: #edf4f0; font-size: var(--font-size-1); }
-.ws-config-ability-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.ws-config-ability-chips span { max-width: 100%; padding: 3px 6px; border: 1px solid #e3e9e5; border-radius: 6px; color: #5b685f; background: #f6f9f7; font-size: var(--font-size-1); overflow-wrap: anywhere; }
+.ws-config-ability-chips { display: flex; flex-wrap: nowrap; gap: 5px; overflow: hidden; }
+.ws-config-ability-chips > span:not(.ws-chip-more) { min-width: 0; max-width: 100%; padding: 3px 6px; overflow: hidden; border: 1px solid #e3e9e5; border-radius: 6px; color: #5b685f; background: #f6f9f7; font-size: var(--font-size-1); text-overflow: ellipsis; white-space: nowrap; }
+.ws-config-inline { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: var(--space-2); }
+.ws-config-body section.ws-config-inline > label { margin: 0; }
 .ws-config-panel > footer { padding: 11px 17px; border-top: 1px solid var(--ws-line); color: #748078; background: #fff; font-size: var(--font-size-1); line-height: 1.55; }
 
 /* ── 任务页 ── */
@@ -408,11 +410,13 @@
    高时叉号落进顶部拖拽带，点了没反应、连 mousedown 都进不了页面）。
    no-drag 让整个弹窗子树退出拖拽命中，保证弹窗内所有控件可点。 */
 .ws-scrim { z-index: var(--z-modal); -webkit-app-region: no-drag; }
+.ws-view .ws-dialog { width: min(1040px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); }
 .ws-dialog-head { justify-content: space-between; }
 .ws-dialog-head > div { display: flex; align-items: center; gap: var(--space-3); }
 .ws-dialog-head h2 { font-size: 17px; font-weight: var(--font-weight-semibold); color: var(--text-heading); }
 .ws-dialog-head span { padding: var(--space-1) var(--space-2); border-radius: var(--radius-chip); color: var(--color-brand-hover); background: var(--color-brand-soft); font-size: var(--font-size-1); font-weight: var(--font-weight-medium); }
 .ws-dialog-head > .ui-icon-button { flex: none; }
+.ws-dialog-body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; gap: var(--space-5); overflow-y: auto; }
 .ws-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
 .ws-form-grid label { display: block; }
 .ws-form-grid label.full { grid-column: 1 / -1; }
@@ -420,6 +424,10 @@
 .ws-form-grid em { color: var(--text-muted); font-size: var(--font-size-1); font-style: normal; font-weight: var(--font-weight-regular); }
 .ws-form-grid .ui-input, .ws-form-grid .ui-textarea { width: 100%; }
 .ws-form-grid .ui-textarea { min-height: 96px; }
+.ws-project-dir-hint { display: block; margin-top: var(--space-2); color: var(--text-muted); font-size: var(--font-size-1); font-weight: var(--font-weight-regular); line-height: 1.5; }
+.ws-dialog-capabilities { min-width: 0; }
+.ws-dialog-capabilities .ws-cap-heading { margin-top: 0; }
+.ws-dialog-capabilities .ws-cap-list { margin-top: var(--space-3); }
 .ws-cap-heading { margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--line-default); border-radius: var(--radius-card); background: var(--surface-subtle); }
 .ws-cap-heading h3 { font-size: 12px; color: var(--text-heading); }
 .ws-cap-heading p { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--font-size-1); }
@@ -434,8 +442,9 @@
 .ws-cap-top { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
 .ws-cap-top strong { font-size: 11px; color: #455149; }
 .ws-cap-top span { padding: 2px 6px; border-radius: 99px; color: #5d7568; background: #edf4f0; font-size: var(--font-size-1); }
-.ws-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.ws-chips i { padding: 3px 6px; border: 1px solid #e1e8e4; border-radius: 5px; color: #5f6c64; background: #f5f8f6; font-size: var(--font-size-1); font-style: normal; }
+.ws-chips { display: flex; flex-wrap: nowrap; gap: 5px; overflow: hidden; }
+.ws-chips i { min-width: 0; padding: 3px 6px; overflow: hidden; border: 1px solid #e1e8e4; border-radius: 5px; color: #5f6c64; background: #f5f8f6; font-size: var(--font-size-1); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.ws-chip-more { flex: none; padding: 3px 7px; border: 1px dashed var(--line-strong); border-radius: var(--radius-chip); color: var(--text-secondary); background: var(--surface-card); font-size: var(--font-size-1); white-space: nowrap; }
 .ws-dialog-foot { align-items: center; justify-content: space-between; gap: var(--space-4); }
 .ws-dialog-foot small { max-width: 430px; color: var(--text-muted); font-size: var(--font-size-1); line-height: 1.5; }
 .ws-dialog-foot > div { display: flex; gap: var(--space-2); }
@@ -444,8 +453,11 @@
   .ws-dialog-foot > div { justify-content: flex-end; }
   .ws-dialog-foot button { flex-shrink: 0; white-space: nowrap; }
 }
+@media (max-width: 900px) {
+  .ws-dialog-body { grid-template-columns: minmax(0, 1fr); }
+}
 
-.ws-ability-dialog { width: min(900px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); }
+.ws-view .ws-ability-dialog { width: min(900px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); }
 .ws-ability-head { justify-content: space-between; }
 .ws-ability-head h2 { font-size: 16px; font-weight: var(--font-weight-semibold); color: var(--text-heading); }
 .ws-ability-head p { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--font-size-1); }
@@ -481,7 +493,8 @@
 .ws-option-card.selected .ws-check { border-color: #20a965; background: #20a965; }
 .ws-option-card strong { margin-right: 7px; color: #3d4942; font-size: 11px; }
 .ws-option-card em { padding: 2px 5px; border-radius: 5px; color: #177e4d; background: #e6f5ec; font-size: var(--font-size-1); font-style: normal; }
-.ws-option-card p { margin: 5px 0 0; color: #808a84; font-size: var(--font-size-1); line-height: 1.55; }
+.ws-option-card > div { min-width: 0; overflow: hidden; }
+.ws-option-card p { display: -webkit-box; margin: 5px 0 0; overflow: hidden; color: #808a84; font-size: var(--font-size-1); line-height: 1.55; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 /* ── 角色 tab：主/副区分（新建空间能力弹窗）── */
 .ws-role-group-label { margin: 14px 0 8px; color: #657169; font-size: 11px; font-weight: 650; }
 .ws-role-group-label:first-child { margin-top: 0; }
@@ -816,3 +829,22 @@
   .ws-art-grid-shell { grid-template-columns: 1fr; }
   .ws-art-select { min-width: 0; flex: 1 1 140px; }
 }
+
+/* ── S5：Hub 模板（空间 / 定时任务共用）────────────────────────────────── */
+.ws-hub-note { margin: 10px 0 0; color: var(--color-muted); font-size: var(--font-size-2); }
+.ws-template-card.is-blocked { opacity: 0.72; }
+.ws-hub-fill-hint { display: flex; flex-direction: column; gap: 4px; color: var(--color-muted); font-size: var(--font-size-2); }
+.ws-hub-fill-hint:empty { display: none; }
+.ws-hub-fill-hint small { margin-left: 6px; color: var(--color-faint); font-size: var(--font-size-1); }
+.ws-fill-link { padding: 0; border: 0; background: none; color: var(--color-accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.ws-hub-risk { color: var(--color-warning-text); }
+.ws-hub-risk q { display: block; margin-top: 2px; color: var(--color-ink-3); quotes: none; }
+.ws-chip-state { margin-left: 4px; color: var(--color-faint); font-size: var(--font-size-1); }
+.ws-chip-state.is-bad { color: var(--color-danger); }
+.tpl-install-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.tpl-install-list li { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border: 1px solid var(--color-line); border-radius: 8px; font-size: var(--font-size-3); }
+.tpl-install-list li small { color: var(--color-faint); font-size: var(--font-size-1); }
+.tpl-install-list li span { margin-left: auto; color: var(--color-muted); font-size: var(--font-size-2); text-align: right; }
+.tpl-install-list li[data-state="done"] span { color: var(--color-accent); }
+.tpl-install-list li[data-state="failed"] span { color: var(--color-danger); }
+.tpl-install-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

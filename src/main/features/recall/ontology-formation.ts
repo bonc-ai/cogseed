@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { checkedStockOrganizationRevision } from './stock-organization-provenance';
 import { z } from 'zod';
 import { withCognitionSourceDependency } from '../cognition_bridge';
-import { applyOntologyCommand, moduleCanUse, validateOntologyCommand, type OntologyAction } from '../cognition/ontology/commands';
-import { boundedJson, emptyOntologyDocument, OntologyError, validateOntologyId, validateOntologyRecord, type OntologyDocument, type OntologyRecord } from '../cognition/ontology/model';
+import { applyOntologyCommand, intervalsOverlap, moduleCanUse, sameValue, validateOntologyCommand, type OntologyAction } from '../cognition/ontology/commands';
+import { boundedJson, emptyOntologyDocument, isCalendarDate, OntologyError, validateOntologyId, validateOntologyRecord, type OntologyAssertion, type OntologyDocument, type OntologyRecord, type OntologyValue } from '../cognition/ontology/model';
 import { readOntologyDocument } from '../cognition/ontology/service';
 import { normalizeAbilityAssetOntologyRefs, type CanonicalAbilityAssetOntologyRef } from './ontology-refs';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
@@ -14,10 +14,12 @@ import { tokenize } from '../search/tokenize';
 import { ontologyScopeViolations as scopeViolations } from '../cognition/ontology/cognition-scope';
 import { ONTOLOGY_RULE_SEMANTICS } from './ontology-rule-semantics';
 
+export interface OntologyBlockedDetail { code: string; message?: string }
 export interface OntologyFormationPlan {
   schemaVersion: 1; ownerId?: string; candidateId: string; baselineRevision: number; commandId: string;
   actions: OntologyAction[]; refs: CanonicalAbilityAssetOntologyRef[];
   requiresTReview: boolean; blockedReasons: string[]; reason: string; evidence: string[];
+  blockedDetails?: OntologyBlockedDetail[];
   previewChanges: Array<{ intent: string; recordId: string; box: 'T' | 'R' | 'A'; before?: OntologyRecord; after: OntologyRecord }>;
   effectiveFrom?: string;
 }
@@ -69,6 +71,77 @@ function reuseStructures(doc: OntologyDocument, actions: OntologyAction[], refs:
 }
 function commandId(candidateId: string, value: unknown): string {
   return 'formation-' + createHash('sha256').update(JSON.stringify([candidateId, value])).digest('hex').slice(0, 32);
+}
+/** A model sometimes states a dated fact update as a parallel open assertion
+ * instead of superseding the standing one. When that create trips the command
+ * layer's single-valued conflict against exactly one active fact, the host
+ * rewrites it into a dated change on that fact; ambiguous, undated, bounded or
+ * otherwise non-equivalent proposals stay blocked for explicit review. */
+function supersedeConflictingAssertionCreates(doc: OntologyDocument, actions: OntologyAction[], refs: CanonicalAbilityAssetOntologyRef[]): OntologyAction[] {
+  const redirects = new Map<string, string>();
+  const claimed = new Set<string>();
+  const reserved = new Set<string>();
+  for (const action of actions) if (action.intent !== 'create') reserved.add(action.recordId);
+  const rewritten: OntologyAction[] = [];
+  for (const action of actions) {
+    if (action.intent !== 'create' || !action.recordId || String(action.record.kind) !== 'assertion') { rewritten.push(action); continue; }
+    const record = action.record as Record<string, unknown>;
+    const validity = (record.validity ?? {}) as Record<string, unknown>;
+    const from = validity.from, until = validity.until;
+    const { definitionId, moduleId, subjectId, object } = record;
+    if (typeof from !== 'string' || !from || (until !== null && typeof until !== 'string')
+      || typeof definitionId !== 'string' || typeof moduleId !== 'string' || typeof subjectId !== 'string'
+      || !object || typeof object !== 'object') { rewritten.push(action); continue; }
+    const definition = doc.records[definitionId];
+    if (!definition || definition.kind !== 'definition' || definition.status !== 'active' || definition.moduleId !== moduleId
+      || definition.definitionKind === 'type' || definition.cardinality !== 'one') { rewritten.push(action); continue; }
+    const anchorSubject = definition.cardinalityAnchor !== 'object';
+    const conflicts = Object.values(doc.records).filter((other): other is OntologyAssertion => {
+      if (other.kind !== 'assertion' || other.status !== 'active' || other.id === action.recordId) return false;
+      if (other.moduleId !== moduleId || other.definitionId !== definitionId) return false;
+      const slot = anchorSubject ? other.subjectId === subjectId : sameValue(other.object, object);
+      const different = anchorSubject ? !sameValue(other.object, object) : other.subjectId !== subjectId;
+      return slot && different && intervalsOverlap({ validity: { from, until: until as string | null } }, other);
+    });
+    if (conflicts.length !== 1 || claimed.has(conflicts[0].id)) { rewritten.push(action); continue; }
+    const existing = conflicts[0];
+    // The successor inherits the existing interval end, precision, timezone and
+    // access, so a rewrite is only faithful when the proposal already agrees on
+    // all of them. A plan that already targets the fact keeps its own actions.
+    if (until !== existing.validity.until
+      || validity.precision !== existing.validity.precision
+      || validity.timezone !== existing.validity.timezone
+      || (record.access ?? 'task') !== existing.access
+      || reserved.has(existing.id)
+      // Mirror the change validation so the rewrite never degrades into another blocked reason.
+      || !isCalendarDate(from, existing.validity.precision)
+      || (existing.validity.from !== null && from <= existing.validity.from)
+      || (existing.validity.until !== null && from >= existing.validity.until)) { rewritten.push(action); continue; }
+    claimed.add(existing.id);
+    redirects.set(action.recordId, existing.id);
+    const certainty = record.certainty;
+    rewritten.push({ intent: 'change', recordId: existing.id, expectedVersion: existing.version, effectiveFrom: from,
+      object: object as OntologyValue, subjectId,
+      ...(certainty === 'confirmed' || certainty === 'inferred' || certainty === 'unknown' ? { certainty } : {}),
+      sourceLabel: action.sourceLabel });
+  }
+  if (!redirects.size) return rewritten;
+  const rewrite = (value: unknown, key = ''): unknown => {
+    if (typeof value === 'string') return referenceKeys.has(key) ? redirects.get(value) ?? value : value;
+    if (Array.isArray(value)) return value.map(child => rewrite(child, key));
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([field, child]) => [field, rewrite(child, field)]));
+  };
+  for (let index = 0; index < refs.length; index++) {
+    if (refs[index].versionPolicy === 'current') refs[index] = rewrite(refs[index]) as CanonicalAbilityAssetOntologyRef;
+    refs[index].groupId = refs[index].moduleId;
+  }
+  const seen = new Set<string>();
+  for (let index = refs.length - 1; index >= 0; index--) {
+    const key = JSON.stringify([refs[index].moduleId, refs[index].recordId, refs[index].versionPolicy, refs[index].targetVersion, refs[index].sharedBody]);
+    if (seen.has(key)) refs.splice(index, 1); else seen.add(key);
+  }
+  return rewritten.map(action => rewrite(action) as OntologyAction);
 }
 function formationCommandId(candidateId: string, baselineRevision: number, actions: OntologyAction[]): string {
   // Dependency refs can point at generated successor ids; they cannot participate in their own id seed.
@@ -164,7 +237,11 @@ export function parseOntologyFormationProposal(doc: OntologyDocument, candidateI
   assertSafeFormationPersistence(raw);
   validateOntologyId(candidateId);
   const plan: OntologyFormationPlan = { schemaVersion: 1, ownerId: doc.ownerId, candidateId, baselineRevision: doc.revision, commandId: '', actions: [], refs: [],
-    requiresTReview: false, blockedReasons: [], reason: '', evidence: [], previewChanges: [] };
+    requiresTReview: false, blockedReasons: [], reason: '', evidence: [], blockedDetails: [], previewChanges: [] };
+  const blocked = (code: string, message?: string): void => {
+    plan.blockedReasons.push(code);
+    plan.blockedDetails!.push({ code, ...(message ? { message: message.slice(0, 400) } : {}) });
+  };
   try {
     const proposal = proposalSchema.parse(raw);
     plan.reason = proposal.reason; plan.evidence = proposal.evidence;
@@ -184,6 +261,10 @@ export function parseOntologyFormationProposal(doc: OntologyDocument, candidateI
       if (plan.actions.some(action => action.intent === 'create' && !action.recordId))
         throw new OntologyError('invalid_input', 'proposed creations require explicit record ids');
       plan.actions = reuseStructures(doc, plan.actions, plan.refs, recordedAt);
+      plan.actions = supersedeConflictingAssertionCreates(doc, plan.actions, plan.refs);
+      // Rewrite output must carry the canonical envelope key order; the command
+      // identity hash is order-sensitive and stored plans re-validate it.
+      plan.actions = validateOntologyCommand({ commandId: 'proposal', expectedRevision: doc.revision, actions: plan.actions }).actions;
     }
     plan.commandId = formationCommandId(candidateId, plan.baselineRevision, plan.actions);
     const outcome = plan.actions.length ? applyOntologyCommand(doc, { commandId: plan.commandId, expectedRevision: doc.revision, actions: plan.actions }, recordedAt,
@@ -209,10 +290,10 @@ export function parseOntologyFormationProposal(doc: OntologyDocument, candidateI
       if (row.after.kind === 'entity' && row.after.identityStatus === 'confirmed'
         && (!row.before || row.before.kind !== 'entity' || row.before.identityStatus !== 'confirmed' || identityEdit)) {
         const evidence = proposal.identityEvidence.find(item => item.recordId === row.after.id);
-        if (!evidence || evidence.evidence.some(id => !proposal.evidence.includes(id))) plan.blockedReasons.push('identity_evidence_required:' + row.after.id);
+        if (!evidence || evidence.evidence.some(id => !proposal.evidence.includes(id))) blocked('identity_evidence_required:' + row.after.id, 'confirmed 实体需要 identityEvidence（其 evidence 需出现在 proposal.evidence 中）: ' + row.after.id);
       }
       if (row.after.certainty === 'inferred' || row.after.certainty === 'unknown'
-        || (row.after.kind === 'entity' && row.after.identityStatus === 'unresolved')) plan.blockedReasons.push('uncertain_ontology:' + row.after.id);
+        || (row.after.kind === 'entity' && row.after.identityStatus === 'unresolved')) blocked('uncertain_ontology:' + row.after.id, '提案包含不确定条目（certainty 非 confirmed 或实体身份未确认）: ' + row.after.id);
     }
     for (const ref of plan.refs) {
       const record = preview.records[ref.recordId], module = preview.records[ref.moduleId];
@@ -226,11 +307,16 @@ export function parseOntologyFormationProposal(doc: OntologyDocument, candidateI
     }
     // Every proposed rule needs one cognition body binding, preventing parallel editable copies.
     for (const row of plan.previewChanges) if (target === 'cognition' && row.after.kind === 'rule' && row.after.status === 'active'
-      && !plan.refs.some(ref => ref.recordId === row.after.id && ref.sharedBody)) plan.blockedReasons.push('shared_rule_reference_required:' + row.after.id);
+      && !plan.refs.some(ref => ref.recordId === row.after.id && ref.sharedBody)) blocked('shared_rule_reference_required:' + row.after.id, '新建规则需要一条 sharedBody 引用绑定认知正文: ' + row.after.id);
     const effective = plan.actions.find(action => action.intent === 'change');
     if (effective?.intent === 'change') plan.effectiveFrom = effective.effectiveFrom;
   } catch (error) {
-    plan.blockedReasons.push(error instanceof OntologyError ? error.code : 'invalid_ontology_proposal');
+    // blockedReasons stays a flat `code[:recordId]` list for existing consumers;
+    // blockedDetails carries the human/machine-readable cause for the caller.
+    if (error instanceof OntologyError) blocked(error.code, error.message);
+    else if (error instanceof z.ZodError) blocked('invalid_ontology_proposal',
+      error.issues.slice(0, 8).map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
+    else blocked('invalid_ontology_proposal', error instanceof Error ? error.message : String(error));
   }
   if (!plan.commandId) plan.commandId = commandId(candidateId, raw);
   return plan;
@@ -246,6 +332,8 @@ export function normalizeOntologyFormationPlan(userId: string, candidateId: stri
   if (plan.schemaVersion !== 1 || (plan.ownerId !== undefined && plan.ownerId !== userId) || plan.candidateId !== candidateId || !Number.isSafeInteger(plan.baselineRevision) || plan.baselineRevision < 0
     || !Array.isArray(plan.actions) || plan.actions.length > 50 || !Array.isArray(plan.refs)
     || !Array.isArray(plan.previewChanges) || !Array.isArray(plan.blockedReasons) || plan.blockedReasons.some(item => typeof item !== 'string')
+    || (plan.blockedDetails !== undefined && (!Array.isArray(plan.blockedDetails) || plan.blockedDetails.some(item => !item || typeof item !== 'object'
+      || typeof item.code !== 'string' || item.message !== undefined && typeof item.message !== 'string')))
     || typeof plan.reason !== 'string' || !Array.isArray(plan.evidence) || plan.evidence.some(item => typeof item !== 'string'))
     throw new Error('malformed ontology formation plan');
   validateOntologyId(plan.commandId);

@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
+import { loadCognitionAssets } from './helpers/cognition-renderer';
 
 const root = path.join(__dirname, '../..');
 const bindingsSource = fs.readFileSync(path.join(root, 'src/renderer/modules/skills-bindings.js'), 'utf8');
@@ -247,8 +248,18 @@ describe('候选决定的收尾', () => {
     // RECALL_CANDIDATE_ERROR_TEXTS 兜底，绝不透出后端英文。
     expect(core).toContain('RECALL_CANDIDATE_ERROR_TEXTS');
     expect(core).toContain("'cognition.candidate_error_terminal'");
-    expect(core).toContain('error.code = result.code');
+    expect(core).toContain('error.code = code ? String(code)');
     expect(core).toContain('alertUser');
+  });
+
+  it.each([
+    { reply: { ok: false, code: 'recall_candidate_terminal', message: 'already handled' }, message: 'already handled' },
+    { reply: { ok: false, error: { code: 'recall_candidate_terminal', message: 'already handled' } }, message: 'already handled' },
+    { reply: { ok: false, code: 'recall_candidate_terminal', error: 'already handled' }, message: 'already handled' },
+  ])('真实 IPC 客户端保留顶层或嵌套错误码与可读消息：$reply', async ({ reply, message }) => {
+    const { ns } = loadCognitionAssets({}, {}, { cogseed: { invoke: async () => reply } });
+    await expect(ns.api.call('recall.candidates.promote', { candidateId: 'candidate-1' }))
+      .rejects.toMatchObject({ code: 'recall_candidate_terminal', message });
   });
 
   it('作用范围留空时当场停下——按钮叫「确认并限域」', () => {

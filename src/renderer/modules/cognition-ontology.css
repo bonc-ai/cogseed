@@ -149,3 +149,25 @@
 .ontology-document-toolbar > .ui-button,.ontology-document-add-wrap > .ui-button { min-height:32px; padding:6px 11px; font-size:12px; }
 #ca-root .ontology-document-toolbar > .ui-button:first-child { border-color:transparent; background:transparent; color:var(--onto-muted); padding-left:0; }
 .ontology-document-add-wrap > .ui-button { min-width:30px; padding:4px 8px; }
+
+/* 图谱生成状态：上一版保留展示，生成中/失败有明确文字与重试入口。 */
+#ca-root .ontology-graph-status {
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  margin: 0 0 12px; padding: 9px 12px; border:1px solid var(--onto-line);
+  border-radius:10px; background: var(--surface-subtle, #f6f8f7);
+  color: var(--onto-muted); font-size:12px; line-height:1.45;
+}
+#ca-root .ontology-graph-status.is-running { border-color: color-mix(in srgb, var(--onto-accent) 28%, var(--onto-line)); }
+#ca-root .ontology-graph-status.is-failed { border-color: color-mix(in srgb, #b4412f 30%, var(--onto-line)); color:#8d3427; }
+#ca-root .ontology-graph-status.is-ready { background: transparent; border-color: transparent; padding: 2px 0 8px; }
+#ca-root .ontology-graph-status .ui-button { flex:0 0 auto; }
+
+#ca-root .ontology-graph-suggestions {
+  margin: 0 0 12px; padding: 12px 14px; border:1px dashed var(--onto-line);
+  border-radius:10px; background: var(--surface-subtle, #f6f8f7);
+}
+#ca-root .ontology-graph-suggestions h3 { margin:0 0 8px; font-size:13px; }
+#ca-root .ontology-graph-suggestions ul { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+#ca-root .ontology-graph-suggestions li { display:grid; gap:3px; font-size:12px; color:var(--onto-muted); }
+#ca-root .ontology-graph-suggestions strong { color:var(--onto-ink); font-weight:600; }
+#ca-root .ontology-graph-suggestions em { font-style:normal; font-size:11px; color:var(--onto-accent); }

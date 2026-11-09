@@ -327,6 +327,16 @@ describe('tool-catalog', () => {
     expect(missing).toEqual([]);
   });
 
+  it('does not advertise removed read modes in provider guidance', async () => {
+    const { createOntologyTools } = await import('../../../../src/main/model/core-agent/ontology-tools');
+    const query = createOntologyTools({ userId: 'testuid' })[0];
+    for (const tool of [toolByName('edit_cognition'), toolByName('read_ability_asset'), query]) {
+      const guidance = providerGuidanceText(tool);
+      expect(guidance, tool.name).not.toContain('mode=manage');
+      expect(guidance, tool.name).not.toContain('mode=inventory');
+    }
+  });
+
   it('empty names input returns an empty block', () => {
     expect(getToolsSystemPromptBlock([])).toBe('');
   });

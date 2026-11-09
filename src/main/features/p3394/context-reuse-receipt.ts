@@ -340,7 +340,20 @@ export async function completeReceipt(
   const status = requireCompletionStatus(input.status);
   return fileEditLock(receiptPath).runExclusive(async () => {
     const receipt = await readReceipt(userId, executionId);
-    if (receipt.status !== 'prepared') throw new Error('context reuse receipt already finalized');
+    if (receipt.status !== 'prepared') {
+      // 同一回执的完成是幂等的：字段一致且终态相同时按 no-op 成功返回，
+      // 让回合收尾的重放不把 transfer proof 打成 degraded。字段漂移或终态
+      // 不一致仍然拒绝，且保留 'already finalized' 子串（下游按它降级）。
+      assertImmutableCompletionFields(receipt, input);
+      // 只有终态或执行 ID 与已存回执发生漂移才拒绝；值一致的重放仍是幂等
+      // no-op，否则携带相同 ID 的调用方（behavior contrast）重放会误判为冲突。
+      if (receipt.status !== status
+        || (input.baselineExecutionId !== undefined && input.baselineExecutionId !== receipt.baselineExecutionId)
+        || (input.treatmentExecutionId !== undefined && input.treatmentExecutionId !== receipt.treatmentExecutionId)) {
+        throw new Error('context reuse receipt already finalized');
+      }
+      return receipt;
+    }
     assertImmutableCompletionFields(receipt, input);
 
     const next: ContextReuseReceipt = {

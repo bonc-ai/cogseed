@@ -695,3 +695,18 @@ it.each(['completed', 'unavailable'])('requeues %s grounding when the window clo
     expect(await f.candidates.listRecallCandidates(userId)).toEqual([]);
   } finally { f.stop(); }
 });
+
+it('locks the extraction stage to JSON mode with a full output budget', async () => {
+  const f = await fixture();
+  try {
+    await f.capture.runRecallCapture(userId, f.id);
+    const options = mocks.buildRunner.mock.calls
+      .map(call => call[0] as { sessionId: string; responseFormat?: string; maxOutputTokens?: number })
+      .filter(option => option.sessionId.startsWith('memory-extract-'));
+    expect(options.length).toBeGreaterThan(0);
+    for (const option of options) {
+      expect(option.responseFormat).toBe('json_object');
+      expect(option.maxOutputTokens).toBe(16384);
+    }
+  } finally { f.stop(); }
+});

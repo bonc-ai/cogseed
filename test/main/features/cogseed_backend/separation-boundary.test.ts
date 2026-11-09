@@ -50,6 +50,21 @@ describe('CogSeed complete backend separation boundary', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('shares asset search below the Backend and model adapters without a reverse model dependency', () => {
+    const featurePath = path.resolve(process.cwd(), 'src/main/features/recall/asset-search.ts');
+    const feature = fs.readFileSync(featurePath, 'utf8');
+    const backend = fs.readFileSync(path.join(backendRoot, 'cognition-query-host-adapter.ts'), 'utf8');
+    const model = fs.readFileSync(path.resolve(process.cwd(), 'src/main/model/core-agent/recall-tools.ts'), 'utf8');
+    expect(importSpecifiers(backend)).toContain('../recall/asset-search');
+    expect(importSpecifiers(model)).toContain('../../features/recall/asset-search');
+    expect(importSpecifiers(feature).filter(specifier => /model\/|#core-agent/.test(specifier))).toEqual([]);
+    expect(feature).toMatch(/export function createSearchAbilityAssetsTool\(/);
+    // The model retains the shared turn evidence used by its final-response gate.
+    expect(model).toContain('createSearchAbilityAssetsTool(opts.userId, opts, evidence.assets)');
+    expect(model).not.toMatch(/function createSearchAbilityAssetsTool\(/);
+    expect(backend).not.toContain('createRecallToolSuite');
+  });
+
   it('allows Local CLI execution only through the dedicated Backend adapter and local_agents/runner choke point', () => {
     const imports: string[] = [];
     for (const file of tsFiles(backendRoot)) {

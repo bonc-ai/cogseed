@@ -24,7 +24,7 @@ const READ_FAIL = { content: '{"status":"blocked","code":"ontology_not_found"}',
 const READ_OK = { content: '{"status":"ok"}', isError: false };
 
 describe('core-agent › tool failure guard › ontology write block (P1-3)', () => {
-  it('blocks create_cognition(ontology) after a deterministic cognition read failure', async () => {
+  it.each(['ontology', 'joint'])('blocks create_cognition(%s) after a deterministic cognition read failure', async (target) => {
     const guard = createToolFailureGuard();
     const ran: string[] = [];
     const tools = guardToolsWithFailureBreaker(
@@ -39,7 +39,7 @@ describe('core-agent › tool failure guard › ontology write block (P1-3)', ()
     expect(read.isError).toBe(true);
     expect(ran).toEqual(['cognition_ontology_query']);
 
-    const write = await tools[1].execute({ target: 'ontology' }, {});
+    const write = await tools[1].execute({ target }, {});
     expect(write.isError).toBe(true);
     expect(write.endTurn).toBe(true);
     expect(String(write.content)).toContain('已阻断');
@@ -61,6 +61,23 @@ describe('core-agent › tool failure guard › ontology write block (P1-3)', ()
     const otherTarget = await tools[1].execute({ target: 'rule' }, {});
     expect(otherTarget.isError).toBeFalsy();
     expect(ran).toEqual(['cognition_ontology_query', 'create_cognition']);
+  });
+
+  it('requires recovery of every failed cognition read before ontology writes', async () => {
+    const guard = createToolFailureGuard();
+    const ran: string[] = [];
+    const tools = guardToolsWithFailureBreaker([
+      tool('cognition_ontology_query', READ_FAIL, ran),
+      tool('transcript_corrections_query', READ_FAIL, ran),
+      tool('create_cognition', READ_OK, ran),
+    ] as never, { guard }) as unknown as Array<{ execute: (i: unknown, c?: unknown) => Promise<{ isError?: boolean }> }>;
+    await tools[0].execute({});
+    await tools[1].execute({});
+    guard.observe({ tool: 'cognition_ontology_query', ...READ_OK });
+    expect((await tools[2].execute({ target: 'ontology' })).isError).toBe(true);
+    guard.observe({ tool: 'transcript_corrections_query', ...READ_OK });
+    expect((await tools[2].execute({ target: 'ontology' })).isError).toBe(false);
+    expect(ran).toEqual(['cognition_ontology_query', 'transcript_corrections_query', 'create_cognition']);
   });
 
   it('does not block on a transient read failure', async () => {

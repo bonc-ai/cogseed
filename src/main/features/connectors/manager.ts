@@ -21,6 +21,7 @@ import { connectTencentSurvey, refreshTencentSurvey, removeTencentSurvey, callTe
 import * as registry from './registry';
 import { McpConnection } from './mcp-client';
 import { findCatalogEntry } from './catalog';
+import { resolveAppleMcpTransport } from './apple-mcp';
 import { scopeManagedCliTransport } from './cli-runtime';
 import { applyTemplate, scopeTencentMeetingTransport } from './apply-template';
 import { callApprovedTencentMeetingChange, isTencentMeetingInternal, isTencentMeetingWrite } from './tencent-meeting-approval';
@@ -232,7 +233,7 @@ function _isRecoverableTransportUnresolved(inst: ConnectorInstance): boolean {
   // `local_cli` materializes its transport from the template alone, so a missing grant can never
   // be the cause here and re-authorization is never the fix — but retrying the spawn still is.
   // Keying this on `oauth_grant` would wrongly freeze such an instance as a permanent error.
-  if (entry.auth_mode === 'local_cli') return _hasEstablishedConnectorState(inst);
+  if (entry.auth_mode === 'local_cli' || entry.auth_mode === 'local_mcp') return _hasEstablishedConnectorState(inst);
   // `interactive_token` also never has an `oauth_grant`, so the same reasoning applies: the stored
   // transport proves the user supplied a credential, and a retry — not re-authorization — is what
   // fixes an unresolved spawn. Note the contrast with a *cleared* credential: that removes the
@@ -549,6 +550,9 @@ async function _resolveTransport(uid: string, inst: ConnectorInstance): Promise<
   // custom branch above, except the transport comes from the template rather than the instance.
   // This branch must stay ahead of the `oauth_grant` check below: a `local_cli` instance never
   // has that row, and treating its absence as "broken instance" would silently drop the card.
+  if (entry.auth_mode === 'local_mcp') {
+    return { transport: resolveAppleMcpTransport(entry.id), grant: null };
+  }
   if (entry.auth_mode === 'local_cli') {
     const baseTransport = applyTemplate(entry, null);
     return { transport: entry.id === 'tencent-meeting' ? scopeTencentMeetingTransport(uid, baseTransport) : scopeManagedCliTransport(uid, entry.id, baseTransport), grant: null };
@@ -984,6 +988,9 @@ export async function connectViaOAuth(uid: string, catalogId: string): Promise<C
   assertConnectorRuntimeEnabled(uid, catalogId);
   if (entry.auth_mode === 'credentials') throw new Error('email_use_credentials_form');
   if (catalogId === 'tencent-survey') return connectTencentSurvey(uid);
+  if (entry.auth_mode === 'local_mcp') {
+    return _provisionMemberInstance(uid, entry, null, undefined, resolveAppleMcpTransport(entry.id));
+  }
 
   // `local_cli`: no grant is created, requested, stored or refreshed. Returning here keeps the
   // grant/dcrClient declarations below honestly non-nullable, so the OAuth paths cannot
@@ -1163,11 +1170,12 @@ async function _provisionMemberInstance(
     _conns.delete(entry.id);
   }
 
+  const previous = entry.auth_mode === 'local_mcp' ? registry.load(uid).connections[entry.id] : undefined;
   const draft: ConnectorInstance = {
     id: entry.id,
     display_name: entry.display_name,
     transport,
-    enabled_subtools: null,
+    enabled_subtools: previous ? previous.enabled_subtools : entry.default_enabled_subtools ? [...entry.default_enabled_subtools] : null,
     tools_cache: [],
     tools_cached_at: 0,
     status: { kind: 'connecting' },

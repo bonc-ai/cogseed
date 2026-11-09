@@ -41,6 +41,10 @@ req('tsx/esm/api').register();
   // proxy through the same initializer while retaining the billing fetch gate.
   await req(path.join(root, 'src/main/util/proxy-dispatcher.ts')).installEnvProxyDispatcher();
   const uid = process.env.COGSEED_RECALL_LIVE_AUTH_UID;
+  // Isolated credential roots have no in-process boot; tests that copy auth
+  // into a fresh workspace opt in to activating that explicit uid here.
+  if (process.env.COGSEED_RECALL_LIVE_ACTIVATE_USER === '1')
+    req(path.join(root, 'src/main/features/users.ts')).activateUser(uid);
   const { readRecallCaptureSettings } = req(path.join(root, 'src/main/features/recall/capture-settings.ts'));
   const { resolveRecallCaptureModelCandidates } = req(path.join(root, 'src/main/features/recall/capture-model-selection.ts'));
   const settings = await readRecallCaptureSettings(uid);

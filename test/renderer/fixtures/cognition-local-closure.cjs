@@ -178,7 +178,7 @@ app.whenReady().then(async () => {
       check('actual default tool set includes inventory and approval reads', outcome.modelRequests.some(row => row.tools.includes('cognition_ontology_query') && row.tools.includes('list_asset_change_proposals')));
       check('the real SDK chooses the owner inventory route', outcome.modelRequests.some(row => row.nativeToolCalls?.some(call => {
         if (call.name !== 'cognition_ontology_query') return false;
-        try { return JSON.parse(call.arguments).mode === 'inventory'; } catch { return false; }
+        try { const args = JSON.parse(call.arguments); return !('query' in args) && !('recordId' in args); } catch { return false; }
       })));
       check('final inventory answer retains content and proposal entry without accounting diagnostics', !!reply && reply.text.length > 100 && reply.text.includes(`[proposal:${proposal.id}]`) && !reply.text.includes('采用登记未生成回执'));
       if (!reply) throw new Error('no persisted successful final answer');

@@ -86,12 +86,15 @@ async function writeOntologyUsageReceipt(userId: string, taskRunId: string, mess
 
 /** Cite markers count only when the same version was returned by a query in this turn. */
 export async function finalizeOntologyUsageCitations(userId: string, input: {
-  taskRunId: string; messageId: string; finalText: string;
+  taskRunId: string; messageId: string; finalText: string; executionId?: string;
 }): Promise<OntologyUsageReceipt[]> {
   if (!safeId(userId) || !safeId(input.taskRunId) || !safeId(input.messageId)) throw new Error('invalid ontology usage final message');
+  if (input.executionId !== undefined && !safeId(input.executionId)) throw new Error('invalid ontology usage execution');
   const citations = parseCitations(input.finalText);
   if (!citations.length) return [];
-  const readReceipts = await listOntologyQueryReadReceipts(userId, input.taskRunId);
+  const readReceipts = (await listOntologyQueryReadReceipts(userId, input.taskRunId)).filter(receipt => (
+    input.executionId === undefined || receipt.executionId === input.executionId
+  ));
   const finalized: OntologyUsageReceipt[] = [];
   for (const citation of citations) {
     const readReceipt = [...readReceipts].reverse().find(receipt => receipt.recordRefs.some(ref => matches(ref, citation)));

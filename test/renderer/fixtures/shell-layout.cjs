@@ -25,7 +25,7 @@ ipcMain.handle('cogseed.invoke', async (_event, { channel, payload }) => {
   return { ok: false, error: 'unavailable in isolated shell fixture' };
 });
 
-const RAIL_ORDER = ['task', 'workspace', 'kb', 'recall', 'auto', 'connections', 'run-center'];
+const RAIL_ORDER = ['task', 'contacts', 'workspace', 'kb', 'recall', 'auto', 'connections', 'run-center'];
 
 app.whenReady().then(async () => {
   let window;

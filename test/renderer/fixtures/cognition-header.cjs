@@ -69,7 +69,7 @@ app.whenReady().then(async () => {
             const recovery = header.querySelector('[data-shell-action="expand-sidebar"]');
             return [
               { name: 'page header is draggable only on macOS', ok: region(header) === '${mac ? 'drag' : 'none'}' },
-              { name: 'all five navigation items belong to the cognition sidebar', ok: tabs.length === 5 && !!nav.closest('#sidebar-recall-nav') },
+              { name: 'all navigation items (disabled tree + four entries) belong to the cognition sidebar', ok: tabs.length === 5 && !!nav.closest('#sidebar-recall-nav') },
               { name: 'header stays at window top and fits viewport', ok: box.top === 0 && box.right <= innerWidth + 1 },
               { name: 'header clears the rail containing native controls', ok: box.left >= rail.right },
               { name: 'sidebar navigation visibility follows collapse state', ok: (nav.getBoundingClientRect().width > 0) === ${!collapsed} },
@@ -85,8 +85,9 @@ app.whenReady().then(async () => {
           }
           await click('#ca-tabs-nav [data-id="overview"]');
           record('my cognition tab receives mouse input', await window.webContents.executeJavaScript(`CogAssets.store.route.name === 'overview'`));
-          await click('#ca-tabs-nav [data-id="tree"]');
-          record('disabled cognition tree tab ignores mouse input', await window.webContents.executeJavaScript(`CogAssets.store.route.name === 'overview'`));
+          record('cognition tree tab is a disabled placeholder', await window.webContents.executeJavaScript(`(() => { const el = document.querySelector('#ca-tabs-nav [data-id="tree"]'); return !!el && el.classList.contains('is-disabled') && el.getAttribute('aria-disabled') === 'true'; })()`));
+          await click('#ca-tabs-nav [data-id="ontology"]');
+          record('ontology tab receives mouse input', await window.webContents.executeJavaScript(`CogAssets.store.route.name === 'ontology'`));
         }
       }
     }

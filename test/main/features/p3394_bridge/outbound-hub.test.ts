@@ -10,19 +10,25 @@ import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runti
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 import type { P3394PeerRecord } from '../../../../src/main/features/p3394_bridge/registry';
 
-// 测试隔离：sendAndWait 会把 outbox 写到 p3394StateFile，必须走一次性
-// variant，避免污染真实 cogseed variant 的 outbox（含转发 token 字段）。
+// 测试隔离：sendAndWait 会把 outbox 写到 p3394StateFile；把整棵变体树指到
+// 一次性临时目录（runtime-paths 现在校验变体名），避免污染真实 cogseed
+// variant 的 outbox（含转发 token 字段）。
 let previousVariant: string | undefined;
-let variantName: string;
+let previousBaseDir: string | undefined;
+let scratchBase: string;
 beforeEach(() => {
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
-  variantName = 'p3394-out-' + Math.random().toString(36).slice(2, 8);
-  process.env.COGSEED_RUNTIME_VARIANT = variantName;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-out-hub-'));
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 });
 afterEach(() => {
   if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
+  try { fs.rmSync(scratchBase, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
 function envelope(overrides: Record<string, unknown> = {}): P3394Envelope {

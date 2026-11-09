@@ -25,15 +25,43 @@ import type {
 import * as crypto from "node:crypto";
 
 import type { Message, MessageContent, StreamEvent, StopReason, Usage } from "../shared/types.js";
+import { isValidTokenCount } from "../shared/types.js";
 import { AuthError, ProviderError, RateLimitError, ContextOverflowError } from "../shared/errors.js";
 import { createLogger } from "../shared/logger.js";
 import type { CompletionParams, CompletionResult, LLMProvider, ToolDefinition } from "./base.js";
+import { createRequestPrefixAudit } from "./request-prefix-audit.js";
+import { translatePromptCachePolicy, type PromptCachePolicy } from "./prompt-cache-policy.js";
+import { OpenAIWireCapture } from "./openai-wire-usage.js";
 import {
   TOOL_RESULT_IMAGE_BUDGET,
   externalizeToolResultImages,
 } from "../shared/tool-result-images.js";
 
 const log = createLogger("pi-provider");
+
+// Shared across factories (the host can rebuild a provider between turns), but
+// allocated only when explicitly enabled. The audit owns a hard-bounded LRU.
+let requestPrefixAudit: ReturnType<typeof createRequestPrefixAudit> | undefined;
+type PayloadHook = (payload: unknown, model: Model<Api>) => unknown | Promise<unknown>;
+function auditedPayloadHook(onPayload: PayloadHook | undefined, sessionId: string | undefined, requestId?: number): PayloadHook | undefined {
+  // Reuse the host's explicit debug environment seam; the core logger's default
+  // level otherwise suppresses debug(). No config files or prompts are changed.
+  if (process.env.COGSEED_LOG_LEVEL !== "debug") return onPayload;
+  return async function (this: unknown, payload, model) {
+    // Preserve mutation + undefined, async replacements, and existing failures.
+    // Audit only the final provider-facing value, after the host hook completes.
+    const replacement = await onPayload?.call(this, payload, model);
+    try {
+      requestPrefixAudit ??= createRequestPrefixAudit();
+      const report = requestPrefixAudit.observe({
+        api: model.api, provider: model.provider, model: model.id,
+        baseUrl: model.baseUrl, sessionId,
+      }, replacement === undefined ? payload : replacement);
+      log.info("request_prefix_audit", { ...report, requestId });
+    } catch { /* diagnostics, including logger failures, must not break requests */ }
+    return replacement;
+  };
+}
 
 // Core-agent favors stable HTTP event streams over WebSocket optimizations.
 // Providers that do not support transport selection ignore this option.
@@ -57,6 +85,111 @@ function cacheSafeSessionId(s: string | undefined): string | undefined {
   if (s.length <= MAX_CACHE_KEY_LEN) return s;
   const hash = crypto.createHash("sha1").update(s).digest("hex");
   return `${s.slice(0, 22)}-${hash}`;
+}
+
+// Request-local, content-free correlation. Custom cache keys never contain the
+// caller's user/session identity, even when the original id is short.
+let wireRequestSequence = 0;
+type RequestTrace = { requestId: number; startedAt: number; finished: boolean };
+
+/** Cheap numeric diagnostics at normal log level. Prefix hashing stays opt-in.
+ * Absent provider counts must not become zero cache misses (SDKs default them).
+ * A trace finishes once, including when an SDK error is subsequently rethrown. */
+function logRequestUsage(trace: RequestTrace, outcome: 'completed' | 'error', usage?: Partial<Usage>, toolCalls = 0): void {
+  if (trace.finished) return;
+  trace.finished = true;
+  try {
+    const total = usage?.totalInputTokens;
+    const cached = usage?.cacheReadTokens;
+    const known = isValidTokenCount(total) && isValidTokenCount(cached) && cached <= total;
+    log.info('request_usage_summary', {
+      requestId: trace.requestId, outcome,
+      durationMs: Math.max(0, Math.round(performance.now() - trace.startedAt)),
+      toolCalls, cacheStatus: known ? 'known' : 'unknown',
+      ...(isValidTokenCount(total) ? { totalInputTokens: total } : {}),
+      ...(isValidTokenCount(usage?.outputTokens) ? { outputTokens: usage.outputTokens } : {}),
+      ...(known ? { cacheReadTokens: cached, uncachedInputTokens: total - cached,
+        ...(total > 0 ? { cacheReadRatio: cached / total } : {}) } : {}),
+      // Without an authoritative total this may just be an SDK default zero.
+      ...(isValidTokenCount(total) && isValidTokenCount(usage?.cacheWriteTokens)
+        ? { cacheWriteTokens: usage.cacheWriteTokens } : {}),
+    });
+  } catch { /* diagnostics must not fail or retry a model request */ }
+}
+
+function scopedCacheKey(model: Model<Api>, sessionId?: string, namespace?: string): string | undefined {
+  if (!sessionId) return undefined;
+  return crypto.createHash("sha256")
+    .update(JSON.stringify([namespace, model.provider, model.baseUrl, sessionId])).digest("hex");
+}
+function safeReportedModel(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9._:/@+\-]{1,160}$/.test(value) ? value : undefined;
+}
+function requestOptions(config: { onPayload?: PayloadHook; promptCachePolicy?: PromptCachePolicy; cacheNamespace?: string },
+  model: Model<Api>, params: CompletionParams) {
+  const requestId = ++wireRequestSequence;
+  const trace: RequestTrace = { requestId, startedAt: performance.now(), finished: false };
+  const explicitPolicy = config.promptCachePolicy !== undefined
+    && (model.api === 'openai-completions' || model.api === 'openai-responses');
+  const sessionId = explicitPolicy ? scopedCacheKey(model, params.sessionId, config.cacheNamespace) : cacheSafeSessionId(params.sessionId);
+  const hints = translatePromptCachePolicy({ policy: config.promptCachePolicy,
+    api: model.api, cacheRetention: params.cacheRetention, sessionId });
+  const headers: Record<string, string> = { ...model.headers };
+  if (explicitPolicy) {
+    for (const key of Object.keys(headers)) {
+      if (['session_id', 'x-client-request-id', 'x-session-affinity'].includes(key.toLowerCase())) delete headers[key];
+    }
+    Object.assign(headers, hints.headers);
+  }
+  const applyPolicy: PayloadHook | undefined = explicitPolicy ? async function (this: unknown, payload, target) {
+    const replacement = await config.onPayload?.call(this, payload, target);
+    const finalPayload = replacement === undefined ? payload : replacement;
+    if (finalPayload && typeof finalPayload === 'object' && !Array.isArray(finalPayload)) {
+      const body = { ...(finalPayload as Record<string, unknown>) };
+      delete body.prompt_cache_key;
+      delete body.prompt_cache_retention;
+      return Object.assign(body, hints.payload);
+    }
+    return replacement;
+  } : config.onPayload;
+  const sdkModel = explicitPolicy ? { ...model, headers,
+    compat: { ...(model as any).compat, sendSessionAffinityHeaders: false } } as Model<Api> : model;
+  const audit = { requestId, cacheHintsObserved: false, cacheKey: false,
+    retention: 'unspecified', affinity: Object.keys(hints.headers).length > 0 };
+  const inspect: PayloadHook | undefined = process.env.COGSEED_LOG_LEVEL === 'debug'
+    ? async function (this: unknown, payload, target) {
+      const replacement = await applyPolicy?.call(this, payload, target);
+      const finalPayload = replacement === undefined ? payload : replacement;
+      if (finalPayload && typeof finalPayload === 'object' && !Array.isArray(finalPayload)) {
+        const body = finalPayload as Record<string, unknown>;
+        audit.cacheHintsObserved = true;
+        audit.cacheKey = typeof body.prompt_cache_key === 'string' && !!body.prompt_cache_key;
+        audit.retention = body.prompt_cache_retention === '24h' || body.prompt_cache_retention === 'in-memory'
+          ? body.prompt_cache_retention : 'unspecified';
+      }
+      return replacement;
+    } : applyPolicy;
+  return { sessionId, sdkSessionId: explicitPolicy ? undefined : sessionId, headers, requestId, sdkModel,
+    onPayload: auditedPayloadHook(inspect, sessionId, requestId), audit, trace,
+  };
+}
+function wireResult(capture: OpenAIWireCapture | undefined, usage: PiAssistantMessage['usage'],
+  model: unknown, audit: Record<string, unknown>, requestedModel: string,
+  trace: RequestTrace, outcome: 'completed' | 'error', content: PiAssistantMessage['content']) {
+  const observed = capture?.finish(mapUsage(usage), safeReportedModel(model));
+  if (observed) {
+    const reported = safeReportedModel(observed.reportedModel);
+    if (reported) observed.reportedModel = reported;
+    else delete observed.reportedModel;
+  }
+  if (process.env.COGSEED_LOG_LEVEL === 'debug') {
+    try { log.info('request_wire_usage', { ...audit, requestedModel: safeReportedModel(requestedModel),
+      ...(observed?.diagnostics || {}), reportedModel: observed?.reportedModel,
+      usage: observed?.usage || mapUsage(usage) }); } catch { /* diagnostics only */ }
+  }
+  const result = observed || { usage: mapUsage(usage), reportedModel: safeReportedModel(model) };
+  logRequestUsage(trace, outcome, result.usage, content.filter(block => block.type === 'toolCall').length);
+  return result;
 }
 
 // ─── Type conversion helpers ──────────────────────────────────────────────
@@ -246,13 +379,15 @@ function mapStopReason(reason: PiAssistantMessage["stopReason"]): StopReason {
   }
 }
 
-/** Convert pi-ai Usage to our Usage. */
+/** pi-ai input is uncached; cache reads/writes are separate input buckets.
+ * Preserve numeric zero and omit absent cache fields. pi-ai itself defaults
+ * some missing wire fields to zero, so those cannot be distinguished here. */
 function mapUsage(u: PiAssistantMessage["usage"]): Usage {
   return {
     inputTokens: u.input,
     outputTokens: u.output,
-    cacheReadTokens: u.cacheRead || undefined,
-    cacheWriteTokens: u.cacheWrite || undefined,
+    ...(isValidTokenCount(u.cacheRead) ? { cacheReadTokens: u.cacheRead } : {}),
+    ...(isValidTokenCount(u.cacheWrite) ? { cacheWriteTokens: u.cacheWrite } : {}),
     totalTokens: u.totalTokens,
   };
 }
@@ -306,6 +441,10 @@ export function createPiProvider(config: {
    *  hand-constructed by the caller. When set, `config.model` /
    *  `config.baseUrl` are ignored (the Model already carries them). */
   customModel?: Model<Api>;
+  /** Explicit compatible endpoint cache capabilities; absent keeps SDK defaults. */
+  promptCachePolicy?: PromptCachePolicy;
+  /** Private host user namespace; hashed into explicit cache keys, never sent raw. */
+  cacheNamespace?: string;
   /** Each pi-ai provider invokes `options.onPayload?(params, model)`
    *  after `buildParams` and before sending the request, allowing the
    *  callback to return new params that overwrite the originals.
@@ -362,49 +501,43 @@ export function createPiProvider(config: {
       const model = resolveModel(providerId, params.model, resolvedModel, config.baseUrl);
       const context = buildPiContext(params.messages, params.systemPrompt, params.tools, model);
       const reasoning = effectiveReasoning(params.reasoning);
-      const sessionId = cacheSafeSessionId(params.sessionId);
+      const { sdkSessionId, onPayload, headers, audit, sdkModel, trace } = requestOptions(config, model, params);
+      const capture = model.api === 'openai-completions' || model.api === 'openai-responses'
+        ? new OpenAIWireCapture({ baseUrl: model.baseUrl,
+            api: model.api === 'openai-responses' ? 'openai-responses' : 'openai-completions' }) : undefined;
 
       log.debug(`complete ${providerId}/${model.id}`);
 
       try {
         let result: PiAssistantMessage;
 
-        if (reasoning) {
-          result = await piCompleteSimple(model, context, {
-            apiKey: config.apiKey,
-            transport: CORE_AGENT_TRANSPORT,
-            signal: params.signal,
-            maxTokens: params.maxTokens,
-            temperature: params.temperature,
-            reasoning,
-            cacheRetention: params.cacheRetention,
-            sessionId,
-            ...(config.onPayload ? { onPayload: config.onPayload as any } : {}),
-          });
-        } else {
-          result = await piComplete(model, context, {
-            apiKey: config.apiKey,
-            transport: CORE_AGENT_TRANSPORT,
-            signal: params.signal,
-            maxTokens: params.maxTokens,
-            temperature: params.temperature,
-            cacheRetention: params.cacheRetention,
-            sessionId,
-            ...(config.onPayload ? { onPayload: config.onPayload as any } : {}),
-          });
-        }
+        const options = {
+          apiKey: config.apiKey, transport: CORE_AGENT_TRANSPORT,
+          signal: params.signal, maxTokens: params.maxTokens,
+          temperature: params.temperature, cacheRetention: params.cacheRetention,
+          sessionId: sdkSessionId, headers, ...(onPayload ? { onPayload: onPayload as any } : {}),
+        };
+        const invoke = () => reasoning
+          ? piCompleteSimple(sdkModel, context, { ...options, reasoning })
+          : piComplete(sdkModel, context, options);
+        result = await (capture ? capture.run(invoke) : invoke());
 
         if (result.stopReason === "error") {
+          // Error responses can omit usage. Diagnostics must never replace the
+          // provider's status with a mapper error (or make a 400 retryable).
+          if (result.usage) wireResult(capture, result.usage, (result as any).responseModel,
+            audit, model.id, trace, 'error', result.content);
           throw providerResultError(result, providerId);
         }
-
+        const observed = wireResult(capture, result.usage, (result as any).responseModel,
+          audit, model.id, trace, 'completed', result.content);
         return {
-          content: mapContent(result.content),
-          stopReason: mapStopReason(result.stopReason),
-          usage: mapUsage(result.usage),
-          model: result.model || model.id,
+          content: mapContent(result.content), stopReason: mapStopReason(result.stopReason),
+          usage: observed.usage, model: model.id,
+          ...(observed.reportedModel ? { reportedModel: observed.reportedModel } : {}),
         };
       } catch (err) {
+        logRequestUsage(trace, 'error');
         throw wrapError(err, providerId);
       }
     },
@@ -413,7 +546,10 @@ export function createPiProvider(config: {
       const model = resolveModel(providerId, params.model, resolvedModel, config.baseUrl);
       const context = buildPiContext(params.messages, params.systemPrompt, params.tools, model);
       const reasoning = effectiveReasoning(params.reasoning);
-      const sessionId = cacheSafeSessionId(params.sessionId);
+      const { sdkSessionId, onPayload, headers, audit, sdkModel, trace } = requestOptions(config, model, params);
+      const capture = model.api === 'openai-completions' || model.api === 'openai-responses'
+        ? new OpenAIWireCapture({ baseUrl: model.baseUrl,
+            api: model.api === 'openai-responses' ? 'openai-responses' : 'openai-completions' }) : undefined;
 
       // Request identity + whether the routing headers actually ride along. The
       // 2026-10-13 pattern was "first attempt 400 MissingSessionID, retry fine", so the
@@ -425,8 +561,8 @@ export function createPiProvider(config: {
       log.debug(`stream ${providerId}/${model.id}`);
 
       try {
-        const eventStream = reasoning
-          ? piStreamSimple(model, context, {
+        const invoke = () => reasoning
+          ? piStreamSimple(sdkModel, context, {
               apiKey: config.apiKey,
               transport: CORE_AGENT_TRANSPORT,
               signal: params.signal,
@@ -434,13 +570,13 @@ export function createPiProvider(config: {
               temperature: params.temperature,
               reasoning,
               cacheRetention: params.cacheRetention,
-              sessionId,
+              sessionId: sdkSessionId,
               // pi-ai reads request headers from these per-call options, NOT from the
               // Model object — omitting them silently dropped `x-opencode-session`, so
               // OpenCode-fronting endpoints answered 400 {"type":"MissingSessionID"}
               // (2026-10-13, three attempts: the header was set on the Model all along).
-              ...(model.headers ? { headers: model.headers as Record<string, string> } : {}),
-              ...(config.onPayload ? { onPayload: config.onPayload as any } : {}),
+              headers,
+              ...(onPayload ? { onPayload: onPayload as any } : {}),
               // Diagnostics (2026-10-13): identify WHICH request the endpoint rejects.
               // pi-ai calls this once per HTTP response with the status, so a 400 can be
               // tied to a concrete call instead of the whole turn.
@@ -449,25 +585,25 @@ export function createPiProvider(config: {
                   log.info(
                     `stream response ${providerId}/${model.id}`
                     + ` status=${info?.status ?? "-"}`
-                    + ` baseUrl=${String((model as any).baseUrl || config.baseUrl || "-")}`,
+                    + ` endpoint=${new URL(model.baseUrl).hostname}`,
                   );
                 } catch { /* diagnostics must never break the stream */ }
               },
             })
-          : piStream(model, context, {
+          : piStream(sdkModel, context, {
               apiKey: config.apiKey,
               transport: CORE_AGENT_TRANSPORT,
               signal: params.signal,
               maxTokens: params.maxTokens,
               temperature: params.temperature,
               cacheRetention: params.cacheRetention,
-              sessionId,
+              sessionId: sdkSessionId,
               // pi-ai reads request headers from these per-call options, NOT from the
               // Model object — omitting them silently dropped `x-opencode-session`, so
               // OpenCode-fronting endpoints answered 400 {"type":"MissingSessionID"}
               // (2026-10-13, three attempts: the header was set on the Model all along).
-              ...(model.headers ? { headers: model.headers as Record<string, string> } : {}),
-              ...(config.onPayload ? { onPayload: config.onPayload as any } : {}),
+              headers,
+              ...(onPayload ? { onPayload: onPayload as any } : {}),
               // Diagnostics (2026-10-13): identify WHICH request the endpoint rejects.
               // pi-ai calls this once per HTTP response with the status, so a 400 can be
               // tied to a concrete call instead of the whole turn.
@@ -476,12 +612,13 @@ export function createPiProvider(config: {
                   log.info(
                     `stream response ${providerId}/${model.id}`
                     + ` status=${info?.status ?? "-"}`
-                    + ` baseUrl=${String((model as any).baseUrl || config.baseUrl || "-")}`,
+                    + ` endpoint=${new URL(model.baseUrl).hostname}`,
                   );
                 } catch { /* diagnostics must never break the stream */ }
               },
             });
 
+        const eventStream = capture ? capture.run(invoke) : invoke();
         for await (const event of eventStream) {
           switch (event.type) {
             case "start":
@@ -513,16 +650,23 @@ export function createPiProvider(config: {
             case "toolcall_end":
               yield { type: "tool_use_end", id: event.toolCall.id };
               break;
-            case "done":
+            case "done": {
+              const observed = wireResult(capture, event.message.usage,
+                (event.message as any).responseModel, audit, model.id, trace, 'completed', event.message.content);
               yield {
                 type: "message_end",
                 stopReason: mapStopReason(event.reason),
-                usage: mapUsage(event.message.usage),
+                usage: observed.usage,
                 content: mapContent(event.message.content),
-                model: event.message.model || model.id,
+                model: model.id,
+                ...(observed.reportedModel ? { reportedModel: observed.reportedModel } : {}),
               };
               break;
+            }
             case "error":
+              if (event.error.usage) wireResult(capture, event.error.usage, (event.error as any).responseModel, audit, model.id,
+                trace, 'error', event.error.content);
+              else logRequestUsage(trace, 'error');
               // Surface everything we can from the stream error event.
               // pi-ai's fetch layer swallows the original Error(cause chain)
               // and only keeps `.message` on `errorMessage`; any extra field
@@ -548,6 +692,7 @@ export function createPiProvider(config: {
           }
         }
       } catch (err) {
+        logRequestUsage(trace, 'error');
         throw wrapError(err, providerId);
       }
     },

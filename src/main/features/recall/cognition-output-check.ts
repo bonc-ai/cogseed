@@ -63,6 +63,11 @@ export function parseCognitionOutputChecks(raw: string, assets: OutputCheckAsset
   const evidenceSeen = new Map<string, Set<string>>();
   for (const raw of parsed.checks) {
     if (!plain(raw) || Object.keys(raw).some(k => !['assetId', 'version', 'status', 'outputEvidence', 'taskEvidence'].includes(k))) throw new Error('invalid output check');
+    // A provider may append an all-empty trailing row: it names no asset and
+    // asserts no verdict, so dropping it preserves a grounded assessment; any
+    // other unknown identity still rejects the whole response.
+    if (raw.assetId === '' && raw.version === '' && raw.status === 'unknown'
+      && !('outputEvidence' in raw) && !('taskEvidence' in raw)) continue;
     const asset = assets.find(a => a.assetId === raw.assetId && a.version === raw.version);
     if (!asset || !['complied', 'not_complied', 'not_applicable', 'unknown'].includes(String(raw.status))) throw new Error('unknown output check identity');
     const outputEvidence = evidence(raw.outputEvidence, output);

@@ -1143,6 +1143,42 @@ describe('S4 我的智能体 / 我的技能（specs/009 FR-017～021）', () => 
 });
 
 describe('S4 停用状态在卡片上写明（specs/009 FR-016 / FR-027）', () => {
+  it('uses the current Hub skill status at the real use entry before opening a new task', async () => {
+    const { context } = loadCategoryRenderers();
+    const calls: Array<{ channel: string; payload: any }> = [];
+    const views: string[] = [];
+    const selections: any[] = [];
+    context.setView = (view: string) => views.push(view);
+    context.setChatRecipient = () => {};
+    context.setChatUseSelection = (_cid: string, selection: any) => selections.push(selection);
+    context.window.cogseed.invoke = async (channel: string, payload: any) => {
+      calls.push({ channel, payload });
+      return { checked: true, installed: true, status: 'disabled', disabled: true };
+    };
+    vm.runInContext(`
+      _skillsCache = [{ id: 'hub-skill', name: 'Hub Skill', source: 'marketplace', enabled: true }];
+      _openSkillsCache = [];
+    `, context);
+
+    await context.useSkill('hub-skill', 'Hub Skill');
+
+    expect(calls).toEqual([{
+      channel: 'marketplace.refreshContentStatus',
+      payload: { kind: 'skill', id: 'hub-skill' },
+    }]);
+    expect(views).toEqual([]);
+    expect(selections).toEqual([]);
+
+    context.window.cogseed.invoke = async (channel: string, payload: any) => {
+      calls.push({ channel, payload });
+      return { checked: true, installed: true, status: 'published', disabled: false };
+    };
+    await context.useSkill('hub-skill', 'Hub Skill');
+
+    expect(views).toEqual(['new-chat']);
+    expect(selections).toEqual([{ kind: 'skill', id: 'hub-skill', name: 'Hub Skill' }]);
+  });
+
   it('用户自己停用的智能体卡片标「已停用」；Hub 停用的只标 Hub 停用', () => {
     const { context, el } = loadCategoryRenderers();
     context.renderAgentsGrid([

@@ -15,6 +15,25 @@ function processEvent(actor: string, turnId: string | undefined, data: Record<st
 }
 
 describe('GroupEventChatProjector', () => {
+  it.each(['cancelled', 'failed', 'waiting_input', 'completed'] as const)(
+    'preserves authoritative %s status and deduplicates the terminal event', (status) => {
+      const projector = new GroupEventChatProjector();
+      projector.project(processEvent('commander', 'T1', { type: 'delta', text: 'partial' }));
+      projector.project(processEvent('agent-x', 'T2', { type: 'delta', text: 'other' }));
+      const end: any = {
+        type: 'message', cid: 'c-1', turn_end: true, turn_id: 'T1',
+        msg: { from: 'commander', terminal_status: status,
+          ...(status === 'cancelled' ? { failure_kind: 'runtime' } : {}) },
+      };
+      expect(projector.project(end)).toEqual([expect.objectContaining({
+        type: 'chat.turn.completed', turnId: 'T1', status,
+      })]);
+      expect(projector.project(end)).toEqual([]);
+      expect(projector.project({ ...end, turn_id: 'T2', msg: { from: 'agent-x' } }))
+        .toEqual([expect.objectContaining({ turnId: 'T2', status: 'completed' })]);
+    },
+  );
+
   it('process 投影 chat.* 且多 actor 互不串扰', () => {
     const projector = new GroupEventChatProjector();
     const a = projector.project(processEvent('commander', 'T1', { type: 'delta', text: '调度中' }));

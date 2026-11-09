@@ -449,6 +449,21 @@ async function _reverifyDeep(
   // entire library at once, which is exactly how a badge stops being read.
   const declarationCheck = await checkDeclaration(skillDir, skillId);
 
+  // Preserve an explicit user override across a rescan of the SAME bytes.
+  //
+  // `payloadHash` equality is the whole condition: the override was a decision
+  // about this content, so a ruleset upgrade that re-blocks identical bytes must
+  // not silently turn the user's accepted install into a withheld skill. If the
+  // bytes changed, the hash comparison fails and the override is dropped — a
+  // post-install edit is a new decision, not an inherited one. Red-team F-05: the
+  // load gate must not lose the install-time override on the first re-check.
+  const previous = readReceipt(uid, skillId, agentId);
+  const carriedOverride = decision === 'blocked'
+    && previous
+    && previous.payloadHash === payloadHash
+    ? previous.userOverride
+    : undefined;
+
   const receipt = writeReceipt(uid, skillId, {
     payloadHash,
     decision,
@@ -459,6 +474,7 @@ async function _reverifyDeep(
     ...(topRule ? { topRule } : {}),
     ...(topLevel ? { topLevel } : {}),
     ...(declarationCheck ? { declarationCheck } : {}),
+    ...(carriedOverride ? { userOverride: carriedOverride } : {}),
   }, agentId);
 
   if (reason === 'payload_changed') {
@@ -571,6 +587,29 @@ export function reverifySkills(uid: string, skillIds: readonly string[]): Reveri
 }
 
 /**
+ * Does this re-verification result allow the skill to be loaded?
+ *
+ * Two ways to be allowed, and the second one is a deliberate policy that was
+ * missing before red-team F-05 (2026-11-04):
+ *
+ *  1. the scan did not refuse (`pass` / `risk` / `unknown`);
+ *  2. the scan refused, but this exact payload carried a recorded
+ *     `userOverride` — the user was shown the refusal and chose to install.
+ *
+ * Without (2), recording `decision: 'blocked'` on an overridden install would
+ * have made the skill unusable: the install gate honours consent, so the load
+ * gate has to honour the same consent for the same bytes, or "install anyway"
+ * means "install a skill the agent will never see". The receipt still says
+ * `blocked` — the audit trail must not be rewritten by the override — and the
+ * override is bound to the payload hash by `isReceiptStale`, so any edit
+ * invalidates it and the refusal takes effect again.
+ */
+function _trustedOf(result: ReverifyResult): boolean {
+  if (result.decision !== 'blocked') return true;
+  return result.receipt?.userOverride !== undefined;
+}
+
+/**
  * Decide whether an installed skill may be exposed to the agent.
  *
  * This is the enforcement point that turns detection into prevention. Without
@@ -578,11 +617,12 @@ export function reverifySkills(uid: string, skillIds: readonly string[]): Reveri
  * nothing stops the edited skill from being loaded — which means the install
  * gate can be bypassed by installing something benign and then rewriting it.
  *
- * Only a `blocked` verdict withholds the skill. `risk` and `unknown` pass
- * through, because this runs on the load path for every skill on every catalog
- * rebuild: withholding on anything softer would let a single scanner hiccup
- * silently disable a user's working skills, and a security control that
- * randomly removes functionality gets disabled by the people it protects.
+ * Only a `blocked` verdict without a recorded override withholds the skill.
+ * `risk` and `unknown` pass through, because this runs on the load path for every
+ * skill on every catalog rebuild: withholding on anything softer would let a
+ * single scanner hiccup silently disable a user's working skills, and a security
+ * control that randomly removes functionality gets disabled by the people it
+ * protects.
  *
  * Cost is not a concern here — hashing the entire builtin corpus (47 skills,
  * 134 files, 1.2 MB) measures ~5 ms total, and the caller only re-checks when
@@ -611,7 +651,7 @@ export function isSkillTrustedForLoad(uid: string, skillId: string): {
 } {
   const result = reverifySkill(uid, skillId);
   return {
-    trusted: result.decision !== 'blocked',
+    trusted: _trustedOf(result),
     decision: result.decision,
     staleReason: result.staleReason,
   };
@@ -687,7 +727,7 @@ export async function isSkillTrustedForLoadDeep(uid: string, skillId: string): P
 }> {
   const result = await reverifySkillDeep(uid, skillId);
   return {
-    trusted: result.decision !== 'blocked',
+    trusted: _trustedOf(result),
     decision: result.decision,
     staleReason: result.staleReason,
   };
@@ -781,7 +821,7 @@ export async function isAgentPrivateSkillTrustedForLoadDeep(
 ): Promise<{ trusted: boolean; decision: ReverifyResult['decision']; staleReason: StaleReason | null }> {
   const result = await reverifyAgentPrivateSkillDeep(uid, agentId, skillId);
   return {
-    trusted: result.decision !== 'blocked',
+    trusted: _trustedOf(result),
     decision: result.decision,
     staleReason: result.staleReason,
   };

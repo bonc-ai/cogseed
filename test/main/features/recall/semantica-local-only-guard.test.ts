@@ -11,6 +11,7 @@ describe('Semantica local-only production guard', () => {
       'src/main/features/recall/context-projection.ts',
       'src/main/features/recall/prompt-injection.ts',
       'src/main/model/core-agent/recall-tools.ts',
+      'src/main/features/recall/asset-search.ts',
       'src/main/ipc/semantica-settings.ts',
     ].map(read).join('\n');
 

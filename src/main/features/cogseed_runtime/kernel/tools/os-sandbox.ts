@@ -14,6 +14,8 @@ export interface OsSandboxPolicy {
   writableRoots?: readonly string[];
   protectedPaths?: readonly string[];
   tempRoots?: readonly string[];
+  /** Full-access mode still protects CogSeed private stores. */
+  allowAllWrites?: boolean;
 }
 
 export interface WrappedBashCommand {
@@ -46,14 +48,57 @@ export function buildSeatbeltProfile(policy: OsSandboxPolicy): string {
   const lines = [
     '(version 1)',
     '(allow default)',
-    '(deny file-write*)',
-    '(allow file-write* (literal "/dev/null"))',
   ];
-  for (const root of writable) lines.push(`(allow file-write* (subpath ${quote(root)}))`);
+  if (!policy.allowAllWrites) {
+    lines.push('(deny file-write*)', '(allow file-write* (literal "/dev/null"))');
+    for (const root of writable) lines.push(`(allow file-write* (subpath ${quote(root)}))`);
+  }
   for (const protectedPath of protectedPaths) {
+    lines.push(`(deny file-read* (subpath ${quote(protectedPath)}))`);
     lines.push(`(deny file-write* (subpath ${quote(protectedPath)}))`);
   }
   return lines.join('\n');
+}
+
+/** Wrap a direct process (not a shell command) with the same OS sandbox.
+ *  Returns null when the backend is unavailable for the target platform. */
+export function wrapProcessForOsSandbox(
+  file: string,
+  args: readonly string[],
+  policy: OsSandboxPolicy,
+  opts: { platform?: NodeJS.Platform; executable?: string } = {},
+): WrappedBashCommand | null {
+  const platform = opts.platform ?? process.platform;
+  if (platform === 'darwin') {
+    return {
+      file: opts.executable || '/usr/bin/sandbox-exec',
+      args: ['-p', buildSeatbeltProfile(policy), file, ...args],
+      enforcement: 'os-full',
+    };
+  }
+  if (platform === 'linux') {
+    const wrapped = buildLinuxArgs(policy, file, args);
+    return { file: opts.executable || 'bwrap', args: wrapped, enforcement: 'os-full' };
+  }
+  return null;
+}
+
+function buildLinuxArgs(policy: OsSandboxPolicy, file: string, args: readonly string[]): string[] {
+  const writable = uniqueCanonical([
+    ...(policy.workspaceRoot ? [policy.workspaceRoot] : []),
+    ...(policy.writableRoots || []),
+    ...(policy.tempRoots || []),
+  ]);
+  const protectedPaths = uniqueCanonical(policy.protectedPaths);
+  const out = policy.allowAllWrites
+    ? ['--dev-bind', '/', '/']
+    : ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc'];
+  if (!policy.allowAllWrites) {
+    for (const root of writable) out.push('--bind', root, root);
+  }
+  for (const protectedPath of protectedPaths) out.push('--tmpfs', protectedPath);
+  out.push('--', file, ...args);
+  return out;
 }
 
 /** Wrap a shell command for the current platform, or return null when the
@@ -74,17 +119,9 @@ export function wrapBashForOsSandbox(
     };
   }
   if (platform === 'linux') {
-    const writable = uniqueCanonical([
-      ...(policy.workspaceRoot ? [policy.workspaceRoot] : []),
-      ...(policy.writableRoots || []),
-      ...(policy.tempRoots || []),
-    ]);
-    const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc'];
-    for (const root of writable) args.push('--bind', root, root);
-    args.push('--', '/bin/sh', '-c', command);
     return {
       file: opts.executable || 'bwrap',
-      args,
+      args: buildLinuxArgs(policy, '/bin/sh', ['-c', command]),
       enforcement: 'os-full',
     };
   }

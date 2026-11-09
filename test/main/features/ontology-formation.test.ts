@@ -267,6 +267,64 @@ describe('认知与本体同组形成', () => {
       { intent: 'update', recordId: privateFact.id, expectedVersion: privateFact.version, patch: { access: 'task' }, sourceLabel: '单独修改事实显示范围' },
     ] })).rejects.toMatchObject({ code: 'formation_blocked' });
   });
+  it('冲突槽位的dated平行开放断言create被改写为对既有事实的change；无日期、同日或多重冲突保持blocked', async () => {
+    const { formation, service } = await setup();
+    await service.commitOntologyCommand(uid, { commandId: 'pref-seed', expectedRevision: 1, actions: [
+      create('person-type', { kind: 'definition', moduleId: 'personal', name: '人物', description: '', definitionKind: 'type', subjectTypes: [], objectTypes: [], valueType: 'entity', cardinality: 'many', cardinalityAnchor: 'subject' }),
+      create('self', { kind: 'entity', moduleId: 'personal', typeId: 'person-type', name: '用户本人', description: '', aliases: [], identityStatus: 'confirmed' }),
+      create('pref-def', { kind: 'definition', moduleId: 'personal', name: '表达偏好', description: '', definitionKind: 'attribute', subjectTypes: ['person-type'], objectTypes: [], valueType: 'text', cardinality: 'one', cardinalityAnchor: 'subject' }),
+      create('pref-fact', { kind: 'assertion', moduleId: 'personal', subjectId: 'self', definitionId: 'pref-def', object: { kind: 'literal', valueType: 'text', value: '复杂问题先结论后原因' }, validity: { from: '2026-10-11', until: null, precision: 'day', timezone: 'Asia/Shanghai' } }),
+    ] });
+    const parallelCreate = (recordId: string, from: string | null, overrides: { until?: string | null; access?: 'owner_only' } = {}) => ({ reason: '用户补充故障分析场景边界', evidence: ['m1'],
+      refs: [
+        { moduleId: 'personal', recordId: 'pref-fact', versionPolicy: 'current' },
+        { moduleId: 'personal', recordId: recordId, versionPolicy: 'current' },
+      ],
+      actions: [create(recordId, { kind: 'assertion', moduleId: 'personal', subjectId: 'self', definitionId: 'pref-def',
+        object: { kind: 'literal', valueType: 'text', value: '故障分析先列证据再给结论，与原偏好合成同一条' },
+        validity: { from, until: overrides.until ?? null, precision: 'day', timezone: 'Asia/Shanghai' },
+        ...(overrides.access ? { access: overrides.access } : {}), certainty: 'confirmed' })] });
+    const plan = formation.parseOntologyFormationProposal(service.readOntologyDocument(uid), candidateId, parallelCreate('pref-fact-merged', '2026-10-12'), '')!;
+    expect(plan.blockedReasons).toEqual([]);
+    expect(plan.actions[0]).toMatchObject({ intent: 'change', recordId: 'pref-fact', expectedVersion: 1, effectiveFrom: '2026-10-12' });
+    expect(plan.effectiveFrom).toBe('2026-10-12');
+    expect(plan.previewChanges[0].after).toMatchObject({ id: 'pref-fact', validity: { from: '2026-10-11', until: '2026-10-12' } });
+    expect(plan.previewChanges[1].after).toMatchObject({ validity: { from: '2026-10-12', until: null }, supersedesId: 'pref-fact' });
+    expect(plan.refs).toEqual([{ groupId: 'personal', moduleId: 'personal', recordId: plan.previewChanges[1].after.id, versionPolicy: 'current' }]);
+    expect(formation.normalizeOntologyFormationPlan(uid, candidateId, plan)).toEqual(plan);
+    const undated = formation.parseOntologyFormationProposal(service.readOntologyDocument(uid), candidateId, parallelCreate('pref-fact-undated', null), '')!;
+    expect(undated.blockedReasons).toContain('conflicting_facts');
+    expect(undated.actions[0].intent).toBe('create');
+    const sameDay = formation.parseOntologyFormationProposal(service.readOntologyDocument(uid), candidateId, parallelCreate('pref-fact-same-day', '2026-10-11'), '')!;
+    expect(sameDay.blockedReasons).toContain('conflicting_facts');
+    const bounded = formation.parseOntologyFormationProposal(service.readOntologyDocument(uid), candidateId,
+      parallelCreate('pref-fact-bounded', '2026-10-12', { until: '2026-12-01' }), '')!;
+    expect(bounded.blockedReasons).toContain('conflicting_facts');
+    expect(bounded.actions[0].intent).toBe('create');
+    const privateUpdate = formation.parseOntologyFormationProposal(service.readOntologyDocument(uid), candidateId,
+      parallelCreate('pref-fact-private', '2026-10-12', { access: 'owner_only' }), '')!;
+    expect(privateUpdate.blockedReasons).toContain('conflicting_facts');
+    expect(privateUpdate.actions[0].intent).toBe('create');
+    const replaced = formation.parseOntologyFormationProposal(service.readOntologyDocument(uid), candidateId, {
+      reason: '用户表示旧偏好作废并给出新偏好', evidence: ['m1'], refs: [],
+      actions: [
+        { intent: 'archive', recordId: 'pref-fact', expectedVersion: 1, sourceLabel: '旧偏好作废' },
+        create('pref-fact-next', { kind: 'assertion', moduleId: 'personal', subjectId: 'self', definitionId: 'pref-def',
+          object: { kind: 'literal', valueType: 'text', value: '新的表达偏好' },
+          validity: { from: '2026-10-12', until: null, precision: 'day', timezone: 'Asia/Shanghai' }, certainty: 'confirmed' }),
+      ],
+    }, '')!;
+    expect(replaced.blockedReasons).toEqual([]);
+    expect(replaced.actions.map(action => action.intent)).toEqual(['archive', 'create']);
+    await service.commitOntologyCommand(uid, { commandId: 'pref-segment-seed', expectedRevision: 2, actions: [
+      create('seg-fact-a', { kind: 'assertion', moduleId: 'personal', subjectId: 'self', definitionId: 'pref-def', object: { kind: 'literal', valueType: 'text', value: '九月旧偏好一' }, validity: { from: '2026-09-01', until: '2026-09-15', precision: 'day', timezone: 'Asia/Shanghai' } }),
+    ] });
+    const ambiguous = formation.parseOntologyFormationProposal(service.readOntologyDocument(uid), candidateId, { reason: '跨两段区间，宿主不得猜改写哪一条', evidence: ['m1'],
+      refs: [], actions: [create('pref-fact-span', { kind: 'assertion', moduleId: 'personal', subjectId: 'self', definitionId: 'pref-def',
+        object: { kind: 'literal', valueType: 'text', value: '跨段新表述' }, validity: { from: '2026-09-10', until: '2026-11-01', precision: 'day', timezone: 'Asia/Shanghai' } })] }, '')!;
+    expect(ambiguous.blockedReasons).toContain('conflicting_facts');
+    expect(ambiguous.actions[0].intent).toBe('create');
+  });
   it('精确相同的最小T复用已有身份，依赖引用一起重指；不按名称猜人物同一性', async () => {
     const { formation, service } = await setup();
     await service.commitOntologyCommand(uid, { commandId: 'type-seed', expectedRevision: 1, actions: [

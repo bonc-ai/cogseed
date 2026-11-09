@@ -13,6 +13,11 @@ export const formationComparisonSchema = z.object({
     version: z.string().regex(/^\d{1,9}$/), quote: z.string().min(1).max(1000).optional() }).strict()).min(1).max(100).optional(),
 }).strict();
 export type FormationComparison = z.infer<typeof formationComparisonSchema> & { coverage?: CaptureExistingAssetsResult['coverage'] };
+/** Providers retype host text and may insert spaces around digits inside CJK
+ * text. Quotes stay content-bound: they must reproduce the statement with all
+ * whitespace removed, which keeps the evidence check while ignoring typography. */
+const plain = (value: string) => value.replace(/\s+/g, '');
+const quotesStatement = (statement: string, quote: string) => statement.includes(quote) || plain(statement).includes(plain(quote));
 export function validateFormationComparison(raw: unknown, assets: CaptureExistingAsset[], coverage: CaptureExistingAssetsResult['coverage'],
   options: { allowReferenceOnly?: boolean } = {}): FormationComparison {
   // A JSON null in an optional field is absence, never a version or quote.
@@ -27,7 +32,7 @@ export function validateFormationComparison(raw: unknown, assets: CaptureExistin
     for (const item of row.relatedAssets) {
       const asset = assets.find(asset => asset.id === item.assetId && asset.version === item.version);
       if (!asset || (!item.quote && !options.allowReferenceOnly)
-        || (item.quote !== undefined && (!item.quote.trim() || !asset.statement.includes(item.quote)))) throw new Error('related target evidence unavailable');
+        || (item.quote !== undefined && (!item.quote.trim() || !quotesStatement(asset.statement, item.quote)))) throw new Error('related target evidence unavailable');
     }
   }
   // A singleton adds no information only when it is the exact same target.
@@ -35,7 +40,7 @@ export function validateFormationComparison(raw: unknown, assets: CaptureExistin
   if (row.relatedAssets?.length === 1) {
     const item = row.relatedAssets[0];
     if (!row.targetAssetId || item.assetId !== row.targetAssetId || item.version !== row.targetVersion
-      || !row.targetQuote || (item.quote !== row.targetQuote && !(options.allowReferenceOnly && item.quote === undefined)))
+      || !row.targetQuote || (item.quote !== undefined && item.quote !== row.targetQuote && plain(item.quote) !== plain(row.targetQuote)))
       throw new Error('single related asset does not match target');
     delete row.relatedAssets;
   }
@@ -43,7 +48,7 @@ export function validateFormationComparison(raw: unknown, assets: CaptureExistin
     if (row.targetAssetId || row.targetVersion || row.targetQuote || row.relatedAssets || coverage.truncated || coverage.unavailable) throw new Error('new identity comparison incomplete');
   } else if (row.relation !== 'ambiguous' || row.targetAssetId || row.targetVersion || row.targetQuote) {
     const target = assets.find(asset => asset.id === row.targetAssetId && asset.version === row.targetVersion);
-    if (!target || !row.targetQuote?.trim() || !target.statement.includes(row.targetQuote)) throw new Error('comparison target evidence unavailable');
+    if (!target || !row.targetQuote?.trim() || !quotesStatement(target.statement, row.targetQuote)) throw new Error('comparison target evidence unavailable');
   }
   return { ...row, coverage };
 }

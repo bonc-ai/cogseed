@@ -250,15 +250,27 @@
     async call(channel, payload) {
       const result = await window.cogseed.invoke(channel, payload || {});
       if (result && result.ok === false) {
-        const error = new Error(result.error || result.message || `ipc failed: ${channel}`);
-        error.code = result.code || '';
+        const detail = result.error && typeof result.error === 'object' ? result.error : null;
+        const detailMessage = detail
+          ? (typeof detail.message === 'string' ? detail.message : (typeof detail.error === 'string' ? detail.error : ''))
+          : '';
+        const error = new Error(
+          (typeof result.error === 'string' && result.error)
+          || detailMessage
+          || result.message
+          || `ipc failed: ${channel}`,
+        );
+        const code = result.code || (detail && detail.code) || '';
+        error.code = code ? String(code) : '';
         // 具体规则标识：界面据此说明"哪条规则拦的"，
         // 而不是把主进程的英文原文甩给用户。
-        error.blockRule = result.blockRule || '';
+        error.blockRule = result.blockRule || (detail && detail.blockRule) || '';
         // 结构化业务返回体不能被这一层吞掉：版本冲突
         // 是"被拒绝的一次确认"，不是普通失败——渲染层要靠 versionConflict 里
         // 的版本号才能如实提示并按当前在用版重新展示差异。只搬运字段，不做判定。
-        if (result.versionConflict) error.versionConflict = result.versionConflict;
+        const versionConflict = result.versionConflict || (detail && detail.versionConflict);
+        if (versionConflict) error.versionConflict = versionConflict;
+        if (detail) error.finalizeResult = result;
         if (result.state) error.state = result.state;
         throw error;
       }
@@ -295,6 +307,13 @@
     inboxResolved: [],
     inboxGroups: [],
     inboxError: '',
+    /** 独立旧内容整理方案：候选被拒后仍保留，活动列表单独成行。 */
+    oldContentPlans: [],
+    oldContentPlansError: '',
+    /** 方案详情按需读取：{planId: {loading, loaded, plan, error}}。 */
+    oldContentPlanDetails: {},
+    /** 审阅明细（前后对照、来源摘录、删除影响），按方案缓存。 */
+    oldContentPlanReviews: {},
     /** 本体候选：与资产候选同页展示，读失败单独记错。 */
     captures: [],
     capturesError: '',
@@ -377,7 +396,7 @@
     captureContext: null,
     /** 整理页：会话列表是否展开全部（默认收拢 5 条）。 */
     /** 路由：{name, category, assetId, candidateId, proofEventId, captureBucket, captureId, sourceIssueOpen} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', inboxId: '', poCandidateId: '', activityQuery: '', activityPage: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', candCreate: '', experienceId: '', manage: '' },
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', proofEventId: '', inboxId: '', planId: '', poCandidateId: '', activityQuery: '', activityPage: '', captureBucket: '', captureId: '', sourceIssueOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', candCreate: '', experienceId: '', manage: '' },
     /** 资产详情异步补数会触发整页 render；编辑表单草稿留在 store，防止
      * 版本/回执/排序依据到达时替换 DOM 并丢掉用户尚未保存的输入。 */
     assetEditDrafts: {},
@@ -426,7 +445,7 @@
     async snapshot() {
       store.errors = [];
       // 事件驱动刷新与冷启动共用具名 BLOCK_FETCHERS，避免位置解构导致区块错配。
-      await loadBlocks(['assets', 'ontology', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox'], true);
+      await loadBlocks(['assets', 'ontology', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox', 'oldContentPlans'], true);
       // 跨区块联动 stale（改复盘/沉淀/打标后回来别吃旧值）：按需加载器的
       // stale 守卫会跳过从未拉过的场景，这里只标记已存在的状态。
       if (store.improvementOutcomes) store.improvementOutcomes = { ...store.improvementOutcomes, stale: true };
@@ -540,6 +559,20 @@
         if (isStaleBlockRead('assets', gen)) return;
         // 保留最近一次成功读到的内容；读取失败不能被当成空库。
         store.assetsError = String(error?.message || error || 'load_failed');
+      }
+    },
+    async oldContentPlans() {
+      const gen = beginBlockRead('oldContentPlans');
+      try {
+        const result = await api.call('recall.oldContent.plan.list', {});
+        if (isStaleBlockRead('oldContentPlans', gen)) return;
+        if (!Array.isArray(result?.plans)) throw new Error('invalid old-content plan list response');
+        store.oldContentPlans = result.plans;
+        store.oldContentPlansError = '';
+      } catch (error) {
+        if (isStaleBlockRead('oldContentPlans', gen)) return;
+        // 读失败不伪装成“没有待处理方案”：保留上次结果并进入错误态。
+        store.oldContentPlansError = String(error?.message || error || 'load_failed');
       }
     },
     async inbox() {
@@ -688,7 +721,7 @@
       ...(store.libraryView?.sort === 'used' ? ['timeline'] : []),
       ...(route.assetId ? ['inbox'] : []),
     ];
-    return ['assets', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox'];
+    return ['assets', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox', 'oldContentPlans'];
   }
   async function loadBlocks(names, force = false) {
     let started = false;
@@ -727,11 +760,13 @@
     'ability-asset-versions': ['assets', 'candidates', 'inbox'],
     'ability-asset-audit': ['assets', 'timeline'],
     'source-controls': ['assets', 'candidates', 'sources', 'timeline', 'inbox'],
-    'candidates': ['candidates', 'captureStats', 'inbox'],
+    'candidates': ['candidates', 'captureStats', 'inbox', 'oldContentPlans'],
+    'old-content-plans': ['oldContentPlans', 'candidates', 'inbox'],
     // 旧停驻页退役：po 候选与 Recall 候选同住「待我处理」收件箱，
     // 广播改刷 candidates 区块（两个列表一并重拉），旧页面刷新入口已删除。
     'ontology-candidates': ['candidates', 'inbox'],
     'ontology': ['ontology', 'assets', 'inbox'],
+    'ontology-graph': ['ontology'],
     'captures': ['captures'],
     'capture-settings': ['settings', 'captureStats'],
     'capture-sweep': ['captureStats'],
@@ -851,6 +886,13 @@
       if (collection === 'ability-assets' || collection === 'ability-asset-versions') {
         store.assetVersions = null;
         invalidateReviewEvidence('asset');
+        // The asset changed outside this confirmation: any conflict snapshot is
+        // now stale. Drop it instead of showing an old "current version"; the
+        // next confirm re-runs the lock-time check and surfaces a fresh one.
+        if (store.candidateVersionConflict) {
+          store.candidateVersionConflict = null;
+          pendingRefresh.add('candidates');
+        }
       } else if (collection === 'candidates') invalidateReviewEvidence('candidate');
       else if (collection === 'source-controls') {
         invalidateReviewEvidence();
@@ -868,6 +910,59 @@
   /** 供 app.js 的可见性监听在面板回到前台时调用（隐藏期间挂起的区块此刻补拉）。 */
   NS.changeRailVisible = (visible) => { changeRailVisible = () => visible; };
   NS.isChangeRailVisible = () => changeRailVisible();
+
+  /** 方案详情按需读取。失败保留状态供界面区分「没读到」与「没有方案」。 */
+  NS.loadOldContentPlan = async function loadOldContentPlan(planId, force) {
+    const id = String(planId || '');
+    if (!id) return;
+    const states = store.oldContentPlanDetails || (store.oldContentPlanDetails = {});
+    if (!force && (states[id]?.loading || states[id]?.loaded)) return;
+    const state = states[id] = { loading: true, loaded: false, plan: states[id]?.plan || null, error: '' };
+    NS.notify();
+    try {
+      const result = await api.call('recall.oldContent.plan.read', { planId: id });
+      if (states[id] !== state) return;
+      state.plan = result?.plan || null;
+      state.loaded = true;
+    } catch (error) {
+      if (states[id] !== state) return;
+      state.error = String(error?.message || error || 'load_failed');
+      state.loaded = true;
+    } finally {
+      if (states[id] === state) { state.loading = false; NS.notify(); }
+    }
+  };
+  NS.loadOldContentPlanReview = async function loadOldContentPlanReview(planId, force) {
+    const id = String(planId || '');
+    if (!id) return;
+    const states = store.oldContentPlanReviews || (store.oldContentPlanReviews = {});
+    if (!force && (states[id]?.loading || states[id]?.loaded)) return;
+    const state = states[id] = { loading: true, loaded: false, review: states[id]?.review || null, error: '' };
+    try {
+      const result = await api.call('recall.oldContent.plan.review', { planId: id });
+      if (states[id] !== state) return;
+      state.review = result?.review || null;
+      state.loaded = true;
+    } catch (error) {
+      if (states[id] !== state) return;
+      state.error = String(error?.message || error || 'load_failed');
+      state.loaded = true;
+    } finally {
+      if (states[id] === state) { state.loading = false; NS.notify(); }
+    }
+  };
+  function applyOldContentPlanResult(plan) {
+    if (!plan?.id) return;
+    const states = store.oldContentPlanDetails || (store.oldContentPlanDetails = {});
+    states[plan.id] = { loading: false, loaded: true, plan, error: '' };
+  }
+  /** A candidate save or undo changes executions outside the plan detail call;
+   * drop the cached detail/review so the next open reloads the real state. */
+  function invalidateOldContentPlan(planId) {
+    if (!planId) return;
+    if (store.oldContentPlanDetails) delete store.oldContentPlanDetails[planId];
+    if (store.oldContentPlanReviews) delete store.oldContentPlanReviews[planId];
+  }
 
   /** 整理详情页按需拉「对话上下文」（本次整理实际读到的消息 + 参与角色）。
    *  按任务缓存；失败降级为 data:null（不进全局 errors——上下文缺席不该
@@ -1387,12 +1482,12 @@
 
   /* ────────────────────────── 路由 ────────────────────────── */
 
-  // 认知树暂不开放，默认进入「我的认知」。
+  // 认知树以灰色占位页签保留（disabled，不可进入），默认落地「我的认知」。
   const TABS = [
     { id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树', disabled: true },
-    // 「我的认知」在「本体」前。
-    { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
+    // 四个并列入口：本体与我的认知是并列知识层，认知生长是两者共用的形成流程。
     { id: 'ontology', titleKey: 'cognition.tab_ontology', title: '本体' },
+    { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
     // 认知资产全量重构：独立「待我处理」页签下线——全部
     // 治理动作收敛到「认知生长」的需要关注/已处理；旧 review 路由在
     // router.go 归一化到 activity，深链与历史栈不断。
@@ -1427,7 +1522,7 @@
         target = Object.assign({}, target, { activityView: 'done', activityDone: '1' });
       }
       if (target.candCreate) target = Object.assign({}, target, { candCreate: '' });
-      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', approvalId: '', moduleId: '', recordId: '', recordVersion: '', proofEventId: '', inboxId: '', poCandidateId: '', activityQuery: '', activityPage: '', captureBucket: '', captureId: '', sourceIssueOpen: '', taskFailedOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', candCreate: '', experienceId: '', manage: '', activityDone: '' }, target);
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', approvalId: '', moduleId: '', recordId: '', recordVersion: '', proofEventId: '', inboxId: '', planId: '', poCandidateId: '', activityQuery: '', activityPage: '', captureBucket: '', captureId: '', sourceIssueOpen: '', taskFailedOpen: '', kstarEpisodeId: '', assetVersionId: '', assetEdit: '', assetVersionDiff: '', assetVersionsExpanded: '', assetView: '', candCreate: '', experienceId: '', manage: '', activityDone: '' }, target);
       const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
       store.route = merged;
@@ -1479,6 +1574,16 @@
       '检测到与现有资产高度相似——确认是新条目，还是同一条的修订（改为更新）。'],
     recall_candidate_changed_during_confirmation: ['cognition.candidate_error_changed_during_confirmation',
       '确认过程中这条候选被改动过，当前内容可能已更新。请重新核对后再确认。'],
+    recall_candidate_related_group_unavailable: ['cognition.candidate_error_related_group_unavailable',
+      '这条建议当前没有可合并的多条旧内容，或所属整理任务暂时不能重新核对。内容没有改动，请刷新后按当前状态重试。'],
+    recall_candidate_old_content_plan: ['cognition.candidate_error_old_content_pending',
+      '旧内容整理方案还有需要你核对的内容；先打开方案处理，再保存这条建议。'],
+    plan_needs_review: ['cognition.candidate_error_old_content_pending',
+      '旧内容整理方案还有需要你核对的内容；先打开方案处理，再保存这条建议。'],
+    plan_blocked: ['cognition.candidate_error_old_content_pending',
+      '旧内容整理方案还有需要你核对的内容；先打开方案处理，再保存这条建议。'],
+    plan_executing: ['cognition.candidate_error_old_content_pending',
+      '旧内容整理方案还有需要你核对的内容；先打开方案处理，再保存这条建议。'],
     recall_candidate_content_too_long: ['cognition.candidate_error_content_too_long',
       '内容太长，先精简后再保存。'],
     ontology_meaning_unresolved: ['cognition.ontology_meaning_unresolved',
@@ -1511,6 +1616,22 @@
   NS.promotionBlockText = function promotionBlockText(reason) {
     const entry = RECALL_PROMOTION_BLOCK_TEXTS[reason];
     return entry ? T(entry[0], entry[1]) : '';
+  };
+
+  /* 多条关联内容归并的逐条原因（主进程返回稳定码）。合并/重判都是可重试的
+   * 写动作，原因必须逐条说清，不能只报一句"失败"。 */
+  const RELATED_MERGE_REASON_TEXTS = {
+    not_found: ['cognition.formation_related_reason_not_found', '这条内容已经不在了'],
+    not_mutable: ['cognition.formation_related_reason_not_mutable', '这条内容当前不在生效状态'],
+    already_merged: ['cognition.formation_related_reason_already_merged', '这条内容已经并入其他条目'],
+    type_mismatch: ['cognition.formation_related_reason_type_mismatch', '内容类型不一致'],
+    boundary_mismatch: ['cognition.formation_related_reason_boundary_mismatch', '作用范围或使用授权不一致'],
+    version_conflict: ['cognition.formation_related_reason_version_conflict', '判断后内容已有新版本'],
+    merge_failed: ['cognition.formation_related_reason_merge_failed', '合并没有完成'],
+  };
+  NS.relatedMergeReasonText = function relatedMergeReasonText(reason) {
+    const entry = RELATED_MERGE_REASON_TEXTS[String(reason || '')];
+    return entry ? T(entry[0], entry[1]) : T('cognition.formation_related_reason_unknown', '当前无法合并');
   };
 
   /** 把 IPC 失败体（{code, error, blockRule, promotionReasons}）翻成给用户看的话。 */
@@ -1708,6 +1829,31 @@
     return asset;
   }
 
+  function oldContentUndoErrorText(code) {
+    const value = String(code || '');
+    if (value.includes('changed_since')) return T('cognition.old_content_plan_undo_changed', '内容在处理后被修改过');
+    if (value.includes('referenced_since')) return T('cognition.old_content_plan_undo_referenced', '处理后有新的内容引用了它');
+    if (value.includes('asset_purged')) return T('cognition.old_content_plan_undo_purged', '内容已被彻底清除');
+    if (value.includes('asset_missing') || value.includes('version unavailable'))
+      return T('cognition.old_content_plan_undo_missing', '处理前的版本已不可用');
+    return T('cognition.old_content_plan_error_generic', '这项没有完成');
+  }
+  function oldContentUnitErrorText(code) {
+    const value = String(code || '');
+    if (value.includes('baseline_changed')) return T('cognition.old_content_plan_error_baseline', '内容已变化，需要重新核对');
+    if (value.includes('asset_missing') || value.includes('asset_inactive'))
+      return T('cognition.old_content_plan_error_unreadable', '内容不可读或状态不可处理');
+    if (value.includes('merge_body_not_contained'))
+      return T('cognition.old_content_plan_error_not_contained', '无法证明合并后覆盖全部来源');
+    if (value.includes('merge_condition_mismatch') || value.includes('merge_boundary'))
+      return T('cognition.old_content_plan_error_boundary', '类型、范围或适用条件不一致');
+    if (value.includes('referenced')) return T('cognition.old_content_plan_error_referenced', '仍被其他内容引用，不能删除');
+    if (value.includes('unresolved_open')) return T('cognition.old_content_plan_error_unresolved', '还没选择处理方式');
+    if (value.includes('single_asset_action')) return T('cognition.old_content_plan_error_single', '这项只能按单条内容处理');
+    return T('cognition.old_content_plan_error_generic', '这项没有完成');
+  }
+  NS.oldContentUnitErrorText = oldContentUnitErrorText;
+
   const actions = {
     /** 资产编辑按需加载可读的 Agent / 工作空间名称。目录失败不阻断正文
      *  编辑；保存时省略 scopePolicy，后端就会保留原策略。 */
@@ -1805,19 +1951,40 @@
         await alertUser(T('cognition.candidate_scope_required', '先填写作用范围：没有范围的资产不会被带入任何任务。'));
         return;
       }
-      // 版本组防分裂：create 候选与现有资产语义高度相似时后端
-      // 拦下并返回专用错误码——问用户"仍存新条目"还是回来改为更新。
-      // 重锚声明只挂在"主确认"这一次调用上：相似资产的二次选择（`promote(true)`）
-      // 是另一条分流，主进程对 create 落点也没有版本比对面。
-      const promote = (force, baseline) => api.call('recall.candidates.promote', {
-        candidateId,
-        forceCreateSimilar: force,
-        ...(candidate.risk === 'high' ? { riskAcknowledged: true } : {}),
-        ...(baseline ? { confirmBaselineVersion: baseline } : {}),
-      });
+      // 普通候选直接走用户确认；只有带旧内容计划的候选才需要先处理旧内容，
+      // 再保存新内容。promote 的冲突/风险/相似资产语义由主进程统一判定。
+      const promote = async (forceCreateSimilar = false, baseline = '') => {
+        const payload = await api.call('recall.candidates.promote', {
+          candidateId,
+          ...(forceCreateSimilar ? { forceCreateSimilar: true } : {}),
+          ...(candidate.risk === 'high' ? { riskAcknowledged: true } : {}),
+          ...(baseline ? { confirmBaselineVersion: baseline } : {}),
+        });
+        if (payload?.ok === false) {
+          throw Object.assign(new Error(payload.message || 'promote failed'), {
+            code: payload.code || '',
+            versionConflict: payload.versionConflict,
+            promotionResult: payload,
+          });
+        }
+        return payload;
+      };
+      const finalize = async (mode, options = {}) => {
+        return api.call('recall.candidates.finalize', {
+          candidateId,
+          mode,
+          ...(options.forceCreateSimilar ? { forceCreateSimilar: true } : {}),
+          ...(candidate.risk === 'high' ? { riskAcknowledged: true } : {}),
+          ...(options.confirmBaselineVersion ? { confirmBaselineVersion: options.confirmBaselineVersion } : {}),
+        });
+      };
       let result;
       try {
-        result = await promote(false, confirmBaselineVersion);
+        if (candidate.oldContentPlanId) {
+          result = await finalize('old_then_new', { confirmBaselineVersion });
+        } else {
+          result = await promote(false, confirmBaselineVersion);
+        }
       } catch (error) {
         // 版本冲突：这条资产在确认前被改过——**这次没有
         // 生效**（不是部分生效、更不是静默覆盖）。把结构化冲突摆到页面上，按
@@ -1866,7 +2033,14 @@
             choice = await confirmUser(T('cognition.candidate_similar_asset_confirm', '检测到与现有资产高度相似（{info}）。确认 = 保存为新条目；取消 = 改为对它的更新。', { info })) ? 'create' : 'update';
           }
           if (choice === 'create') {
-            result = await promote(true);
+            if (candidate.oldContentPlanId) {
+              result = await finalize('old_then_new', {
+                forceCreateSimilar: true,
+                ...(confirmBaselineVersion ? { confirmBaselineVersion } : {}),
+              });
+            } else {
+              result = await promote(true);
+            }
           } else if (choice === 'update') {
             const match = String(error.message || '').match(/^similar asset ([A-Za-z0-9-]+)/);
             const targetAssetId = match ? match[1] : '';
@@ -1896,14 +2070,16 @@
           throw error;
         }
       }
-      const confirmed = await verifyPromotion(result, candidateId);
+      const promotionResult = result?.promotion || result;
+      const confirmed = await verifyPromotion(promotionResult, candidateId);
       if (!confirmed) {
         store.lastPromoted = null;
         toast(T('cognition.manual_save_unconfirmed', '内容已提交，暂时无法确认正式保存结果。请打开这条记录核对状态，不必重复提交。'), 'warning');
         NS.notify();
         return;
       }
-      result = Object.assign({}, result, confirmed);
+      result = Object.assign({}, promotionResult, confirmed);
+      invalidateOldContentPlan(candidate.oldContentPlanId);
       // 存量候选没有记录任务当时的版本（`versionCheckSkipped`）：主进程没有可
       // 核对的对象，这次确认照常生效——但必须如实说清"无法核对改进对象"，绝不
       // 假装核过。这条只出现在确认成功的返回体上。
@@ -1975,6 +2151,235 @@
       toast({ reject: T('cognition.candidate_rejected', '已拒绝'), ignore: T('cognition.candidate_ignored', '已忽略'), defer: T('cognition.activity_deferred_saved', '已标记稍后处理，仍保留在需要关注中。') }[action] || T('common.done', '已完成'));
       if (activityOperation) NS.activityController.afterDecision(candidateId, action === 'defer', activityOperation);
       NS.notify();
+    },
+    /** 多条关联内容的一次性处置：把这些旧内容并成一份后重新核对，或保留全部。
+     *  合并前用共享确认弹窗说清"其余条目会归档"；服务端先整体预检，任何冲突
+     *  零写入并逐条回报原因——这里只翻译与反馈，不重做归并判定。 */
+    async resolveRelatedFormation(candidateId, action, targetAssetId) {
+      const candidate = store.candidates.find(c => String(c.id) === String(candidateId));
+      if (!candidate) throw new Error(T('cognition.candidate_error_not_found', '这条候选已经不在了，可能已被处理或已过期。'));
+      const relatedAssets = ((candidate.formationComparison && candidate.formationComparison.relatedAssets) || [])
+        .map(item => (store.assets || []).find(asset => String(asset.id) === String(item.assetId) && asset.status === 'active'))
+        .filter(Boolean);
+      // 已归并但重判失败后的重试：沿用原目标，不再二次确认归并（资产不会再次写入）。
+      const retrying = action === 'merge' && candidate.relatedResolution?.action === 'merged';
+      const effectiveTargetId = targetAssetId || (retrying ? String(candidate.relatedResolution.targetAssetId || '') : '');
+      if (action === 'merge' && !retrying) {
+        const target = relatedAssets.find(asset => String(asset.id) === String(effectiveTargetId || ''));
+        if (!target) throw new Error(T('cognition.formation_related_target_required', '请选择要保留的旧内容，再合并。'));
+        const archive = relatedAssets.filter(asset => String(asset.id) !== String(target.id));
+        const confirmed = await confirmUser(T('cognition.formation_related_merge_confirm', '将保留「{target}」，其余 {count} 条旧内容的版本并入它并归档，然后按合并后的内容重新核对这条建议。确认合并？', {
+          target: String(target.title || target.id), count: String(archive.length),
+        }), true);
+        if (!confirmed) return null;
+      }
+      const result = await api.call('recall.candidates.resolveRelated', {
+        candidateId, action, ...(effectiveTargetId ? { targetAssetId: effectiveTargetId } : {}),
+      });
+      const updated = result && result.candidate;
+      if (updated && updated.id) {
+        const index = store.candidates.findIndex(c => String(c.id) === String(updated.id));
+        if (index >= 0) store.candidates[index] = updated;
+        else store.candidates.push(updated);
+      }
+      const receipts = Array.isArray(result && result.receipts) ? result.receipts : [];
+      const failed = receipts.filter(row => row && row.status !== 'merged');
+      const mergedCount = receipts.filter(row => row && row.status === 'merged').length;
+      if (action === 'keep') {
+        toast(T('cognition.formation_related_kept_toast', '已记录：保留全部旧内容，不合并。'));
+      } else if (result && result.resolved === false) {
+        const reasons = [...new Set(failed.map(row => NS.relatedMergeReasonText(row.reason)))];
+        await alertUser(T('cognition.formation_related_conflict', '这次没有合并，旧内容保持不变。{reasons}', {
+          reasons: reasons.length ? reasons.join('；') : T('cognition.formation_related_reason_unknown', '当前无法合并'),
+        }));
+      } else if (failed.length) {
+        toast(T('cognition.formation_related_partial', '已合并 {n} 条，仍有条目没有归并；可重新核对后再处理。', { n: String(mergedCount) }), 'warning');
+      } else if (result && result.reformation && result.reformation.status === 'failed') {
+        await alertUser(T('cognition.formation_related_reformation_toast_failed', '旧内容已合并，但重新核对没有完成；这条旧建议仍保留在待处理中，可以重试。'));
+      } else if (mergedCount) {
+        toast(T('cognition.formation_related_merge_done', '已合并 {n} 条旧内容，正在按合并后的内容重新核对。', { n: String(mergedCount) }));
+      } else {
+        toast(T('cognition.formation_related_merged_toast', '已按当前内容重新核对这条建议。'));
+      }
+      // 归并会归档来源条目并改写目标版本链：缓存必须失效，列表按真实状态重画。
+      if (action === 'merge') store.assetVersions = null;
+      NS.notify();
+      await NS.reload();
+      return result;
+    },
+    async reviseOldContentPlan(candidateId, op) {
+      const candidate = store.candidates.find(c => String(c.id) === String(candidateId));
+      if (!candidate?.oldContentPlanId || !candidate.oldContentPlanRevision)
+        throw new Error(T('cognition.old_content_plan_edit_failed', '方案没有更新，请刷新后重试。'));
+      await api.call('recall.oldContent.plan.update', {
+        planId: candidate.oldContentPlanId, expectedRevision: candidate.oldContentPlanRevision, ops: [op],
+      });
+      const read = await api.call('recall.candidates.read', { candidateId });
+      const updated = read && read.candidate;
+      if (updated && updated.id) {
+        const index = store.candidates.findIndex(c => String(c.id) === String(updated.id));
+        if (index >= 0) store.candidates[index] = updated;
+        else store.candidates.push(updated);
+      }
+      NS.notify();
+      return updated;
+    },
+    async keepOldContentItem(candidateId, itemId) {
+      await this.reviseOldContentPlan(candidateId, { op: 'keep_item', itemId });
+      toast(T('cognition.old_content_plan_keep_done', '已改为保留，不执行该项。'));
+    },
+    async keepOldContentUnresolved(candidateId) {
+      await this.reviseOldContentPlan(candidateId, { op: 'keep_unresolved' });
+      toast(T('cognition.old_content_plan_keep_unresolved_done', '未决项已改为保留，方案可以执行。'));
+    },
+    async reviseOldContentPlanById(planId, op) {
+      const plan = store.oldContentPlanDetails?.[planId]?.plan;
+      if (!plan?.id) throw new Error(T('cognition.old_content_plan_edit_failed', '方案没有更新，请刷新后重试。'));
+      const result = await api.call('recall.oldContent.plan.update', {
+        planId, expectedRevision: plan.revision, ops: [op],
+      });
+      applyOldContentPlanResult(result?.plan);
+      await loadBlocks(['oldContentPlans', 'candidates'], true);
+      NS.notify();
+      return result?.plan;
+    },
+    /** Merge bodies come from the model; a person can rewrite the wording before
+     *  executing. The host re-validates and marks the body as user-authored. */
+    async editOldContentMergeBody(planId, itemId, statement) {
+      const plan = store.oldContentPlanDetails?.[planId]?.plan;
+      const item = (plan?.items || []).find(row => row.itemId === itemId);
+      if (!plan?.id || !item)
+        throw new Error(T('cognition.old_content_plan_edit_failed', '方案没有更新，请刷新后重试。'));
+      const next = String(statement || '').trim();
+      if (!next) {
+        toast(T('cognition.old_content_plan_edit_merge_empty', '合并正文不能为空。'), 'warning');
+        return null;
+      }
+      if (next === item.merged?.statement) {
+        toast(T('cognition.old_content_plan_edit_merge_unchanged', '合并正文没有变化。'));
+        return null;
+      }
+      const result = await api.call('recall.oldContent.plan.update', {
+        planId, expectedRevision: plan.revision, ops: [{ op: 'edit_merge_body', itemId, statement: next }],
+      });
+      applyOldContentPlanResult(result?.plan);
+      await loadBlocks(['oldContentPlans', 'candidates'], true);
+      NS.notify();
+      toast(T('cognition.old_content_plan_edit_merge_saved', '合并正文已更新，将按这段内容执行。'));
+      return result?.plan;
+    },
+    async resolveOldContentUnresolved(planId, itemId, resolution) {
+      const plan = store.oldContentPlanDetails?.[planId]?.plan;
+      if (!plan?.id) throw new Error(T('cognition.old_content_plan_edit_failed', '方案没有更新，请刷新后重试。'));
+      const result = await api.call('recall.oldContent.plan.resolve', {
+        planId, expectedRevision: plan.revision, resolutions: [{ itemId, resolution }],
+      });
+      applyOldContentPlanResult(result?.plan);
+      await loadBlocks(['oldContentPlans', 'candidates'], true);
+      NS.notify();
+      const kind = resolution === 'keep' ? 'keep' : resolution.kind;
+      toast(kind === 'merge' ? T('cognition.old_content_plan_resolved_merge', '已选择合并目标，方案已更新。')
+        : kind === 'archive' ? T('cognition.old_content_plan_resolved_archive', '已选择归档，方案已更新。')
+          : T('cognition.old_content_plan_resolved_keep', '已选择保留，方案已更新。'));
+      return result?.plan;
+    },
+    async keepOldContentUnresolvedByPlan(planId) {
+      await this.reviseOldContentPlanById(planId, { op: 'keep_unresolved' });
+      toast(T('cognition.old_content_plan_keep_unresolved_done', '未决项已改为保留，方案可以执行。'));
+    },
+    async finalizeOldContentOnly(candidateId) {
+      const payload = await api.call('recall.candidates.finalize', { candidateId, mode: 'old_only' });
+      if (payload?.ok === false) {
+        await alertUser(payload.error?.message || T('cognition.old_content_plan_finalize_failed', '处理没有完成：{reason}', {
+          reason: T('cognition.old_content_plan_error_generic', '这项没有完成'),
+        }));
+        return payload;
+      }
+      const updated = payload?.candidate;
+      if (updated?.id) {
+        const index = store.candidates.findIndex(c => String(c.id) === String(updated.id));
+        if (index >= 0) store.candidates[index] = updated;
+        else store.candidates.push(updated);
+      }
+      store.assetVersions = null;
+      invalidateOldContentPlan(payload?.plan?.id || store.candidates.find(c => String(c.id) === String(candidateId))?.oldContentPlanId);
+      await loadBlocks(['oldContentPlans', 'candidates'], true);
+      NS.notify();
+      toast(T('cognition.old_content_plan_old_only_done', '旧内容已处理；这条建议仍保留，稍后可以继续保存。'));
+      return payload;
+    },
+    async retryOldContentNew(candidateId) {
+      const candidate = store.candidates.find(c => String(c.id) === String(candidateId));
+      if (candidate?.risk === 'high') {
+        const ok = await confirmUser(T('cognition.candidate_high_risk_confirm', '这是高风险资产变更。确认继续保存吗？'));
+        if (!ok) return undefined;
+      }
+      const conflict = store.candidateVersionConflict
+        && String(store.candidateVersionConflict.candidateId) === String(candidateId)
+        ? store.candidateVersionConflict : null;
+      const payload = await api.call('recall.candidates.finalize', {
+        candidateId, mode: 'new_only',
+        ...(candidate?.risk === 'high' ? { riskAcknowledged: true } : {}),
+        ...(conflict?.currentVersion ? { confirmBaselineVersion: String(conflict.currentVersion) } : {}),
+      });
+      store.candidateVersionConflict = null;
+      invalidateOldContentPlan(store.candidates.find(c => String(c.id) === String(candidateId))?.oldContentPlanId);
+      await NS.reload();
+      const saved = payload?.promotion?.candidate?.status === 'confirmed';
+      toast(saved ? T('cognition.old_content_plan_new_retry_done', '新内容已保存。')
+        : T('cognition.manual_save_unconfirmed', '内容已提交，暂时无法确认正式保存结果。请打开这条记录核对状态，不必重复提交。'),
+      saved ? 'success' : 'warning');
+      return payload;
+    },
+    async undoOldContentPlan(planId) {
+      const preview = await api.call('recall.oldContent.plan.undoPreview', { planId });
+      const detail = preview?.preview || null;
+      const blockers = Array.isArray(detail?.blockers) ? detail.blockers : [];
+      if (blockers.length) {
+        await alertUser(T('cognition.old_content_plan_undo_blocked', '现在不能撤销：{reasons}', {
+          reasons: blockers.map(oldContentUndoErrorText).join('；'),
+        }));
+        return preview;
+      }
+      const effects = Array.isArray(detail?.effects) ? detail.effects : [];
+      const ok = await confirmUser(T('cognition.old_content_plan_undo_confirm',
+        '撤销会把 {n} 条旧内容恢复到处理前的状态，并保留本次版本历史。继续？',
+        { n: String(effects.length) }));
+      if (!ok) return null;
+      const result = await api.call('recall.oldContent.plan.undo', { planId, token: detail?.token });
+      if (result?.ok === false) {
+        await alertUser(T('cognition.old_content_plan_undo_blocked', '现在不能撤销：{reasons}', {
+          reasons: (result.blockers || []).map(oldContentUndoErrorText).join('；'),
+        }));
+        return result;
+      }
+      applyOldContentPlanResult(result?.plan);
+      await loadBlocks(['oldContentPlans', 'candidates'], true);
+      NS.notify();
+      toast(T('cognition.old_content_plan_undo_done', '已撤销本次旧内容整理。'));
+      return result;
+    },
+    async executeOldContentPlan(planId, itemIds) {
+      const plan = store.oldContentPlanDetails?.[planId]?.plan;
+      if (!plan?.id) throw new Error(T('cognition.old_content_plan_edit_failed', '方案没有更新，请刷新后重试。'));
+      const result = await api.call('recall.oldContent.plan.execute', {
+        planId, expectedRevision: plan.revision, itemIds,
+      });
+      applyOldContentPlanResult(result?.plan);
+      await loadBlocks(['oldContentPlans', 'candidates'], true);
+      NS.notify();
+      const rows = Array.isArray(result?.results) ? result.results : [];
+      const failed = rows.filter(row => row.status === 'failed');
+      if (failed.length) {
+        await alertUser(T('cognition.old_content_plan_execute_partial', '已处理 {done} 项，{failed} 项没有完成：{reasons}', {
+          done: String(rows.filter(row => row.status !== 'failed').length),
+          failed: String(failed.length),
+          reasons: failed.map(row => oldContentUnitErrorText(row.code)).join('；'),
+        }));
+      } else {
+        toast(T('cognition.old_content_plan_execute_done', '已执行选中的 {n} 项。', { n: String(rows.length) }));
+      }
+      return result;
     },
     async rateProof(proofId, feedback, extra) {
       const busy = store.proofRatingsBusy || (store.proofRatingsBusy = {});

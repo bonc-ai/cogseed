@@ -729,6 +729,53 @@ describe('settings model providers surface', () => {
     expect(documentListeners.get('keydown')).toHaveLength(1);
   });
 
+  it('preserves transport declarations during edit-save without adding capability controls', async () => {
+    const { context, registry, invoke, windowObj } = buildHarness();
+    const transport = ['prompt_cache_key', 'session_affinity', 'prompt_cache_retention_24h'];
+    const provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1', enabled: true,
+      models: [{ id: 'relay-model', contextWindow: 131072, maxTokens: 8192,
+        capabilities: ['structured_output', ...transport, 'unknown_transport'] }],
+    };
+    const g = context as any;
+    g._settingsOpenCustomProviderDetails(provider);
+    await registry.get('settings-custom-provider-detail-model-list')!.children[0].children[1].children[1].click();
+    // Reset and language redraw must not make declarations depend on DOM controls.
+    await registry.get('settings-custom-provider-modal-actions')!.children[0].click();
+    windowObj.dispatchEvent({ type: 'i18n-change' });
+    const body = registry.get('settings-custom-provider-modal-body')!;
+    const controls = body.querySelectorAll('input[name="settings-model-form-capability"]') as any[];
+    expect(controls.map((el) => el.value)).toEqual(['structured_output', 'native_web_search', 'system_message']);
+    for (const el of controls) el.checked = false;
+    body.querySelector('#settings-custom-provider-model-edit-id')!.value = 'renamed-model';
+    const actions = registry.get('settings-custom-provider-modal-actions')!;
+    await actions.children[actions.children.length - 1].click();
+    const saved = invoke.mock.calls.find(([channel]) => channel === 'customProviders.model.update');
+    expect(saved?.[1]).toMatchObject({ modelId: 'relay-model', model: { id: 'renamed-model', capabilities: transport } });
+  });
+
+  it('imports transport declarations through settings filters while dropping unknown capabilities', async () => {
+    const { context, registry, invoke } = buildHarness();
+    const transport = ['prompt_cache_key', 'session_affinity', 'prompt_cache_retention_24h'];
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (channel: string, payload?: any) => {
+      if (channel === 'customProviders.fetchModels') return { ok: true, models: [
+        { id: 'declared-cache-model', capabilities: ['structured_output', ...transport, 'unknown_transport'] },
+        { id: 'undeclared-cache-model', capabilities: ['prompt_cache_keys', 'prompt_cache_retention'] },
+      ] };
+      return original(channel, payload);
+    });
+    const g = context as any;
+    const provider = { id: 'cp-1', name: 'Relay', protocol: 'openai', models: [] };
+    g._settingsOpenCustomProviderModal(provider);
+    await g._settingsOpenCustomProviderFetchModels(provider);
+    await registry.get('settings-custom-provider-modal-actions')!.children[1].click();
+    const added = invoke.mock.calls.filter(([channel]) => channel === 'customProviders.model.add').map(([, payload]) => payload.model);
+    expect(added).toHaveLength(2);
+    expect(added[0].capabilities).toEqual(['structured_output', ...transport]);
+    expect(added[1].capabilities).toBeUndefined();
+  });
+
   it('persists advanced fields when saving from the model editor (2026-09-14 保存失效排查)', async () => {
     const { context, registry, invoke } = buildHarness();
     const g = context as any;

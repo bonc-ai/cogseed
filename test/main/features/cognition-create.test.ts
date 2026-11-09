@@ -314,3 +314,100 @@ describe('host-confirmed conversational creation', () => {
     expect(JSON.parse(reviewed!.modified_content!).input.ontologyFormation).toEqual(candidate.ontologyFormation);
   });
 });
+
+describe('creation intent gate routes uncertainty to the confirmation card', () => {
+  const plainCognition = () => ({ target: 'cognition' as const, cognition: cognition(), reason: '本人要求的长期偏好' });
+
+  it('pops the card on a colloquial instruction without creation verbs', async () => {
+    const env = await setup('你留意一下我平时提问的路子，碰到陌生概念总想先拆到最基础的组成，再一层层推回去，这样才算是真的弄明白');
+    const result = await env.editor.createCognition(uid, env.host, plainCognition());
+    expect(interaction).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: 'applied', version: '1' });
+    expect(await env.assets.listAbilityAssets(uid)).toHaveLength(1);
+  });
+
+  it('asks via the card instead of rejecting when the wording carries no creation verbs', async () => {
+    const env = await setup('今天聊聊数据库索引的设计，为什么B+树比哈希更适合范围查询');
+    interaction.mockResolvedValueOnce({ interactionId: 'deny-interaction', reason: 'answered', decision: 'deny' });
+    const result = await env.editor.createCognition(uid, env.host, plainCognition());
+    expect(interaction).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: 'blocked' });
+    expect(await env.assets.listAbilityAssets(uid)).toHaveLength(0);
+    expect(await env.candidates.listRecallCandidates(uid)).toHaveLength(0);
+  });
+
+  it('still rejects an explicit negation without touching the card', async () => {
+    const env = await setup('不要保存为认知，我们只是聊聊');
+    await expect(env.editor.createCognition(uid, env.host, plainCognition()))
+      .rejects.toMatchObject({ code: 'not_authorized' });
+    expect(interaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects negated colloquial remember phrasings (先别记录)', async () => {
+    const env = await setup('先别记录这条偏好，等我说了再存');
+    await expect(env.editor.createCognition(uid, env.host, plainCognition()))
+      .rejects.toMatchObject({ code: 'not_authorized' });
+    expect(interaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('formation blocked issues transparency', () => {
+  const ontologyText = '根据你对我的了解，创建一个关于我的个人本体。内容可以很简略，但必须保证真实。';
+  const create = (recordId: string, record: Record<string, unknown>) => ({ intent: 'create' as const, recordId, record, sourceLabel: '本人指令' });
+  const personalOntology = (valueType: string) => ({ target: 'ontology' as const, reason: '本人明确创建个人本体',
+    explanation: { title: '个人本体', description: '收录本人已确认事实', value: '沉淀真实个人信息，不含推断', scope: 'personal' },
+    ontologyChanges: { reason: '新建个人模块与已确认事实', actions: [
+      create('mod-personal', { kind: 'module', name: '用户个人', description: '', scope: { kind: 'personal' } }),
+      create('def-person', { kind: 'definition', moduleId: 'mod-personal', name: '人物', description: '', definitionKind: 'type', subjectTypes: [], objectTypes: [], valueType: 'entity', cardinality: 'many', cardinalityAnchor: 'subject' }),
+      create('def-gitname', { kind: 'definition', moduleId: 'mod-personal', name: '拥有提交名', description: '', definitionKind: 'relation', subjectTypes: ['def-person'], objectTypes: [], valueType, cardinality: 'one', cardinalityAnchor: 'subject' }),
+      create('ent-user', { kind: 'entity', moduleId: 'mod-personal', typeId: 'def-person', name: '用户本人', description: '', aliases: [], identityStatus: 'confirmed' }),
+    ], refs: [] } });
+
+  it('surfaces the concrete command error for a relation with a non-entity valueType', async () => {
+    const env = await setup(ontologyText);
+    const error = await env.editor.createCognition(uid, env.host, personalOntology('text')).catch(error => error);
+    expect(error).toMatchObject({ code: 'formation_blocked' });
+    const issues = (error.details ?? {}).issues as Array<{ path: string; message: string }>;
+    expect(issues.length).toBeGreaterThan(0);
+    expect(issues.some(issue => issue.message.includes('relation must reference an entity'))).toBe(true);
+    expect(interaction).not.toHaveBeenCalled();
+    expect(env.ontology.readOntologyDocument(uid).revision).toBe(0);
+  });
+
+  it('surfaces zod path issues instead of a bare invalid_ontology_proposal when refs are malformed', async () => {
+    const env = await setup(ontologyText);
+    const malformed = personalOntology('entity');
+    (malformed.ontologyChanges as { refs: unknown[] }).refs = [{ moduleId: 'mod-personal', recordId: 'no-such-record', versionPolicy: 'current' }];
+    const error = await env.editor.createCognition(uid, env.host, malformed).catch(error => error);
+    expect(error).toMatchObject({ code: 'formation_blocked' });
+    const issues = (error.details ?? {}).issues as Array<{ path: string; message: string }>;
+    expect(issues.length).toBeGreaterThan(0);
+    expect(issues.every(issue => issue.message && issue.message !== 'invalid_ontology_proposal' || issue.path.includes(':'))).toBe(true);
+  });
+
+  it('still reaches pending_confirmation for a structurally valid personal ontology', async () => {
+    const env = await setup(ontologyText);
+    const result = await env.editor.createCognition(uid, { ...env.host }, { ...personalOntology('entity'), mode: 'propose' });
+    expect(result.status).toBe('pending_confirmation');
+    expect(env.ontology.readOntologyDocument(uid).revision).toBe(0);
+  });
+
+  it('surfaces zod issue paths when the top-level schema rejects the input', async () => {
+    const env = await setup(ontologyText);
+    const missingReason = personalOntology('entity');
+    delete (missingReason as { reason?: string }).reason;
+    const error = await env.editor.createCognition(uid, env.host, missingReason).catch(error => error);
+    expect(error).toMatchObject({ code: 'invalid_input' });
+    const issues = (error.details ?? {}).issues as Array<{ path: string; message: string }>;
+    expect(issues.some(issue => issue.path === 'reason' && /Required/i.test(issue.message))).toBe(true);
+  });
+
+  it('surfaces cross-field target issues with paths instead of a bare invalid_input', async () => {
+    const env = await setup(ontologyText);
+    const error = await env.editor.createCognition(uid, env.host,
+      { target: 'ontology', reason: '本人明确创建个人本体' }).catch(error => error);
+    expect(error).toMatchObject({ code: 'invalid_input' });
+    const issues = (error.details ?? {}).issues as Array<{ path: string; message: string }>;
+    expect(issues.map(issue => issue.path)).toEqual(expect.arrayContaining(['explanation', 'ontologyChanges']));
+  });
+});

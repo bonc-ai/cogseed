@@ -80,14 +80,14 @@ describe('tool failure guard', () => {
     expect(guard.snapshot()).toMatchObject({ countedFailures: 0, sameKindStreak: 0 });
   });
 
-  it('resets the streak after any successful observation', () => {
+  it('resets the current group count and no-progress budget after success', () => {
     const guard = createToolFailureGuard();
     guard.observe(fail('a', ONTOLOGY_NO_TEMPLATE));
-    guard.observe(fail('b', ONTOLOGY_NO_TEMPLATE));
+    guard.observe(fail('a', ONTOLOGY_NO_TEMPLATE));
     expect(guard.snapshot().sameKindStreak).toBe(2);
 
     expect(guard.observe(ok('read_file', 'report.md')).action).toBe('continue');
-    expect(guard.snapshot().sameKindStreak).toBe(0);
+    expect(guard.snapshot()).toMatchObject({ sameKindStreak: 0, countedFailures: 0 });
 
     // Two more failures stay below the same-kind threshold again.
     expect(guard.observe(fail('c', ONTOLOGY_NO_TEMPLATE)).action).toBe('continue');
@@ -97,7 +97,7 @@ describe('tool failure guard', () => {
   it('switching kind restarts the same-kind streak but keeps the total', () => {
     const guard = createToolFailureGuard({ maxSameKind: 3, maxTotal: 99 });
     guard.observe(fail('a', ONTOLOGY_NO_TEMPLATE));
-    guard.observe(fail('b', ONTOLOGY_NO_TEMPLATE));
+    guard.observe(fail('a', ONTOLOGY_NO_TEMPLATE));
     expect(guard.observe(fail('c', PLAN_ONE_IN_PROGRESS)).action).toBe('continue');
     expect(guard.snapshot()).toMatchObject({ sameKindStreak: 1, countedFailures: 3 });
   });
@@ -110,7 +110,7 @@ describe('tool failure guard', () => {
     const decision = guard.observe(fail('personal_ontology_fields', ONTOLOGY_NO_TEMPLATE));
     if (decision.action !== 'endTurn') throw new Error('expected endTurn');
 
-    expect(decision.reason).toContain('连续 3 次同类确定性失败');
+    expect(decision.reason).toContain('同一目标与错误出现 3 次确定性失败');
     expect(decision.reason).toContain('最近一次有效进展：read_file 成功：日报规则.md');
     expect(decision.reason).toContain('建议：');
     expect(decision.reason).toContain('未包含网络类重试');
@@ -147,11 +147,11 @@ describe('guardToolsWithFailureBreaker', () => {
 
   it('ends the turn on the third sequential deterministic failure', async () => {
     const { guardToolsWithFailureBreaker } = await import('../../../../src/main/model/core-agent/tool-failure-guard');
-    const trips: string[] = [];
+    const trips: Array<{ code: string; endTurn: boolean }> = [];
     const guard = createToolFailureGuard();
     const [wrapped] = guardToolsWithFailureBreaker([tool('personal_ontology_fields', [failing])], {
       guard,
-      onTrip: (event) => trips.push(event.code),
+      onTrip: (event) => trips.push({ code: event.code, endTurn: event.endTurn }),
     }) as [AnyTool];
 
     await wrapped.execute({} as never, {} as never);
@@ -161,24 +161,40 @@ describe('guardToolsWithFailureBreaker', () => {
     expect(third.endTurn).toBe(true);
     expect(third.isError).toBe(true);
     expect(third.content).toContain('建议：');
-    expect(trips).toEqual(['missing_dependency']);
+    expect(trips).toEqual([{ code: 'missing_dependency', endTurn: true }]);
   });
 
   it('never ends the turn early for parallel tools but still counts', async () => {
     const { guardToolsWithFailureBreaker } = await import('../../../../src/main/model/core-agent/tool-failure-guard');
-    const trips: string[] = [];
+    const trips: Array<{ code: string; endTurn: boolean }> = [];
     const guard = createToolFailureGuard();
     const [wrapped] = guardToolsWithFailureBreaker([tool('search_files', [failing], 'parallel')], {
       guard,
-      onTrip: (event) => trips.push(event.code),
+      onTrip: (event) => trips.push({ code: event.code, endTurn: event.endTurn }),
     }) as [AnyTool];
 
     for (let i = 0; i < 4; i += 1) {
       const result = await wrapped.execute({} as never, {} as never) as { endTurn?: boolean };
       expect(result.endTurn).toBeUndefined();
     }
-    expect(trips.length).toBeGreaterThan(0);   // reported, not early-terminated
+    expect(trips).toEqual([
+      { code: 'missing_dependency', endTurn: false },
+      { code: 'missing_dependency', endTurn: false },
+    ]);
     expect(guard.snapshot().countedFailures).toBe(4);
+  });
+
+  it('marks a parallel trip terminal only when explicitly allowed to end its batch', async () => {
+    const { guardToolsWithFailureBreaker } = await import('../../../../src/main/model/core-agent/tool-failure-guard');
+    const trips: boolean[] = [];
+    const [wrapped] = guardToolsWithFailureBreaker([tool('search_files', [failing], 'parallel')], {
+      guard: createToolFailureGuard(), endTurnInParallel: true,
+      onTrip: event => trips.push(event.endTurn),
+    });
+    await wrapped.execute({} as never, {} as never);
+    await wrapped.execute({} as never, {} as never);
+    expect(await wrapped.execute({} as never, {} as never)).toMatchObject({ endTurn: true, isError: true });
+    expect(trips).toEqual([true]);
   });
 
   it('leaves successful results untouched', async () => {

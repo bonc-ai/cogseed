@@ -8,6 +8,7 @@ const formSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/u
 const cardSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/ui-card.js'), 'utf8');
 const statusSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/ui-status.js'), 'utf8');
 const iconSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/icons.js'), 'utf8');
+const tabsSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/ui-tabs.js'), 'utf8');
 const source = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/settings.js'), 'utf8');
 function setup(settings = { autoApproval: false }) {
   const confirmUser = vi.fn().mockResolvedValue(true);
@@ -24,6 +25,7 @@ function setup(settings = { autoApproval: false }) {
   runInNewContext(cardSource, { window });
   runInNewContext(statusSource, { window });
   runInNewContext(formSource, { window });
+  runInNewContext(tabsSource, { window });
   runInNewContext(source, { window });
   return { NS, policy: NS.assetSettings, confirmUser, updateCaptureSettings };
 }
@@ -42,6 +44,7 @@ describe('资产设置真实状态', () => {
 });
 
 const viewsSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/cognition-assets/views.js'), 'utf8');
+let lastSettingsNS: any = null;
 function settingsHtml(patch: Record<string, unknown> = {}) {
   const { NS } = setup();
   Object.assign(NS.store, {
@@ -54,10 +57,10 @@ function settingsHtml(patch: Record<string, unknown> = {}) {
   const window = {
     CogAssets: NS,
     uiSelect: (options: any) => `<select id="${options.id}"${options.disabled ? ' disabled' : ''}>${options.options.map((item: any) => `<option value='${item.value}'>${item.label}</option>`).join('')}</select>`,
-    uiButton: (options: any) => `<button data-act="${options.attrs?.['data-act'] || ''}"${options.disabled ? ' disabled' : ''}>${options.label}</button>`,
+    uiButton: (options: any) => `<button data-act="${options.attrs?.['data-act'] || ''}"${options.className ? ` class="${options.className}"` : ''}${options.attrs?.['aria-label'] ? ` aria-label="${options.attrs['aria-label']}"` : ''}${options.disabled ? ' disabled' : ''}>${options.label}</button>`,
     uiSwitch: (options: any) => `<button role="switch" data-act="${options.attrs?.['data-act']}"${options.disabled ? ' disabled' : ''}></button>`,
     uiAccordion: (options: any) => options.items.map((item: any) => `<details${item.open ? ' open' : ''}>${item.title}${item.meta || ''}${item.bodyHtml}</details>`).join(''),
-    uiCard: (options: any) => `<section class="${options.className || ''}">${options.bodyHtml || ''}</section>`,
+    uiCard: (options: any) => `<section class="${options.className || ''}"${options.attrs?.id ? ` id="${options.attrs.id}"` : ''}${options.attrs?.tabindex ? ` tabindex="${options.attrs.tabindex}"` : ''}>${options.bodyHtml || ''}</section>`,
     uiStatusPill: (options: any) => `<span role="status">${options.label}</span>`,
     uiProgressBar: (options: any) => `<div role="progressbar" aria-label="${options.ariaLabel}" aria-valuenow="${options.value}" aria-valuemax="${options.max}"></div>`,
   };
@@ -66,8 +69,10 @@ function settingsHtml(patch: Record<string, unknown> = {}) {
   runInNewContext(cardSource, { window });
   runInNewContext(statusSource, { window });
   runInNewContext(formSource, { window });
+  runInNewContext(tabsSource, { window });
   runInNewContext(source, { window });
   runInNewContext(viewsSource.replace('NS.render = render;', 'NS.__settingsView = viewOrganizeSettingsPage; NS.render = render;'), { window });
+  lastSettingsNS = NS;
   return NS.__settingsView();
 }
 
@@ -78,40 +83,47 @@ describe('资产设置只承接夜间发现', () => {
     expect(html).toContain('data-act="nightly-toggle"');
     expect(html).toMatch(/<button[^>]*disabled[^>]*data-act="auto-approval-toggle"/);
     for (const action of ['auto-approval-boundary', 'run-maintenance', 'open-cleanup']) expect(html).not.toContain(`data-act="${action}"`);
-    expect(html).toContain('完整建议进入');
+    expect(html).toContain('查看已处理');
     expect(html).not.toContain('旧记忆迁移');
   });
-  it('高级功能与夜间发现位于同一卡片，自动确认和最近运行保持独立', () => {
+  it('页面顺序为夜间发现、最近运行、自动确认、运行设置，窗口与模型常驻可见', () => {
     const html = settingsHtml({ captureSettings: { enabled: true } });
-    const start = html.indexOf('id="ca-settings-organize"');
-    const end = html.indexOf('</section></div>', start);
-    expect(end).toBeGreaterThan(start);
-    const discovery = html.slice(start, end + '</section></div>'.length);
-    expect(html).toContain('data-act="nightly-scan-now"');
-    const header = discovery.slice(0, discovery.indexOf('class="ca-discovery-row"'));
-    const row = discovery.slice(discovery.indexOf('class="ca-discovery-row"'), discovery.indexOf('data-settings-disclosure="advanced"'));
-    expect(header).toContain('data-act="nightly-toggle"');
-    expect(header).not.toContain('data-act="nightly-scan-now"');
-    expect(row).toContain('class="ca-setting-head-ctl ca-discovery-actions"');
-    expect(row).not.toContain('data-act="nightly-toggle"');
-    expect(row).toContain('data-act="nightly-scan-now"');
-    expect(discovery).toContain('data-settings-disclosure="advanced"');
-    expect(discovery).toContain('夜间发现模型');
-    expect(discovery).toContain('data-window-field="start"');
-    expect(discovery).toContain('data-window-field="end"');
-    expect(discovery).toContain('data-act="nightly-window-save"');
-    expect(discovery).toContain('data-act="nightly-window-reset"');
-    expect(discovery).toContain('<details class="settings-model-form__advanced">');
-    expect(discovery.match(/<details\b/g)).toHaveLength(1);
-    expect(discovery.match(/\bca-setting-card\b/g)).toHaveLength(1);
-    const windowHeader = discovery.slice(discovery.indexOf('class="ca-advanced-window-head"'), discovery.indexOf('class="ca-window-fields"'));
-    const windowFooter = discovery.slice(discovery.indexOf('class="ca-window-footer"'));
-    expect(windowHeader).toContain('当前时区');
-    expect(windowFooter).toContain('下次运行时间待核对');
-    expect(windowFooter).toContain('data-act="nightly-window-reset"');
-    expect(windowFooter).toContain('data-act="nightly-window-save"');
-    expect(html.match(/data-settings-disclosure="advanced"/g)).toHaveLength(1);
-    expect(html.indexOf('自动确认')).toBeLessThan(html.indexOf('最近运行'));
+    const discoveryStart = html.indexOf('id="ca-settings-organize"');
+    const receiptStart = html.indexOf('id="ca-settings-recent-run"');
+    const runStart = html.indexOf('id="ca-settings-run"');
+    expect(discoveryStart).toBeGreaterThan(-1);
+    expect(receiptStart).toBeGreaterThan(discoveryStart);
+    expect(runStart).toBeGreaterThan(receiptStart);
+    expect(html.indexOf('自动确认')).toBeGreaterThan(receiptStart);
+    expect(html.indexOf('自动确认')).toBeLessThan(runStart);
+    const discovery = html.slice(discoveryStart, receiptStart);
+    expect(discovery).toContain('data-act="nightly-toggle"');
+    expect(discovery).toContain('data-act="nightly-scan-now"');
+    expect(discovery).toContain('class="ca-run-strip"');
+    expect(discovery).toContain('data-act="go-run-settings"');
+    expect(discovery).toContain('下次自动运行');
+    expect(discovery).not.toContain('<details');
+    expect(discovery).not.toContain('data-window-field');
+    expect(html).not.toContain('data-settings-disclosure');
+    const run = html.slice(runStart);
+    expect(run).toContain('data-window-field="start"');
+    expect(run).toContain('data-window-field="end"');
+    expect(run).toContain('data-window-duration');
+    expect(run).toContain('data-window-next');
+    expect(run).toContain('模型顺序');
+    expect(run).toContain('data-act="nightly-model-add"');
+    const windowPanel = run.slice(run.indexOf('data-settings-window'), run.indexOf('data-settings-models'));
+    const windowHead = windowPanel.slice(0, windowPanel.indexOf('class="ca-run-lines"'));
+    const windowLines = windowPanel.slice(windowPanel.indexOf('class="ca-run-lines"'));
+    expect(windowHead).toContain('每日运行窗口');
+    expect(windowLines).toContain('每天运行一次');
+    expect(windowLines).toContain('时区跟随系统');
+    expect(windowLines).toContain('共');
+    expect(windowLines).toContain('data-window-duration>4 小时');
+    expect(windowLines).toContain('下次运行');
+    expect(windowLines).toContain('待核对');
+    expect(windowLines).toContain('data-act="nightly-window-reset"');
+    expect(windowLines).toContain('data-act="nightly-window-save"');
     expect(settingsHtml({ captureSettings: { enabled: false } }))
       .toMatch(/<button[^>]*disabled[^>]*data-act="nightly-scan-now"/);
     const running = settingsHtml({
@@ -121,6 +133,7 @@ describe('资产设置只承接夜间发现', () => {
     expect(running).toContain('扫描中…');
     expect(running).toMatch(/<button[^>]*disabled[^>]*data-act="nightly-scan-now"/);
     expect(running).toContain('data-act="nightly-scan-stop"');
+    expect(running).toContain('本轮进度');
   });
   it('模型授权未完成和通道不可用也不展示旧配置提醒', () => {
     for (const captureModel of [{ channel: 'unavailable', authorizationRequired: true }, { channel: 'api', configured: false }, { channel: 'cli', available: false }]) {
@@ -140,6 +153,94 @@ describe('资产设置只承接夜间发现', () => {
     expect(failed).toContain('本轮扫描未全部完成');
     expect(failed).not.toContain('失败 0 场');
     expect(failed).not.toContain('data-act="capture-action"');
+  });
+});
+
+const partialStats = () => ({
+  window: { state: 'completed', nextRunAt: '2026-10-30T02:00:00.000Z' },
+  runtime: { running: false },
+  sweep: {
+    trigger: 'scheduled',
+    phase: 'partial_complete',
+    lastResult: {
+      finishedAt: '2026-10-29T02:03:00Z', scanned: 12, queued: 5, failed: 1, deferred: 0,
+      reconcile: { superseded: 1, related: 1 },
+      inspection: {
+        scanned: 18, findings: 2, duplicate: 1, conflict: 1, outdated: 0, skippedClaimed: 3,
+        coverage: { evaluated: 18, total: 40, remaining: 22, unavailable: 2 },
+      },
+    },
+    receipt: {
+      runId: 'run-1', candidateIds: ['a', 'b', 'c'], items: [
+        { captureId: 'c1', conversationId: 'x', status: 'completed', candidateIds: ['a'] },
+        { captureId: 'c2', conversationId: 'y', status: 'failed', errorCode: 'invalid_model_output', candidateIds: [] },
+        { captureId: 'c3', conversationId: 'z', status: 'pending', candidateIds: [] },
+      ],
+    },
+    stock: { checked: 18, total: 40, proposed: 2, saved: 1, noChange: 15, insufficient: 0, remaining: 21, items: {} },
+  },
+});
+
+describe('最近运行的结果卡', () => {
+  it('部分完成显示横幅、四项指标与页签，概览汇总本轮数字', () => {
+    const html = settingsHtml({ captureSettings: { enabled: true }, captureStats: partialStats() });
+    expect(html).toContain('ca-run-banner is-warn');
+    expect(html).toContain('本轮未全部完成');
+    expect(html).toContain('class="ca-run-metrics"');
+    expect(html).toMatch(/class="ca-run-metric is-bad"><b>1<\/b>/);
+    expect(html).toContain('<b>12</b>');
+    expect(html).toContain('<b>3</b>');
+    expect(html).toContain('data-settings-run-tabs');
+    expect(html).toContain('id="ca-run-tab-overview"');
+    expect(html).toContain('id="ca-run-tab-failures"');
+    expect(html).toContain('形成 3 条建议');
+    expect(html).toContain('存量整理检查 18/40，保存 1 条');
+    expect(html).toContain('取代 1 条旧建议，关联 1 条到已有内容');
+    expect(html).toContain('自动运行');
+    // 时间·触发随标题同行（2026-11-06），不再独占一行 hint。
+    expect(html).toMatch(/class="tt">最近运行<span class="ca-setting-head-hint">[^<]*· (?:手动|自动)运行<\/span><\/div>/);
+    expect(html).toContain('data-act="go-run-review"');
+  });
+  it('页签切换只换面板并保留选择，失败页签给出阶段与原因', () => {
+    settingsHtml({ captureSettings: { enabled: true }, captureStats: partialStats() });
+    lastSettingsNS.assetSettings.setRunTab('failures');
+    const failures = lastSettingsNS.__settingsView();
+    expect(failures).toContain('id="ca-run-pane"');
+    expect(failures).toContain('模型结果无法识别');
+    expect(failures).toContain('对话处理');
+    expect(failures).toContain('已保留建议');
+    expect(failures).not.toContain('本轮没有失败项');
+    lastSettingsNS.assetSettings.setRunTab('existing');
+    const existing = lastSettingsNS.__settingsView();
+    expect(existing).toContain('巡检已有认知与本体');
+    expect(existing).toContain('提出整理');
+    expect(existing).toContain('18/40');
+    lastSettingsNS.assetSettings.setRunTab('conversations');
+    const conversations = lastSettingsNS.__settingsView();
+    expect(conversations).toContain('class="ca-run-table"');
+    expect(conversations).not.toContain('本轮没有逐条对话记录');
+    lastSettingsNS.assetSettings.setRunTab('bogus');
+    expect(lastSettingsNS.__settingsView()).toContain('class="ca-run-table"');
+  });
+  it('从未运行只显示空态与下次运行，运行中不冒充完成结果', () => {
+    const empty = settingsHtml({ captureSettings: { enabled: true } });
+    expect(empty).toContain('还没有运行记录');
+    expect(empty).not.toContain('class="ca-run-metrics"');
+    expect(empty).not.toContain('data-settings-run-tabs');
+    const running = settingsHtml({
+      captureSettings: { enabled: true },
+      captureStats: {
+        sweep: { phase: 'discovery', discovery: { ranges: 3, queued: 1 }, receipt: { runId: 'run-2', candidateIds: [], items: [
+          { captureId: 'c1', conversationId: 'x', status: 'pending', candidateIds: [] },
+          { captureId: 'c2', conversationId: 'y', status: 'pending', candidateIds: [] },
+        ] } },
+        runtime: { running: true, startedAt: '2026-10-29T02:00:00Z' },
+        window: { state: 'running' },
+      },
+    });
+    expect(running).toContain('本轮进度');
+    expect(running).toContain('正在检查对话 0/2');
+    expect(running).not.toContain('data-settings-run-tabs');
   });
 });
 
@@ -219,7 +320,7 @@ describe('设置不再触发旧迁移或自动批准流程', () => {
 describe('自动确认设置的真实页面闭环', () => {
   it('默认关闭；只有运行能力明确支持才允许开启，读取失败不伪装为已开启', () => {
     const defaultHtml = settingsHtml();
-    expect(defaultHtml).toContain('默认关闭');
+    expect(defaultHtml).toContain('依据完整、范围明确');
     expect(defaultHtml).toMatch(/aria-checked="false"[^>]*data-act="auto-approval-toggle"/);
     expect(defaultHtml).not.toMatch(/disabled[^>]*data-act="auto-approval-toggle"/);
     const missing = settingsHtml({ captureCapabilities: null, captureSettings: { autoApproval: true } });
@@ -229,8 +330,8 @@ describe('自动确认设置的真实页面闭环', () => {
     expect(error).toMatch(/aria-checked="false"[^>]*disabled[^>]*data-act="auto-approval-toggle"/);
     const enabled = settingsHtml({ captureSettings: { autoApproval: true } });
     expect(enabled).toMatch(/aria-checked="true"[^>]*data-act="auto-approval-toggle"/);
-    expect(enabled).toContain('其余完整建议留在');
-    expect(enabled).toContain('T 结构变化、冲突和不确定内容仍需人工确认');
+    expect(enabled).toContain('可在“已处理”里修改、暂停或撤回');
+    expect(enabled).toContain('结构变化、冲突和不确定内容仍需你确认');
   });
   it('开启需说明确认范围，取消不写入，重复点击不会产生两次授权', async () => {
     const { NS, policy, confirmUser, updateCaptureSettings } = setup();
@@ -325,11 +426,11 @@ describe('夜间模型条目与选择弹窗', () => {
     await h.policy.loadModels();
     const html = h.policy.modelControls();
     expect(h.invoke).toHaveBeenCalledExactlyOnceWith('recall.captures.settings.get', {});
-    expect(html).toContain('跟随系统首个模型');
-    expect(html).toContain('One · First');
-    expect(html).not.toContain('One · Second');
-    expect(html).not.toContain('Expired · Gone');
-    expect(html.indexOf('添加模型')).toBeGreaterThan(html.indexOf('One · First'));
+    expect(html).toContain('拖动模型行可调整顺序');
+    expect(html).toContain('<strong>First</strong>');
+    expect(html).not.toContain('<strong>Second</strong>');
+    expect(html).not.toContain('<strong>Gone</strong>');
+    expect(html.indexOf('添加模型')).toBeGreaterThan(html.indexOf('<strong>First</strong>'));
     expect(html).not.toContain('<select');
     expect(html).not.toContain('设为首选模型');
     for (const act of ['nightly-model-up', 'nightly-model-down', 'nightly-model-remove', 'nightly-model-reset']) expect(html).not.toContain(`data-act="${act}"`);
@@ -349,9 +450,9 @@ describe('夜间模型条目与选择弹窗', () => {
   it('模型列表与添加入口分开，弹窗以独立模型名、供应商和右侧状态呈现', async () => {
     const h = modelSettingsHarness(); await h.policy.loadModels();
     const html = h.policy.modelControls();
-    expect(html.match(/class="ui-resource-card[^"\n]*ca-nightly-model-card"/g)).toHaveLength(1);
-    expect(html).toContain('class="ca-nightly-model-name">First</strong>');
-    expect(html).toContain('class="ca-nightly-model-provider">One</span>');
+    expect(html.match(/class="ca-model-row"/g)).toHaveLength(1);
+    expect(html).toContain('<strong>First</strong>');
+    expect(html).toContain('<span>One</span>');
     expect(html).toContain('data-act="nightly-model-add"');
     const opened = h.open();
     expect(h.modal().options.size).toBe('md');
@@ -388,11 +489,11 @@ describe('夜间模型条目与选择弹窗', () => {
   it('默认随系统首个变化，自定义顺序不被刷新覆盖，并可排序、删除及恢复', async () => {
     const h = modelSettingsHarness(); await h.policy.loadModels();
     h.setModels([...h.models()].reverse()); await h.policy.loadModels(true);
-    expect(h.policy.modelControls()).toContain('Expired · Gone');
+    expect(h.policy.modelControls()).toContain('<strong>Gone</strong>');
     expect(h.policy.modelControls()).toContain('系统配置中已停用或移除');
     h.NS.store.captureSettings.modelCandidates = [{ provider: 'cp:one', model: 'first' }, { provider: 'cp:one', model: 'second' }];
     await h.policy.loadModels(true);
-    expect(h.policy.modelControls()).not.toContain('Expired · Gone');
+    expect(h.policy.modelControls()).not.toContain('<strong>Gone</strong>');
     const html = h.policy.modelControls();
     expect(html).toContain('aria-label="拖动或按上下键调整 Second 顺序"');
     expect(html).not.toContain('data-act="nightly-model-up"');
@@ -405,7 +506,7 @@ describe('夜间模型条目与选择弹窗', () => {
     expect(h.NS.store.captureSettings.modelCandidates[0].model).toBe('first');
     await h.act('nightly-model-remove', 0); await h.act('nightly-model-remove', 0);
     expect(h.NS.store.captureSettings.modelCandidates).toEqual([]);
-    expect(h.policy.modelControls()).toContain('Expired · Gone');
+    expect(h.policy.modelControls()).toContain('<strong>Gone</strong>');
   });
   it('拖动排序使用目标位置，保存失败和列表变化保留原顺序', async () => {
     const h = modelSettingsHarness(); await h.policy.loadModels();
@@ -470,15 +571,15 @@ describe('夜间模型条目与选择弹窗', () => {
     h.events['cogseed:model-entries-changed']();
     h.NS.store.route.name = 'settings';
     await h.policy.loadModels();
-    expect(h.policy.modelControls()).toContain('One · Second');
-    expect(h.policy.modelControls()).not.toContain('One · First');
+    expect(h.policy.modelControls()).toContain('<strong>Second</strong>');
+    expect(h.policy.modelControls()).not.toContain('<strong>First</strong>');
     let finishOld: (value: unknown) => void;
     h.invoke.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }) as any);
     const old = h.policy.loadModels(true);
     await h.policy.loadModels(true);
     finishOld!({ ok: true, modelSelection: { configured: [{ provider: 'stale', model: 'old', label: 'Stale', available: true }] } });
     await old;
-    expect(h.policy.modelControls()).toContain('One · Second');
+    expect(h.policy.modelControls()).toContain('<strong>Second</strong>');
     expect(h.policy.modelControls()).not.toContain('Stale');
   });
   it('无配置时保留真实运行来源，模型列表未确认保存不得冒充成功', async () => {

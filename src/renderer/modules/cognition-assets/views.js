@@ -839,6 +839,12 @@
     if (kind === 'asset_version_selected') {
       return T('cognition.proof_sentence_version_selected', '{when}，选用 v{n} 为在用版本', { when, n: String(refs.version || '') });
     }
+    if (kind === 'old_content_applied') {
+      return T('cognition.proof_sentence_old_content_applied', '{when}，这条内容参与了旧内容整理', { when });
+    }
+    if (kind === 'old_content_undone') {
+      return T('cognition.proof_sentence_old_content_undone', '{when}，这次旧内容整理被撤销', { when });
+    }
     return T('cognition.proof_sentence_unknown', '{when}，{title}', { when, title: proofEventTitle(proof) });
   }
 
@@ -1814,8 +1820,10 @@
         ? btn(T('cognition.asset_restore_deleted', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true, disabled: !verifiedAsset || !restoreAllowed || !!S.assetsError })
         : switchable ? `${btn(T('cognition.prototype_edit', '修改'), 'edit-asset', { id: asset.id, primary: true, disabled: !mutationReady })}${mutationReady ? btn(T('cognition.prototype_merge', '版本归组'), 'library-show-merge', { id: asset.id }) : ''}` : '';
       const rightActions = switchable && !S.assetsError ? `${btn(T(statusOn ? 'cognition.asset_pause' : 'cognition.asset_resume', statusOn ? '暂停使用' : '恢复使用'), 'asset-action', { id: asset.id, data: { action: statusOn ? 'pause' : 'resume' } })}${btn(T('cognition.asset_delete', '删除'), 'asset-action', { id: asset.id, data: { action: 'delete' }, className: 'd' })}` : '';
+      const expanded = options.presentation === 'expanded';
+      const factsHtml = `<div class="ca-library-facts">${window.uiTag({ label: contentCategoryLabel(asset) })}${chip(!verifiedAsset ? T('cognition.asset_status_unknown', '状态未知') : statusKind === 'active' ? T('cognition.library_active', '启用') : statusKind === 'paused' ? T('cognition.library_paused', '暂停') : statusKind === 'deleted' ? T('cognition.library_deleted', '已删除') : statusKind === 'archived' ? (asset.mergedInto ? T('cognition.library_merged', '已归并') : T('cognition.library_archived', '归档')) : statusKind === 'revoked' ? T('cognition.asset_status.revoked', '已撤回') : statusKind === 'purged' ? T('cognition.asset_status.purged', '已清除') : T('cognition.asset_status_unknown', '状态未知'), 'line')}<span class="note">${esc(T(switchable ? 'cognition.prototype_active_version' : 'cognition.library_saved_version', switchable ? '在用 v{n}' : '保存版本 v{n}', { n: String(asset.activeVersion || asset.version || T('cognition.activity_version_unknown', '版本未记录')) }))}</span></div>`;
       return window.uiCard({ tag: 'div', readonly: true, className: 'ca-asset-page ca-library-asset-detail', attrs: { 'data-library-asset-id': asset.id }, bodyHtml: `
-        <header class="ca-library-detail-head ca-detail-head"><div class="ca-library-detail-title"><h2>${esc(asset.title || asset.id)}</h2>${detailTitleActions({ expandAct: options.presentation === 'expanded' ? '' : 'library-expand', closeAct: options.presentation === 'expanded' ? 'library-expand-close' : 'library-close' })}</div><div class="ca-library-facts">${window.uiTag({ label: contentCategoryLabel(asset) })}${chip(!verifiedAsset ? T('cognition.asset_status_unknown', '状态未知') : statusKind === 'active' ? T('cognition.library_active', '启用') : statusKind === 'paused' ? T('cognition.library_paused', '暂停') : statusKind === 'deleted' ? T('cognition.library_deleted', '已删除') : statusKind === 'archived' ? (asset.mergedInto ? T('cognition.library_merged', '已归并') : T('cognition.library_archived', '归档')) : statusKind === 'revoked' ? T('cognition.asset_status.revoked', '已撤回') : statusKind === 'purged' ? T('cognition.asset_status.purged', '已清除') : T('cognition.asset_status_unknown', '状态未知'), 'line')}<span class="note">${esc(T(switchable ? 'cognition.prototype_active_version' : 'cognition.library_saved_version', switchable ? '在用 v{n}' : '保存版本 v{n}', { n: String(asset.activeVersion || asset.version || T('cognition.activity_version_unknown', '版本未记录')) }))}</span></div></header>
+        <header class="ca-library-detail-head ca-detail-head"><div class="ca-library-detail-title"><h2>${esc(asset.title || asset.id)}</h2>${expanded ? factsHtml : ''}${detailTitleActions({ expandAct: expanded ? '' : 'library-expand', closeAct: expanded ? 'library-expand-close' : 'library-close' })}</div>${expanded ? '' : factsHtml}</header>
         <div class="ca-library-detail-body ca-detail-body">
           ${topControl && statusKind !== 'deleted' ? topControl : ''}${recommendWarn}${!verifiedAsset ? `<p class="note" role="alert">${esc(T('cognition.library_invalid_readonly', '这条记录的类型或状态无法核对，未计入正式库；当前仅可查看原文与记录。'))}</p>` : ''}${S.assetsError ? `<p class="note" role="alert">${esc(T('cognition.library_stale_readonly', '当前显示上次读取的内容；请刷新核对后再修改。'))}</p>` : ''}
           ${cognitionContentFields(asset, { part: 'body' })}${typeHint}
@@ -2899,6 +2907,12 @@
     const stateUnknown = Boolean(S.captureModelError) || !S.captureSettings;
     const nightlyOn = settings.enabled !== false;
     const discovery = NS.assetSettings.discoveryStatus(S.captureStats, S.captureStatsError);
+    const shortStamp = (value) => {
+      const date = value ? new Date(value) : null;
+      if (!date || Number.isNaN(date.getTime())) return '';
+      const pad = n => String(n).padStart(2, '0');
+      return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    };
     const budget = !S.captureStatsError && S.captureStats?.budget;
     const budgetNote = budget?.recorded ? T('cognition.settings_model_usage', '夜间窗口 {night}：模型调用 {calls} 次，其中已有内容整理 {stockCalls} 次。已报告 {tokens} token，{unknown} 次用量未知。', {
       night: budget.windowKey, calls: String(budget.calls), stockCalls: String(budget.stock?.calls || 0), tokens: String(budget.reportedTokens),
@@ -2907,7 +2921,7 @@
     const discoveryLabels = {
       stopped: T('cognition.scan_phase_stopped', '本次停止'),
       budget_held: T('cognition.scan_phase_budget_held', '上次因旧额度限制暂停'),
-      failure_held: T('cognition.scan_phase_failure_held', '模型异常，扫描暂停'),
+      failure_held: T('cognition.settings_discovery_paused', '失败暂停'),
       unknown: T('cognition.settings_discovery_unknown', '状态暂时无法读取'),
       never: T('cognition.settings_discovery_never', '尚无运行记录'),
       running: T('cognition.settings_discovery_running', '运行中'),
@@ -2947,15 +2961,22 @@
           ? T('cognition.settings_discovery_in_progress', '扫描对话与已有认知、本体，形成完整建议。')
           : discovery.state === 'stopped' ? discoveryLabels[discovery.state] : T('cognition.settings_discovery_waiting', '暂无扫描记录。夜间运行，或点击“立即扫描”。');
     const switchHtml = (label, checked, act, disabled) => window.uiSwitch({ label, checked, disabled, attrs: { 'data-act': act } });
+    const nightlyHeld = ['failure_held', 'failed'].includes(discovery.state);
     const discoveryPill = window.uiStatusPill({
+      className: discovery.state === 'running' ? 'ca-pill-run' : '',
       label: discovery.state === 'running' ? T('cognition.settings_discovery_running', '运行中')
         : stateUnknown ? T('cognition.settings_policy_unknown', '状态未知')
-          : nightlyOn ? T('cognition.settings_discovery_allowed', '允许') : T('cognition.settings_status_off', '已暂停'),
-      tone: discovery.state === 'running' ? 'attention' : !stateUnknown && nightlyOn ? 'success' : 'neutral',
+          : !nightlyOn ? T('cognition.settings_status_off', '已暂停')
+            : nightlyHeld ? T('cognition.settings_discovery_paused', '暂停') : T('cognition.settings_discovery_allowed', '允许'),
+      tone: discovery.state === 'running' ? 'attention' : nightlyHeld && !stateUnknown && nightlyOn ? 'critical'
+        : !stateUnknown && nightlyOn ? 'success' : 'neutral',
     });
     const runtimePill = window.uiStatusPill({
+      className: discovery.state === 'running' ? 'ca-pill-run' : '',
       label: discoveryLabels[discovery.state],
-      tone: ['failed', 'partial_complete', 'running', 'failure_held', 'missed', 'error'].includes(discovery.state) ? 'attention' : discovery.state === 'completed' ? 'success' : 'neutral',
+      tone: ['failed', 'failure_held', 'error'].includes(discovery.state) ? 'critical'
+        : ['partial_complete', 'running', 'missed'].includes(discovery.state) ? 'attention'
+          : discovery.state === 'completed' ? 'success' : 'neutral',
     });
     const scanButton = btn(discovery.state === 'running'
       ? T('cognition.settings_discovery_scanning', '扫描中…') : T('cognition.settings_discovery_scan_now', '立即扫描'),
@@ -2985,16 +3006,8 @@
       duplicate: String(inspection.duplicate || 0), conflict: String(inspection.conflict || 0),
       outdated: String(inspection.outdated || 0), skipped: String(inspection.skippedClaimed || 0),
     }) : '';
-    const stockProgress = stock ? T('cognition.settings_stock_progress', '存量：检查 {checked}/{total} 条，建议 {proposed} 组，保存结果 {saved} 条，无需修改 {noChange}，依据不足 {insufficient}，失败 {failed}，剩余 {remaining}。', {
-      ...stock, failed: stock.failed || 0,
-    }) : '';
     const receipt = sweep?.receipt;
     const items = Array.isArray(receipt?.items) ? receipt.items : [];
-    const countItems = status => items.filter(item => item.status === status).length;
-    const itemSummary = items.length ? T('cognition.settings_run_item_counts', '对话：完成 {completed}，失败 {failed}，待处理 {pending}，跳过 {skipped}，部分完成 {partial}。', {
-      completed: String(countItems('completed')), failed: String(countItems('failed')),
-      pending: String(countItems('pending')), skipped: String(countItems('skipped')), partial: String(countItems('partial')),
-    }) : '';
     const reasons = {
       source_removed: T('cognition.settings_run_reason_removed', '来源已移除'),
       source_paused: T('cognition.settings_run_reason_paused', '来源已暂停'),
@@ -3027,61 +3040,222 @@
     };
     const itemTitle = item => (S.captures || []).find(row => String(row.id) === String(item.captureId))?.conversationTitle
       || S.conversationTitles?.[item.conversationId] || T('cognition.settings_run_conversation', '对话');
-    const failures = items.filter(item => item.status === 'failed' || item.status === 'partial').map(item => {
-      const groups = Array.isArray(item.failures) ? item.failures : [];
-      const groupDetails = groups.map(group => {
-        const number = Number.isInteger(group.candidateIndex) && group.candidateIndex >= 0 ? String(group.candidateIndex + 1) : '?';
-        const stage = group.stage === 'uncertainty' ? T('cognition.settings_run_group_uncertainty', '不确定内容核对') : T('cognition.settings_run_group_grounding', '依据核对');
-        const reason = reasons[group.reason] || T('cognition.settings_run_reason_support', '建议依据尚未核对，未能形成完整建议；请核对相关内容后重新扫描。');
-        return `<li>${esc(T('cognition.settings_run_group_failure', '第 {number} 项 · {stage}：{reason}', { number, stage, reason }))}</li>`;
-      }).join('');
-      const saved = Array.isArray(item.candidateIds) ? item.candidateIds.length : 0;
-      const savedText = saved ? `<p>${esc(T('cognition.settings_run_saved_suggestions', '已保留 {count} 条建议，可在“查看本轮建议”中核对。', { count: String(saved) }))}</p>` : '';
-      return `<li>${esc(itemTitle(item))}：${esc(itemStates[item.status])}${savedText}${groupDetails ? `<ul>${groupDetails}</ul>` : ` · ${esc(reasons[item.errorCode] || T('cognition.settings_run_reason_unknown', '处理失败，原因待核对'))}`}</li>`;
-    }).join('');
-    const conversationItems = items.map(item => `<li>${esc(itemTitle(item))}：${esc(itemStates[item.status] || itemStates.pending)}</li>`).join('');
     const coverage = inspection.coverage;
     const coverageText = coverage ? T('cognition.settings_inspection_coverage', '旧内容：累计检查 {evaluated}/{total} 条，剩余 {remaining} 条，其中 {unavailable} 条不可读取；相似或矛盾内容仍可能有遗漏。', {
       evaluated: String(coverage.evaluated), total: String(coverage.total), remaining: String(coverage.remaining), unavailable: String(coverage.unavailable || 0),
     }) : '';
-    const unavailableIds = new Set(Array.isArray(inspection.unavailableAssetIds) ? inspection.unavailableAssetIds.map(String) : []);
-    const inspectionNames = (ids) => (Array.isArray(ids) ? ids : []).filter(id => !unavailableIds.has(String(id))).map(id => {
-      const asset = !S.assetsError && (S.assets || []).find(row => String(row.id) === String(id));
-      return `<li>${esc(asset?.title || T('cognition.settings_inspection_name_unavailable', '名称暂不可读取'))}</li>`;
-    }).join('');
-    const inspectedNames = inspectionNames(inspection.evaluatedAssetIds);
-    const coveredNames = inspectionNames(inspection.coveredAssetIds);
-    const pendingNames = inspectionNames(inspection.pendingAssetIds);
-    const inspectionDetails = inspectedNames || coveredNames || pendingNames || unavailableIds.size
-      ? `<details class="details"><summary>${esc(T('cognition.settings_inspection_details', '查看检查范围'))}</summary>${coveredNames ? `<p>${esc(T('cognition.settings_inspection_covered', '累计已检查'))}</p><ul>${coveredNames}</ul>` : ''}${inspectedNames ? `<p>${esc(T('cognition.settings_inspection_this_batch', '本次检查'))}</p><ul>${inspectedNames}</ul>` : ''}${pendingNames ? `<p>${esc(T('cognition.settings_inspection_pending', '尚未检查'))}</p><ul>${pendingNames}</ul>` : ''}${unavailableIds.size ? `<p class="note">${esc(T('cognition.settings_inspection_unavailable_count', '{count} 条不可读取，未显示名称。', { count: String(unavailableIds.size) }))}</p>` : ''}</details>` : '';
     const inspectionError = inspection.error ? T(inspection.error === 'inspection_baseline_stale' ? 'cognition.settings_inspection_changed' : 'cognition.settings_inspection_failed',
       inspection.error === 'inspection_baseline_stale' ? '检查期间内容发生变化，点击“立即扫描”继续。' : '旧内容检查失败，点击“立即扫描”重试。') : '';
     const reconcileError = sweep?.reconcile?.error ? T('cognition.settings_reconcile_failed', '结果汇总未完成，点击“立即扫描”继续。') : '';
-    const stockItems = Object.entries(stock?.items || {}).map(([key, item]) => {
+    const windowState = !S.captureStatsError && S.captureStats?.window || {};
+    const runningNow = discovery.state === 'running';
+    const processedItems = items.filter(item => item.status !== 'pending').length;
+    const runningSub = items.length
+      ? T('cognition.settings_run_strip_checking', '正在检查对话 {done}/{total}', { done: String(processedItems), total: String(items.length) })
+      : phaseLabels[sweep?.phase] || '';
+    const windowSub = T('cognition.settings_run_strip_window', '窗口 {start}–{end} · 应用需保持运行', {
+      start: settings.nightlyStart || '02:00', end: settings.nightlyEnd || '06:00',
+    });
+    const nextValue = runningNow
+      ? T('cognition.settings_run_strip_started', '本轮 {time} 开始', { time: S.captureStats?.runtime?.startedAt ? fmtDate(S.captureStats.runtime.startedAt) : '' })
+      : NS.assetSettings.nextRunValue(windowState);
+    const failedItems = items.filter(item => item.status === 'failed').length;
+    const pendingItems = items.filter(item => item.status === 'pending').length;
+    const lastParts = [
+      failedItems ? T('cognition.settings_run_last_failed', '失败 {count} 项', { count: String(failedItems) }) : '',
+      pendingItems ? T('cognition.settings_run_last_pending', '待处理 {count} 项', { count: String(pendingItems) }) : '',
+    ].filter(Boolean);
+    const lastLine = runningNow
+      ? T('cognition.settings_run_last_running', '本轮进行中；可在结束前停止。')
+      : discovery.at
+        ? `${T('cognition.settings_run_last', '上次 {time} {state}', { time: shortStamp(discovery.at), state: discoveryLabels[discovery.state] || '' })}${lastParts.length ? `：${lastParts.join('，')}` : ''}`
+        : T('cognition.settings_discovery_never', '尚无运行记录');
+    const viewRunSettings = window.uiButton({
+      label: T('cognition.settings_view_run_settings', '查看运行设置'), role: 'ghost', size: 'sm',
+      attrs: { 'data-act': 'go-run-settings' },
+    });
+    const viewReceipt = receipt || sweep?.lastResult
+      ? window.uiButton({
+        label: T('cognition.settings_view_receipt', '查看结果 ↓'), role: 'ghost', className: 'ca-link-btn', size: 'sm',
+        attrs: { 'data-act': 'go-receipt' },
+      })
+      : '';
+    const nightlyBody = `<div class="ca-run-strip"><div class="ca-run-strip-main"><span class="ca-run-strip-k">${esc(runningNow ? T('cognition.settings_run_strip_progress', '本轮进度') : T('cognition.settings_run_strip_next', '下次自动运行'))}</span><strong class="ca-run-strip-value">${esc(nextValue)}</strong><span class="ca-run-strip-sub">${esc(runningNow ? runningSub : windowSub)}</span></div><div class="ca-run-strip-actions">${runningNow ? `${scanButton}${btn(T('cognition.settings_scan_stop', '停止本次'), 'nightly-scan-stop', { small: true })}` : `${viewRunSettings}${scanButton}`}</div></div><div class="ca-run-last"><span>${esc(lastLine)}</span>${viewReceipt}</div>`;
+    const lastResult = sweep?.lastResult;
+    const candidateCount = new Set(Array.isArray(receipt?.candidateIds) ? receipt.candidateIds : []).size;
+    const runTrigger = sweep?.trigger === 'manual'
+      ? T('cognition.settings_run_trigger_manual', '手动运行')
+      : T('cognition.settings_run_trigger_scheduled', '自动运行');
+    const receiptHint = lastResult?.finishedAt
+      ? `${shortStamp(lastResult.finishedAt)} · ${runTrigger}`
+      : runningNow && S.captureStats?.runtime?.startedAt
+        ? `${shortStamp(S.captureStats.runtime.startedAt)} · ${runTrigger}`
+        : discovery.at ? shortStamp(discovery.at) : '';
+    const itemStatePill = state => window.uiStatusPill({
+      label: state,
+      tone: state === itemStates.completed ? 'success' : state === itemStates.failed ? 'critical'
+        : state === itemStates.pending ? 'attention' : 'neutral',
+    });
+    const countText = count => T('cognition.settings_run_count_items', '{count} 条', { count: String(count) });
+    const groupText = count => T('cognition.settings_run_count_groups', '{count} 组', { count: String(count) });
+    const metricCell = (value, key, fallback, bad) => `<div class="ca-run-metric${bad ? ' is-bad' : ''}"><b>${esc(value == null ? '—' : String(value))}</b><span>${esc(T(key, fallback))}</span></div>`;
+    const metricsHtml = lastResult ? `<div class="ca-run-metrics">${metricCell(lastResult.scanned, 'cognition.settings_run_metric_conversations', '检查对话')}${metricCell(candidateCount, 'cognition.settings_run_metric_suggestions', '形成建议')}${metricCell(stock?.saved || 0, 'cognition.settings_run_metric_existing', '整理已有内容')}${metricCell(lastResult.failed || 0, 'cognition.settings_run_metric_failed', '失败', Number(lastResult.failed) > 0)}</div>` : '';
+    const bannerStates = ['failure_held', 'failed', 'partial_complete', 'missed', 'budget_held'];
+    const banner = bannerStates.includes(discovery.state)
+      ? `<div class="ca-run-banner${['failure_held', 'failed'].includes(discovery.state) ? ' is-danger' : ' is-warn'}"><strong>${esc(discoveryLabels[discovery.state] || '')}</strong><span>${esc(discoveryNote)}</span></div>`
+      : '';
+    const runTab = NS.assetSettings.getRunTab();
+    const tabsHtml = typeof window.uiTabs === 'function' ? window.uiTabs({
+      ariaLabel: T('cognition.settings_recent_run', '最近运行'),
+      value: runTab,
+      className: 'ca-run-tabs',
+      attrs: { 'data-settings-run-tabs': '' },
+      items: [
+        { label: T('cognition.settings_run_tab_overview', '概览'), value: 'overview', attrs: { id: 'ca-run-tab-overview' } },
+        { label: T('cognition.settings_run_tab_conversations', '对话'), value: 'conversations', count: items.length, attrs: { id: 'ca-run-tab-conversations' } },
+        { label: T('cognition.settings_run_tab_existing', '已有内容'), value: 'existing', attrs: { id: 'ca-run-tab-existing' } },
+        { label: T('cognition.settings_run_tab_failures', '失败'), value: 'failures', count: failedItems, attrs: { id: 'ca-run-tab-failures' } },
+      ],
+    }) : '';
+    const tableHtml = (heads, rows, emptyText) => rows
+      ? `<table class="ca-run-table"><thead><tr>${heads.map(head => `<th>${esc(head)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`
+      : `<p class="note ca-run-empty-line">${esc(emptyText)}</p>`;
+    const conversationRows = items.map(item => {
+      const saved = Array.isArray(item.candidateIds) ? item.candidateIds.length : 0;
+      return `<tr><td>${esc(itemTitle(item))}</td><td>${itemStatePill(itemStates[item.status] || itemStates.pending)}</td><td>${saved ? esc(countText(saved)) : '—'}</td></tr>`;
+    }).join('');
+    const existingRows = Object.entries(stock?.items || {}).map(([key, item]) => {
       const asset = key.startsWith('asset-') ? (S.assets || []).find(row => String(row.id) === key.slice(6)) : null;
       const ontology = key.startsWith('ontology-') ? S.ontologySnapshot?.records?.[key.slice(9)] : null;
       const title = asset?.title || ontology?.name || T('cognition.settings_run_existing_item', '已有内容');
-      const state = itemStates[item.status] || itemStates.pending;
-      const reason = item.status === 'failed' ? reasons[item.errorCode] || T('cognition.settings_run_reason_unknown', '处理失败，原因待核对') : '';
-      return `<li>${esc(title)}：${esc(state)}${reason ? ` · ${esc(reason)}` : ''}</li>`;
+      // A failed stock item keeps its reason next to the state; a bare red pill
+      // would leave the user unable to act on it.
+      const reason = item.status === 'failed'
+        ? reasons[item.errorCode] || T('cognition.settings_run_reason_unknown', '处理失败，原因待核对') : '';
+      return `<tr><td>${esc(title)}</td><td>${itemStatePill(itemStates[item.status] || itemStates.pending)}</td><td>${reason ? esc(reason) : '—'}</td></tr>`;
     }).join('');
-    const progressHtml = `${sweep?.phase && !['stopped', 'partial_complete', 'budget_held', 'failure_held', 'missed', 'scheduled'].includes(discovery.state) ? `<p role="status">${esc(phaseLabels[sweep.phase] || '')}</p>` : ''}${discoveryProgress ? `<p class="note">${esc(discoveryProgress)}</p>` : ''}${itemSummary ? `<p class="note">${esc(itemSummary)}</p>` : ''}${failures ? `<ul>${failures}</ul>` : ''}${conversationItems ? `<details class="details"><summary>${esc(T('cognition.settings_run_conversation_details', '查看对话处理结果'))}</summary><ul>${conversationItems}</ul></details>` : ''}${inspectionProgress ? `<p class="note">${esc(inspectionProgress)}</p>` : ''}${inspectionError ? `<p role="alert">${esc(inspectionError)}</p>` : ''}${coverageText ? `<p class="note">${esc(coverageText)}</p>` : ''}${inspectionDetails}${stockProgress ? `<p class="note">${esc(stockProgress)}</p>` : ''}${stockItems ? `<details class="details"><summary>${esc(T('cognition.settings_run_existing_details', '查看已有内容处理结果'))}</summary><ul>${stockItems}</ul></details>` : ''}${reconcileError ? `<p role="alert">${esc(reconcileError)}</p>` : ''}`;
+    const failureRows = items.filter(item => item.status === 'failed' || item.status === 'partial').map(item => {
+      const groups = Array.isArray(item.failures) ? item.failures : [];
+      const stageNames = groups.map(group => group.stage === 'uncertainty'
+        ? T('cognition.settings_run_group_uncertainty', '不确定内容核对')
+        : T('cognition.settings_run_group_grounding', '依据核对'));
+      const stage = stageNames.filter((name, index) => stageNames.indexOf(name) === index).join('、')
+        || T('cognition.settings_run_stage_conversation', '对话处理');
+      const reason = groups.length
+        ? groups.map(group => reasons[group.reason] || T('cognition.settings_run_reason_support', '建议依据尚未核对，未能形成完整建议；请核对相关内容后重新扫描。'))
+          .filter((text, index, list) => list.indexOf(text) === index).join('；')
+        : reasons[item.errorCode] || T('cognition.settings_run_reason_unknown', '处理失败，原因待核对');
+      const saved = Array.isArray(item.candidateIds) ? item.candidateIds.length : 0;
+      return `<tr><td>${esc(itemTitle(item))}</td><td>${esc(stage)}</td><td>${esc(reason)}</td><td>${saved ? esc(countText(saved)) : '—'}</td></tr>`;
+    }).join('');
+    const kv = pairs => `<dl class="ca-run-kv">${pairs.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join('')}</dl>`;
+    const existingHtml = `${inspection.scanned || stock ? `<div class="ca-run-kv-grid">
+      ${inspection.scanned ? `<div class="ca-run-kv-box"><h5>${esc(T('cognition.settings_run_kv_inspected', '巡检已有认知与本体'))}</h5>${kv([
+        [T('cognition.settings_run_kv_checked', '检查'), countText(Number(inspection.scanned) || 0)],
+        [T('cognition.settings_run_kv_found', '发现'), groupText(Number(inspection.findings) || 0)],
+        [T('cognition.settings_run_kv_skipped', '跳过已由本轮处理'), countText(Number(inspection.skippedClaimed) || 0)],
+      ])}</div>` : ''}
+      ${stock ? `<div class="ca-run-kv-box"><h5>${esc(T('cognition.settings_run_kv_stock', '存量整理'))}</h5>${kv([
+        [T('cognition.settings_run_kv_checked', '检查'), `${Number(stock.checked) || 0}/${Number(stock.total) || 0}`],
+        [T('cognition.settings_run_kv_proposed', '提出整理'), groupText(Number(stock.proposed) || 0)],
+        [T('cognition.settings_run_kv_saved', '保存'), countText(Number(stock.saved) || 0)],
+        [T('cognition.settings_run_kv_no_change', '无需修改'), countText(Number(stock.noChange) || 0)],
+        [T('cognition.settings_run_kv_insufficient', '依据不足'), countText(Number(stock.insufficient) || 0)],
+        [T('cognition.settings_run_kv_remaining', '剩余'), countText(Number(stock.remaining) || 0)],
+      ])}</div>` : ''}
+    </div>` : ''}${tableHtml([
+      T('cognition.settings_run_col_existing', '已有内容'),
+      T('cognition.settings_run_col_result', '结果'),
+      T('cognition.settings_run_col_reason', '原因'),
+    ], existingRows, T('cognition.settings_run_no_existing', '本轮没有处理已有内容。'))}`;
+    const reconcileCounts = lastResult?.reconcile;
+    const overviewHtml = `<div class="ca-run-overview">
+      <div class="ca-run-block"><span class="ca-run-block-k">${esc(T('cognition.settings_run_overview_new', '新对话'))}</span><p>${esc([
+        discoveryProgress || T('cognition.settings_run_overview_none', '本轮没有新对话。'),
+        candidateCount ? T('cognition.settings_run_overview_suggestions', '形成 {count} 条建议。', { count: String(candidateCount) }) : '',
+      ].filter(Boolean).join(' '))}</p></div>
+      <div class="ca-run-block"><span class="ca-run-block-k">${esc(T('cognition.settings_run_overview_existing', '已有内容'))}</span><p>${esc([
+        inspectionProgress,
+        stock ? T('cognition.settings_run_overview_stock', '存量整理检查 {checked}/{total}，保存 {saved} 条。', {
+          checked: String(stock.checked || 0), total: String(stock.total || 0), saved: String(stock.saved || 0),
+        }) : '',
+      ].filter(Boolean).join(' ') || T('cognition.settings_run_no_existing', '本轮没有处理已有内容。'))}</p>${inspectionError ? `<p class="ca-run-empty-line" role="alert">${esc(inspectionError)}</p>` : ''}</div>
+      <div class="ca-run-block"><span class="ca-run-block-k">${esc(T('cognition.settings_run_overview_coverage', '覆盖'))}</span><p>${esc(coverageText || T('cognition.settings_run_overview_no_coverage', '本轮没有旧内容覆盖变化。'))}</p>${coverage && Number(coverage.total) > 0 && Number(coverage.evaluated) > 0 ? window.uiProgressBar({
+        ariaLabel: T('cognition.settings_run_overview_coverage', '覆盖'),
+        value: Math.min(100, Math.round((Number(coverage.evaluated) / Number(coverage.total)) * 100)),
+        max: 100,
+      }) : ''}</div>
+      <div class="ca-run-block"><span class="ca-run-block-k">${esc(T('cognition.settings_run_overview_result', '结果汇总'))}</span><p>${esc(reconcileError || (reconcileCounts
+        ? T('cognition.settings_run_overview_reconcile', '取代 {superseded} 条旧建议，关联 {related} 条到已有内容。', {
+          superseded: String(reconcileCounts.superseded || 0), related: String(reconcileCounts.related || 0),
+        })
+        : T('cognition.settings_run_overview_no_result', '本轮没有需要汇总的变化。')))}</p></div>
+    </div>`;
+    const paneHtml = runTab === 'conversations'
+      ? tableHtml([
+        T('cognition.settings_run_col_conversation', '对话'),
+        T('cognition.settings_run_col_result', '结果'),
+        T('cognition.settings_run_col_suggestions', '建议'),
+      ], conversationRows, T('cognition.settings_run_no_items', '本轮没有逐条对话记录。'))
+      : runTab === 'existing' ? existingHtml
+        : runTab === 'failures'
+          ? `${tableHtml([
+            T('cognition.settings_run_col_conversation', '对话'),
+            T('cognition.settings_run_col_stage', '阶段'),
+            T('cognition.settings_run_col_reason', '原因'),
+            T('cognition.settings_run_col_saved', '已保留建议'),
+          ], failureRows, T('cognition.settings_run_no_failures', '本轮没有失败项。'))}${failureRows ? `<p class="note ca-run-empty-line">${esc(T('cognition.settings_run_failures_note', '失败项会在下次运行继续；已形成的建议不会重复生成。'))}</p>` : ''}`
+          : overviewHtml;
+    const receiptActions = `<div class="actions">${btn(T('cognition.settings_view_run_suggestions', '查看本轮建议'), 'go-run-review', { small: true, primary: true, disabled: !receipt?.runId })}${btn(T('cognition.settings_view_all_suggestions', '查看全部建议'), 'go-review', { small: true, className: 'ca-link-btn' })}</div>`;
+    const emptyNext = NS.assetSettings.nextRunParts(windowState);
+    const emptyNextText = emptyNext.time
+      ? T('cognition.settings_run_empty_next', '下次自动运行：{time}（窗口 {start}–{end}）', {
+        time: `${emptyNext.label} ${emptyNext.time}`,
+        start: settings.nightlyStart || '02:00', end: settings.nightlyEnd || '06:00',
+      })
+      : '';
+    const emptyHtml = `<div class="ca-run-empty"><span class="dot"></span><div><p>${esc(T('cognition.settings_run_empty', '还没有运行记录。首次运行后，这里会列出检查了多少对话、形成了哪些建议、失败原因和模型用量。'))}</p>${emptyNextText ? `<p class="note">${esc(emptyNextText)}</p>` : ''}<p class="note">${esc(T('cognition.settings_run_empty_note', '你现在也可以点上方“立即扫描”先跑一轮。'))}</p></div></div>`;
+    const runPhaseOrder = ['inventory', 'discovery', 'inspection', 'reconcile'];
+    const runPhaseLabels = {
+      inventory: T('cognition.settings_run_phase_inventory', '清点'),
+      discovery: T('cognition.settings_run_phase_discovery', '发现'),
+      inspection: T('cognition.settings_run_phase_inspection', '巡检'),
+      reconcile: T('cognition.settings_run_phase_reconcile', '汇总'),
+    };
+    const runPhaseAlias = { organizing: 'inspection', checking: 'reconcile', complete: 'reconcile' };
+    const runPhase = runPhaseAlias[String(sweep?.phase || '')] || String(sweep?.phase || '');
+    const runPhaseIndex = runPhaseOrder.indexOf(runPhase);
+    const runPhaseChips = runPhaseOrder.map((phase, index) => `<span class="ca-run-phase${runPhaseIndex >= 0 && index < runPhaseIndex ? ' is-done' : index === runPhaseIndex ? ' is-now' : ''}">${esc(runPhaseLabels[phase])}</span>`).join('');
+    const runPhaseText = runPhaseLabels[runPhase] || phaseLabels[runPhase] || '';
+    const runningBody = `<div class="ca-run-progress"><div class="ca-run-progress-top"><span>${esc(T('cognition.settings_run_progress_phase', '正在检查对话（{phase}）', { phase: runPhaseText }))}</span>${items.length ? `<span>${processedItems} / ${items.length}</span>` : ''}</div>${items.length ? window.uiProgressBar({
+      ariaLabel: T('cognition.settings_run_progress_label', '本轮进度'), value: processedItems, max: items.length,
+    }) : ''}<div class="ca-run-phases">${runPhaseChips}</div></div>${budgetNote ? `<p class="note">${esc(budgetNote)}</p>` : ''}${receiptActions}`;
+    const receiptBody = runningNow
+      ? runningBody
+      : !lastResult
+        ? `${banner}${banner ? '' : emptyHtml}`
+        : `${banner}${metricsHtml}${tabsHtml}<div class="ca-run-pane" id="ca-run-pane">${paneHtml}</div><div class="ca-run-foot"><span class="ca-run-usage">${esc(budgetNote || '')}</span>${receiptActions}</div>`;
     const runtimeCard = NS.assetSettings.settingCard({
+      id: 'ca-settings-recent-run',
       title: T('cognition.settings_recent_run', '最近运行'),
-      hint: discovery.at ? fmtDate(discovery.at) : '',
+      hint: receiptHint,
+      hintInline: true,
       controls: runtimePill,
-      bodyHtml: `${progressHtml}<p class="note">${esc(discoveryNote)}</p>${budgetNote ? `<p class="note">${esc(budgetNote)}</p>` : ''}<div class="actions">${btn(T('cognition.settings_view_run_suggestions', '查看本轮建议'), 'go-run-review', { small: true, disabled: !receipt?.runId })}${btn(T('cognition.settings_view_all_suggestions', '查看全部建议'), 'go-review', { small: true })}</div>`,
+      bodyHtml: receiptBody,
     });
     return `<section class="ca-settings-page"><div class="ca-settings-shell">
       <div class="ca-settings-cards" aria-label="${esc(T('cognition.settings_policy_label', '认知资产设置'))}">
-        <div id="ca-settings-organize" tabindex="-1">${NS.assetSettings.settingCard({
+        ${NS.assetSettings.settingCard({
+          id: 'ca-settings-organize',
           title: T('cognition.settings_discovery_title', '夜间发现'),
           hint: T('cognition.settings_discovery_hint', '检查新对话与新增消息，巡检已有认知与本体，包括内容合并与拆分。'),
           controls: `${discoveryPill}${switchHtml(T('cognition.settings_discovery_switch', '允许夜间发现'), nightlyOn, 'nightly-toggle', stateUnknown)}`,
-          bodyHtml: `<div class="ca-discovery-row"><div class="ca-discovery-copy"><p class="note">${esc(T('cognition.settings_nightly_window', '自动：{start}–{end}；手动“立即扫描”可随时处理。应用需运行，会消耗模型额度。窗口内启动，错过不补扫。', { start: settings.nightlyStart || '02:00', end: settings.nightlyEnd || '06:00' }))}</p><p class="note">${esc(T('cognition.settings_organization_hint', '没有新对话时，巡检已有认知与本体，给出整理、冲突或建议复核的提醒。建议经你确认后保存；连续 3 个模型处理任务失败时停止本轮，保留进度。'))}</p></div><div class="ca-setting-head-ctl ca-discovery-actions">${scanButton}${discovery.state === 'running' ? btn(T('cognition.settings_scan_stop', '停止本次'), 'nightly-scan-stop', { small: true }) : ''}</div></div>${NS.assetSettings.advancedControls()}`,
-        })}</div>
-        ${NS.assetSettings.autoApprovalControls()}
+          bodyHtml: nightlyBody,
+        })}
         ${runtimeCard}
+        ${NS.assetSettings.autoApprovalControls()}
+        ${NS.assetSettings.runSettingsCard({ id: 'ca-settings-run' })}
+        ${NS.assetSettings.relatedOverflowSection()}
       </div>
     </div></section>`;
   }
@@ -3610,7 +3784,7 @@
     const pageDescriptions = {
       overview: ['cognition.library_intro', '查找已保存的内容，理解依据，再决定如何使用。'],
       activity: ['cognition.activity_page_hint', '集中浏览建议，逐项核对后处理。'],
-      settings: ['cognition.settings_nightly_confirmation_flow', '从对话中发现新认知，整理已有认知与本体；在认知生长查看建议和处理结果。'],
+      settings: ['cognition.settings_nightly_confirmation_flow', '控制夜间发现、自动确认和运行结果。'],
     };
     const description = !route.captureId && pageDescriptions[route.name];
     const pageHeaderHtml = typeof window.uiPageHeader === 'function'
@@ -3618,9 +3792,9 @@
       : '';
     const bannerSlot = document.getElementById('ca-banner-slot');
     const main = document.getElementById('ca-scroll');
-    const settingsDisclosures = route.name === 'settings' ? NS.assetSettings.captureDisclosures(main) : null;
     const oldSearch = route.name === 'activity' && !route.candidateId ? main?.querySelector?.('#ca-activity-search') : null;
     const searchSelection = oldSearch && oldSearch === document.activeElement ? { start: oldSearch.selectionStart, end: oldSearch.selectionEnd } : null;
+    const focusedRunTab = route.name === 'settings' ? main?.querySelector?.('[data-ui-tab]:focus')?.id || '' : '';
     // 树页/本体页是「整页高度」型：滚动容器不收滚动、改由页面自己占满
     //（原型 .tree-stage/.onto-page 都是整屏高度，不随内容滚）。
     const stageScroll = route.name === 'tree' || route.name === 'ontology';
@@ -3662,7 +3836,8 @@
     }
     const scrollRoot = document.getElementById('ca-scroll');
     styleDetailDisclosures(scrollRoot);
-    if (settingsDisclosures) NS.assetSettings.restoreDisclosures(scrollRoot, settingsDisclosures);
+    if (scrollRoot && typeof window.hydrateUiTabs === 'function') window.hydrateUiTabs(scrollRoot);
+    if (focusedRunTab) scrollRoot?.querySelector?.(`#${focusedRunTab}`)?.focus?.({ preventScroll: true });
     const newSearch = searchSelection ? scrollRoot?.querySelector?.('#ca-activity-search') : null;
     if (newSearch) {
       newSearch.focus();

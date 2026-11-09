@@ -19,7 +19,9 @@ import * as path from 'node:path';
 // 独立工作区 + 运行时变体：src/main 模块（paths.ts）需要这些变量，且本
 // 脚本绝不触碰任何真实 CogSeed 实例的状态。必须在动态 import 之前设置。
 process.env.COGSEED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-adapter-test-'));
-process.env.COGSEED_RUNTIME_VARIANT = 'p3394-adapter-test-' + Date.now().toString(36);
+// 独立变体树：runtime-paths 现在校验变体名，隔离改为重定向整棵变体树。
+process.env.COGSEED_VARIANT_BASE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-adapter-test-variants-'));
+process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 
 interface AdapterModule {
   default?: never;

@@ -7,6 +7,7 @@ type DialogResult = string | { choice: string; mode?: string };
 
 function loadHarness(dialogResult: DialogResult, invokeImpl?: (channel: string, payload: any) => Promise<any>) {
   let pushHandler: ((info: any) => void) | null = null;
+  const pushHandlers = new Map<string, (info: any) => void>();
   const dialogArgs: any[] = [];
   const invokeCalls: Array<{ channel: string; payload: any }> = [];
   const monitorEvent = vi.fn();
@@ -17,6 +18,7 @@ function loadHarness(dialogResult: DialogResult, invokeImpl?: (channel: string, 
     console,
     setTimeout,
     clearTimeout,
+    AbortController,
     Promise,
     String,
     Array,
@@ -70,6 +72,7 @@ function loadHarness(dialogResult: DialogResult, invokeImpl?: (channel: string, 
           return { handled: true };
         }),
         onPushEvent: vi.fn((name: string, cb: (info: any) => void) => {
+          pushHandlers.set(name, cb);
           if (name === 'bash:permission') pushHandler = cb;
         }),
       },
@@ -81,7 +84,8 @@ function loadHarness(dialogResult: DialogResult, invokeImpl?: (channel: string, 
   vm.runInContext(code, context, { filename: 'bash_permission.js' });
   if (!pushHandler) throw new Error('bash:permission handler was not registered');
 
-  return { context, pushHandler, dialogArgs, invokeCalls, monitorEvent, warn };
+  return { context, pushHandler, dialogArgs, invokeCalls, monitorEvent, warn,
+    close: (info: any) => pushHandlers.get('bash:permission-closed')?.(info) };
 }
 
 async function flush() {
@@ -91,6 +95,53 @@ async function flush() {
 }
 
 describe('renderer bash permission prompt', () => {
+  it('cancels active and queued approvals, drains another conversation, and ignores late allow', async () => {
+    const h = loadHarness('deny');
+    let lateAllow!: (value: any) => void;
+    h.context.window.__cogseedBashPermissionDialogForTest = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { lateAllow = resolve; }))
+      .mockResolvedValue({ choice: 'allow_once' });
+    h.context.window.chatStreamDismissBashPermission = vi.fn();
+    h.pushHandler({ request_id: 'active', cid: 'c1' });
+    h.pushHandler({ request_id: 'queued', cid: 'c1' });
+    h.pushHandler({ request_id: 'other', cid: 'c2' });
+    await flush();
+    h.close({ request_id: 'queued', cid: 'c1' });
+    h.close({ request_id: 'active', cid: 'c1' });
+    await flush();
+    expect(h.invokeCalls.filter(c => c.channel === 'bash.permission_response')).toEqual([
+      { channel: 'bash.permission_response', payload: { request_id: 'other', decision: 'allow_once' } },
+    ]);
+    expect(h.context.window.__cogseedBashPermissionDialogForTest).toHaveBeenCalledTimes(2);
+    lateAllow({ choice: 'allow_run', mode: 'all_files_auto' });
+    await flush();
+    expect(h.invokeCalls.some(c => c.channel === 'permissions.setLocalExecMode')).toBe(false);
+    expect(h.invokeCalls.filter(c => c.channel === 'bash.permission_response')).toHaveLength(1);
+    expect(h.context.window.chatStreamDismissBashPermission).toHaveBeenCalledWith('active');
+    expect(h.context.window.chatStreamDismissBashPermission).toHaveBeenCalledWith('queued');
+  });
+
+  it('cancellation during permission-mode lookup releases the queue before lookup resolves', async () => {
+    let resolveMode!: (value: any) => void;
+    let lookups = 0;
+    const h = loadHarness('deny', async channel => {
+      if (channel === 'permissions.getLocalExec' && ++lookups === 1) {
+        return new Promise(resolve => { resolveMode = resolve; });
+      }
+      return { mode: 'all_files_approval' };
+    });
+    h.pushHandler({ request_id: 'lookup', cid: 'c1' });
+    h.pushHandler({ request_id: 'next', cid: 'c2' });
+    await flush();
+    h.close({ request_id: 'lookup', cid: 'c1' });
+    await flush();
+    expect(h.invokeCalls.filter(c => c.channel === 'bash.permission_response').map(c => c.payload.request_id))
+      .toEqual(['next']);
+    resolveMode({ mode: 'all_files_approval' });
+    await flush();
+    expect(h.dialogArgs).toHaveLength(1);
+  });
+
   it('reuses the shared chevron icon in the permission level trigger', () => {
     const code = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/bash_permission.js'), 'utf8');
 

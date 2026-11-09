@@ -17,6 +17,8 @@ interface Harness {
   candidates: () => any[];
   events: any[];
   badge: () => number;
+  badgeMount: { textContent: string; hidden: boolean; innerHTML: string };
+  createdElements: ReturnType<typeof vi.fn>;
   toasts: any[];
   /** 模块注册的定时刷新回调（在线状态会变，缓存不能停在启动那一刻）。 */
   intervals: Array<() => void>;
@@ -54,23 +56,30 @@ function createHarness(
   const toasts: any[] = [];
   const intervals: Array<() => void> = [];
   let badgeNode: any = null;
+  const badgeMount = { textContent: '', hidden: true, innerHTML: '', addEventListener: vi.fn() };
   const badgeHost: BadgeHost = {
     children: [],
     appendChild(node: any) { badgeNode = node; this.children.push(node); },
     querySelector: () => badgeNode,
   };
+  const createdElements = vi.fn(() => {
+    const node: any = {
+      className: '',
+      innerHTML: '',
+      attrs: {} as Record<string, string>,
+      setAttribute(k: string, v: string) { this.attrs[k] = v; },
+      remove() { badgeNode = null; },
+    };
+    return node;
+  });
   const doc: Record<string, any> = {
-    getElementById: (id: string) => (options.badgeHost && id === 'contacts-btn' ? badgeHost : null),
-    createElement: () => {
-      const node: any = {
-        className: '',
-        innerHTML: '',
-        attrs: {} as Record<string, string>,
-        setAttribute(k: string, v: string) { this.attrs[k] = v; },
-        remove() { badgeNode = null; },
-      };
-      return node;
+    getElementById: (id: string) => {
+      if (!options.badgeHost) return null;
+      if (id === 'contacts-btn') return badgeHost;
+      if (id === 'contacts-nav-badge') return badgeMount;
+      return null;
     },
+    createElement: createdElements,
   };
   sandbox.document = doc;
   sandbox.setInterval = (fn: () => void) => { intervals.push(fn); return intervals.length; };
@@ -81,11 +90,9 @@ function createHarness(
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'contacts.js' });
   return {
-    badge: () => {
-      if (!badgeNode) return 0;
-      const match = String(badgeNode.innerHTML || '').match(/>(\d+)</);
-      return match ? Number(match[1]) : 0;
-    },
+    badge: () => badgeMount.hidden ? 0 : Number(badgeMount.textContent),
+    badgeMount,
+    createdElements,
     toasts,
     intervals,
     api: sandbox.window.contacts,
@@ -180,15 +187,22 @@ describe('contacts bridge › mutations refresh the cache', () => {
     expect(result).toEqual({ registered: true, discoverable: true, is_contact: false });
   });
 
-describe('contacts bridge › sidebar badge (AC-01)', () => {
-  it('adds a count badge when a request is pending and clears it when not', () => {
+describe('contacts bridge › shell-owned rail badge (AC-01)', () => {
+  it('updates the shared mount using text and hidden state, retaining it when the count clears', async () => {
     const h = createHarness({ 'contacts.requests': { ok: true, requests: [{ id: 'r1', state: 'pending' }] } }, {
       badgeHost: true,
     });
+    await flush();
     h.api.updateNavBadge(2);
     expect(h.badge()).toBe(2);
+    expect(h.badgeMount).toMatchObject({ textContent: '2', hidden: false, innerHTML: '' });
     h.api.updateNavBadge(0);
     expect(h.badge()).toBe(0);
+    expect(h.badgeMount).toMatchObject({ textContent: '', hidden: true, innerHTML: '' });
+    h.api.updateNavBadge(3);
+    expect(h.badge()).toBe(3);
+    expect(h.badgeMount).toMatchObject({ textContent: '3', hidden: false, innerHTML: '' });
+    expect(h.createdElements).not.toHaveBeenCalled();
   });
 
   it('toasts only when the pending count grows', () => {

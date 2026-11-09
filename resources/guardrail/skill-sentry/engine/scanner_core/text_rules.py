@@ -212,10 +212,13 @@ def scan_regex_rules(docs: list[tuple[str, str]], rules: dict[str, Any]) -> list
                     if rx.search(line):
                         ctx = _ctx(rel, line, lineno)
                         declared = spec.get("severity", "medium")
+                        category = spec.get("category", group)
                         finding = make_finding(
                             spec.get("sr") or group_sr.get(group, "SR-03"), spec["id"],
-                            severity_for(declared, ctx),
-                            spec.get("category", group), rel, lineno,
+                            # 行为类类别不随目录降权（context.BEHAVIOUR_CATEGORIES）：
+                            # 「换个目录」不改变 curl|sh 在执行什么。
+                            severity_for(declared, ctx, category=category),
+                            category, rel, lineno,
                             spec.get("description") or f"命中规则 {spec['id']}（{group}）",
                             spec.get("remediation", ""),
                             context=ctx, original_severity=declared,
@@ -265,6 +268,10 @@ def build_profile(files: set[str], docs: list[tuple[str, str]], rules: dict[str,
     has_lock = any(any(lf.lower() in name for name in files) for lf in rules.get("lockfiles", []))
     has_pin = any(m in text for m in ("==", ">=", "~=", "@sha256", "@v"))
     latest_hits = [p for p in rules.get("supply_chain_latest", []) if p.lower() in text]
+    # 带 `.gitmodules` 的技能把一部分内容留在了另一个仓库：包里的文件是完整的，
+    # 但实际运行需要的代码不在包里。这在供应链上比「写了 @latest」更硬——后者
+    # 至少指向一个可解析的坐标，前者连内容都不在。
+    has_git_submodule = any(name.endswith(".gitmodules") for name in files)
     return {
         "has_permissions": _contains(text, PERMISSION_TOKENS),
         "has_audit": _contains(text, AUDIT_TOKENS),
@@ -272,7 +279,8 @@ def build_profile(files: set[str], docs: list[tuple[str, str]], rules: dict[str,
         "has_side_effects": _contains(text, SIDE_EFFECT_TOKENS),
         "has_injection_defense": _contains(text, INJECTION_DEFENSE_TOKENS),
         "network_used": _contains(text, ["http://", "https://", "requests.", "fetch(", "axios", "webhook", "socket"]),
-        "supply_pinned": bool(has_lock or has_pin or not latest_hits),
+        "supply_pinned": bool((has_lock or has_pin or not latest_hits) and not has_git_submodule),
+        "has_git_submodule": has_git_submodule,
         "latest_hits": latest_hits,
     }
 
@@ -350,9 +358,19 @@ def evaluate_sr_items(profile: dict[str, Any], findings: list[dict[str, Any]]) -
          "required": False,
          "detail": "无副作用或已声明 HITL" if (not profile["has_side_effects"]) or profile["has_hitl"] else "发现写/删/发送等副作用但缺少人工确认声明",
          "recommendation": "对高风险写操作添加 approve_required/HITL 机制"},
-        {"id": "SR-06", "name": "供应链可复现性", "passed": profile["supply_pinned"], "required": False,
-         "detail": "依赖已 pin 或未发现 latest/main" if profile["supply_pinned"] else "发现非固定依赖: " + ", ".join(profile["latest_hits"][:6]),
-         "recommendation": "固定 tag/commit/digest，提交 lockfile，避免运行时拉 latest"},
+        # `required` 只对 `.gitmodules` 为真：普通技能「没写版本号」是成熟度问题
+        # （SR-02/05/08 同一档，见函数头），而「内容不在包里、来自另一个仓库的
+        # 当前提交」是有证据的供应链缺陷——扫描器看到的东西和用户实际运行的
+        # 东西不是同一份。把它当成 CAUTION 而不是阻断：子模块在开发仓库里是
+        # 合法工具，用户需要看到理由并自己决定。
+        {"id": "SR-06", "name": "供应链可复现性", "passed": profile["supply_pinned"],
+         "required": bool(profile.get("has_git_submodule")),
+         "detail": ("依赖已 pin 或未发现 latest/main" if profile["supply_pinned"]
+                    else ("含 .gitmodules：部分内容来自另一个仓库的当前提交"
+                          if profile.get("has_git_submodule")
+                          else "发现非固定依赖: " + ", ".join(profile["latest_hits"][:6]))),
+         "recommendation": "固定 tag/commit/digest，提交 lockfile，避免运行时拉 latest；"
+                           "移除 .gitmodules 或把子模块内容以固定版本随包分发"},
         {"id": "SR-07", "name": "提示注入与系统信息保护", "passed": not has_injection_payload, "required": False,
          "detail": "未发现提示注入载荷" if not has_injection_payload else "发现提示注入/系统提示抽取载荷",
          "recommendation": "移除注入载荷；补充提示注入防护与工具输出隔离策略"},

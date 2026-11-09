@@ -221,7 +221,7 @@ function resetWorld(candidate: Record<string, unknown> = updateCandidate()) {
   // NS.isRouteLoading）。真机进候选详情前这些区块早已读过；夹具里没有真实
   // reload 的副作用可蹭，逐用例显式标成已读，否则渲染只有骨架、断言全变空断言。
   const blockStatus = Object.fromEntries(
-    ['assets', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox', 'ontology']
+    ['assets', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox', 'ontology', 'oldContentPlans']
       .map((name) => [name, { loaded: true, loading: false }]),
   );
   Object.assign(ns.store, {
@@ -244,6 +244,15 @@ function resetWorld(candidate: Record<string, unknown> = updateCandidate()) {
 
 function renderDetail(): string {
   const ns = ensureModule();
+  // A previous test's async reload can re-enter the loading state after
+  // resetWorld(). Mark every route block loaded at render time without dropping
+  // unrelated block state (notably oldContentPlans) from the fixture.
+  ns.store.loaded = true;
+  ns.store.loading = false;
+  ns.store.blockStatus = ns.store.blockStatus || {};
+  for (const name of ['assets', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox', 'ontology', 'oldContentPlans']) {
+    ns.store.blockStatus[name] = { loaded: true, loading: false };
+  }
   domRoot.innerHTML = '';
   (ns.render as () => void)();
   return domRoot.innerHTML;
@@ -272,6 +281,34 @@ describe('确认更新撞版本冲突的处置（T022 / US-702）', () => {
     await ns.actions.adoptCandidate('rcand-u', undefined);
     return ns;
   }
+
+  it('无旧内容方案的本体建议走本体确认入口，不送进资产两阶段保存', async () => {
+    const candidate = updateCandidate({ proposalTarget: 'ontology' });
+    const ns = resetWorld(candidate);
+    const handoff = { status: 'integrated', commandId: 'ontology-command', recordIds: ['record-1'], ontologyRevision: 2 };
+    invokeImpl = (channel, payload) => channel === 'recall.candidates.promote'
+      ? { ok: true, candidate: { ...candidate, status: 'integrated', ontologyHandoff: handoff }, ontologyHandoff: handoff }
+      : defaultInvoke(candidate)(channel, payload);
+    await ns.actions.adoptCandidate('rcand-u', undefined);
+    expect(callsOf('recall.candidates.promote')).toHaveLength(1);
+    expect(callsOf('recall.candidates.finalize')).toHaveLength(0);
+    expect(ns.store.candidates[0].status).toBe('integrated');
+    expect(TOASTS.map(t => t.message)).toContain(zh['cognition.ontology_proposal_saved']);
+  });
+
+  it('有旧内容方案仍走两阶段保存，并保留嵌套的版本冲突，不发成功反馈', async () => {
+    const candidate = updateCandidate({ oldContentPlanId: 'ocp-1' });
+    const ns = resetWorld(candidate);
+    invokeImpl = (channel, payload) => channel === 'recall.candidates.finalize'
+      ? { ok: false, phase: 'new_failed', candidate, error: { code: 'version_conflict', message: 'version changed', versionConflict: rawConflict } }
+      : defaultInvoke(candidate)(channel, payload);
+    await ns.actions.adoptCandidate('rcand-u', undefined);
+    expect(callsOf('recall.candidates.promote')).toHaveLength(0);
+    expect(callsOf('recall.candidates.finalize').map(call => call.payload)).toEqual([{ candidateId: 'rcand-u', mode: 'old_then_new' }]);
+    expect(ns.store.candidateVersionConflict).toMatchObject({ currentVersion: '3' });
+    expect(ns.store.candidates[0].status).toBe('pending_review');
+    expect(TOASTS.map(t => t.message)).not.toContain(zh['cognition.candidate_promoted']);
+  });
 
   it('冲突：如实说"这次没有生效"，不静默、不假装成功、候选仍待确认', async () => {
     const ns = await promoteIntoConflict();
@@ -556,11 +593,11 @@ describe('冲突链路的源码级不变量（T028）', () => {
     const adopt = coreFn('async adoptCandidate');
     // 冲突状态还挂在这个候选上 → 这次点击就是"看过新差异后再确认"。
     expect(adopt).toContain("const confirmBaselineVersion = String((conflictState && conflictState.currentVersion) || '');");
-    expect(adopt).toContain('result = await promote(false, confirmBaselineVersion);');
+    expect(adopt).toContain("result = await finalize('old_then_new', { confirmBaselineVersion });");
     // 相似资产那条分流（promote(true)）不重锚：它是另一条路，主进程对 create
     // 落点也没有版本比对面。
     expect(adopt).toContain('result = await promote(true);');
-    expect(adopt).toContain('...(baseline ? { confirmBaselineVersion: baseline } : {})');
+    expect(adopt).toContain('...(options.confirmBaselineVersion ? { confirmBaselineVersion: options.confirmBaselineVersion } : {})');
   });
 
   it('冲突落状态只读不写：重拉资产与版本链，零写通道', () => {
@@ -573,7 +610,8 @@ describe('冲突链路的源码级不变量（T028）', () => {
   });
 
   it('结构化冲突不被 IPC 客户端吞掉：versionConflict 随错误上抛', () => {
-    expect(coreSource).toContain('if (result.versionConflict) error.versionConflict = result.versionConflict;');
+    expect(coreSource).toContain('const versionConflict = result.versionConflict || (detail && detail.versionConflict);');
+    expect(coreSource).toContain('if (versionConflict) error.versionConflict = versionConflict;');
   });
 
   it('冲突块只用共享控件与既有折叠件，不新增裸控件/内联 SVG', () => {
@@ -587,6 +625,139 @@ describe('冲突链路的源码级不变量（T028）', () => {
     expect(block).not.toContain('<button');
     expect(block).not.toContain('<svg');
     expect(block).not.toContain('document.');
+  });
+});
+
+/* ────────────── ④ 文案种子（T009 验收点：四语齐） ────────────── */
+
+describe('旧内容候选的 finalize 错误契约', () => {
+  const oldContentCandidate = (over: Record<string, unknown> = {}) => updateCandidate({
+    oldContentPlanId: 'plan-1',
+    ...over,
+  });
+
+  function withFinalize(
+    reply: (payload: Record<string, any>) => unknown,
+    candidate: Record<string, unknown>,
+  ) {
+    const ns = resetWorld(candidate);
+    ns.store.candidates = [candidate];
+    invokeImpl = (channel, payload) => {
+      if (channel === 'recall.candidates.finalize') return reply(payload);
+      return defaultInvoke(candidate)(channel, payload);
+    };
+    return ns;
+  }
+
+  it('finalize 版本冲突使用扁平信封，并保留重锚基线', async () => {
+    const candidate = oldContentCandidate();
+    const ns = withFinalize(() => ({
+      ok: false,
+      phase: 'new_failed',
+      code: 'recall_candidate_version_conflict',
+      message: '这条资产在你确认之前被改过',
+      versionConflict: rawConflict,
+      candidate,
+    }), candidate);
+    await ns.actions.adoptCandidate('rcand-u', undefined);
+    expect(ns.store.candidateVersionConflict).toMatchObject({ currentVersion: '3' });
+    expect(ALERTS.join(' ')).not.toContain('[object Object]');
+
+    CALLS.length = 0;
+    invokeImpl = (channel, payload) => {
+      if (channel === 'recall.candidates.finalize') {
+        const promoted = { ...candidate, status: 'confirmed', promotedAssetId: 'aa-t1' };
+        return {
+          ok: true,
+          phase: 'new_saved',
+          candidate: promoted,
+          asset: { ...targetAsset, version: '4', activeVersion: '4' },
+          promotion: { candidate: promoted, asset: { ...targetAsset, version: '4', activeVersion: '4' } },
+        };
+      }
+      return defaultInvoke(candidate)(channel, payload);
+    };
+    await ns.actions.adoptCandidate('rcand-u', undefined);
+    expect(callsOf('recall.candidates.finalize')[0].payload.confirmBaselineVersion).toBe('3');
+  });
+
+  it('finalize plan_needs_review 给出中文原因，不显示 [object Object]', async () => {
+    const candidate = oldContentCandidate();
+    const ns = withFinalize(() => ({
+      ok: false,
+      phase: 'old_failed',
+      code: 'plan_needs_review',
+      message: 'old-content plan is not ready',
+      candidate,
+    }), candidate);
+    let thrown: any = null;
+    try {
+      await ns.actions.adoptCandidate('rcand-u', undefined);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown?.code).toBe('plan_needs_review');
+    const message = ns.recallErrorText(thrown);
+    expect(message).toBe(T('cognition.candidate_error_old_content_pending',
+      '旧内容整理方案还有需要你核对的内容；先打开方案处理，再保存这条建议。'));
+    expect(message).not.toContain('[object Object]');
+  });
+
+  it('finalize 相似资产打开三选一，存为新条目时带 forceCreateSimilar', async () => {
+    const candidate = oldContentCandidate();
+    let round = 0;
+    let secondPayload: Record<string, any> | null = null;
+    const ns = withFinalize((payload) => {
+      round += 1;
+      if (round === 1) {
+        return {
+          ok: false,
+          phase: 'new_failed',
+          code: 'recall_candidate_similar_asset',
+          message: 'similar asset aa-sim (score 0.9300)',
+          candidate,
+        };
+      }
+      secondPayload = payload;
+      const promoted = { ...candidate, status: 'confirmed', promotedAssetId: 'aa-t1' };
+      return {
+        ok: true,
+        phase: 'new_saved',
+        candidate: promoted,
+        asset: { ...targetAsset, version: '2', activeVersion: '2' },
+        promotion: { candidate: promoted, asset: { ...targetAsset, version: '2', activeVersion: '2' } },
+      };
+    }, candidate);
+    (globalScope.window as Record<string, any>).uiChoice = async () => 'create';
+    await ns.actions.adoptCandidate('rcand-u', undefined);
+    expect(secondPayload).toMatchObject({ forceCreateSimilar: true });
+  });
+
+  it('高风险候选重试前重新确认，取消时不发 finalize', async () => {
+    const candidate = oldContentCandidate({ status: 'failed', risk: 'high' });
+    const ns = resetWorld(candidate);
+    ns.store.candidates = [candidate];
+    let confirmCalls = 0;
+    (globalScope.window as Record<string, any>).uiConfirm = async () => {
+      confirmCalls += 1;
+      return false;
+    };
+    let finalizeCalls = 0;
+    invokeImpl = (channel, payload) => {
+      if (channel === 'recall.candidates.finalize') {
+        finalizeCalls += 1;
+        return { ok: true };
+      }
+      return defaultInvoke(candidate)(channel, payload);
+    };
+    await ns.actions.retryOldContentNew('rcand-u');
+    expect(confirmCalls).toBe(1);
+    expect(finalizeCalls).toBe(0);
+
+    (globalScope.window as Record<string, any>).uiConfirm = async () => true;
+    await ns.actions.retryOldContentNew('rcand-u');
+    expect(finalizeCalls).toBe(1);
+    expect(callsOf('recall.candidates.finalize')[0].payload.riskAcknowledged).toBe(true);
   });
 });
 

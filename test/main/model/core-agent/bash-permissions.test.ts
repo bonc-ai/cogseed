@@ -80,13 +80,49 @@ describe('bash-permissions', () => {
 
     // a previously-granted run scope would be cleared too: grant then cancel
     const p2 = ask();
-    bp.respond(pushed[1].payload.request_id, 'allow_run');
+    bp.respond(pushed.filter(p => p.channel === 'bash:permission')[1].payload.request_id, 'allow_run');
     await p2;
     bp.cancelForCid('c1');
     const p3 = ask();
-    expect(pushed).toHaveLength(3); // re-prompted, run grant was dropped
-    bp.respond(pushed[2].payload.request_id, 'deny');
+    const requests = pushed.filter(p => p.channel === 'bash:permission');
+    expect(requests).toHaveLength(3); // re-prompted, run grant was dropped
+    bp.respond(requests[2].payload.request_id, 'deny');
     await p3;
+  });
+
+  it('closes only cancelled conversation prompts and ignores late grants', async () => {
+    vi.useFakeTimers();
+    const onWaiting = vi.fn();
+    const first = ask({ onWaiting });
+    const second = ask();
+    const other = ask({ cid: 'c2' });
+    const ids = pushed.map(p => p.payload.request_id);
+    bp.cancelForCid('c1');
+    expect(await first).toBe('deny');
+    expect(await second).toBe('deny');
+    expect(pushed.filter(p => p.channel === 'bash:permission-closed').map(p => p.payload))
+      .toEqual(ids.slice(0, 2).map(request_id => ({ request_id, cid: 'c1' })));
+    expect(bp.respond(ids[0], 'allow_run')).toBe(false);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(onWaiting).toHaveBeenCalledTimes(1);
+    expect(bp.respond(ids[2], 'allow_once')).toBe(true);
+    expect(await other).toBe('allow_once');
+    const fresh = ask();
+    const last = pushed.at(-1)!;
+    expect(last.channel).toBe('bash:permission');
+    bp.respond(last.payload.request_id, 'deny');
+    await fresh;
+  });
+
+  it('a broken close notification cannot interrupt denial or remaining cleanup', async () => {
+    const first = ask();
+    const second = ask();
+    const ids = pushed.map(p => p.payload.request_id);
+    bp._setBroadcastForTest(() => { throw new Error('closed renderer'); });
+    expect(() => bp.cancelForCid('c1')).not.toThrow();
+    expect(await first).toBe('deny');
+    expect(await second).toBe('deny');
+    for (const id of ids) expect(bp.respond(id, 'allow_run')).toBe(false);
   });
 
   it('does not auto-deny while waiting for user action', async () => {

@@ -14,6 +14,7 @@ const resolveCogSeedAgentExecutionContext = vi.fn(async () => ({
 }));
 const readGroupChatRun = vi.fn(async () => null as any);
 const recordRunDispatch = vi.fn(async () => null);
+const requestActorReport = vi.fn(async () => ({ status: 'running', actor_report_requested: true }));
 
 vi.mock('../../../../src/main/features/cogseed_backend/runtime-controller', () => ({
   cogseedRuntimeController: { startCogSeedTask, cancelCogSeedTask },
@@ -38,6 +39,7 @@ vi.mock('../../../../src/main/features/cogseed_backend/local-cli-execution-adapt
 vi.mock('../../../../src/main/features/group_chat/run_store', () => ({
   readRun: readGroupChatRun,
   recordRunDispatch,
+  requestActorReport,
 }));
 
 describe('CogSeed P3394 wake dispatcher', () => {
@@ -50,6 +52,8 @@ describe('CogSeed P3394 wake dispatcher', () => {
     readGroupChatRun.mockResolvedValue(null);
     recordRunDispatch.mockReset();
     recordRunDispatch.mockResolvedValue(null);
+    requestActorReport.mockReset();
+    requestActorReport.mockResolvedValue({ status: 'running', actor_report_requested: true });
     resolveCogSeedAgentExecutionContext.mockReset();
     resolveCogSeedAgentExecutionContext.mockResolvedValue({
       agentId: 'agent-1',
@@ -62,6 +66,29 @@ describe('CogSeed P3394 wake dispatcher', () => {
       standards: [],
     });
   });
+
+  it.each(['dispatch_to', 'plan_step', 'user_mention', 'hand_off_to'] as const)(
+    'records report ownership only for an approved asynchronous parent dispatch: %s', async (source) => {
+      const actor = { agent_id: 'agent-1', terminal: 'pending', dispatched: ['turn-wake-wake-report'], attempts: 1 };
+      readGroupChatRun.mockResolvedValue({ run_id: 'run-report', status: 'running', actors: [] });
+      recordRunDispatch.mockResolvedValue({ run_id: 'run-report', status: 'running', actors: [actor] } as any);
+      const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+      await cogseedWakeDispatcher.dispatch('user-1', {
+        id: 'wake-report', conversation_id: 'cid-1', agent_id: 'agent-1',
+        source, source_actor_id: source === 'user_mention' ? 'user' : 'commander',
+        objective: 'work', context_scope: ['conversation:cid-1'], behavior_scope: [source],
+        dispatch_payload: { text: 'work', run_id: 'run-report' },
+        status: 'approved', created_at: 't', updated_at: 't',
+      });
+      expect(startCogSeedTask).toHaveBeenCalledTimes(1);
+      if (source === 'dispatch_to' || source === 'plan_step') {
+        expect(requestActorReport).toHaveBeenCalledWith('user-1', 'cid-1', 'run-report');
+        expect(requestActorReport.mock.invocationCallOrder[0]).toBeLessThan(startCogSeedTask.mock.invocationCallOrder[0]);
+      } else {
+        expect(requestActorReport).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('falls back to a direct CogSeed task for legacy interactive handoffs with a conversation scope', async () => {
     const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');

@@ -10,7 +10,7 @@
 # 等于不存在。
 
 schema_version: "2.0.0"
-engine_version: "2.3.0"
+engine_version: "2.4.1"
 
 capabilities:
   text_static_analysis:
@@ -29,6 +29,7 @@ capabilities:
     since: "2.1.0"
     method: "按扩展名做规则语言分派；按路径/注释/围栏块/断言语料判定上下文并降级 severity"
     contexts: [source, doc, prose, comment, test, vendor]
+    prose_scope: "散文封顶只适用于作者叙述性文档（.md/.markdown/.rst/.txt/.adoc）；.svg/.html/.pdf/.ipynb 等载体文件的正文是模型读取的内容，停留在 doc"
     coverage: "消除「防御代码被判成攻击代码」「JS re.exec() 被判 Python 动态执行」「测试断言输入被判攻击载荷」「安全守则散文被判成实际行为」四类系统性误报"
     guarantees:
       - "降权只降级，绝不删除 finding；original_severity / context / demoted 三字段完整保留审计轨迹"
@@ -56,6 +57,7 @@ capabilities:
   instruction_analysis:
     implemented: true
     since: "2.2.0"
+    prose_channel: "指令类命中在散文里不降权——模型读到的就是这段文字。因此它可以单独构成 DO_NOT_INSTALL（`guardrail_bypass_on_block`，三信号同行、high 置信），也可以与凭据/外发证据组合构成阻断（scan_gate._instruction_with_evidence）"
     method: "针对代理运行时的确定性规则：结构层（宿主配置路径 / 危险命令行开关 / MCP 键）+ 祈使层（隐瞒、越权、绕过、索取凭据、结果外送）+ 组合层（弱信号配对）+ 否定守卫（前置与内部）"
     coverage: "补足纯代码规则的结构性盲区：一个不需要代码就能生效的越权指令"
     guarantees:
@@ -105,18 +107,69 @@ capabilities:
       - "不做 CVE 匹配（需 osv-scanner），不做包内容级比对"
       - "安装命令行解析是 token 级的；跨行拼接的命令无法还原"
 
+  carrier_evidence_collection:
+    implemented: true
+    since: "2.4.0"
+    method: "扩展名白名单 + **内容探测**（NUL / UTF-8 / 可打印占比）+ PDF 文本层抽取 + PNG 文本块抽取 + 有界归档成员递归读取；归档成员以 `外层::内部` 合成路径并入同一条文本规则管线"
+    coverage: "SVG / HTML / XML / ipynb / CSV / PowerShell / PHP / Ruby / Lua 等文本载体；**白名单之外、内容为文本的文件**（.rtf / .vbs / .jsp / 无扩展名脚本）；PDF（未加密内容流）、PNG（tEXt/zTXt/iTXt）；zip / tar.* / gz·bz2·xz / docx·xlsx·pptx·whl 的文本成员"
+    rationale_v2_4_1: "复测 2026-11-05 V1：把 A1-svg 的同一段指令改名成 .rtf 即 pass/100。白名单只决定先读哪些，不再是「读不读」的最终裁决"
+    rationale: "红队 2026-11-04：同一段越权文本改名成 .txt 立刻 restricted，留在 .svg/.pdf/.zip 里则是 pass/ALLOW/100——缺的是收集，不是检测"
+    guarantees:
+      - "所有上限触顶后产出 archive_* / carrier_* finding，绝不静默截断"
+      - "归档成员不解压到磁盘，只按上限读入内存；路径越界成员报 critical 并跳过"
+      - "压缩比 / 单成员体积 / 成员数 / 嵌套深度四条上限分别对应一类压缩炸弹"
+    caps:
+      archive_depth: 2
+      archive_members: 200
+      member_bytes: 2097152
+      archive_total_bytes: 8388608
+      compression_ratio: 200
+      extracted_text_bytes: 262144
+    report_fields: ["findings[].category == \"scan_coverage\"", "findings[].file", "limitations"]
+    known_limitations:
+      - "PDF 只抽未加密内容流里的文本字面量：加密 PDF、CID 字体、对象流间接引用抽不出来，此时报 carrier_text_unparsed 而不是判为干净"
+      - "PNG 只抽文本块；像素内的文字需要 OCR / 多模态通道，本次未覆盖"
+      - "7z / rar / zst / lz4 / cab / iso 无法在本地解包，报 archive_format_unscannable"
+      - "归档成员不写入 files 集合，因此 forbidden_files（敏感文件名）只对归档外的路径生效"
+
+  unread_content_disclosure:
+    implemented: true
+    since: "2.4.1"
+    method: "文本类内容读不到时产出点名 finding（text_carrier_oversized / text_carrier_unreadable / text_budget_exhausted / carrier_binary_document_unparsed），并把 pass 上限压到 restricted"
+    rationale: "复测 2026-11-05 N-01：「有 N 个文件未做文本分析」是 info 计数，不点名、不扣分、不改回执——一份没被打开的文件仍然拿到干净回执"
+    guarantees:
+      - "任一文本类文件未被读取 → 不得 pass，回执必须能指到具体文件"
+      - "二进制/图片/加密归档的未解析仍是独立 finding，不并入这一条"
+    report_fields: ["findings[].rule_id", "findings[].file"]
+    known_limitations:
+      - "本项只约束「文本类内容」，不承诺图像像素或加密归档已被检查"
+
+  instruction_composition:
+    implemented: true
+    since: "2.4.1"
+    method: "代理指令的组合层按**逻辑句**判定（句读符 + Markdown 块边界），而非物理行；「输入监听 × 外发」「用户目录批量收集 × 外发」作为组合规则，组合命中不随目录降权"
+    rationale: "复测 2026-11-05 N-02/N-03/N-06：V5 只在句内加一个换行即 pass/100；V9 不含凭据字面量的散文外发无 corroboration；V8 的键盘记录器因 vendor 降权仍 pass"
+    guarantees:
+      - "同一语义在换行/分句后仍被判定（回归向量 attack-sentence-split-bypass）"
+      - "组合命中保留 original_severity，审计能看到降权前的等级"
+    report_fields: ["findings[].rule_id", "findings[].original_severity"]
+    known_limitations:
+      - "仍不做语义理解：同义改写、跨段落拆散的多句指令仍可能漏检"
+      - "surveillance 类别不阻断（键盘钩子是合法自动化原语），组合只升到 CAUTION"
+
   structural_analysis:
     implemented: true
     since: "2.2.0"
-    method: "文件级结构检查：可执行载荷扩展名、嵌套压缩包、符号链接逃逸、内嵌 .git 目录、可执行位、超大文件"
+    method: "文件级结构检查：可执行载荷（扩展名 + **文件头魔数**，覆盖无扩展名的 ELF/PE/Mach-O）、嵌套压缩包、符号链接逃逸、内嵌 .git 目录、可执行位、超大文件"
     coverage: "报告同时给出文件构成统计（文件数、总字节、可执行数、归档数、符号链接数、类型分布）"
     guarantees:
       - "结构事实不做上下文降权；符号链接按 realpath 判定是否逃出 Skill 目录"
       - ".git 目录整体报一次，不下钻其内部对象"
     report_fields: ["findings[].category == \"structural\"", "structural_summary"]
     known_limitations:
-      - "不解析二进制指令、不做符号执行"
-      - "归档只报存在，不解包递归扫描"
+      - "不解析二进制指令、不做符号执行；原生二进制只按魔数识别并告警（high），不判断其行为"
+      - "魔数判定只读前 8 字节，加壳/自解码二进制仍无法识别"
+      - "归档成员由 carrier_evidence 递归读取（2.4.0 起），本项仍只报「存在」这一结构事实"
 
   secret_detection:
     implemented: true
@@ -210,6 +263,7 @@ capabilities:
     guarantees:
       - "固定 info 级，不参与打分：这是关于「这次检查」的陈述，不是关于「这个技能」的陈述"
       - "同时出现在 coverage 字段（机器可读）与 findings（人可读）"
+      - "载体取证的上限触顶（2.4.0）单独报 archive_* / carrier_* 发现项，与覆盖率统计分开"
     report_fields: ["findings[].category == \"scan_coverage\"", "coverage"]
 
   scan_tier:

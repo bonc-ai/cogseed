@@ -1,6 +1,6 @@
 {
   "name": "cogseed",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
@@ -41,6 +41,8 @@
     "runtime:prepare:dev": "node scripts/ensure-dev-dependencies.cjs",
     "builtin:manifest": "node scripts/update-builtin-manifest.cjs",
     "builtin:manifest:check": "node scripts/update-builtin-manifest.cjs --check",
+    "template-refs:manifest": "tsx scripts/export-template-ref-manifest.ts",
+    "template-refs:manifest:check": "tsx scripts/export-template-ref-manifest.ts --check",
     "reuse:check": "node scripts/reuse-check.cjs",
     "sbom:generate": "npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --package-lock-only --output-file sbom.cdx.json",
     "sbom:check": "node scripts/sbom-check.cjs",

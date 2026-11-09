@@ -22,6 +22,7 @@
  *   compaction → {type:'progress', text: 'compacted <before>→<after> tokens'}
  *   done (ok)  → {type:'final', text} then {type:'done'}
  *   done (err) → {type:'error', text: meta.error.message} then {type:'done'}
+ *   done (execution limit) → runtime error with the deterministic partial receipt
  *
  * The returned generator is ready to be `yield*`'d straight out of
  * `streamChatWithModel`.
@@ -597,13 +598,8 @@ export async function* mapCoreAgentEvents(
 
       case 'done': {
         const result = ev.result;
-        // Forward the accumulated token usage (input / output / cache read /
-        // cache write) so downstream consumers — today just the dev archiver,
-        // tomorrow a cost meter — can observe per-call spend. The devtools
-        // panel displays cacheRead/inputTokens ratio as cache hit rate. For
-        // providers whose pi-ai adapter hard-codes cache fields to 0 (Mistral,
-        // openai-responses write side) the value will be 0 — documented
-        // behavior, not a bug on our side.
+        // Preserve authoritative totals and unknown cache buckets. Routing aliases
+        // and endpoint-reported identities are separate request observations.
         if (result.meta.usage) {
           yield {
             type: 'event',
@@ -614,6 +610,9 @@ export async function* mapCoreAgentEvents(
               // 求和）只服务消耗/计费口径。
               data: {
                 ...(result.meta.usage as unknown as Record<string, unknown>),
+                requestedModel: result.meta.model,
+                ...(/^[A-Za-z0-9._:/@+\-]{1,160}$/.test(result.meta.reportedModel || '')
+                  ? { reportedModel: result.meta.reportedModel } : {}),
                 ...(result.meta.lastCallUsage
                   ? { lastCallUsage: result.meta.lastCallUsage as unknown as Record<string, unknown> }
                   : {}),
@@ -638,6 +637,13 @@ export async function* mapCoreAgentEvents(
           // Prefer the explicit `result.text` over our accumulated delta —
           // the runner may have trimmed trailing whitespace etc.
           if (result.text) finalText = localizeKnownRunnerText(result.text);
+          const terminationReason = result.meta.terminationReason;
+          if (terminationReason === 'tool_call_limit' || terminationReason === 'read_only_limit') {
+            // Core owns this terminal decision. Prose/tags and tool errors may
+            // describe recovered failures and must never classify the run.
+            error = finalText || t('model.tool_loop_limit_reached');
+            failureDetails = { failureKind: 'runtime', failureCode: terminationReason, failurePhase: 'tool' };
+          }
         }
         break;
       }

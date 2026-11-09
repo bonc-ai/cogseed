@@ -37,6 +37,8 @@ function loadConversationRenderer() {
     currentCid: '',
     conversations: [],
     pendingConvs,
+    conversationStopRequests: new Map(),
+    unconfirmedConversationStops: new Set(),
     groupBusyConvs,
     isGroupConversationBusy: (cid: string) => groupBusyConvs.has(cid),
     isConvPending: (cid: string) => pendingConvs.has(cid) || groupBusyConvs.has(cid),

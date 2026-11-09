@@ -3,7 +3,7 @@ import { MEETING_RECORD_TEMPLATE } from '../../../meeting-record-contract';
 import type { RuntimeModelToolDefinition } from '../model-adapter';
 import type { RuntimeToolPolicy } from '../types';
 
-export type RuntimeToolName = TranscriptToolName | 'stat_file' | 'read_file' | 'search_files' | 'grep_files' | 'write_file' | 'edit_file' | 'bash' | 'run_skill' | 'list_connector_tools' | 'call_connector_tool' | 'search_mate_kb' | 'read_mate_kb' | 'office_read' | 'office_create' | 'office_edit' | 'office_render' | 'browser_open' | 'browser_snapshot' | 'browser_click' | 'browser_type' | 'browser_screenshot' | 'cogseed_delegate' | 'cogseed_join' | 'cogseed_tasks' | 'publish_outputs' | 'cogseed_cancel' | 'cogseed_retry_step' | 'cogseed_skip_step' | 'cogseed_resume_workflow' | 'cogseed_workflow' | 'messaging_list_targets' | 'messaging_send' | 'p3394_send' | 'ontology_graph_read' | 'ontology_projection_apply';
+export type RuntimeToolName = TranscriptToolName | 'stat_file' | 'read_file' | 'search_files' | 'grep_files' | 'write_file' | 'edit_file' | 'bash' | 'run_skill' | 'list_connector_tools' | 'call_connector_tool' | 'search_mate_kb' | 'read_mate_kb' | 'office_read' | 'office_create' | 'office_edit' | 'office_render' | 'browser_open' | 'browser_snapshot' | 'browser_click' | 'browser_type' | 'browser_screenshot' | 'cogseed_delegate' | 'cogseed_join' | 'cogseed_tasks' | 'publish_outputs' | 'cogseed_cancel' | 'cogseed_retry_step' | 'cogseed_skip_step' | 'cogseed_resume_workflow' | 'cogseed_workflow' | 'messaging_list_targets' | 'messaging_send' | 'p3394_send' | 'ontology_graph_read' | 'ontology_projection_apply' | 'ontology_task_query' | 'search_ability_assets';
 
 export interface RuntimeToolCatalogEntry {
   name: RuntimeToolName;
@@ -161,6 +161,43 @@ export const TOOL_CATALOG = Object.freeze<readonly RuntimeToolCatalogEntry[]>([
     summary: `Project one confirmed meeting record (meeting_record.v1 JSON file in the task workspace) into the ontology graph: creates or updates the meeting, decision, open-question and action-item entities and their fixed relations. Idempotent; never deletes; links people, projects and series only by entity ids named in the record. Write the record with write_file in exactly this shape (keys N1/D1/Q1/A1, enums as listed, omit unknown optionals): ${MEETING_RECORD_TEMPLATE}`,
     kind: 'host',
     parameters: { type: 'object', properties: { record_path: { type: 'string' } }, required: ['record_path'], additionalProperties: false },
+  },
+  {
+    name: 'ontology_task_query',
+    summary: 'Query the task-scoped cognitive ontology for facts, rules and conflicts. Read-only; the host re-derives task scope from the persisted session and records a query read receipt. Returns the JSON query result with citations.',
+    kind: 'host',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', maxLength: 200, description: 'Primary search query (mention or topic).' },
+        queries: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 5, description: 'Additional queries merged into the same result.' },
+        module_id: { type: 'string', maxLength: 160, description: 'Restrict to a specific module.' },
+        entity_id: { type: 'string', maxLength: 160, description: 'Restrict rules to a specific entity.' },
+        purpose: { type: 'string', maxLength: 200, description: 'Task purpose for rule condition matching.' },
+        task_kind: { type: 'string', maxLength: 80, description: 'Task kind for rule condition matching.' },
+        at: { type: 'string', description: 'Query date (YYYY-MM-DD); defaults to today.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'search_ability_assets',
+    summary: 'Search the user-owned ability asset pool: catalog page, semantic query, or bounded body reads by asset ids. Read-only with asset admission and agent-read receipts.',
+    kind: 'host',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', maxLength: 400, description: 'Semantic/lexical query; omit with assetIds for the catalog page.' },
+        assetIds: { type: 'array', items: { type: 'string', maxLength: 160 }, maxItems: 6, description: 'Read bodies of these assets (max 6).' },
+        k: { type: 'integer', minimum: 1, maximum: 50 },
+        offset: { type: 'integer', minimum: 0, maximum: 10000, description: 'Catalog page offset.' },
+        scope: { type: 'string', maxLength: 80, description: 'Filter by applicability scope.' },
+        spaceId: { type: 'string', maxLength: 160, description: 'Filter by originating space.' },
+        type: { type: 'string', maxLength: 80, description: 'Filter by asset type (rule / template / skill / personal …).' },
+      },
+      additionalProperties: false,
+    },
   },
 ]);
 

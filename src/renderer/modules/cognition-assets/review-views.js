@@ -67,6 +67,10 @@
     const attention = [], done = [];
     const candidates = (S.candidates || []).filter(c => !runFilter || runFilter.candidates.has(String(c.id)));
     const excluded = new Set(candidates.filter(c => c.activityExclusionReason || NS.isKstarCandidate?.(c)).map(c => c.id));
+    // Related suggestions only point at content a person can still open.
+    const readableAssetIds = new Set((S.assets || [])
+      .filter(asset => asset.status === 'active')
+      .map(asset => String(asset.id)));
     const decisionGroups = new Map();
     const sorted = [...candidates].sort((a,b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
     for (const c of sorted) {
@@ -80,8 +84,13 @@
       const proposedText = c.proposalTarget === 'ontology' ? (c.ontologyFormation?.previewChanges || []).map(change => change.after?.description || change.after?.requirement || '').filter(Boolean).join('；') : '';
       const kind = c.contentOrganization || c.stockOrganizationProvenance ? 'organize'
         : (c.suggestedAction && c.suggestedAction !== 'create') ? 'update' : 'add';
+      // A create proposal has no target, so its formationComparison is the only
+      // evidence that it may touch the same assets as another pending suggestion.
+      const relatedAssetIds = (c.formationComparison?.relatedAssets || [])
+        .map(item => String(item.assetId || ''))
+        .filter(id => id && readableAssetIds.has(id));
       const assetIds = [...new Set([c.targetAssetId, c.mergedIntoAssetId,
-        ...(c.contentOrganization?.draft.sourceAssetIds || [])].filter(Boolean).map(String))];
+        ...(c.contentOrganization?.draft.sourceAssetIds || []), ...relatedAssetIds].filter(Boolean).map(String))];
       const row = { key: 'candidate:' + c.id, title: candidateTitle(c), detail: proposedText || c.judgment || c.value || '', scope: activityScope(c.suggestedScope), rawAt: activityAt, at: fmtDate(activityAt), result: waiting && (c.activityDeferredAt || c.capabilities?.isSnoozed) ? T('cognition.activity_deferred_result', '稍后 · 待处理') + ' · ' + result : result, route: { candidateId: c.id }, candidateIds: [c.id], kind, source: c.stockOrganizationProvenance ? 'inspection' : 'discovery', assetIds };
       // 只折叠完全相同、同范围且同治理边界的建议；不同冲突/版本/风险绝不能合并。
       const hasConflict = (S.inbox || []).some(item => item.candidateId === c.id && item.kind !== 'candidate_pending_review');
@@ -93,6 +102,39 @@
       (waiting ? attention : done).push(row);
     }
     const assetTitle = assetId => (S.assets || []).find(asset => String(asset.id) === String(assetId))?.title || '';
+    // Old-content plans are independent records: they stay visible after the
+    // candidate that proposed them is rejected, and shared plans appear once.
+    for (const plan of S.oldContentPlans || []) {
+      if (!plan || !plan.id) continue;
+      if (runFilter && !(plan.candidateIds || []).some(id => runFilter.candidates.has(String(id)))) continue;
+      const titles = (plan.assetIds || []).map(assetTitle).filter(Boolean);
+      const title = titles.join(' / ') || (plan.assets || []).map(asset => asset.title).filter(Boolean).join(' / ')
+        || T('cognition.old_content_plan_untitled', '旧内容整理');
+      const unresolved = Number(plan.unresolvedCount) || 0;
+      const applied = plan.status === 'applied';
+      const blocked = plan.status === 'blocked';
+      const at = plan.updatedAt || plan.lastExecutionAt || '';
+      const result = applied ? T('cognition.old_content_plan_row_applied', '已处理，可撤销')
+        : blocked ? T('cognition.old_content_plan_row_blocked', '内容已变化，需重新核对')
+          : T('cognition.old_content_plan_row_pending', '旧内容整理 · 待处理');
+      const detail = unresolved
+        ? T('cognition.old_content_plan_row_detail_unresolved', '还有 {n} 项需要你核对。', { n: String(unresolved) })
+        : T('cognition.old_content_plan_row_detail', '涉及 {n} 项旧内容，确认后按方案处理。', { n: String(Number(plan.itemCount) || 0) });
+      (applied ? done : attention).push({
+        key: 'plan:' + plan.id,
+        title,
+        detail,
+        scope: T('cognition.activity_scope_assets', '已有内容'),
+        rawAt: at,
+        at: at ? fmtDate(at) : '',
+        result,
+        route: { planId: String(plan.id) },
+        candidateIds: (plan.candidateIds || []).map(String),
+        kind: 'organize',
+        source: 'old_content',
+        assetIds: [...(plan.assetIds || [])],
+      });
+    }
     const inspectionAt = S.captureStats?.sweep?.lastResult?.finishedAt || S.captureStats?.sweep?.lastRunAt || '';
     for (const item of S.inbox || []) {
       if (item.kind !== 'inspection_finding') continue;
@@ -159,14 +201,18 @@
       });
     }
     // 本体逐次保存历史只在对应对象的详情查看；共同确认结果由候选的 integrated 记录承载。
-    const rows = [...attention, ...done];
-    for (const row of rows) {
-      const ids = new Set(row.assetIds || []);
+    // Terminal rows never advertise possible further work. Pending rows only
+    // relate through content that is still readable, so an unavailable asset
+    // cannot manufacture a cross-link.
+    for (const row of done) row.relatedSuggestionIds = [];
+    for (const row of attention) {
+      const ids = new Set((row.assetIds || []).map(String).filter(id => readableAssetIds.has(id)));
       if (!ids.size) { row.relatedSuggestionIds = []; continue; }
-      row.relatedSuggestionIds = rows
-        .filter(other => other.key !== row.key && (other.assetIds || []).some(id => ids.has(String(id))))
-        .map(other => other.key)
-        .slice(0, 4);
+      row.relatedSuggestionIds = attention
+        .filter(other => other.key !== row.key)
+        .filter(other => (other.assetIds || []).some(id => readableAssetIds.has(String(id)) && ids.has(String(id))))
+        .slice(0, 4)
+        .map(other => other.key);
     }
     return { attention, done, excludedCount: excluded.size };
   }
@@ -203,9 +249,9 @@
     if (typeof viewer.getClientRects !== 'function') return true;
     return !viewer.closest?.('[hidden]') && viewer.getClientRects().length > 0;
   }
-  const activityRoute = (patch = {}) => Object.assign({}, S.route, { name: 'activity', candidateId: '', inboxId: '', poCandidateId: '', captureId: '', approvalId: '' }, patch);
+  const activityRoute = (patch = {}) => Object.assign({}, S.route, { name: 'activity', candidateId: '', inboxId: '', planId: '', poCandidateId: '', captureId: '', approvalId: '' }, patch);
   function selectedActivityKey(route) {
-    return route.approvalId ? 'approval:' + route.approvalId : route.candidateId ? 'candidate:' + route.candidateId : route.inboxId ? 'inbox:' + route.inboxId : route.poCandidateId ? 'legacy:' + route.poCandidateId : activitySelection;
+    return route.approvalId ? 'approval:' + route.approvalId : route.candidateId ? 'candidate:' + route.candidateId : route.inboxId ? 'inbox:' + route.inboxId : route.planId ? 'plan:' + route.planId : route.poCandidateId ? 'legacy:' + route.poCandidateId : activitySelection;
   }
   function activityModelForRoute(route) {
     if (!route.activityRunId) return activityModel();
@@ -308,6 +354,163 @@
       closeAct: presentation === 'expanded' ? 'activity-expand-close' : 'activity-close',
     });
   }
+  function activityPlan(row) {
+    const planId = String(row.route.planId);
+    const summary = (S.oldContentPlans || []).find(item => String(item.id) === planId);
+    const state = (S.oldContentPlanDetails || {})[planId];
+    const plan = state?.plan || null;
+    if (!summary && !plan) return `<p role="status">${esc(T('cognition.old_content_plan_missing', '这条整理方案已处理或不可用。'))}</p>${btn(T('common.refresh', '刷新'), 'refresh', { small: true })}`;
+    const assetTitle = assetId => (S.assets || []).find(asset => String(asset.id) === String(assetId))?.title
+      || plan?.assets?.find(asset => String(asset.id) === String(assetId))?.title
+      || summary?.assets?.find(asset => String(asset.id) === String(assetId))?.title
+      || T('cognition.old_content_plan_asset_fallback', '旧内容 {id}', { id: String(assetId) });
+    const assetNames = assetIds => assetIds.map(assetTitle).join('、');
+    const status = plan?.status || summary?.status;
+    const statusText = {
+      ready: T('cognition.old_content_plan_status_ready', '方案已完成校验，确认后按下列动作处理旧内容。'),
+      needs_review: T('cognition.old_content_plan_status_needs_review', '方案包含需要你裁定的内容，暂不能确认。'),
+      blocked: T('cognition.old_content_plan_status_blocked', '方案所需内容发生变化，需要重新核对后才能执行。'),
+      applied: T('cognition.old_content_plan_status_applied', '旧内容已按方案处理。'),
+      undone: T('cognition.old_content_plan_status_undone', '本次旧内容处理已撤销。'),
+      dismissed: T('cognition.old_content_plan_status_dismissed', '本次旧内容整理已放弃。'),
+    }[status] || T('cognition.old_content_plan_status_unavailable', '本次旧内容整理没有形成可用方案。');
+    // Execution controls only exist for plans the service still accepts; an
+    // undone, blocked or finished plan must not offer a dead action.
+    const executableStatuses = ['ready', 'needs_review'];
+    const canExecutePlan = Boolean(plan) && executableStatuses.includes(String(plan.status));
+    const blockedReasons = {
+      asset_missing_during_recovery: T('cognition.old_content_plan_blocked_missing', '方案涉及的某条内容已经不存在，无法继续执行。'),
+      mixed_execution_state: T('cognition.old_content_plan_blocked_mixed', '上一次处理只完成了一部分；请核对当前内容后重新整理。'),
+    };
+    const blockedNote = plan?.status === 'blocked'
+      ? `<p role="status">${esc(blockedReasons[String(plan.blockedReason || '')]
+        || T('cognition.old_content_plan_blocked_unknown', '方案当前不可执行；请刷新后核对内容状态。'))}</p>` : '';
+    const assets = (summary?.assets || []).map(asset =>
+      `<li>${esc(asset.title || asset.id)} · v${esc(asset.version || '?')}</li>`).join('');
+    const actionLabel = {
+      merge: T('cognition.old_content_plan_action_merge', '合并'),
+      keep: T('cognition.old_content_plan_action_keep', '保留'),
+      archive: T('cognition.old_content_plan_action_archive', '归档'),
+      delete: T('cognition.old_content_plan_action_delete', '删除'),
+    };
+    const executedByUnit = new Map();
+    for (const execution of plan?.executions || []) for (const receipt of execution.items) executedByUnit.set(receipt.itemId, receipt);
+    const reviewState = (S.oldContentPlanReviews || {})[planId];
+    const reviewUnits = new Map(((reviewState?.review?.units) || []).map(unit => [unit.unitId, unit]));
+    const reviewDetail = unitId => {
+      const unit = reviewUnits.get(unitId);
+      if (!unit) return '';
+      const assetBlocks = (unit.assets || []).map(asset => {
+        const changes = (asset.changes || []).map(change =>
+          `<li><strong>${esc(change.field)}</strong>：${esc(change.before)} → ${esc(change.after)}</li>`).join('');
+        const excerpts = (asset.excerpts || []).filter(item => item.excerpt)
+          .map(item => `<li>${esc(item.excerpt)}</li>`).join('');
+        const impact = (asset.deleteImpact || []).length
+          ? `<p role="status">${esc(T('cognition.old_content_plan_review_impact', '仍被引用：{items}', {
+            items: asset.deleteImpact.map(item => item.title || item.id).join('、'),
+          }))}</p>` : '';
+        return `<div><strong>${esc(asset.title || asset.id)}</strong> · v${esc(asset.version || '?')}${impact}${changes ? `<ul>${changes}</ul>` : ''}${excerpts ? `<details><summary>${esc(T('cognition.old_content_plan_review_sources', '来源摘录'))}</summary><ul>${excerpts}</ul></details>` : ''}</div>`;
+      }).join('');
+      const target = unit.targetVersion
+        ? `<p class="note">${esc(T('cognition.old_content_plan_review_target', '目标版本 v{n}', { n: String(unit.targetVersion) }))}</p>` : '';
+      const blockers = (unit.blockers || []).map(code => NS.oldContentUnitErrorText?.(code) || String(code));
+      const blocked = blockers.length
+        ? `<p role="alert">${esc(T('cognition.old_content_plan_review_blockers', '这项现在不能执行：{reasons}', {
+          reasons: blockers.join('；'),
+        }))}</p>` : '';
+      return `<details class="details"><summary>${esc(T('cognition.old_content_plan_review_summary', '查看修改前后与来源'))}</summary>${assetBlocks || `<p class="note">${esc(T('cognition.old_content_plan_review_empty', '没有可展示的差异。'))}</p>`}${target}${blocked}</details>`;
+    };
+    const unitControl = (unitId, label) => {
+      if (!canExecutePlan || executedByUnit.has(unitId)) return '';
+      const controlId = `ca-old-unit-${planId}-${unitId}`;
+      return `<label for="${esc(controlId)}">${window.uiCheckbox({ id: controlId, value: unitId, label,
+        attrs: { 'data-old-content-unit': '1' } })}<span>${esc(label)}</span></label>`;
+    };
+    const receiptNote = unitId => {
+      const receipt = executedByUnit.get(unitId);
+      if (!receipt) return '';
+      const text = receipt.status === 'kept'
+        ? T('cognition.old_content_plan_unit_kept', '已保留')
+        : T('cognition.old_content_plan_unit_applied', '已处理');
+      return `<p class="note">${esc(text)}${receipt.targetVersion ? ` · v${esc(receipt.targetVersion)}` : ''}</p>`;
+    };
+    const itemRows = (plan?.items || []).map(item => {
+      const action = item.state === 'excluded' ? 'keep' : item.action;
+      const label = `${actionLabel[action] || action} ${assetNames(item.assetIds)}`;
+      const control = unitControl(item.itemId, label);
+      const target = action === 'merge' && item.targetAssetId
+        ? `<p class="note">${esc(T('cognition.old_content_plan_target', '合并目标：{target}', { target: assetTitle(item.targetAssetId) }))}</p>` : '';
+      const merged = item.merged?.statement
+        ? `<details><summary>${esc(T('cognition.old_content_plan_merged_body', '查看合并后的正文'))}</summary><div class="content-text">${esc(item.merged.statement)}</div></details>` : '';
+      const mergedSource = item.merged?.bodySource === 'user'
+        ? `<p class="note">${esc(T('cognition.old_content_plan_merge_body_user', '已由你修改'))}</p>` : '';
+      // The user can fix the model's merged wording before it is applied;
+      // the host still validates the text and records it as user-authored.
+      const mergeEdit = item.merged && action === 'merge' && item.state !== 'excluded'
+        && plan && ['needs_review', 'ready', 'blocked'].includes(plan.status)
+        ? `<details class="details"><summary>${esc(T('cognition.old_content_plan_edit_merge', '编辑合并正文'))}</summary>
+          ${window.uiTextarea({ id: `ca-old-merge-${planId}-${item.itemId}`, className: 'ca-old-content-merge-body',
+            value: item.merged.statement, attrs: { rows: 3, 'data-old-content-merge-body': item.itemId,
+              'aria-label': T('cognition.old_content_plan_edit_merge_label', '合并后的正文') } })}
+          <div class="actions">${btn(T('cognition.old_content_plan_edit_merge_save', '保存正文'), 'old-content-edit-merge-save', {
+            id: planId, small: true, primary: true, data: { 'item-id': item.itemId },
+          })}</div></details>` : '';
+      return `<li>${control || `<strong>${esc(actionLabel[action] || action)}</strong> ${esc(assetNames(item.assetIds))}`}${target}<p>${esc(item.reason)}</p>${merged}${mergedSource}${mergeEdit}${reviewDetail(item.itemId)}${receiptNote(item.itemId)}</li>`;
+    }).join('');
+    const unresolvedRows = (plan?.unresolved || []).map(item => {
+      const resolved = item.resolution && item.resolution !== 'keep'
+        ? (item.resolution.kind === 'merge'
+          ? T('cognition.old_content_plan_resolution_merge', '已选择合并到 {target}', { target: assetTitle(item.resolution.targetAssetId) })
+          : T('cognition.old_content_plan_resolution_archive', '已选择归档'))
+        : item.resolution === 'keep' ? T('cognition.old_content_plan_resolution_keep', '已选择保留') : '';
+      const controls = !item.resolution && item.itemId
+        ? `<div class="actions">${btn(T('cognition.old_content_plan_keep_item', '保留，不执行'), 'old-content-unresolved-keep', {
+          id: planId, small: true, className: 'o', data: { 'item-id': item.itemId },
+        })}${item.assetIds.length === 1 ? btn(T('cognition.old_content_plan_action_archive', '归档'), 'old-content-unresolved-archive', {
+          id: planId, small: true, className: 'o', data: { 'item-id': item.itemId },
+        }) : item.assetIds.map(assetId => btn(T('cognition.old_content_plan_merge_into', '合并到「{title}」', { title: assetTitle(assetId) }),
+          'old-content-unresolved-merge', { id: planId, small: true, className: 'o',
+            data: { 'item-id': item.itemId, target: assetId } })).join('')}</div>` : '';
+      const unitId = item.itemId || '';
+      const control = item.resolution && unitId ? unitControl(unitId, assetNames(item.assetIds)) : '';
+      return `<li>${control || esc(assetNames(item.assetIds))}：${esc(item.reason)}${resolved ? `<p class="note">${esc(resolved)}</p>` : ''}${reviewDetail(unitId)}${receiptNote(unitId)}${controls}</li>`;
+    }).join('');
+    const openUnresolved = (plan?.unresolved || []).filter(item => !item.resolution).length;
+    const keepAll = openUnresolved
+      ? `<div class="actions">${btn(T('cognition.old_content_plan_keep_unresolved', '全部保留，不再裁定'), 'old-content-plan-keep-unresolved', {
+        id: planId, small: true, className: 'o',
+      })}</div>` : '';
+    const executableUnits = [...(plan?.items || []).map(item => item.itemId),
+      ...(plan?.unresolved || []).filter(item => item.resolution && item.itemId).map(item => item.itemId)]
+      .filter(unitId => unitId && !executedByUnit.has(unitId));
+    const executeSelected = canExecutePlan && executableUnits.length
+      ? `<div class="actions actions-right">${btn(T('cognition.old_content_plan_execute_selected', '执行选中'), 'old-content-plan-execute', {
+        id: planId, primary: true,
+      })}</div>` : '';
+    const hasActiveExecution = (plan?.executions || []).some(execution => !execution.undoneAt);
+    const undoButton = plan && hasActiveExecution && plan.status !== 'undone'
+      ? `<div class="actions actions-right">${btn(T('cognition.old_content_plan_undo', '撤销本次整理'), 'old-content-plan-undo', {
+        id: planId, small: true, className: 'o',
+      })}</div>` : '';
+    const loading = state && !state.loaded ? `<p class="note">${esc(T('cognition.old_content_plan_loading', '正在读取方案明细…'))}</p>` : '';
+    const failed = state?.error ? `<p role="status">${esc(T('cognition.old_content_plan_read_failed', '方案明细暂时无法读取，请重试。'))}</p>${btn(T('common.retry', '重试'), 'old-content-plan-reload', { id: planId, small: true })}` : '';
+    const reviewFailed = reviewState?.error
+      ? `<p role="status">${esc(T('cognition.old_content_plan_review_failed', '审阅明细暂时无法读取。'))}</p>${btn(T('common.retry', '重试'), 'old-content-plan-review-reload', { id: planId, small: true })}` : '';
+    return `<section class="ca-review-content"><h3>${esc(T('cognition.old_content_plan_title', '旧内容整理方案'))}</h3>
+      <p>${esc(statusText)}</p>
+      ${blockedNote}
+      <ul>${assets}</ul>
+      ${itemRows ? `<h4>${esc(T('cognition.old_content_plan_items_title', '按方案处理'))}</h4><ul>${itemRows}</ul>` : ''}
+      ${unresolvedRows ? `<h4>${esc(T('cognition.old_content_plan_unresolved_title', '需要你核对'))}</h4><ul>${unresolvedRows}</ul>${keepAll}` : ''}
+      ${loading}${failed}${reviewFailed}${executeSelected}${undoButton}
+      <p class="note">${esc(T('cognition.old_content_plan_counts', '方案项 {items} · 未决 {unresolved} · 已处理 {executed}', {
+        items: String(Number(summary?.itemCount ?? plan?.items?.length) || 0),
+        unresolved: String(Number(summary?.unresolvedCount ?? openUnresolved) || 0),
+        executed: String(Number(summary?.executedCount) || 0),
+      }))}</p>
+      <p class="note">${esc(T('cognition.old_content_plan_linked_candidates', '关联建议 {n} 条', { n: String((summary?.candidateIds || plan?.candidateIds || []).length) }))}</p>
+    </section>`;
+  }
   function activityDetail(row, processed, options = {}) {
     const chrome = activityChrome(options.presentation);
     if (!row) {
@@ -323,6 +526,7 @@
     if (row.route.candidateId) content = activityCandidate(row, processed);
     else if (row.route.approvalId) content = activityApproval(row, processed);
     else if (row.route.inboxId) content = activityInbox(row, processed);
+    else if (row.route.planId) content = activityPlan(row);
     else content = '';
     let fixedActions = '';
     const actionPattern = (row.route.candidateId || row.route.approvalId) ? /<div class="actions actions-right" data-activity-primary-actions>([\s\S]*?)<\/div>/ : /<div class="actions actions-right">([\s\S]*?)<\/div>/;
@@ -342,15 +546,19 @@
     const subtitle = [version ? T(saved || (ontologyOnly && processed && candidate.status === 'integrated') ? 'cognition.detail_saved_version' : 'cognition.detail_based_version', saved || (ontologyOnly && processed && candidate.status === 'integrated') ? '已保存 v{n}' : '基于 v{n}', { n: String(version) }) : ''].filter(Boolean).join(' · ');
     const actionLabel = processed ? '' : inboxItem ? T('cognition.activity_inbox_action', '核对建议') : candidate ? NS.candidate.suggestedActionLabel(candidate) : proposal ? T('cognition.activity_operation_update', '建议更新') : '';
     const relatedHtml = !row.route.inboxId && (row.relatedSuggestionIds || []).length
-      ? `<p class="note">${esc(T('cognition.activity_related_suggestions', '这处内容还有 {n} 条可能相关的建议；处理前可先核对它们。', { n: String(row.relatedSuggestionIds.length) }))}</p>`
+      ? `<p class="note">${esc(row.kind === 'add'
+        ? T('cognition.activity_related_create', '这条是新增建议，但与已有建议涉及同一批关联内容；处理前可先核对它们。', { n: String(row.relatedSuggestionIds.length) })
+        : T('cognition.activity_related_suggestions', '这处内容还有 {n} 条可能相关的建议；处理前可先核对它们。', { n: String(row.relatedSuggestionIds.length) }))}</p>`
       : '';
-    return `<header class="ca-activity-detail-head ca-detail-head"><div class="ca-library-detail-title"><h2>${esc(detailTitle)}</h2>${chrome}</div><div class="ca-library-facts">${type ? window.uiTag({ label: type }) : ''}${actionLabel ? chip(actionLabel, 'green') : ''}${chip(processed ? row.result : T('cognition.candidate_status_pending', '待确认'), processed ? 'line' : 'amber')}${subtitle ? `<span class="note">${esc(subtitle)}</span>` : ''}</div></header><div class="ca-activity-detail-body ca-detail-body" data-activity-key="${esc(row.key)}">${relatedHtml}${content}</div><footer class="ca-activity-detail-footer ca-detail-footer">${fixedActions}${processed ? btn(T('cognition.activity_next_item', '下一项'), 'activity-next', { small: true }) + btn(T('cognition.activity_back_pending', '返回需要关注 ›'), 'activity-tab', { id: 'attention', small: true, className: 'o' }) : ''}</footer>`;
+    const expanded = options.presentation === 'expanded';
+    const factsHtml = `<div class="ca-library-facts">${type ? window.uiTag({ label: type }) : ''}${actionLabel ? chip(actionLabel, 'green') : ''}${chip(processed ? row.result : T('cognition.candidate_status_pending', '待确认'), processed ? 'line' : 'amber')}${subtitle ? `<span class="note">${esc(subtitle)}</span>` : ''}</div>`;
+    return `<header class="ca-activity-detail-head ca-detail-head"><div class="ca-library-detail-title"><h2>${esc(detailTitle)}</h2>${expanded ? factsHtml : ''}${chrome}</div>${expanded ? '' : factsHtml}</header><div class="ca-activity-detail-body ca-detail-body" data-activity-key="${esc(row.key)}">${relatedHtml}${content}</div><footer class="ca-activity-detail-footer ca-detail-footer">${fixedActions}${processed ? btn(T('cognition.activity_next_item', '下一项'), 'activity-next', { small: true }) + btn(T('cognition.activity_back_pending', '返回需要关注 ›'), 'activity-tab', { id: 'attention', small: true, className: 'o' }) : ''}</footer>`;
   }
 
   function viewActivity(route) {
     const model = activityModelForRoute(route);
     const isNarrow = narrowActivity();
-    if (!activityRendered && isNarrow && (route.candidateId || route.approvalId || route.inboxId || route.poCandidateId)) activityDrawer = true;
+    if (!activityRendered && isNarrow && (route.candidateId || route.approvalId || route.inboxId || route.planId || route.poCandidateId)) activityDrawer = true;
     if (activityRendered && isNarrow !== activityWasNarrow) activityDrawer = false;
     activityRendered = true; activityWasNarrow = isNarrow;
     const processed = route.activityView === 'done' || route.activityDone === '1';
@@ -371,21 +579,35 @@
     const rows = all.slice(page * ACTIVITY_PAGE_SIZE, (page + 1) * ACTIVITY_PAGE_SIZE);
     S.activityRows = rows;
     const key = selectedActivityKey(route);
-    let selected = all.find(row => row.key === key || row.candidateIds.includes(route.candidateId));
+    // Only candidate rows resolve through candidate ids; a plan row lists its
+    // linked candidates but must not hijack a candidate deep link.
+    let selected = all.find(row => row.key === key
+      || (row.route.candidateId && row.candidateIds.includes(route.candidateId)));
     // Deep links can refer to an excluded or already processed item; retain its original content.
-    if (!selected && !route.activityRunId && (route.candidateId || route.approvalId || route.inboxId || route.poCandidateId)) {
-      selected = [...model.attention, ...model.done].find(row => row.key === key || row.candidateIds.includes(route.candidateId));
+    if (!selected && !route.activityRunId && (route.candidateId || route.approvalId || route.inboxId || route.planId || route.poCandidateId)) {
+      selected = [...model.attention, ...model.done].find(row => row.key === key
+        || (row.route.candidateId && row.candidateIds.includes(route.candidateId)));
       if (!selected && route.candidateId) {
         const historical = S.candidates.find(c => c.id === route.candidateId);
         if (historical) selected = { key, title: candidateTitle(historical), detail: historical.judgment || '',
           scope: activityScope(historical.suggestedScope), route: { candidateId: route.candidateId },
           candidateIds: [route.candidateId], result: activityResult(historical, false) };
       }
+      // 深链到一个已处理/已清理的方案时保留入口，由详情明确说明不可用；
+      // 不能静默退回列表让用户以为链接失效。
+      if (!selected && route.planId) selected = { key: 'plan:' + route.planId,
+        title: T('cognition.old_content_plan_untitled', '旧内容整理'), detail: '', scope: '',
+        route: { planId: route.planId }, candidateIds: [], result: '' };
     }
 
     if (selected) activitySelection = selected.key;
-    else if (!(route.candidateId || route.approvalId || route.inboxId || route.poCandidateId)) activitySelection = '';
+    else if (!(route.candidateId || route.approvalId || route.inboxId || route.planId || route.poCandidateId)) activitySelection = '';
     S.activityDetailTarget = selected?.route || null;
+    // 方案详情按需读取；放到微任务里，避免在渲染中同步触发通知。
+    if (selected?.route?.planId) Promise.resolve().then(() => {
+      NS.loadOldContentPlan?.(selected.route.planId);
+      NS.loadOldContentPlanReview?.(selected.route.planId);
+    });
     const showDetail = !!selected || !!route.approvalId;
     if (!showDetail) activityExpanded = false;
     const showDrawer = isNarrow && showDetail && activityDrawer;
@@ -757,7 +979,7 @@
         return true;
       }
       if (act === 'activity-expand') {
-        if (!(activitySelection || S.route.candidateId || S.route.approvalId || S.route.inboxId || S.route.poCandidateId)) return true;
+        if (!(activitySelection || S.route.candidateId || S.route.approvalId || S.route.inboxId || S.route.planId || S.route.poCandidateId)) return true;
         activityExpanded = true; NS.notify(); return true;
       }
       if (act === 'activity-expand-close') { activityExpanded = false; NS.notify(); focusAfterFrame(() => document.querySelector?.('.ca-activity-detail:not(.is-mirror) [data-act="activity-expand"]')?.focus?.({ preventScroll: true })); return true; }

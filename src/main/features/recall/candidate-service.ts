@@ -5,6 +5,9 @@ import { purgedOrganizationRecord } from './organization-content-lifecycle';
 import { verifyContentOrganization, type ContentOrganizationPlan, type ContentOrganizationReceipt } from './content-organization';
 import { normalizeStockOrganizationProvenance, verifyStockOrganizationCandidate, withStockOrganizationConfirmation, type StockOrganizationProvenance } from './stock-organization-provenance';
 import { formationComparisonSchema, type FormationComparison } from './formation-comparison';
+import { formationOldContentPlanSchema, oldContentReceiptSchema, type FormationOldContentPlan, type OldContentReceipt } from './formation-old-content';
+import { type OldContentFinalization, type OldContentPlanRecord, type OldContentPlanStatus } from './old-content-plan-contract';
+import { bindOldContentPlan, oldContentPlanProjection, readOldContentPlan } from './old-content-plan-service';
 import { isDeepStrictEqual } from 'node:util';
 import { bindOntologyFormationPlan, normalizeOntologyFormationPlan, withOntologyFormationPromotion, withOntologyOnlyFormation, type OntologyFormationPlan } from './ontology-formation';
 import { withRecallAutoApprovalLock } from './capture-settings';
@@ -56,11 +59,13 @@ import {
   abilityAssetActiveVersion,
   createAbilityAsset,
   listAbilityAssetVersions,
+  mergeAbilityAssetGroup,
   pauseAbilityAsset,
   readAbilityAsset,
   readAbilityAssets,
   updateAbilityAsset,
   type AbilityAssetActor,
+  type MergeAssetGroupReceipt,
 } from './asset-service';
 import { makeDisplayTitle } from './statement-fusion';
 import { recallTitleIssue } from './title-policy';
@@ -91,6 +96,7 @@ import {
   RecallCandidateStateError,
 } from './candidate-capabilities';
 import type { PersonalProfileSyncResult, PersonalProfileTarget } from './personal-profile-sync';
+import type { RecallCaptureRecord } from './capture-service';
 
 export type RecallCandidateStatus =
   | 'observed'
@@ -200,6 +206,27 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
    *  提案锚定用）；确认时与资产当前在用版核对，避免改错对象。 */
   targetVersionUsed?: string;
   formationComparison?: FormationComparison;
+  /** Reference to the independent old-content plan. */
+  oldContentPlanId?: string;
+  /** Host-validated legacy plan or a read-time projection of the independent plan. */
+  oldContentPlan?: FormationOldContentPlan;
+  /** One user-confirmed commit projected from the independent plan. */
+  oldContentReceipt?: OldContentReceipt;
+  oldContentPlanState?: OldContentPlanStatus;
+  oldContentPlanRevision?: number;
+  oldContentPlanRecord?: OldContentPlanRecord;
+  oldContentFinalization?: OldContentFinalization;
+  /** User decision for a multi-asset ambiguity group; display/audit only. */
+  relatedResolution?: {
+    action: 'merged' | 'kept';
+    targetAssetId?: string;
+    targetVersion?: string;
+    at: string;
+    receipts?: Array<{ sourceAssetId: string; status: 'merged' | 'skipped' | 'failed'; reason?: string; targetVersion?: string }>;
+    /** Re-formation requested after the merge; an error here is retryable and
+     *  never turns the decision back into "not merged". */
+    reformation?: { requestedAt: string; error?: string };
+  };
   /** Automatic semantic deduplication provenance. These links are audit hints,
    *  not lifecycle states: the candidate still ends in a normal state. */
   mergedInto?: string;
@@ -343,6 +370,8 @@ export interface SaveRecallCandidateInput {
    *  提案锚定用）；确认时与资产当前在用版核对，避免改错对象。 */
   targetVersionUsed?: string;
   formationComparison?: FormationComparison;
+  /** Only a host-validated formation result may provide old-content actions. */
+  oldContentPlan?: FormationOldContentPlan;
   learningSignal?: KstarLearningSignal;
   learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
@@ -1058,6 +1087,14 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
   const captureProvenance = normalizeCaptureProvenance(value.captureProvenance);
   const humanInstructionProvenance = normalizeHumanInstructionProvenance(value.humanInstructionProvenance);
   const stockOrganizationProvenance = normalizeStockOrganizationProvenance(value.stockOrganizationProvenance);
+  const oldContentPlanId = value.oldContentPlanId === undefined ? undefined
+    : String(value.oldContentPlanId);
+  if (oldContentPlanId !== undefined && !safeId(oldContentPlanId)) throw new Error('invalid old-content plan id');
+  const oldContentPlan = value.oldContentPlan === undefined ? undefined
+    : formationOldContentPlanSchema.parse(value.oldContentPlan);
+  const oldContentReceipt = value.oldContentReceipt === undefined ? undefined
+    : oldContentReceiptSchema.parse(value.oldContentReceipt);
+  if (oldContentReceipt && !oldContentPlan && !oldContentPlanId) throw new Error('old-content receipt has no plan');
   if ([captureProvenance, humanInstructionProvenance, stockOrganizationProvenance].filter(Boolean).length > 1) throw new Error('ambiguous candidate formation origin');
   if ((status === 'integrated') !== (ontologyHandoff?.status === 'integrated')
     || (ontologyHandoff?.status === 'in_progress' && isTerminalCandidate(status))) {
@@ -1108,6 +1145,9 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
     ...(captureProvenance ? { captureProvenance } : {}),
     ...(humanInstructionProvenance ? { humanInstructionProvenance } : {}),
     ...(stockOrganizationProvenance ? { stockOrganizationProvenance } : {}),
+    ...(oldContentPlanId ? { oldContentPlanId } : {}),
+    ...(oldContentPlan ? { oldContentPlan } : {}),
+    ...(oldContentReceipt ? { oldContentReceipt } : {}),
     ...(origin ? { origin } : {}),
     // 读时重新派生正文警示，不落盘、不拦截写入。
     // 显式覆盖旧 statementIssues，保证正文更改后陈旧警示能够清除。
@@ -1297,6 +1337,18 @@ async function recordCaptureCandidateReceipt(userId: string, captureKey: string 
   });
 }
 
+async function withOldContentPlanProjection(userId: string, candidate: RecallCandidateRecord): Promise<RecallCandidateRecord> {
+  if (!candidate.oldContentPlanId) return candidate;
+  try {
+    const plan = await readOldContentPlan(userId, candidate.oldContentPlanId);
+    return { ...candidate, ...oldContentPlanProjection(plan) };
+  } catch (error) {
+    log.warn('old-content plan projection unavailable', { candidateId: candidate.id,
+      planId: candidate.oldContentPlanId, error: error instanceof Error ? error.message.slice(0, 160) : 'unknown' });
+    return { ...candidate, oldContentPlanState: 'blocked' };
+  }
+}
+
 export async function listRecallCandidates(userId: string): Promise<RecallCandidateRecord[]> {
   let names: string[];
   const reader = createRecallCollectionReader(userId, 'candidates');
@@ -1338,7 +1390,8 @@ export async function listRecallCandidates(userId: string): Promise<RecallCandid
       log.warn('skipped a malformed recall candidate', { candidateId: read.id, error: (error as Error).message });
     }
   }
-  return candidates.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const sorted = candidates.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return Promise.all(sorted.map(candidate => withOldContentPlanProjection(userId, candidate)));
 }
 
 /** 启动期候选记录维护：内容格式规范化 + 旧「稍后处理」退役。
@@ -1601,7 +1654,7 @@ export async function runCandidateRecordMigrations(userId: string, signal?: Abor
 export async function readRecallCandidate(userId: string, candidateId: string): Promise<RecallCandidateRecord> {
   const record = await readRecallJsonRecord(userId, 'candidates', candidateId);
   if (!record) throw recallCandidateError('recall_candidate_not_found', 'recall candidate not found');
-  return asCandidate(record);
+  return withOldContentPlanProjection(userId, asCandidate(record));
 }
 
 export async function saveRecallCandidate(userId: string, input: SaveRecallCandidateInput): Promise<RecallCandidateRecord> {
@@ -1632,6 +1685,8 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
   if (input.proposalTarget === 'joint' && !input.ontologyFormation) throw new Error('joint suggestion requires ontology changes');
   if (input.proposalTarget === 'ontology' && (!input.ontologyFormation || (!input.ontologyFormation.actions.length && !input.ontologyFormation.blockedReasons.length) || input.targetAssetId
     || input.targetVersionUsed || input.ontologyFormation.refs.some(ref => ref.sharedBody))) throw new Error('invalid ontology-only suggestion');
+  if (input.proposalTarget === 'ontology' && input.oldContentPlan)
+    throw new Error('ontology-only suggestion cannot carry an old-content plan');
   const judgment = boundedCandidateStatement(input.judgment);
   // value 缺省取 judgment 全文，因此两者使用相同的长度上限。
   const value = boundedText(input.value, 'value', RECALL_TEXT_LIMITS.value, false, true);
@@ -1648,6 +1703,7 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
     ? await verifyHumanInstructionCandidate(userId, input, { newWrite: true }) : undefined;
   const stockOrganizationProvenance = input.stockOrganizationProvenance
     ? await verifyStockOrganizationCandidate(userId, input, { newWrite: true }) : undefined;
+  const oldContentPlan = input.oldContentPlan ? formationOldContentPlanSchema.parse(input.oldContentPlan) : undefined;
   if (input.contentOrganization) await verifyContentOrganization(userId, input, true);
   const captureProvenance = input.contentOrganization || humanInstructionProvenance || stockOrganizationProvenance ? undefined : await verifyCaptureProvenanceForWrite(userId, input.captureProvenance, sourceRefs);
   const hasExplicitValue = Object.prototype.hasOwnProperty.call(input, 'value');
@@ -1668,6 +1724,7 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
     learningProvenance ? JSON.stringify(learningProvenance) : undefined,
     captureProvenance ? JSON.stringify(captureProvenance) : undefined,
     input.formationComparison ? JSON.stringify(input.formationComparison) : undefined,
+    oldContentPlan ? JSON.stringify(oldContentPlan) : undefined,
   ]);
   const captureKey = input.captureKey === undefined
     ? undefined
@@ -1750,9 +1807,12 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
     // Extraction may recognize an already saved idea, but it cannot append
     // evidence to its formal asset or rewrite the committed candidate proof.
     if (['confirmed', 'integrated'].includes(existing.status)) {
+      if (input.oldContentPlan) await bindOldContentPlan(userId, existing.id, input.oldContentPlan);
       if (captureProvenance) await recordCaptureCandidateReceipt(userId, captureKey, existing.id);
-      return existing;
+      return readRecallCandidate(userId, existing.id);
     }
+    const boundPlan = input.oldContentPlan
+      ? await bindOldContentPlan(userId, existing.id, input.oldContentPlan) : undefined;
     const merged = await updateRecallJsonRecord(userId, 'candidates', existing.id, (current) => {
       if (!current) return existing;
       const candidate = asCandidate(current);
@@ -1772,6 +1832,7 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
         evidenceRefs: mergeSourceRefs(candidate.evidenceRefs, evidenceRefs),
         risk: maxCandidateRisk(candidate.risk, risk),
         ...(captureProvenance ? { captureProvenance } : {}),
+        ...(boundPlan ? { oldContentPlanId: boundPlan.id } : {}),
         ...(input.ontologyFormation ? { ontologyFormation: normalizeOntologyFormationPlan(userId, candidate.id, bindOntologyFormationPlan(candidate.id, input.ontologyFormation)) } : {}),
         ...(candidateBoundaries.applicableWhen !== undefined
           ? { applicableWhen: candidateBoundaries.applicableWhen }
@@ -1789,7 +1850,7 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
         updatedAt: now,
       };
     });
-    return asCandidate(merged);
+    return readRecallCandidate(userId, existing.id);
   }
   // Purge clears candidate judgment, so fingerprint dedupe cannot see the old
   // confirmed row. Match the asset tombstone hash and keep returning that
@@ -1804,12 +1865,14 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
       return suppressed;
     }
   }
+  const recordId = captureKey ? candidateIdForCaptureKey(captureKey) : `cand-${genId12()}`;
+  const boundPlan = input.oldContentPlan ? await bindOldContentPlan(userId, recordId, input.oldContentPlan) : undefined;
   const record: RecallCandidateRecord = {
     schemaVersion: 1,
     contentFormatVersion: 1,
     taxonomyVersion: 2,
     ownerId: userId,
-    id: captureKey ? candidateIdForCaptureKey(captureKey) : `cand-${genId12()}`,
+    id: recordId,
     ...(input.proposalTarget ? { proposalTarget: input.proposalTarget } : {}),
     ...(input.formationProposalId ? { formationProposalId: input.formationProposalId } : {}),
     status: reviewReady ? 'pending_review' : 'weak_observation',
@@ -1844,6 +1907,7 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
     ...(targetAssetId ? { targetAssetId } : {}),
     ...(targetVersionUsed ? { targetVersionUsed } : {}),
     ...(formationComparison ? { formationComparison } : {}),
+    ...(boundPlan ? { oldContentPlanId: boundPlan.id } : {}),
     expiresAt,
     createdAt: now,
     updatedAt: now,
@@ -1854,13 +1918,13 @@ async function saveRecallCandidateUnlocked(userId: string, input: SaveRecallCand
       userId,
       'candidates',
       record.id,
-      (current) => current || record,
+      (current) => current
+        ? { ...current, ...(boundPlan ? { oldContentPlanId: boundPlan.id } : {}) }
+        : record,
     ));
   }
   await writeRecallJsonRecord(userId, 'candidates', record.id, record);
-  // 与 captureKey 路径同口径：返回前过 asCandidate，让 origin 等读时推导
-  // 字段在两条路径上一致。
-  return asCandidate(record as unknown as RecallJsonRecord);
+  return readRecallCandidate(userId, record.id);
 }
 
 /**
@@ -2224,6 +2288,304 @@ export async function supersedeRecallCandidate(
 
 export function keepCurrentRecallCandidate(userId: string, candidateId: string, note?: string): Promise<RecallCandidateRecord> {
   return decideWithoutAsset(userId, candidateId, 'keep_current', 'ignored', note);
+}
+
+/* ── 多条关联内容的归并与重判──────────────────────────
+ * 形成建议指出这条新内容同时牵涉 2–6 条旧内容时，用户只有两种选择：把这些
+ * 旧内容并成一份（版本组收口）后重新核对这条建议，或保留全部旧内容不合并。
+ * 归并本身是可撤销成本很高的写操作，所以：版本、类型与授权边界在**第一次
+ * 写入之前**整体预检（allowPartial:false），任何冲突零写入并逐条回报；成功
+ * 后候选仍是待处理，由所属整理任务在后台按合并后的内容重判，新候选保存时
+ * 才取代旧候选，失败则旧候选原样保留、可再次发起。 */
+
+const RELATED_FORMATION_MIN = 2;
+const RELATED_FORMATION_MAX = 6;
+const RELATED_FORMATION_REFORMABLE_STATUSES = ['review_ready', 'completed', 'partial', 'failed', 'no_candidate'] as const;
+const RELATED_FORMATION_RUNNING_CAPTURE_STATUSES = ['queued', 'extracting', 'writing'] as const;
+
+export type RelatedFormationStatus = 'idle' | 'running' | 'completed' | 'failed';
+
+/** Re-formation state derived for display; never persisted as a second source
+ *  of truth (the capture record and relatedResolution are authoritative). */
+export interface RecallRelatedFormationState {
+  captureId: string;
+  status: RelatedFormationStatus;
+  action?: 'merged' | 'kept';
+  targetAssetId?: string;
+  targetVersion?: string;
+  /** Stable code the renderer translates; never the raw capture message. */
+  error?: string;
+  retryable: boolean;
+}
+
+export interface ResolveRelatedFormationResult {
+  /** False only when the group merge was blocked or partially failed. */
+  resolved: boolean;
+  candidate: RecallCandidateRecord;
+  receipts: MergeAssetGroupReceipt[];
+  resolution?: 'merged' | 'kept';
+  reformation?: RecallRelatedFormationState;
+}
+
+function relatedFormationGroup(candidate: RecallCandidateRecord): {
+  captureId: string;
+  versions: Record<string, string>;
+} {
+  if (!['pending_review', 'deferred'].includes(candidate.status)) {
+    throw new RecallCandidateStateError(
+      RECALL_CANDIDATE_TERMINAL_ERROR_CODE, 'recall candidate is terminal', candidate.status,
+    );
+  }
+  if (candidate.oldContentPlan)
+    throw recallCandidateError('recall_candidate_old_content_plan',
+      'old-content actions require their dedicated confirmation');
+  const comparison = candidate.formationComparison;
+  const related = comparison?.relation === 'ambiguous' ? comparison.relatedAssets || [] : [];
+  if (candidate.targetAssetId || related.length < RELATED_FORMATION_MIN || related.length > RELATED_FORMATION_MAX) {
+    throw recallCandidateError(
+      'recall_candidate_related_group_unavailable',
+      'candidate has no multi-asset ambiguity group to resolve',
+    );
+  }
+  const captureId = String(candidate.captureProvenance?.captureId || '');
+  if (!safeId(captureId)) {
+    throw recallCandidateError(
+      'recall_candidate_related_group_unavailable',
+      'candidate has no capture that can rejudge the merged group',
+    );
+  }
+  return { captureId, versions: Object.fromEntries(related.map(item => [item.assetId, item.version])) };
+}
+
+/** Read-only precheck so assets are never merged into a capture that cannot
+ *  rejudge the suggestion afterwards. */
+async function readRelatedFormationCapture(userId: string, captureId: string, candidateId: string) {
+  const { readRecallCapture } = await import('./capture-service');
+  let capture: RecallCaptureRecord;
+  try {
+    capture = await readRecallCapture(userId, captureId);
+  } catch {
+    throw recallCandidateError('recall_candidate_related_group_unavailable', 'the owning capture is unavailable');
+  }
+  if (!RELATED_FORMATION_REFORMABLE_STATUSES.includes(capture.status as typeof RELATED_FORMATION_REFORMABLE_STATUSES[number])
+    || !capture.formationCheckpoint || capture.formationCheckpoint.sourceProposalVersion !== 1
+    || !(capture.candidateIds || []).includes(candidateId)) {
+    throw recallCandidateError(
+      'recall_candidate_related_group_unavailable',
+      'the owning capture cannot rejudge this suggestion',
+    );
+  }
+  return capture;
+}
+
+function relatedFormationStateOf(
+  candidate: Pick<RecallCandidateRecord, 'captureProvenance' | 'relatedResolution'>,
+  capture: RecallCaptureRecord,
+): RecallRelatedFormationState | undefined {
+  const captureId = String(candidate.captureProvenance?.captureId || '');
+  const resolution = candidate.relatedResolution;
+  if (!safeId(captureId) || !resolution) return undefined;
+  const base = {
+    captureId,
+    action: resolution.action,
+    ...(resolution.targetAssetId ? { targetAssetId: resolution.targetAssetId } : {}),
+    ...(resolution.targetVersion ? { targetVersion: resolution.targetVersion } : {}),
+  };
+  if (resolution.action === 'kept') return { ...base, status: 'completed', retryable: false };
+  if (RELATED_FORMATION_RUNNING_CAPTURE_STATUSES.includes(capture.status as typeof RELATED_FORMATION_RUNNING_CAPTURE_STATUSES[number])) {
+    return { ...base, status: 'running', retryable: false };
+  }
+  const checkpoint = capture.formationCheckpoint;
+  const error = checkpoint?.reformationError || resolution.reformation?.error
+    || (['failed', 'configuration_required', 'cancelled'].includes(capture.status)
+      && checkpoint?.reformationRequestedAt ? capture.errorCode || 'capture_reformation_failed' : undefined);
+  if (error) return { ...base, status: 'failed', error, retryable: true };
+  // A merge decision without a reformation mark means the rejudge was never
+  // queued (for example the request failed before the mark landed).
+  if (!resolution.reformation?.requestedAt) return { ...base, status: 'idle', retryable: true };
+  return { ...base, status: 'completed', retryable: false };
+}
+
+/** Attach derived re-formation state only where a multi-asset group exists, so
+ *  list reads do not open captures for ordinary suggestions. */
+export async function withRecallCandidateRelatedFormation<T extends RecallCandidateRecord>(
+  userId: string,
+  candidates: readonly T[],
+): Promise<Array<T & { relatedFormation?: RecallRelatedFormationState }>> {
+  const targets = candidates.filter((candidate) => {
+    const related = candidate.formationComparison?.relation === 'ambiguous'
+      ? candidate.formationComparison.relatedAssets || [] : [];
+    return safeId(String(candidate.captureProvenance?.captureId || ''))
+      && (Boolean(candidate.relatedResolution) || related.length >= RELATED_FORMATION_MIN);
+  });
+  if (!targets.length) return candidates.map(candidate => ({ ...candidate }));
+  const { readRecallCapture } = await import('./capture-service');
+  const captures = new Map<string, RecallCaptureRecord | undefined>();
+  for (const captureId of [...new Set(targets.map(candidate => String(candidate.captureProvenance!.captureId)))]) {
+    captures.set(captureId, await readRecallCapture(userId, captureId).catch(() => undefined));
+  }
+  return candidates.map(candidate => {
+    const capture = captures.get(String(candidate.captureProvenance?.captureId || ''));
+    const relatedFormation = capture ? relatedFormationStateOf(candidate, capture) : undefined;
+    return { ...candidate, ...(relatedFormation ? { relatedFormation } : {}) };
+  });
+}
+
+async function writeRelatedResolution(
+  userId: string,
+  candidateId: string,
+  resolution: NonNullable<RecallCandidateRecord['relatedResolution']>,
+): Promise<RecallCandidateRecord> {
+  const row = await updateRecallJsonRecord(userId, 'candidates', candidateId, raw => {
+    if (!raw) throw recallCandidateError('recall_candidate_not_found', 'recall candidate not found');
+    const current = asCandidate(raw);
+    if (isTerminalCandidate(current.status)) {
+      throw new RecallCandidateStateError(RECALL_CANDIDATE_TERMINAL_ERROR_CODE, 'recall candidate is terminal', current.status);
+    }
+    return { ...current, relatedResolution: structuredClone(resolution), updatedAt: new Date().toISOString() };
+  });
+  return asCandidate(row);
+}
+
+async function writeRelatedReformationMark(
+  userId: string,
+  candidateId: string,
+  mark: NonNullable<NonNullable<RecallCandidateRecord['relatedResolution']>['reformation']>,
+): Promise<RecallCandidateRecord> {
+  const row = await updateRecallJsonRecord(userId, 'candidates', candidateId, raw => {
+    if (!raw) throw recallCandidateError('recall_candidate_not_found', 'recall candidate not found');
+    const current = asCandidate(raw);
+    if (current.relatedResolution?.action !== 'merged') return current;
+    return { ...current, relatedResolution: { ...current.relatedResolution, reformation: mark } };
+  });
+  return asCandidate(row);
+}
+
+async function requestRelatedFormation(
+  userId: string,
+  candidateId: string,
+  captureId: string,
+): Promise<RecallCandidateRecord> {
+  const requestedAt = new Date().toISOString();
+  try {
+    const { requestCaptureReformation } = await import('./capture-service');
+    await requestCaptureReformation(userId, captureId, {
+      candidateIds: [candidateId], reason: 'related_merge', runNow: false,
+    });
+    return await writeRelatedReformationMark(userId, candidateId, { requestedAt });
+  } catch (error) {
+    log.warn('related merge reformation could not be queued', {
+      candidateId, captureId, error: String((error as Error)?.message || error).slice(0, 300),
+    });
+    return await writeRelatedReformationMark(userId, candidateId, {
+      requestedAt, error: 'capture_reformation_unavailable',
+    });
+  }
+}
+
+/** Resolve a multi-asset ambiguity group: merge the old assets into one version
+ *  group and let the owning capture rejudge, or keep all old assets untouched.
+ *  Both outcomes leave the candidate pending for the fresh judgement. */
+export async function resolveRelatedFormationCandidate(
+  userId: string,
+  candidateId: string,
+  input: { action: 'merge' | 'keep'; targetAssetId?: string },
+): Promise<ResolveRelatedFormationResult> {
+  if (!safeId(userId) || !safeId(candidateId)) throw new Error('invalid recall candidate reference');
+  if (input?.action !== 'merge' && input?.action !== 'keep') throw new Error('invalid related formation action');
+  const action = input.action;
+  const targetAssetId = input.targetAssetId === undefined ? undefined : String(input.targetAssetId);
+  if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid related formation target');
+  if (action === 'keep' && targetAssetId !== undefined) throw new Error('keep cannot choose a merge target');
+
+  const planned = await withRecallCandidateReviewLock(userId, async () => {
+    const candidate = await readRecallCandidate(userId, candidateId);
+    const group = relatedFormationGroup(candidate);
+    const existing = candidate.relatedResolution;
+    // User already decided: repeat clicks are no-ops, never a second merge or a
+    // silent downgrade from "merged" back to "kept".
+    if (existing) {
+      return {
+        candidate,
+        captureId: group.captureId,
+        receipts: (existing.receipts || []) as MergeAssetGroupReceipt[],
+        resolution: existing.action,
+        blocked: false,
+      };
+    }
+    if (action === 'keep') {
+      const updated = await writeRelatedResolution(userId, candidateId, {
+        action: 'kept', at: new Date().toISOString(),
+      });
+      return { candidate: updated, captureId: group.captureId, receipts: [] as MergeAssetGroupReceipt[],
+        resolution: 'kept' as const, blocked: false };
+    }
+    if (!targetAssetId || !group.versions[targetAssetId]) {
+      throw recallCandidateError(
+        'recall_candidate_related_group_unavailable',
+        'the merge target must be one of the related assets',
+      );
+    }
+    // Assets must not merge while the capture is mid-run; that would race the
+    // group the user is confirming. The caller retries after the run settles.
+    const capture = await readRelatedFormationCapture(userId, group.captureId, candidateId);
+    if (RELATED_FORMATION_RUNNING_CAPTURE_STATUSES.includes(capture.status as typeof RELATED_FORMATION_RUNNING_CAPTURE_STATUSES[number])) {
+      throw recallCandidateError(
+        'recall_candidate_related_group_unavailable',
+        'the owning capture is rejudging this suggestion',
+      );
+    }
+    const sourceAssetIds = Object.keys(group.versions).filter(id => id !== targetAssetId);
+    const merge = await mergeAbilityAssetGroup(userId, {
+      sourceAssetIds,
+      targetAssetId,
+      expectedVersions: group.versions,
+      expectedTargetVersion: group.versions[targetAssetId],
+      allowPartial: false,
+    }, { actor: 'user', reason: 'related merge from suggestion' });
+    const merged = merge.receipts.filter(row => row.status === 'merged').length;
+    if (!merge.ok && merged === 0) {
+      // Preflight conflict: nothing was written, the user sees every reason.
+      return { candidate: await readRecallCandidate(userId, candidateId), captureId: group.captureId,
+        receipts: merge.receipts, resolution: undefined, blocked: true };
+    }
+    const updated = await writeRelatedResolution(userId, candidateId, {
+      action: 'merged',
+      targetAssetId,
+      ...(merge.targetVersion ? { targetVersion: merge.targetVersion } : {}),
+      at: new Date().toISOString(),
+      receipts: merge.receipts,
+    });
+    return { candidate: updated, captureId: group.captureId, receipts: merge.receipts,
+      resolution: 'merged' as const, blocked: !merge.ok };
+  });
+
+  if (planned.resolution !== 'merged') {
+    return {
+      resolved: planned.resolution === 'kept',
+      candidate: planned.candidate,
+      receipts: planned.receipts,
+      ...(planned.resolution ? { resolution: planned.resolution } : {}),
+    };
+  }
+  // A previous attempt may have failed to queue the rejudge; retry from the
+  // same explicit decision instead of forcing the user to merge again.
+  const { readRecallCapture } = await import('./capture-service');
+  const before = await readRecallCapture(userId, planned.captureId).catch(() => undefined);
+  const previous = before ? relatedFormationStateOf(planned.candidate, before) : undefined;
+  const shouldRequest = !previous || previous.status === 'idle' || previous.status === 'failed';
+  const candidate = shouldRequest
+    ? await requestRelatedFormation(userId, candidateId, planned.captureId)
+    : planned.candidate;
+  const capture = await readRecallCapture(userId, planned.captureId).catch(() => undefined);
+  const reformation = capture ? relatedFormationStateOf(candidate, capture) : undefined;
+  return {
+    resolved: !planned.blocked,
+    candidate,
+    receipts: planned.receipts,
+    resolution: 'merged',
+    ...(reformation ? { reformation } : {}),
+  };
 }
 
 /** Use the same pool mutex as asset promotion for cross-domain candidate handoffs. */
@@ -2855,6 +3217,8 @@ async function promoteRecallCandidateWithGrant(
   }
   const preflight = await readRecallCandidate(userId, candidateId);
   if (preflight.contentOrganization) throw new Error(t('cognition.organization.confirm_group'));
+  if (preflight.oldContentPlan?.status === 'ready' && !preflight.oldContentReceipt)
+    throw new Error('old-content plan must be committed before the new suggestion');
   if (preflight.humanInstructionProvenance && (options.actor !== 'user' || options.forceCreateSimilar || options.confirmBaselineVersion
     || options.decisionType || options.ontologyRefs || options.scopePolicy || options.causalRule || options.profileTarget
     || Object.keys(optionSemantics).length || Object.keys(relationContract).length))

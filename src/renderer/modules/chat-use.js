@@ -7,7 +7,7 @@
 
 const _chatUse = { 'new-chat': null, 'conversation': null, auto: null };
 const _CHAT_USE_TOKEN_OPEN = '@{';
-const _CHAT_USE_TOKEN_KINDS = new Set(['skill', 'connector']);
+const _CHAT_USE_TOKEN_KINDS = new Set(['skill', 'connector', 'agent']);
 const _CHAT_USE_TOKEN_START = '\u2063';
 const _CHAT_USE_TOKEN_META = '\u2062';
 const _CHAT_USE_TOKEN_END = '\u2064';
@@ -40,7 +40,8 @@ function _normalizeChatUseSelection(value) {
   }
   if (typeof value !== 'object') return null;
   const kind = value.kind === 'connector' ? 'connector'
-    : (value.kind === 'ontology_group' ? 'ontology_group' : (value.kind === 'skill' ? 'skill' : ''));
+    : (value.kind === 'ontology_group' ? 'ontology_group'
+      : (value.kind === 'agent' ? 'agent' : (value.kind === 'skill' ? 'skill' : '')));
   if (!kind) return null;
   const name = String(value.name || value.id || '').trim();
   const id = String(value.id || name).trim();
@@ -307,6 +308,7 @@ function formatChatUseLabel(selection) {
   const sel = _normalizeChatUseSelection(selection);
   if (!sel) return '';
   if (sel.kind === 'connector') return t('connectors.use_label', { connector: sel.name || sel.id });
+  if (sel.kind === 'agent') return t('agents.use_label', { agent: sel.name || sel.id });
   if (sel.kind === 'ontology_group') return `${t('agent_picker.ontology_group')}：${sel.name || sel.id}`;
   return t('skills.use_label', { skill: sel.name || sel.id });
 }
@@ -319,8 +321,9 @@ function _chatUseLabelParts(selection) {
     const prefix = `${t('agent_picker.ontology_group')}：`;
     return { name, label: `${prefix}${name}`, prefix };
   }
-  const token = sel.kind === 'connector' ? 'connector' : 'skill';
-  const key = sel.kind === 'connector' ? 'connectors.use_label' : 'skills.use_label';
+  const token = sel.kind === 'connector' ? 'connector' : (sel.kind === 'agent' ? 'agent' : 'skill');
+  const key = sel.kind === 'connector' ? 'connectors.use_label'
+    : (sel.kind === 'agent' ? 'agents.use_label' : 'skills.use_label');
   return {
     name,
     label: t(key, { [token]: name }),
@@ -355,7 +358,7 @@ function _renderChatUseChip(target) {
   if (!chip) return;
   if (!next) {
     chip.style.display = 'none';
-    chip.classList.remove('is-skill', 'is-connector');
+    chip.classList.remove('is-skill', 'is-connector', 'is-agent');
     delete chip.dataset.kind;
     delete chip.dataset.itemId;
     const lbl = chip.querySelector('.chip-label');
@@ -365,6 +368,7 @@ function _renderChatUseChip(target) {
   chip.style.display = 'inline-flex';
   chip.classList.toggle('is-skill', next.kind === 'skill');
   chip.classList.toggle('is-connector', next.kind === 'connector');
+  chip.classList.toggle('is-agent', next.kind === 'agent');
   chip.dataset.kind = next.kind;
   chip.dataset.itemId = next.id || '';
   const lbl = chip.querySelector('.chip-label');
@@ -378,6 +382,9 @@ function refreshChatUseChips() {
 
 function isChatUseAllowedForTarget(target, kind) {
   if (!target || !kind) return false;
+  // Extra Agent chips are an Automation-template dependency control, not a
+  // conversation dispatch primitive. Other composers must never accept them.
+  if (kind === 'agent') return target === 'auto';
   // Commander and agent recipients now share the same skill/connector surface.
   // Live connector availability is still checked when the draft is consumed.
   return true;
@@ -552,6 +559,9 @@ function _chatUseInlineText(selection) {
   if (sel.kind === 'connector') {
     return _localizedChatUseText('connectors.inline_text', { connector: name }, `${name} connector`);
   }
+  if (sel.kind === 'agent') {
+    return _localizedChatUseText('agents.use_label', { agent: name }, `Agent: ${name}`);
+  }
   if (sel.kind === 'ontology_group') {
     // Sync fallback for callers that just want a short readable label (e.g.
     // conversation title seeding) — NOT the actual emphasis path. The real
@@ -685,7 +695,7 @@ async function transformWithChatUseAsync(content, selection) {
   selections.forEach((sel) => {
     if (sel.kind === 'connector') {
       out = t('connectors.use_prefix', { connector: sel.name || sel.id, content: out });
-    } else if (sel.kind !== 'ontology_group') {
+    } else if (sel.kind === 'skill') {
       // ontology_group selections are only reachable via inline tokens in the
       // input text (multi-select, no legacy `_chatUse[target]` single-slot
       // state), so they're already handled by transformChatUseTokensAsync above.
@@ -701,7 +711,7 @@ function transformWithChatUse(content, selection) {
   selections.forEach((sel) => {
     if (sel.kind === 'connector') {
       out = t('connectors.use_prefix', { connector: sel.name || sel.id, content: out });
-    } else if (sel.kind !== 'ontology_group') {
+    } else if (sel.kind === 'skill') {
       out = transformWithSkill(out, sel.name || sel.id);
     }
   });
@@ -724,7 +734,8 @@ function _renderChatUseMirrorHtml(text, renderPlainHtml) {
   tokens.forEach((token) => {
     if (token.start > last) html += renderer(src.slice(last, token.start));
     const parts = _chatUseLabelParts(token.selection);
-    const cls = token.selection.kind === 'connector' ? 'is-connector' : 'is-skill';
+    const cls = token.selection.kind === 'connector' ? 'is-connector'
+      : (token.selection.kind === 'agent' ? 'is-agent' : 'is-skill');
     const title = parts ? parts.label : formatChatUseLabel(token.selection);
     html += `<span class="chat-use-inline-chip ${cls}" title="${escapeHtml(title)}">`;
     if (parts) {

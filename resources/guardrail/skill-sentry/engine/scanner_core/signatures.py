@@ -106,12 +106,16 @@ def _severity_and_context(rule, rel: str, data: bytes, offset: int,
     original = str(meta.get("severity") or "high").lower()
     if original not in _ALLOWED_SEVERITY:
         original = "high"
+    # 签名包的类别来自 rule meta，与文本规则走同一张行为类表：socket+dup2 与
+    # stratum 池地址在 tests/ 与 vendor/ 里仍然是同一个行为。
+    category = str(meta.get("category") or "") or None
     ctx = contexts.get(rel)
     if ctx is None:
-        return severity_for(original, file_context(rel)), file_context(rel)
+        base = file_context(rel)
+        return severity_for(original, base, category=category), base
     line_no, line_text = _line_and_text(data, offset)
     level = ctx.at(line_no, line_text)
-    return severity_for(original, level), level
+    return severity_for(original, level, category=category), level
 
 
 def scan_signatures(skill_dir: Path, contexts: dict[str, Any],

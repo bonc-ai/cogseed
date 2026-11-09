@@ -1,7 +1,7 @@
 ---
 name: skill-sentry
 description: "针对 Skill 的强制安全扫描 + 信任网关：静态检测危险命令、注入、密钥、恶意特征（内置 YARA 子集引擎与签名包）、Prompt Injection 载荷、不可见内容（零宽/标签块/双向控制符）、混淆与编码载荷、代理运行时指令、供应链与安装钩子、持久化、数据外传、二进制行为线索、依赖漏洞（内置 OSV 快照）；归一化与解码后重扫以对抗规避；输出可解释的 Security Score / 风险分级 / 部署建议 / CWE 与 OWASP 编号 / SARIF，并通过信任根 + 信任台账 + 有到期日的风险接受提供全生命周期防篡改保护。"
-version: 2.3.0
+version: 2.4.1
 author: CogSeed
 license: Apache-2.0
 platforms: [linux, darwin]
@@ -26,6 +26,79 @@ Companion Agent / Task Agent 的**强制安全入口**。前身为 `cogseed-secu
 - 任何 Skill 在安装 / 发布 / 上线前的强制安全检查（一次性扫描）。
 - 需要在 Skill 已安装后持续防止内容被篡改（信任台账 + TOCTOU 防护）。
 - 需要对 Skill 输出 Security Score、风险分级和部署建议（ALLOW / CAUTION / DO_NOT_INSTALL）。
+
+## 2.4.1 修复：未读即不得放行（复测 N-01～N-06）
+
+第二阶段复测（2026-11-05）确认 2.4.0 的 33 个冻结样本已关闭，但同一通道的
+变体仍在收口。2.4.1 只修这些变体暴露的四类结构问题，不新增检测类别。
+
+**未读内容不得产生 `pass`**（`path_security.py` / `scan_gate.py`）
+- 扩展名白名单之外再做**内容探测**（NUL / UTF-8 / 可打印占比）：`.rtf`、
+  `.vbs`、`.jsp`、无扩展名文本进入同一条管线。V1 之所以能 `pass/100`，
+  不是规则不认识那段指令，而是文件从没被打开。
+- 文本类内容因体积上限或总量预算没读完时，产出点名 finding 并把 `pass`
+  压到 `restricted`。`archive_*` / `carrier_*` 维持原有分级。
+
+**组合层按逻辑句判定**（`agentic_rules.py`）
+- `guardrail_bypass_on_block` 与弱信号配对改为在**逻辑句**上判断：句读符与
+  Markdown 块边界切分，续行合并。绕过成本不再是一个换行（复测 V5）。
+- 新增 `bulk_collection_to_network`：用户私有目录批量收集 × 外发，不依赖
+  凭据字面量（复测 V9）；`covert_execution` 补上「do not mention … to the
+  user」这类插入语形态。
+- 新增 `keystroke_capture_egress`：输入监听 × 网络外发，组合命中不随
+  `tests/`、`vendor/` 降权（复测 V8）。`surveillance` 仍不进阻断类别
+  （键盘钩子是合法自动化原语），因此结论是 `restricted`，不是 `blocked`。
+
+**官方语料可导入**（`src/main/quality/index.ts`）
+- 本地红线的 `test` 上下文改为**要求共现**：同一条 `test/` 命中需要第二条
+  独立规则佐证才升 EXTREME。`seo-crawl` 的负向断言只点名一个地址（1 条），
+  真实载荷是「读 + 外发」（2 条），两者因此不再同向处理。
+- 发布门禁补一条：**每个** 官方 skill 必须能过安装谓词，而不只是 `report.ok`。
+
+## 2.4.0 新增：载体取证（红队 F-01/F-02/F-03/F-06）
+
+2.4.0 修的是**收集层**，不是检测层。第一阶段红队（2026-11-04）用四条通道把
+26 个攻击样本里的 20 个装进了技能库，其中 5 个拿到 `pass / ALLOW / 100`；
+把这些样本的原文本改名成 `.txt` 立刻变成 `restricted`——说明规则认识这些内容，
+只是从没读到它们。
+
+**载体取证**（`engine/scanner_core/path_security.py`）
+- `TEXT_EXT` 扩到 SVG / HTML / XML / ipynb / CSV / PowerShell / PHP / Ruby /
+  Lua 等纯文本载体。
+- PDF 抽取未加密内容流里的文本字面量（Flate 解压 + `Tj`/`TJ`），PNG 抽取
+  `tEXt`/`zTXt`/`iTXt` 文本块。都只用标准库、都有硬上限。
+- 归档（zip / tar.\* / 单流 gz·bz2·xz，以及 zip 容器的 docx·xlsx·pptx·whl）
+  **递归读取成员**，成员以 `外层::内部` 的合成路径进入同一条文本管线。于是
+  文本规则 / YARA / 隐藏内容 / 解码重扫 / 指令规则全部自动覆盖归档内部，
+  不存在「压缩包里的东西另有一套检测」这种会漂移的第二实现。
+- 所有上限（2 层嵌套 / 200 成员 / 单成员 2 MiB / 总解压 8 MiB / 压缩比 200）
+  触顶后产出 `archive_*` / `carrier_*` finding，**不静默截断**：扫描被截断不是
+  「干净」的证据。
+
+**散文封顶只适用于作者叙述**（`engine/scanner_core/context.py`）
+`CONTEXT_PROSE` 的上限（low）是在 Markdown / 纯文本语料上标定的——那类正文会写
+「不要用 `curl | sh`」。把它外推到 `.svg` / `.html` / `.pdf` / `.ipynb` 上，
+等于给载体发一张免检通行证：同一段越权指令在 `assets/logo.svg` 里是 `prose`，
+在 `scripts/*.py` 里是 critical。2.4.0 起散文判定只对 `.md`/`.txt`/`.rst`/
+`.adoc` 生效，载体文件停留在 `doc`。
+
+**门禁按「类别」而不是「目录」判定**（`scan_gate.py`）
+`BLOCKING_CATEGORIES` 从 3 类扩到 10 类：新增 reverse_shell / crypto_miner /
+command_exec / destructive / unauthorized_download / obfuscation / persistence。
+此前这两类只靠 `deployment_recommendation` 兜底，而那个值读的是**降权后**的
+严重级——于是 `tests/` 与 `vendor/` 里的同一份代码被降成 medium，两个目录之差
+就是「拒装」与「装进去」。有良性读法的类别（privilege / surveillance /
+mcp_config / network）刻意不收，并在代码里写明理由。
+
+**高危依赖公告至少 CAUTION**
+`requests==2.0.0` 命中 1 条 high + 5 条 medium 公告，2.3.0 给的是
+`MEDIUM / 42 分 / ALLOW`——一条 high 的已知漏洞落在 ALLOW 里。现在已知
+high/critical 公告会把建议提升到 CAUTION，风险卡片上能看到具体公告 id。
+
+**`--detail` 在多 Skill 包上不再崩**
+`_detail_payload` 读了一个只属于单 Skill 扫描的局部变量，聚合报告里没有
+`scan_tier` 时抛 `NameError`，整包被判 `unknown`（fail-closed，但用户看不到
+任何解释）。
 
 ## 2.3.0 新增（先读这一节）
 

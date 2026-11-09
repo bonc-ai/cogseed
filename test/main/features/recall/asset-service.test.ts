@@ -914,6 +914,38 @@ describe('治理动作', () => {
     expect(actions).toContain('merged_from');
   });
 
+  it('一次合并多条同边界资产，版本预检失败时零写入', async () => {
+    const { candidates, assets } = await modules();
+    const fixture = async (summary: string, judgment: string) => {
+      const candidate = await createNightlyCandidateFixture('user-merge-group', {
+        judgment, summary, suggestedType: 'rule', suggestedScope: 'general',
+        sourceRefs: [{ kind: 'conversation', id: `conv-${summary}` }],
+      });
+      return (await candidates.promoteRecallCandidate('user-merge-group', candidate.id, { actor: 'user', forceCreateSimilar: true })).asset;
+    };
+    const target = await fixture('group-target', '群组合并目标。');
+    const first = await fixture('group-first', '群组合并来源一。');
+    const second = await fixture('group-second', '群组合并来源二。');
+    const result = await assets.mergeAbilityAssetGroup('user-merge-group', {
+      sourceAssetIds: [first.id, second.id], targetAssetId: target.id,
+      expectedVersions: { [first.id]: first.version, [second.id]: second.version },
+      expectedTargetVersion: target.version,
+    }, userAction('group merge'));
+    expect(result.ok).toBe(true);
+    expect(result.receipts.map(row => row.status)).toEqual(['merged', 'merged']);
+    expect((await assets.readAbilityAsset('user-merge-group', first.id)).status).toBe('archived');
+    expect((await assets.readAbilityAsset('user-merge-group', second.id)).status).toBe('archived');
+    expect((await assets.readAbilityAsset('user-merge-group', target.id)).version).not.toBe(target.version);
+
+    const later = await fixture('group-later', '群组合并来源三。');
+    const blocked = await assets.mergeAbilityAssetGroup('user-merge-group', {
+      sourceAssetIds: [later.id], targetAssetId: target.id,
+      expectedVersions: { [later.id]: '999' }, expectedTargetVersion: target.version,
+    }, userAction('group merge stale'));
+    expect(blocked.ok).toBe(false);
+    expect((await assets.readAbilityAsset('user-merge-group', later.id)).status).toBe('active');
+  });
+
   it('版本链带按版本的使用效果聚合：applied/contradicted 计数', async () => {
     const { candidates, assets } = await modules();
     const receipts = await import('../../../../src/main/features/recall/asset-usage-receipt');

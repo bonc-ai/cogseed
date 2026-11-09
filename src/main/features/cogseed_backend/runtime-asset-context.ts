@@ -31,6 +31,31 @@ const log = createLogger('cogseed-backend:runtime-asset-context');
  *  authoritative, while this module still enforces a hard ceiling. */
 export const MAX_RUNTIME_ASSET_CONTEXT_CHARS = 16_000;
 
+export interface RuntimeAssetContextAssembly {
+  items: RuntimeContextItem[];
+  assetIds: string[];
+  omittedAssetIds?: string[];
+}
+
+export interface RuntimeDispatchedAssetContextAssembly {
+  items: RuntimeContextItem[];
+  assetIds: string[];
+}
+
+export interface RuntimeOntologyContextInput {
+  taskText: string;
+  purpose?: string;
+  taskKind?: string;
+  topicQuery?: string;
+  executionId?: string;
+  agentId?: string;
+  projectId?: string;
+  workspaceId?: string;
+  conversationKind?: string;
+  fileKinds?: string[];
+  injectedAssetIds?: string[];
+}
+
 export interface DispatchedRuntimeAssetContextInput {
   agentId?: string;
   taskText: string;
@@ -48,29 +73,40 @@ export interface DispatchedRuntimeAssetContextInput {
  * This remains in the main-process asset assembler so every Recall read has a
  * single, auditable boundary before text crosses into the isolated worker.
  */
-export async function buildDispatchedRuntimeAssetContext(
+export async function buildDispatchedRuntimeAssetContextAssembly(
   userId: string,
   assetIds: string[],
   context: DispatchedRuntimeAssetContextInput,
-): Promise<RuntimeContextItem[]> {
+): Promise<RuntimeDispatchedAssetContextAssembly> {
   try {
     const dispatched = await buildDispatchedAssetsPromptBlock(userId, assetIds, context);
-    if (!dispatched.promptBlock) return [];
+    if (!dispatched.promptBlock) return { items: [], assetIds: [] };
     if (context.taskId && context.executionId) {
       const { recordInjectionReceipt } = await import('../recall/injection-receipt');
       await Promise.allSettled(dispatched.assets.map(asset => recordInjectionReceipt(userId, { taskRunId: context.taskId!,
         assetId: asset.id, assetVersion: asset.version, boundary: 'real', status: 'injected', channel: 'runtime',
         messageId: runtimeResultAnchor(context.executionId!) })));
     }
-    return [{
-      type: 'text',
-      label: 'Commander-dispatched ability assets',
-      content: dispatched.promptBlock,
-    }];
+    return {
+      items: [{
+        type: 'text',
+        label: 'Commander-dispatched ability assets',
+        content: dispatched.promptBlock,
+      }],
+      assetIds: dispatched.assets.map(asset => asset.id),
+    };
   } catch (error) {
     log.warn('Commander-dispatched asset context assembly failed', { error: (error as Error).message });
-    return [];
+    return { items: [], assetIds: [] };
   }
+}
+
+export async function buildDispatchedRuntimeAssetContext(
+  userId: string,
+  assetIds: string[],
+  context: DispatchedRuntimeAssetContextInput,
+): Promise<RuntimeContextItem[]> {
+  return (await buildDispatchedRuntimeAssetContextAssembly(userId, assetIds, context)).items;
 }
 
 /**
@@ -80,13 +116,13 @@ export async function buildDispatchedRuntimeAssetContext(
  * when no asset is active, or on any recall read failure (soft failure: the
  * runtime task must still run without assets).
  */
-export async function buildRuntimeAssetContext(
+export async function buildRuntimeAssetContextAssembly(
   userId: string,
   conversationId: string,
   taskId?: string,
   executionId?: string,
   runtimeContext: import('../recall/formal-assets/runtime').AssetRuntimeContext = {},
-): Promise<RuntimeContextItem[]> {
+): Promise<RuntimeAssetContextAssembly> {
   let block: string;
   let citations: Array<{ assetId: string; version: string; projectionId: string }> = [];
   try {
@@ -96,13 +132,15 @@ export async function buildRuntimeAssetContext(
     citations = context.citations.map((citation) => ({ assetId: citation.assetId, version: citation.version, projectionId: citation.projectionId }));
   } catch (error) {
     log.warn('runtime asset context assembly failed', { error: (error as Error).message });
-    return [];
+    return { items: [], assetIds: [] };
   }
   const assetIds = [...new Set(citations.map((citation) => citation.assetId).filter(Boolean))];
-  if (!block) return [];
+  if (!block) return { items: [], assetIds: [] };
   // A whole block is either supplied or omitted; never cut its final exception
   // while recording every asset as successfully supplied.
-  if (block.length > MAX_RUNTIME_ASSET_CONTEXT_CHARS) return [];
+  if (block.length > MAX_RUNTIME_ASSET_CONTEXT_CHARS) {
+    return { items: [], assetIds: [], omittedAssetIds: assetIds };
+  }
   // 回执键与终态事件对齐：`recall-bridge` 用 taskId 作为 reuse turn id，
   // `terminal-proof.collectLoadedAssetsFromReceipts` 按 `turn-<id>` 回读。
   // 只有真的注入了资产（citations 非空）才落——没有注入就不该有加载凭证。
@@ -144,9 +182,65 @@ export async function buildRuntimeAssetContext(
       log.warn('runtime asset injection receipts failed', { error: (error as Error).message });
     }
   }
-  return [{
-    type: 'text',
-    label: 'Confirmed reusable ability assets',
-    content: block,
-  }];
+  return {
+    items: [{
+      type: 'text',
+      label: 'Confirmed reusable ability assets',
+      content: block,
+    }],
+    assetIds,
+  };
+}
+
+export async function buildRuntimeAssetContext(
+  userId: string,
+  conversationId: string,
+  taskId?: string,
+  executionId?: string,
+  runtimeContext: import('../recall/formal-assets/runtime').AssetRuntimeContext = {},
+): Promise<RuntimeContextItem[]> {
+  return (await buildRuntimeAssetContextAssembly(userId, conversationId, taskId, executionId, runtimeContext)).items;
+}
+
+export async function buildRuntimeOntologyContext(
+  userId: string,
+  taskId: string,
+  input: RuntimeOntologyContextInput,
+): Promise<RuntimeContextItem[]> {
+  try {
+    const { buildTaskOntologyContext } = await import('../cognition/ontology/task-context');
+    const result = await buildTaskOntologyContext({
+      userId,
+      taskText: input.taskText,
+      context: {
+        taskText: input.taskText,
+        ...(input.purpose ? { purpose: input.purpose } : {}),
+        ...(input.agentId ? { agentId: input.agentId } : {}),
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+        ...(input.conversationKind ? { conversationKind: input.conversationKind } : {}),
+        ...(input.fileKinds?.length ? { fileKinds: input.fileKinds } : {}),
+      },
+      ...(input.purpose ? { purpose: input.purpose } : {}),
+      ...(input.taskKind ? { taskKind: input.taskKind } : {}),
+      ...(input.topicQuery ? { topicQuery: input.topicQuery } : {}),
+      injectedAssetIds: input.injectedAssetIds || [],
+    });
+    if (result.errorCode) {
+      log.warn('task ontology context unavailable', { code: result.errorCode });
+    }
+    if (!result.promptBlock) return [];
+    if (result.readRefs.length) {
+      try {
+        const { recordOntologyQueryReadReceipt } = await import('../cognition/ontology/query-receipt');
+        await recordOntologyQueryReadReceipt(userId, taskId, result.readRefs, input.executionId);
+      } catch (error) {
+        log.warn('runtime ontology read receipt failed', { error: (error as Error).message });
+      }
+    }
+    return [{ type: 'text', label: 'Task ontology', content: result.promptBlock }];
+  } catch (error) {
+    log.warn('runtime ontology context assembly failed', { error: (error as Error).message });
+    return [];
+  }
 }

@@ -40,9 +40,9 @@ import { busAssetApprovalCardPort, postAssetChangeApprovalCard } from '../../fea
 import { safeId } from '../../storage';
 import { logErrorRef, maskId } from '../../util/log-redact';
 import { classifyMemoryReplaceIntent } from '../../features/recall/memory-save-intent';
-import { editCognition, assertCognitionManagementTarget, assertAssetManagementSources, cognitionManagementAssetMatches,
+import { editCognition, assertCognitionManagementTarget, assertAssetManagementSources,
   prepareCognitionAssetEdit, withPreparedCognitionAssetEdit, commitPreparedCognitionAssetEdit, proposePreparedCognitionAssetEdit } from '../../features/cognition/edit-service';
-import { assertCognitionManagementReadTarget, managementContentChunk, managementReadVersion, MANAGEMENT_PAGE_TOKENS } from '../../features/cognition/management-read';
+import { managementContentChunk, managementReadVersion, MANAGEMENT_PAGE_TOKENS } from '../../features/cognition/management-read';
 import { esticogseedToolResultTokens } from '../../util/tool-result-cap';
 
 const log = createLogger('asset-steward-tools');
@@ -359,19 +359,18 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
     executionMode: 'parallel',
     description: [
       '读出一条认知资产的**完整正文**：单批最多 2000 字，长正文用 chunk 逐批读完（返回里会写明第几批/共几批与下一批的 chunk）。',
-      '这是管理视角的全文读取，不受"一次 6 条、每条 2000 字"的目录取用限制；适合改动前先看清内容、核对某条到底写了什么。',
+      '本人资产直接放开读：状态（暂停/归档等）如实标注在元数据行，由你按状态决定是否继续采用；不再按任务可用性拦正文。',
+      '已删除（保留期内可恢复）、已彻底清除或已撤销的资产当前不可用：返回如实说明状态而不是正文；已删除的可先恢复（restore_ability_asset）再读。',
+      '来源被本人撤权时正文同样不外显——这是来源状态事实，不是"资产不存在"，别当成不存在，也别试图绕过。',
       '读取本身不算采用；若确实按它形成产出，且本轮有 report_ability_asset_usage，最终回复前调用该工具报告具体版本和产出原文片段。只写采用说明不会留下正式回执。',
-      '资产**不可用时不会返回正文**，而是如实说明原因（已删除/已暂停/来源被撤权/范围不符/命中禁用场景/敏感级过高/未分级等）——这不是"找不到"，别当成资产不存在，也别试图绕过。',
-      '已删除的资产在保留期内仍然存在，但正文已不可用；要恢复它用 restore_ability_asset。',
       '这条资产若挂着**待审批提议**（AI 提过改动、用户还没定），返回里会点明：那类改动**不重复提交**，先把卡片的事告诉用户。',
     ].join(''),
     inputSchema: {
       type: 'object',
       properties: {
         assetId: { type: 'string', description: '目录里的资产 id（aa- 开头）。' },
-        mode: { type: 'string', enum: ['task', 'manage'], description: 'manage：当前本人点名，或明确要求全部资产内容盘点时按目录ID管理读；可读暂停/归档内容，不恢复任务使用，不登记采用，已删除/撤权正文仍不可读。缺省task门禁不变。' },
         chunk: { type: 'number', description: `第几批（从 0 开始），默认 0。一批 ${READ_CHUNK_CHARS} 字；返回会写明总批数与下一批编号。` },
-        contentCursor: { anyOf: [{ type: 'integer', const: 0 }, { type: 'string' }], description: '超大完整合同使用（task每批仍须原runtime准入，manage每批核本人指令）：0开始，再传nextContentCursor。逐批回源核来源和版本，含全部正文/条件/范围/关联，按contentRange拼接完整JSON；与chunk二选一。' },
+        contentCursor: { anyOf: [{ type: 'integer', const: 0 }, { type: 'string' }], description: '超大完整合同使用：0开始，再传nextContentCursor。逐批回源核来源和版本，按contentRange拼接完整JSON；与chunk二选一。' },
       },
       required: ['assetId'],
       additionalProperties: false,
@@ -389,31 +388,32 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
         return { content: `[asset:${assetId}] 读取失败：这条资产不存在，或不属于当前用户。`, isError: true };
       }
 
-      if (input.mode !== undefined && !['task', 'manage'].includes(String(input.mode))) return { content: '无效读取模式', isError: true };
-      let management = false;
-      if (input.mode === 'manage') {
-        try {
-          const intent = await assertCognitionManagementReadTarget(userId, { ...opts, userId }, 'asset', asset);
-          if (intent === 'named') {
-            const matches = await cognitionManagementAssetMatches(userId, opts, asset);
-            if (matches.length) return { content: JSON.stringify({ status: 'ambiguous', matches }) };
-          }
-          await assertAssetManagementSources(userId, asset);
-          management = true;
-        } catch (error) { return { content: error instanceof Error ? error.message : '管理读取未获授权', isError: true }; }
-      }
-      const reasons = management ? [] : await runtimeBlockReasons(opts, asset);
-      if (reasons.length) {
-        // 「被拦截不得计为成功」：isError 是平台自身的成功/失败信号，回执同时写明
-        // 具体命中哪条规则——不静默当不存在，也不把正文交出去。
+      if (['deleted', 'purged', 'revoked'].includes(asset.status)) {
         return {
           content: [
             `[asset:${assetId}] ${asset.title || '(无标题)'}：当前不可读出正文。`,
             `状态：${statusText(asset.status)}`,
-            `拦截规则：${blockReasonText(reasons)}`,
             asset.status === 'deleted'
               ? '这条在删除保留期内：可以恢复（restore_ability_asset），恢复后才能读到正文。'
-              : '这是权限/状态门禁的结果，不是"资产不存在"。',
+              : '这是状态事实（正文已销毁或已撤权），不是"资产不存在"。',
+          ].join('\n'),
+          isError: true,
+        };
+      }
+      try {
+        await assertAssetManagementSources(userId, asset);
+      } catch (error) {
+        return { content: error instanceof Error ? error.message : t('cognition.read.source_unavailable'), isError: true };
+      }
+      // Task-eligibility no longer withholds bodies, but a deleted or rewritten
+      // evidence source is a fact about the record itself: its body must not
+      // surface after the source it cites has vanished.
+      if ((await runtimeBlockReasons(opts, asset)).includes('source_unavailable')) {
+        return {
+          content: [
+            `[asset:${assetId}] ${asset.title || '(无标题)'}：当前不可读出正文。`,
+            `状态：${statusText(asset.status)}`,
+            `依据来源已失效（被删除或原文已变化）——这是来源状态事实，不是"资产不存在"。`,
           ].join('\n'),
           isError: true,
         };
@@ -423,13 +423,12 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
         if (input.chunk !== undefined) return { content: t('cognition.read.invalid_cursor'), isError: true };
         const fields = ['id', 'title', 'statement', 'value', 'type', 'contentCategory', 'status', 'maturity', 'lifecycleStatus', 'scope', 'scopePolicy',
           'version', 'activeVersion', 'applicableWhen', 'forbiddenWhen', 'sensitivity', 'tags', 'familyName', 'targetAgents', 'evidenceRefs', 'ontologyRefs', 'relations', 'derivedFrom', 'createdAt', 'updatedAt'];
-        const contract = { mode: management ? 'manage' : 'task', asset: Object.fromEntries(fields.filter(key => Object.hasOwn(asset, key)).map(key => [key, (asset as unknown as Record<string, unknown>)[key]])),
+        const contract = { mode: 'manage', asset: Object.fromEntries(fields.filter(key => Object.hasOwn(asset, key)).map(key => [key, (asset as unknown as Record<string, unknown>)[key]])),
           expectedVersion: asset.version, expectedActiveVersion: abilityAssetActiveVersion(asset), useBoundary: t('cognition.read.use_boundary') };
         try {
           const part = managementContentChunk(userId, 'asset', assetId, contract, input.contentCursor);
           const current = await readAbilityAsset(userId, assetId);
-          if (management) await assertAssetManagementSources(userId, current);
-          else if ((await runtimeBlockReasons(opts, current)).length) return { content: t('cognition.read.source_unavailable'), isError: true };
+          await assertAssetManagementSources(userId, current);
           if (managementReadVersion(current) !== managementReadVersion(asset)) return { content: t('cognition.read.snapshot_changed'), isError: true };
           return { content: JSON.stringify(part) };
         } catch (error) { return { content: error instanceof Error ? error.message : t('cognition.read.invalid_cursor'), isError: true }; }
@@ -455,7 +454,7 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
           `[asset:${assetId}] ${asset.title || '(无标题)'}`,
           metaLine(asset),
           `编辑基线：expectedVersion=${asset.version}；expectedActiveVersion=${asset.activeVersion || asset.version}`,
-          ...(management ? [`管理读取不代表任务采用；关联本体=${JSON.stringify(asset.ontologyRefs || [])}`] : []),
+          ...[`读取不代表任务采用；关联本体=${JSON.stringify(asset.ontologyRefs || [])}`],
           // 条件行不能靠"过滤空串"来拼：正文与下一批提示之间那个空行是**故意**的，
           // 一起滤掉会让提示黏在正文末尾，模型分不清哪句是内容、哪句是工具话。
           ...(asset.value ? [`${t('cognition.edit.value')}: ${asset.value}`] : []),
@@ -477,8 +476,8 @@ function createReadAbilityAssetTool(opts: AssetStewardToolsOpts): AgentTool {
             ]
             : []),
         ].join('\n');
-      if (esticogseedToolResultTokens(content) > MANAGEMENT_PAGE_TOKENS) return { content: JSON.stringify({ mode: management ? 'manage' : 'task', id: assetId,
-        contentState: 'requires_chunk_read', managementRead: { assetId, mode: management ? 'manage' : 'task', contentCursor: 0 }, useBoundary: t('cognition.read.use_boundary') }) };
+      if (esticogseedToolResultTokens(content) > MANAGEMENT_PAGE_TOKENS) return { content: JSON.stringify({ mode: 'manage', id: assetId,
+        contentState: 'requires_chunk_read', managementRead: { assetId, contentCursor: 0 }, useBoundary: t('cognition.read.use_boundary') }) };
       return { content };
     },
   };

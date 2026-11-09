@@ -28,6 +28,29 @@ afterEach(() => {
 });
 
 describe('custom provider model persistence (真实磁盘回路)', () => {
+  it('normalizes cache declarations through disk reload, preserves omitted updates and permits explicit clearing', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Cache Relay', protocol: 'openai', baseUrl: 'https://cache.example/v1', apiKey: 'test-key',
+      models: [{ id: 'cache-model', capabilities: [' PROMPT_CACHE_KEY ', 'session_affinity', 'prompt_cache_key', 'prompt_cache_retention_24h'] }],
+    });
+    expect(added.ok).toBe(true);
+    if (!added.ok) throw new Error(added.error);
+    const capabilities = ['prompt_cache_key', 'session_affinity', 'prompt_cache_retention_24h'];
+    vi.resetModules();
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(UID);
+    const reloaded = await import('../../../src/main/features/custom_providers');
+    expect(reloaded.listCustomProviders(UID)[0].models[0].capabilities).toEqual(capabilities);
+    expect(reloaded.updateCustomProviderModel(UID, added.id, 'cache-model', { id: 'cache-model', maxTokens: 1000 }))
+      .toMatchObject({ ok: true, model: { capabilities } });
+    expect(reloaded.listCustomProviders(UID)[0].models[0].capabilities).toEqual(capabilities);
+    expect(reloaded.updateCustomProviderModel(UID, added.id, 'cache-model', { id: 'cache-model', capabilities: ['prompt_cache_keys'] }))
+      .toEqual({ ok: false, error: 'invalid capability: prompt_cache_keys' });
+    expect(reloaded.updateCustomProviderModel(UID, added.id, 'cache-model', { id: 'cache-model', capabilities: [] }).ok).toBe(true);
+    expect(reloaded.listCustomProviders(UID)[0].models[0].capabilities).toBeUndefined();
+  });
+
   it('keeps reasoningLevels / capabilities / input across write→disk→reload', async () => {
     const providers = await import('../../../src/main/features/custom_providers');
     const added = await providers.addCustomProvider(UID, {

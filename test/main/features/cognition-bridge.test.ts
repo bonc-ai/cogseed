@@ -147,16 +147,18 @@ describe('认知主档切换与恢复', () => {
     fs.writeFileSync(sourceFile(), '{broken');
     expect((await migration.migrateLegacyCognition(uid)).errors.length).toBeGreaterThan(0);
   });
-  it('批量读取只解析一次主档，后续读取及写入仍取新快照并隔离用户', async () => {
+  it('冷缓存下批量读取只解析一次主档，后续读取及写入仍取新快照并隔离用户', async () => {
     seed(asset('aa-first')); seed(asset('aa-second'));
     const { migration, store, kernel } = await modules();
     await migration.migrateLegacyCognition(uid, { activate: true });
     const guard = await import('../../../src/main/util/corrupt-guard');
     const reads = vi.spyOn(guard, 'readTextGuarded');
     const assets = await import('../../../src/main/features/recall/asset-service');
+    kernel.clearCognitionStoreReadCache();
     expect((await assets.listAbilityAssets(uid)).map(row => row.id).sort()).toEqual(['aa-first', 'aa-second']);
     expect(reads.mock.calls.filter(([file]) => file === kernel.cognitionStorePath(uid))).toHaveLength(1);
     reads.mockClear();
+    kernel.clearCognitionStoreReadCache();
     const reader = store.createRecallCollectionReader(uid, 'ability-assets');
     expect(reader.ids?.sort()).toEqual(['aa-first', 'aa-second']);
     const records = await Promise.all(reader.ids!.map(id => reader.read(id)));

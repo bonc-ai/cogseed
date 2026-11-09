@@ -29,7 +29,7 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
     // allowed to put the actor back into pending.
     const runIdForLedger = request.dispatch_payload.run_id;
     if (runIdForLedger) {
-      const { readRun, recordRunDispatch } = await import('../group_chat/run_store');
+      const { readRun, recordRunDispatch, requestActorReport } = await import('../group_chat/run_store');
       const run = await readRun(userId, request.conversation_id, runIdForLedger);
       if (!run) throw new Error(`collaboration run unavailable: ${runIdForLedger}`);
       const actor = run?.actors.find((entry) => entry.agent_id === request.agent_id);
@@ -64,6 +64,15 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
         || recordedActor?.terminal !== 'pending'
         || !recordedActor.dispatched.includes(dispatchTurnId)) {
         throw new Error(`collaboration dispatch persistence failed: ${runIdForLedger}`);
+      }
+      // Approved asynchronous parent dispatches owe a report; direct mentions
+      // and final handoffs do not. Use durable Wake provenance, never prose.
+      if (request.source_actor_id === 'commander'
+        && (request.source === 'dispatch_to' || request.source === 'plan_step')) {
+        const owned = await requestActorReport(userId, request.conversation_id, runIdForLedger);
+        if (owned?.status !== 'running' || owned.actor_report_requested !== true) {
+          throw new Error(`collaboration report ownership unavailable: ${runIdForLedger}`);
+        }
       }
     }
 

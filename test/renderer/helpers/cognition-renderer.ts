@@ -12,6 +12,7 @@ const routeDefaults = {
   category: '',
   assetId: '',
   candidateId: '',
+  planId: '',
   proofEventId: '',
   captureBucket: '',
   captureId: '',
@@ -25,6 +26,7 @@ const storeDefaults = {
   assets: [],
   assetCapabilities: { versionedUpdate: true },
   candidates: [],
+  oldContentPlans: [],
   captures: [],
   captureCounts: {},
   captureBuckets: null,
@@ -83,7 +85,7 @@ function loadModule(
   }
 
   Object.assign(context.window.CogAssets.store, storeDefaults, state, {
-    blockStatus: state.blockStatus || Object.fromEntries(['assets', 'ontology', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox']
+    blockStatus: state.blockStatus || Object.fromEntries(['assets', 'ontology', 'candidates', 'captures', 'settings', 'captureStats', 'timeline', 'inbox', 'oldContentPlans']
       .map(name => [name, { loaded: state.loaded !== false, loading: Boolean(state.loading) }])),
     route: { ...routeDefaults, ...route },
   });

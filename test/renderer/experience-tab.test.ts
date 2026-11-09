@@ -55,9 +55,9 @@ describe('经验入口：「我的认知」下的分类档（specs/017 整改一
   it('顶层页签是五个（无「经验」），经验收编为「我的认知」分类档；旧深链 name:experiences 归一化', () => {
     const html = renderCognition({ name: 'experiences' }, { experiences: loadedExperiences([]) });
     const ids = [...html.matchAll(/class="ca-tab[^"]*" data-act="tab" data-id="([a-z-]+)"/g)].map((m) => m[1]);
-    // 2026-10 认知资产壳：五页签=认知树/我的认知/本体/系统活动/资产设置；
+    // 2026-11-06：认知树灰色占位 + 四个并列入口（本体/我的认知/认知生长/资产设置），不设分组标题。
     // 旧「待我处理」整页已并入系统活动，不再单列导航。
-    expect(ids).toEqual(['tree', 'overview', 'ontology', 'activity', 'settings']);
+    expect(ids).toEqual(['tree', 'ontology', 'overview', 'activity', 'settings']);
     expect(html).not.toContain('data-act="tab" data-id="experiences"');
     // 旧深链 { name: 'experiences' } 归一化到「我的认知」下的经验目录；
     // 经验档不再伪装成列表筛选 chip，改由目录页与迁移入口承载。

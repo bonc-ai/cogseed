@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const auto = require('../../src/renderer/modules/auto.js') as {
+  _autoTemplateDisplayText: (template: { fill_ins?: Array<{ id: string; label_zh: string; label_en?: string }> }, value: string) => string;
   _AUTO_TEMPLATES: Array<{
     id: string;
     icon: string;
@@ -57,6 +58,12 @@ describe('auto starter templates', () => {
       'monthly_admin',
       'blank',
     ]);
+  });
+
+  it('converts Hub mustache placeholders into the visible tokens used by required-field validation', () => {
+    expect(auto._autoTemplateDisplayText({
+      fill_ins: [{ id: 'topic', label_zh: '主题' }],
+    }, '汇总 {{topic}} 过去 24 小时的重要动态')).toBe('汇总 【主题】 过去 24 小时的重要动态');
   });
 
   it('keeps the post-meeting digest distinct from the pre-meeting prep template', () => {

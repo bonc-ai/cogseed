@@ -4434,6 +4434,7 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.artifacts) && gm.artifacts.length ? { artifacts: gm.artifacts } : {}),
     ...(Array.isArray(gm.cognition_save_receipts) && gm.cognition_save_receipts.length ? { cognition_save_receipts: gm.cognition_save_receipts } : {}),
     ...(Array.isArray(gm.recall_citations) && gm.recall_citations.length ? { recall_citations: gm.recall_citations } : {}),
+    ...(gm.recall_fallback ? { recall_fallback: gm.recall_fallback } : {}),
     ...(Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length ? { marketplace_requests: gm.marketplace_requests } : {}),
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
@@ -5624,9 +5625,9 @@ function _renderCognitionSaveReceiptsHtml(receipts) {
 // 骨架 recallMemoryCardHtml + 投影数据异步补全 mountRecallProjectionCard）；
 // 这里只保留同步入口与反馈绑定。旧互斥抑制（有投影卡就不出引用卡）已删。
 
-function _renderRecallCitationsHtml(citations) {
+function _renderRecallCitationsHtml(citations, fallback) {
   if (typeof window.recallMemoryCardHtml !== 'function') return '';
-  return window.recallMemoryCardHtml(citations);
+  return window.recallMemoryCardHtml(citations, fallback);
 }
 
 function _hydrateRecallCitations(messageEl, cid, messageId) {
@@ -10407,7 +10408,7 @@ function _mountMsgMeta(ph, metrics) {
     seg.appendChild(v);
     meta.appendChild(seg);
   });
-  if (line.titleLines.length) meta.title = line.titleLines.join('\n');
+  meta.title = line.titleLines.join('\n');
   // 消息级 meta 更新后同步刷会话统计行（覆盖流式 finalize 路径——它不走
   // appendChatMessage 尾部；Task 8）。
   _refreshSessionStats();
@@ -10582,7 +10583,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       })
     : '';
   const recallCitationsHtml = role === 'assistant'
-    ? _renderRecallCitationsHtml(message.recall_citations)
+    ? _renderRecallCitationsHtml(message.recall_citations, message.recall_fallback)
     : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
   // timestamp on one row. Same DOM strip for historical (loaded via
@@ -10817,6 +10818,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
         cid: opts.cid || currentCid,
         onlyModelSelected: true,
         citations: Array.isArray(message.recall_citations) ? message.recall_citations : [],
+        fallback: message.recall_fallback,
       });
     }
   }
@@ -16831,6 +16833,7 @@ function _streamingMarkAborted(msg) {
  */
 function _healStaleGroupBusy(cid) {
   if (!cid) return;
+  if (conversationStopRequests.has(cid) || unconfirmedConversationStops.has(cid)) return;
   if (pendingConvs.has(cid)) return;
   if (_convChatCtrls.has(cid)) return;
   if (!isGroupConversationBusy(cid)) return;
@@ -16850,7 +16853,8 @@ function _finishStreamingMsg(cid) {
   _lastGroupWorkEventAt.delete(cid);
   _groupEventDedupe.delete(cid);
   pendingConvs.delete(cid);
-  if (isGroupConversationBusy(cid)) startPolling(cid);
+  // Observation-stream completion is not a failed stop's idle receipt.
+  if (isGroupConversationBusy(cid) || unconfirmedConversationStops.has(cid)) startPolling(cid);
   else stopPolling(cid);
   _updateConvSidebarBadge(cid, false);
   // Settle any actor placeholder that streaming created but `message`
@@ -18147,7 +18151,7 @@ function _mountFinalRecallMemoryCard(ph, gm, cid) {
   if (!bubble) return;
 
   let host = bubble.querySelector('.chat-recall-citations');
-  const citationsHtml = _renderRecallCitationsHtml(gm.recall_citations);
+  const citationsHtml = _renderRecallCitationsHtml(gm.recall_citations, gm.recall_fallback);
   if (!host && citationsHtml) {
     const template = document.createElement('template');
     template.innerHTML = citationsHtml;
@@ -18179,6 +18183,7 @@ function _mountFinalRecallMemoryCard(ph, gm, cid) {
     cid,
     onlyModelSelected: true,
     citations: Array.isArray(gm.recall_citations) ? gm.recall_citations : [],
+    fallback: gm.recall_fallback,
   });
 }
 
@@ -19605,7 +19610,8 @@ function _resolveConvReply(cid, text, isError) {
   _stopRuntimeActorRecovery(cid);
   pendingConvs.delete(cid);
   setGroupConversationBusy(cid, false);
-  stopPolling(cid);
+  if (unconfirmedConversationStops.has(cid)) startPolling(cid);
+  else stopPolling(cid);
   _updateConvSidebarBadge(cid, false);
 
   const el = state?.loadingEl;
@@ -19650,11 +19656,21 @@ function _updateConvSendUI(cid) {
   if (!sendBtn) return;
   const pending = isConvPending(cid);
   _ensureConvCreateAgentInline();
+  if (conversationStopRequests.has(cid)) {
+    sendBtn.classList.remove('streaming');
+    sendBtn.classList.add('aborting');
+    sendBtn.dataset.abortingCid = cid;
+    sendBtn.disabled = true;
+    sendBtn.title = t('chat.stopping');
+    return;
+  }
   // While `.aborting` is set, pin the button as send-style + disabled. The
   // class self-clears once the stream truly terminates (pending flips false).
   if (sendBtn.classList.contains('aborting')) {
-    if (pending) return;
+    const local = pendingConvs.get(cid);
+    if (pending && sendBtn.dataset.abortingCid === cid && local?.aborted && local.controller) return;
     sendBtn.classList.remove('aborting');
+    delete sendBtn.dataset.abortingCid;
   }
   // Conv-bound agent disabled → input + send button locked. Backend also
   // refuses the send (defense-in-depth), but we lock the UI so the user
@@ -19711,37 +19727,66 @@ function _refreshTaskSurfacesAfterAbort(cid) {
 }
 
 function abortConvStream(cid) {
+  if (!cid) return Promise.resolve(false);
+  const existing = conversationStopRequests.get(cid);
+  if (existing) return existing;
+  // Register before aborting the local stream: its synchronous callbacks may
+  // settle the controller or try to drain queued work on the same stack.
+  const stop = Promise.resolve().then(async () => {
+    let acknowledged = false;
+    try {
+      const response = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/abort`, { method: 'POST' });
+      const result = await response.json();
+      if (!response.ok || result?.ok !== true) throw new Error('conversation stop was not acknowledged');
+      acknowledged = true;
+      unconfirmedConversationStops.delete(cid);
+      setGroupConversationBusy(cid, false);
+    } catch (_) {
+      // The host can reject while a worker still runs. Keep the stop action
+      // retryable and use authoritative history polling to recover its state.
+      unconfirmedConversationStops.add(cid);
+      setGroupConversationBusy(cid, true);
+      startPolling(cid);
+      _convLog.warn('conversation stop was not acknowledged');
+      try { uiToast(t('chat.stop_failed'), { variant: 'error' }); } catch (_) {}
+    } finally {
+      if (conversationStopRequests.get(cid) === stop) conversationStopRequests.delete(cid);
+      if (!acknowledged && cid === currentCid) {
+        const button = document.getElementById('chat-send-btn');
+        if (button) {
+          button.classList.remove('aborting');
+          delete button.dataset.abortingCid;
+        }
+      }
+      _refreshTaskSurfacesAfterAbort(cid);
+      _scheduleHistoryReconcileAfterStream(cid, { force: true });
+      _updateConvSidebarBadge(cid, false);
+      if (cid === currentCid) _updateConvSendUI(cid);
+    }
+    // Preserve existing FIFO semantics, but never admit the next request
+    // while the host is still cancelling the preceding task.
+    if (acknowledged) Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
+    return acknowledged;
+  });
+  conversationStopRequests.set(cid, stop);
   _cleanupSlowSwitchForCid(cid);
   const state = pendingConvs.get(cid);
   _stopRuntimeActorRecovery(cid);
   _stopGroupEventObserver(cid);
   _clearBackgroundGroupEvents(cid);
   setGroupConversationBusy(cid, false);
-  // Group chat: also tell the bus to abort all in-flight worker turns + clear
-  // queues. Cancelling just the IPC stream would leave agents running in the
-  // background. Fire-and-forget — no need to block the UI on the response.
-  try {
-    apiFetch(`/api/conversations/${cid}/abort`, { method: 'POST' })
-      .catch(() => {})
-      .finally(() => {
-        _refreshTaskSurfacesAfterAbort(cid);
-        _scheduleHistoryReconcileAfterStream(cid, { force: true });
-      });
-  } catch (_) {}
   if (!state) {
     _updateConvSidebarBadge(cid, false);
     _refreshTaskSurfacesAfterAbort(cid);
     if (cid === currentCid) _updateConvSendUI(cid);
-    return;
+    return stop;
   }
   // No-controller case: the pendingConvs entry was minted by
   // `loadConversationHistory`'s polling-rescue branch (user opened a conv
   // whose worker was started from outside this renderer — scheduled-task
   // fire, or a refresh mid-turn). There's no in-process stream to cancel;
-  // the bus.abort POST above does the actual work. Clear the placeholder
-  // and the pending entry so the send button flips back to "send" and the
-  // sidebar badge drops. Without this, the button stayed pinned as "stop"
-  // and re-clicks were no-ops.
+  // the host stop request does the actual work. Drop the orphan placeholder,
+  // but keep admission closed through conversationStopRequests until ack.
   if (!state.controller) {
     pendingConvs.delete(cid);
     stopPolling(cid);
@@ -19749,7 +19794,7 @@ function abortConvStream(cid) {
     _updateConvSidebarBadge(cid, false);
     _refreshTaskSurfacesAfterAbort(cid);
     if (cid === currentCid) _updateConvSendUI(cid);
-    return;
+    return stop;
   }
   state.aborted = true;
   try { state.controller.abort(); } catch (_) {}
@@ -19759,13 +19804,9 @@ function abortConvStream(cid) {
   // `done`, often seconds later).
   _updateConvSidebarBadge(cid, false);
   if (cid === currentCid) {
-    const btn = document.getElementById('chat-send-btn');
-    if (btn) {
-      btn.classList.remove('streaming');
-      btn.classList.add('aborting');
-      btn.disabled = true;
-    }
+    _updateConvSendUI(cid);
   }
+  return stop;
 }
 
 // Paint a prominent status badge on the sidebar conversation item that

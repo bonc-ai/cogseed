@@ -134,7 +134,10 @@ function createListConnectorToolsTool(opts: ConnectorMetaToolsOpts): AgentTool {
       'Discover the actions available on a specific connector (the system prompt\'s `## Connectors` ' +
       'block lists which connector ids exist for this conversation). Returns each action\'s name, ' +
       'description, and JSON input schema — use the schema verbatim to construct the `args` for ' +
-      '`call_connector_tool`. Errors when the connector id is not visible to this actor or is ' +
+      '`call_connector_tool`. Omit tool_names for all actions, or pass exact known action names ' +
+      'to retrieve only those schemas. Reuse schemas already discovered in this conversation ' +
+      'unless an action or schema changes; do not rediscover before every call. ' +
+      'Errors when the connector id is not visible to this actor or is ' +
       'currently disconnected.',
     inputSchema: {
       type: 'object',
@@ -142,6 +145,10 @@ function createListConnectorToolsTool(opts: ConnectorMetaToolsOpts): AgentTool {
         connector_id: {
           type: 'string',
           description: 'The connector id from the `## Connectors` system-prompt block.',
+        },
+        tool_names: {
+          type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1,
+          description: 'Optional exact action names whose full schemas are needed. Omit to discover all actions.',
         },
       },
       required: ['connector_id'],
@@ -151,6 +158,12 @@ function createListConnectorToolsTool(opts: ConnectorMetaToolsOpts): AgentTool {
         ? ((input as { connector_id: string }).connector_id).trim()
         : '';
       if (!cid) return errResult('E_BAD_INPUT', '`connector_id` is required (a non-empty string)');
+      const names = (input as { tool_names?: unknown }).tool_names;
+      if (names !== undefined && (!Array.isArray(names) || !names.length
+        || names.some(name => typeof name !== 'string' || !name.trim()))) {
+        return errResult('E_BAD_INPUT', '`tool_names` must be a non-empty array of non-empty action names');
+      }
+      const selected = names === undefined ? undefined : new Set((names as string[]).map(name => name.trim()));
 
       const visible = await resolveVisibleConnectors(opts.userId, opts.agentId, opts.instanceIds);
       const match = visible.find((v) => v.instance.id === cid);
@@ -163,6 +176,11 @@ function createListConnectorToolsTool(opts: ConnectorMetaToolsOpts): AgentTool {
           'E_CONNECTOR_NOT_VISIBLE',
           `connector "${cid}" is not currently available. See the \`## Connectors\` system-prompt block for valid ids; if it was there a moment ago, ask the user to refresh it in the Connectors panel.`,
         );
+      }
+      // Resolve against live visibility, including enabled_subtools, on every call.
+      // A mixed allowed/denied selection must not silently look complete.
+      if (selected && [...selected].some(name => !match.tools.some(tool => tool.name === name))) {
+        return errResult('E_TOOL_NOT_AVAILABLE', 'One or more selected actions are unavailable. Omit tool_names to discover the currently visible actions.');
       }
       if (!match.tools.length) {
         return {
@@ -177,13 +195,14 @@ function createListConnectorToolsTool(opts: ConnectorMetaToolsOpts): AgentTool {
         '',
       ];
       for (const t of match.tools) {
+        if (selected && !selected.has(t.name)) continue;
         lines.push(`### ${t.name}`);
         lines.push(t.description || '(no description)');
         lines.push('');
         lines.push('Input schema:');
         lines.push('```json');
         try {
-          lines.push(JSON.stringify(t.input_schema ?? {}, null, 2));
+          lines.push(JSON.stringify(t.input_schema ?? {}));
         } catch {
           lines.push('{}');
         }
@@ -201,7 +220,11 @@ function createCallConnectorToolTool(opts: ConnectorMetaToolsOpts): AgentTool {
     description:
       'Invoke a specific action on a connected third-party service. Always call ' +
       '`list_connector_tools(connector_id)` first (in this conversation) to learn the action ' +
-      'name and its input schema; then construct `args` to match that schema. The result is ' +
+      'name and its input schema; reuse that schema to construct `args`. Submit independent, ' +
+      'authorized actions with already-known arguments as multiple call_connector_tool calls ' +
+      'in the same assistant response, rather than one model round per item. Calls still execute ' +
+      'serially in model order and count separately toward tool and failure limits. Wait for ' +
+      'prerequisite results before submitting dependent calls; never guess ids or outcomes. The result is ' +
       'the connector\'s response (text / JSON), exactly as the underlying service returned it.',
     inputSchema: {
       type: 'object',
@@ -276,14 +299,18 @@ function createCallConnectorToolTool(opts: ConnectorMetaToolsOpts): AgentTool {
           if (denied) throw new Error(denied.content);
         } });
         const content = stringifyMcpResult(raw);
+        // Preserve the standard MCP failure signal for the host's failure guard.
+        // Arbitrary service text/status codes are not a portable error contract.
+        const result: ToolResult = { content, ...(raw && typeof raw === 'object'
+          && (raw as { isError?: unknown }).isError === true ? { isError: true } : {}) };
         // Meeting transcripts arrive twice (paragraphs + flat text) and quickly
         // exceed the inline cap. Persist the flat text in the task workspace and
         // return transcript_path so correction tools read it by path instead of
         // the model re-reading spilled chunks and exhausting the read budget.
         const workingDir = typeof ctx.workingDir === 'string' ? ctx.workingDir : '';
-        if (!workingDir) return { content };
+        if (!workingDir || result.isError) return result;
         const { spillConnectorTranscript } = await import('../../features/cogseed_backend/connector-transcript-spill');
-        return spillConnectorTranscript({ content }, { workingDir, writableRoots: [workingDir] });
+        return spillConnectorTranscript(result, { workingDir, writableRoots: [workingDir] });
       } catch (err) {
         const msg = (err as Error).message;
         log.warn(`call_connector_tool failed connector=${cid} tool=${toolName}: ${msg}`);

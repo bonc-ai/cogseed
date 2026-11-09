@@ -127,12 +127,16 @@ describe('反漂移源码级断言', () => {
     // 排序只由目录引擎调用；提示词与工具共用回合快照。
     const hint = read('features/recall/asset-catalog-hint.ts');
     const tools = read('model/core-agent/recall-tools.ts');
+    const search = read('features/recall/asset-search.ts');
     const engine = read('features/recall/catalog-engine.ts');
     expect(engine).toContain('rankAssets(');
     expect(hint).not.toContain('rankAssets(');
     expect(tools).not.toContain('rankAssets(');
+    expect(search).not.toContain('rankAssets(');
     expect(hint).toContain('catalogSnapshot(');
-    expect(tools).toContain('catalogOrderedToolPool(');
+    expect(tools).toContain("from '../../features/recall/asset-search'");
+    expect(tools).not.toContain('catalogOrderedToolPool(');
+    expect(search).toContain('catalogOrderedToolPool(');
     // bus.ts 的回执写侧只查表透传，不重算（不出现 rankAssets 调用）。
     const bus = read('features/group_chat/bus.ts');
     expect(bus).not.toContain('rankAssets(');
@@ -150,6 +154,7 @@ describe('反漂移源码级断言', () => {
       'features/recall/asset-ranking.ts',
       'features/recall/asset-catalog-hint.ts',
       'model/core-agent/recall-tools.ts',
+      'features/recall/asset-search.ts',
       'features/group_chat/bus.ts',
     ]) {
       expect(read(rel)).not.toContain('status === \'applied\'');
@@ -171,6 +176,7 @@ describe('反漂移源码级断言', () => {
     const { TOOL_CATALOG } = await import('../../../../src/main/model/core-agent/tool-catalog');
     // 集合包含主动创建与编辑入口，排除已退役的 propose_ability_asset。
     // 2026-10-27 develop 合并：会议转写纠错词表 4 件与本体图/投影/列表 3 件已登记。
+    // 私下请示入口登记于目录；实际暴露仍受接待会话的宿主授权约束。
     const frozen = [
       'add_custom_connector', 'archive_ability_asset', 'ask_materials',
       'background_list', 'background_output', 'background_stop',
@@ -191,7 +197,7 @@ describe('反漂移源码级断言', () => {
       'personal_fields_check',
       'personal_ontology_fields', 'project_instructions', 'publish_outputs',
       'read_ability_asset', 'read_file', 'read_task_experience',
-      'report_ability_asset_usage', 'research_rerank', 'restore_ability_asset', 'rollback_ability_asset', 'search_ability_assets', 'search_files',
+      'report_ability_asset_usage', 'request_a2a_consultation', 'research_rerank', 'restore_ability_asset', 'rollback_ability_asset', 'search_ability_assets', 'search_files',
       'stat_file', 'tool_result_read_chunk', 'tool_result_search', 'touchpoint_list', 'transcript_corrections_query',
       'transcript_glossary_apply', 'transcript_glossary_list', 'transcript_glossary_scan', 'transcript_glossary_upsert',
       'web_fetch', 'web_search',

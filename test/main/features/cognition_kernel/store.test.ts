@@ -260,7 +260,8 @@ describe('cognition_kernel/store — 统一认知库内核', () => {
     if (!applied.results[0]?.applied) throw new Error('synthetic add was not applied');
     const objectId = applied.results[0].objectId;
     fs.rmSync(cognitionAuditPath(UID), { force: true });
-    const doc = loadCognitionStoreSync(UID);
+    // 读缓存返回按版本共享的冻结文档；构造合成档先拷贝私有稿。
+    const doc = structuredClone(loadCognitionStoreSync(UID));
     doc.pendingJournal = [{
       key: 'audit-pending-test',
       line: { at: new Date().toISOString(), ops: [{ objectId, op: 'add', home: 'template', origin: 'user', summary: marker }] },

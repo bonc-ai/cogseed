@@ -21,10 +21,10 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function seedReadReceipt(taskRunId: string) {
+async function seedReadReceipt(taskRunId: string, executionId?: string) {
   const { recordOntologyQueryReadReceipt } = await import('../../../src/main/features/cognition/ontology/query-receipt');
   return recordOntologyQueryReadReceipt(userId, taskRunId, [{ moduleId: 'project-module', recordId: 'owner-rule', recordVersion: 3,
-    kind: 'rule', sourceKind: 'user' }]);
+    kind: 'rule', sourceKind: 'user' }], executionId);
 }
 
 describe('ontology usage receipt', () => {
@@ -62,5 +62,24 @@ describe('ontology usage receipt', () => {
     expect(wrongVersion).toEqual([]);
     expect(unqueriedRecord).toEqual([]);
     expect(await listOntologyUsageReceipts(userId)).toEqual([]);
+  });
+
+  it('does not count a read from another execution of the same task', async () => {
+    const { recordOntologyQueryReadReceipt } = await import('../../../src/main/features/cognition/ontology/query-receipt');
+    const { finalizeOntologyUsageCitations } = await import('../../../src/main/features/cognition/ontology/usage-receipt');
+    const ref = { moduleId: 'project-module', recordId: 'owner-rule', recordVersion: 3, kind: 'rule' as const, sourceKind: 'user' as const };
+    await recordOntologyQueryReadReceipt(userId, 'task-exec', [ref], 'exec-1');
+    await recordOntologyQueryReadReceipt(userId, 'task-exec', [{ ...ref, recordVersion: 4 }], 'exec-2');
+    const stale = await finalizeOntologyUsageCitations(userId, {
+      taskRunId: 'task-exec', messageId: 'message-exec-2', executionId: 'exec-2',
+      finalText: '[[ontology:project-module/owner-rule@3]]',
+    });
+    expect(stale).toEqual([]);
+    const current = await finalizeOntologyUsageCitations(userId, {
+      taskRunId: 'task-exec', messageId: 'message-exec-2', executionId: 'exec-2',
+      finalText: '[[ontology:project-module/owner-rule@4]]',
+    });
+    expect(current).toHaveLength(1);
+    expect(current[0]).toMatchObject({ recordVersion: 4, taskRunId: 'task-exec' });
   });
 });

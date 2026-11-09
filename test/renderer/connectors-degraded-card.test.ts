@@ -23,6 +23,7 @@ function makeElement(tag: string): any {
   const el: any = {
     tagName: tag,
     className: '',
+    classList: { add: (...names: string[]) => { el.className += ' ' + names.join(' '); } },
     dataset: {},
     style: {},
     children: [] as any[],
@@ -120,6 +121,10 @@ function loadConnectorsRenderer(
     context.__pending = list;
     vm.runInContext('_connectorsState.instances = __pending;', context);
   };
+  context.__setCatalog = (list: unknown[]) => {
+    context.__pending = list;
+    vm.runInContext('_connectorsState.catalog = __pending;', context);
+  };
   context.__alerts = alerts;
   context.__events = events;
   context.__errors = errors;
@@ -146,6 +151,51 @@ function degradedGscInstance(lastVerifiedAt: number) {
 }
 
 describe('connectors panel — degraded cards never claim 已连接', () => {
+  it('shows macOS-only Apple connectors as unavailable and never starts a connection', async () => {
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const ctx = loadConnectorsRenderer(invoke);
+    const entry = { id: 'apple-notes', display_name: 'Apple Notes', auth_mode: 'local_mcp',
+      availability: 'visible_disabled', disabled_reason: 'macos_only', transport_template: { kind: 'stdio' } };
+    const card = ctx._renderCatalogCard(entry, null);
+    expect(card.innerHTML).toContain('connectors.apple.macos_only');
+    expect(ctx._connectorHasPopup(entry.id)).toBe(true);
+    const synced = ctx._renderCatalogCard(entry, { id: entry.id, status: { kind: 'connected' }, enabled: true });
+    expect(synced.innerHTML).not.toContain('connector-card-account');
+    ctx.__setCatalog([entry]);
+    ctx.__setInstances([{ id: entry.id, status: { kind: 'connected' }, enabled: true }]);
+    expect(ctx.isConnectorLive(entry.id)).toBe(false);
+    expect(ctx.listUsableConnectorsForPicker()).toEqual([]);
+    await ctx._runConnect(entry);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(ctx.__alerts).toContain('connectors.apple.macos_only');
+  });
+
+  it('shows Apple dependency guidance rather than the Tencent CLI failure', () => {
+    const ctx = loadConnectorsRenderer();
+    const entry = { id: 'apple-reminders', display_name: 'Apple Reminders', auth_mode: 'local_mcp',
+      availability: 'visible_disabled', disabled_reason: 'cli_missing', transport_template: { kind: 'stdio' } };
+    const card = ctx._renderCatalogCard(entry, null);
+    expect(card.innerHTML).toContain('connectors.apple.setup');
+    expect(card.innerHTML).not.toContain('data-act="unsupported-connect"');
+    ctx._showConnectorUnavailableToast(entry);
+    expect(ctx.__alerts).toContain('connectors.apple.dependency_missing');
+  });
+
+  it('opens installation and permission documentation through validated IPC without starting a connector', async () => {
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const ctx = loadConnectorsRenderer(invoke);
+    const entry = { setup: { steps_zh: ['安装后手动授权'], steps_en: ['Authorize after installation'],
+      install_url: 'https://nodejs.org/en/download', docs_url: 'https://github.com/sweetrb/apple-notes-mcp#permissions-check' } };
+    await ctx._openConnectorSetupDocs(entry, 'install');
+    expect(invoke).toHaveBeenLastCalledWith('auth.openExternal', { url: entry.setup.install_url });
+    await ctx._openConnectorSetupDocs(entry);
+    expect(invoke).toHaveBeenLastCalledWith('auth.openExternal', { url: entry.setup.docs_url });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    invoke.mockResolvedValueOnce({ ok: false } as any);
+    await ctx._openConnectorSetupDocs(entry, 'install');
+    expect(ctx.__alerts).toContain('connectors.setup.open_failed');
+  });
+
   it('renders the failure reason and staleness instead of the connected treatment', () => {
     const ctx = loadConnectorsRenderer();
     const sixDaysAgo = Date.now() - 6 * 24 * 60 * 60 * 1000;

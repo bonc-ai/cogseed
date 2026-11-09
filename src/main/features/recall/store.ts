@@ -101,6 +101,9 @@ async function readExistingRecallRecord(
   return validateRecallRecord(userId, recordId, raw, context);
 }
 
+/** 统一库（ability-assets/candidates）模式返回的是按 store 版本共享的缓存记录
+ * （本体已冻结）：只读使用，原地改会抛错；需要草稿先 structuredClone，
+ * 持久化写入走 updateRecallJsonRecord。 */
 export async function readRecallJsonRecord(
   userId: string,
   collection: string,
@@ -112,7 +115,9 @@ export async function readRecallJsonRecord(
   return readExistingRecallRecord(userId, recordPath, recordId);
 }
 
-/** A list reads the unified file once, while retaining per-record validation and legacy IO errors. */
+/** A list reads the unified file once, while retaining per-record validation and
+ * legacy IO errors. Unified-mode rows are the shared frozen cache records; copy
+ * before mutating. */
 export function createRecallCollectionReader(userId: string, collection: string) {
   // Validate the scope before reading the main file, including empty collections.
   recallJsonRecordPath(userId, collection, 'snapshot');
@@ -162,7 +167,7 @@ export async function writeRecallJsonRecord(
     else await writeJson(recordPath, result);
     return result;
   });
-  const validated = await (isManagedCognitionCollection(collection) || ['stock-organization', 'asset-approvals', 'cleanup-reports', 'inspection-runs'].includes(collection) ? withCognitionTransition(userId, work) : work());
+  const validated = await (isManagedCognitionCollection(collection) || ['stock-organization', 'asset-approvals', 'cleanup-reports', 'inspection-runs', 'old-content-plans'].includes(collection) ? withCognitionTransition(userId, work) : work());
   notifyCognitionWrite(userId, collection, 'write', recordId);
   return validated;
 }
@@ -176,14 +181,17 @@ export async function updateRecallJsonRecord(
   const recordPath = recallJsonRecordPath(userId, collection, recordId);
   const work = () => fileEditLock(recordPath).runExclusive(async () => {
     const current = await readRecallJsonRecord(userId, collection, recordId);
-    const next = await updater(current);
+    // Unified stores return the cached compatibility record itself; isolate the
+    // updater so an in-place edit cannot leak into the shared store document.
+    const draft = current && isManagedCognitionCollection(collection) ? structuredClone(current) : current;
+    const next = await updater(draft);
     await assertOrganizationContentWrite(userId, collection, current, next);
     const result = validateRecallRecord(userId, recordId, collection === 'ability-assets' ? withPendingAssetVersion(current, next) : next);
     if (isManagedCognitionCollection(collection)) await persistCognitionSource(userId, collection, recordId, result, () => writeJson(recordPath, result));
     else await writeJson(recordPath, result);
     return result;
   });
-  const validated = await (isManagedCognitionCollection(collection) || ['stock-organization', 'asset-approvals', 'cleanup-reports', 'inspection-runs'].includes(collection) ? withCognitionTransition(userId, work) : work());
+  const validated = await (isManagedCognitionCollection(collection) || ['stock-organization', 'asset-approvals', 'cleanup-reports', 'inspection-runs', 'old-content-plans'].includes(collection) ? withCognitionTransition(userId, work) : work());
   notifyCognitionWrite(userId, collection, 'update', recordId);
   return validated;
 }
@@ -197,7 +205,7 @@ async function assertOrganizationContentWrite(
     await assertReportContentWrite(collection, current, next, async id => (await readRecallJsonRecord(userId, 'ability-assets', id))?.status === 'purged');
     return;
   }
-  if (!['candidates', 'stock-organization', 'asset-approvals'].includes(collection)) return;
+  if (!['candidates', 'stock-organization', 'asset-approvals', 'old-content-plans'].includes(collection)) return;
   if (current?.contentPurgedAt) {
     if (!isDeepStrictEqual(current, next)) throw contentPurgedError();
     return;

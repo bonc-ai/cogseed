@@ -109,7 +109,7 @@ describe('CogSeed Group Chat projection bridge', () => {
     await bus.dropConv(base.userId, cid);
   });
 
-  it('carries groupChatRunId through terminal projection and settles the durable run summary', async () => {
+  it.each([false, true])('settles projected run bookkeeping and wakes Commander only when explicitly owed: %s', async (reportRequested) => {
     const chats = await import('../../../../src/main/features/chats');
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const groupChat = await import('../../../../src/main/features/group_chat');
@@ -126,6 +126,7 @@ describe('CogSeed Group Chat projection bridge', () => {
       memberAgentIds: [agentId],
       mentionAgentIds: [agentId],
     });
+    if (reportRequested) await store.requestActorReport(userId, cid, run!.run_id);
     const base = {
       userId,
       conversationId: cid,
@@ -149,10 +150,9 @@ describe('CogSeed Group Chat projection bridge', () => {
     });
 
     const settled = await store.readRun(userId, cid, run!.run_id);
-    // R-11（真机 2026-10-14 16:24 事故）：唤醒/后端派发的工人走的是这条投影
-    // 终态路径，此前**从不问**"commander 是否欠一次汇报"，于是工人交付后没有
-    // 汇报回合——commander 上一句仍停在"等你批准"，用户看到谁在执行的错觉。
-    expect(settled).toMatchObject({ actor_report_enqueued: true });
+    // Projection covers both direct user requests and parent-owned dispatches.
+    // Only the latter owe a Commander model round; both keep host accounting.
+    expect(settled?.actor_report_enqueued === true).toBe(reportRequested);
     expect(settled).toMatchObject({
       status: 'completed',
       actors: [{

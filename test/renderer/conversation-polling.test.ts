@@ -37,6 +37,7 @@ describe('conversation polling cancellation', () => {
 
     const context: any = {
       Map,
+      unconfirmedConversationStops: new Set(),
       Date,
       pollTimers: new Map(),
       pollMsgCounts: new Map([['c1', 'u1']]),
@@ -88,6 +89,7 @@ describe('conversation polling cancellation', () => {
 
     const context: any = {
       Map,
+      unconfirmedConversationStops: new Set(),
       Date,
       pollTimers: new Map(),
       pollMsgCounts: new Map([['c1', 1]]),
@@ -148,6 +150,7 @@ describe('conversation polling cancellation', () => {
 
     const context: any = {
       Map,
+      unconfirmedConversationStops: new Set(),
       Date,
       pollTimers: new Map(),
       pollMsgCounts: new Map([['c1', 1]]),

@@ -76,7 +76,7 @@ import type {
   OrchestrationLedgerInput,
   StateFile,
 } from "./state";
-import { maxToolLoopsForActorTurn } from "./actor-budgets";
+import { resolveTurnExecutionPolicy, normalizeRunTimings } from "./turn-execution-policy";
 import {
   GroupMessage,
   appendVisible,
@@ -89,6 +89,7 @@ import {
   type GroupMessageFailureKind,
   type GroupMessageMetrics,
   type MarketplaceInstallRequest,
+  type RecallFallbackInfo,
   type RecallMessageCitation,
   type WakeRequestSummary,
 } from "./visibility";
@@ -275,6 +276,7 @@ import {
 } from "../../i18n";
 import { getLanguage, getUiLanguage } from "../config";
 import * as marketplaceFeat from "../marketplace";
+import { refreshMarketplaceContentStatus } from "../marketplace/content-status-refresh";
 import { readInstalls } from "../marketplace_installs";
 import {
   createSkillTurnBuffer,
@@ -2836,6 +2838,8 @@ export interface EnqueueParams {
    * taxonomy only; the rendered text still controls failure actions/UI. */
   failure_kind?: GroupMessageFailureKind;
   failure_code?: string;
+  /** Host-owned terminal status, including explicit user cancellation. */
+  terminal_status?: GroupMessage['terminal_status'];
   /** Durable host action id used to make retry/continuation enqueue idempotent. */
   actionRequestId?: string;
   /** Host-owned deterministic id for crash-recoverable submissions. */
@@ -2866,6 +2870,7 @@ export interface EnqueueParams {
   /** Explicit projection receipt ownership on the final user-visible turn message. */
   projection_receipt?: { projectionId: string; authorization: string };
   recall_citations?: RecallMessageCitation[];
+  recall_fallback?: RecallFallbackInfo;
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   asset_change_approval_card?: { kind: 'asset_change_approval'; proposalId: string; assetId: string; assetTitle: string; baselineVersion: string; diff: { before: string; after: string; fields: string[] }; reason: string; actions: Array<'confirm' | 'defer' | 'reject'> };
   produced?: string[];
@@ -3393,6 +3398,18 @@ async function _enqueueBody(
   }
   to = Array.from(new Set(to));
 
+  // The six-hour marketplace reconcile is for bulk freshness, not a final
+  // execution gate. Refresh only the exact recipients and explicitly selected
+  // Skills about to start work; the helper coalesces repeated checks and keeps
+  // the last local observation when Hub is unreachable.
+  await Promise.all([
+    ...to.filter((id) => !RESERVED_IDS.has(id))
+      .map((id) => refreshMarketplaceContentStatus(uid, 'agent', id)),
+    ...(params.use_selections || [])
+      .filter((selection) => selection && selection.kind === 'skill')
+      .map((selection) => refreshMarketplaceContentStatus(uid, 'skill', selection.id)),
+  ]);
+
   // 空间作用域 at dispatch time: 会话挂空间 → 丢弃未绑定空间的 recipient
   // reserved ids（user/commander）恒放行。过滤后空 `to` 落入下方 sender-default 规则。
   // 廉价：一次 space.json 读 + 空间派生集解析，resolveSpaceScope 已 memoise
@@ -3478,6 +3495,18 @@ async function _enqueueBody(
       }
     } catch (err) {
       log.warn(`interactive Backend follow-up target failed cid=${cid}: ${(err as Error).message}`);
+    }
+  }
+
+  // Reporting belongs to an asynchronous parent dispatch, not merely to a run
+  // with completed Agents. Persist that ownership before Wake can start work.
+  // A direct user → Agent request must never summon Commander to repeat it.
+  if (params.runId && fromKind === 'commander' && params.dispatch === true
+    && to.some((recipientId) => !RESERVED_IDS.has(recipientId))) {
+    const { requestActorReport } = await import('./run_store');
+    const recorded = await requestActorReport(uid, cid, params.runId);
+    if (recorded?.status !== 'running' || recorded.actor_report_requested !== true) {
+      throw new Error(`collaboration report ownership unavailable: ${params.runId}`);
     }
   }
 
@@ -3758,6 +3787,7 @@ async function _enqueueBody(
       : {}),
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
+    ...(params.terminal_status ? { terminal_status: params.terminal_status } : {}),
     ...(params.actionRequestId ? { action_request_id: params.actionRequestId } : {}),
     ...(params.model_text && params.model_text.trim()
       ? { model_text: params.model_text }
@@ -3777,6 +3807,7 @@ async function _enqueueBody(
     ...(params.recall_citations && params.recall_citations.length
       ? { recall_citations: params.recall_citations }
       : {}),
+    ...(params.recall_fallback ? { recall_fallback: params.recall_fallback } : {}),
     ...(params.kstar_review_card ? { kstar_review_card: params.kstar_review_card } : {}),
     ...(params.asset_change_approval_card ? { asset_change_approval_card: params.asset_change_approval_card } : {}),
     ...(params.produced && params.produced.length
@@ -6159,6 +6190,8 @@ async function runActorTurnBody(
   // explicitly grants assets per dispatch via the tools' `ability_assets`
   // field, and only those render here. CLI agents never consume this path.
   let recallCitations: RecallPromptCitation[] = [];
+  // committed 基线回退到自动投影时，本轮最终回复要持久化的投影级事实。
+  let recallFallback: RecallFallbackInfo | undefined;
   // 收尾时为画像注入逐条记录 channel='profile_memory' 的 InjectionReceipt。
   let recallProfileMemory: Array<{ id: string; source: string; version: string }> = [];
   // 授权块、画像块与目录文本在目录建成后合为一个 <asset-context> 块。
@@ -6166,6 +6199,11 @@ async function runActorTurnBody(
   let recallProfileBlock = '';
   let recallAnswerEvidence: OntologyAnswerEvidenceBundle | undefined;
   let recallTaskGoal = '';
+  let taskOntologyBlock = '';
+  let taskOntologyReadRefs: Array<{
+    moduleId: string; recordId: string; recordVersion: number;
+    kind: 'assertion' | 'rule'; sourceKind: 'user' | 'candidate' | 'legacy';
+  }> = [];
   // Commander-granted assets actually injected into a delegated turn, kept for
   // the same usage ledger the Commander injection uses (outcome 'dispatched').
   let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
@@ -6215,6 +6253,10 @@ async function runActorTurnBody(
           ...(committedProjectionId ? { committedProjectionId } : {}),
           ...(item.forecastId ? { forecastId: item.forecastId } : {}),
         });
+        // 回退事实与本轮是否带入资产无关：空回退也要让用户知道确认投影未生效。
+        if (committedProjectionId && recallContext.committedFallbackReason) {
+          recallFallback = { projectionId: committedProjectionId, reason: recallContext.committedFallbackReason };
+        }
         if (recallContext.promptBlock || recallContext.answerEvidence) {
         // 授权块与画像块暂存，等目录建成后合成单一 <asset-context>，不在此处重复追加。
           recallCitations = recallContext.citations;
@@ -6258,6 +6300,30 @@ async function runActorTurnBody(
           } catch {
             // receipt 落库失败不阻断回合——只是这次不产生迁移凭证。
           }
+        }
+        try {
+          const { buildTaskOntologyContext } = await import('../cognition/ontology/task-context');
+          const ontology = await buildTaskOntologyContext({
+            userId: uid,
+            taskText,
+            context: {
+              taskText,
+              ...(recallTaskGoal ? { purpose: recallTaskGoal } : {}),
+              agentId: actor.id,
+              ...(turnProjectId ? { projectId: turnProjectId } : {}),
+              ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
+              ...(turnConversationKind ? { conversationKind: turnConversationKind } : {}),
+              ...(turnAttachmentMetadata.attachmentTypes.length
+                ? { fileKinds: turnAttachmentMetadata.attachmentTypes } : {}),
+            },
+            ...(recallTaskGoal ? { purpose: recallTaskGoal, topicQuery: recallTaskGoal } : {}),
+            injectedAssetIds: recallCitations.map(citation => citation.assetId),
+          });
+          taskOntologyBlock = ontology.promptBlock;
+          taskOntologyReadRefs = ontology.readRefs;
+          if (ontology.errorCode) log.warn(`task ontology context unavailable code=${ontology.errorCode} cid=${cid}`);
+        } catch (error) {
+          log.warn(`task ontology context failed cid=${cid}: ${(error as Error).message}`);
         }
       } catch (error) {
         log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
@@ -6311,6 +6377,20 @@ async function runActorTurnBody(
           systemPrompt = `${systemPrompt}\n\n${[recallAuthorizedBlock, recallProfileBlock].filter(Boolean).join('\n\n')}`;
         }
         if (catalogText) systemPrompt = `${systemPrompt}\n\n${catalogText}`;
+      }
+
+      // 本体背景是独立兄弟块：不进入 <asset-context>，也不进资产 citations /
+      // reuse refs。只有真正拼进 systemPrompt 后才登记本体读取回执。
+      if (taskOntologyBlock) {
+        systemPrompt = `${systemPrompt}\n\n${taskOntologyBlock}`;
+        if (taskOntologyReadRefs.length) {
+          try {
+            const { recordOntologyQueryReadReceipt } = await import('../cognition/ontology/query-receipt');
+            await recordOntologyQueryReadReceipt(uid, item.turnId, taskOntologyReadRefs);
+          } catch (error) {
+            log.warn(`task ontology read receipt failed cid=${cid}: ${(error as Error).message}`);
+          }
+        }
       }
 
       // 任务经验与资产目录并列追加，集合和过滤语义独立。
@@ -7127,7 +7207,9 @@ async function runActorTurnBody(
       coordinatorLease?.stop();
     };
     try {
-      const actorMaxToolLoops = maxToolLoopsForActorTurn(actor.kind);
+      const turnExecutionPolicy = resolveTurnExecutionPolicy(
+        actor.kind, item.fromActorId === USER_ID ? item.sourceMessageText : undefined,
+      );
       const creatorPolicyPromise = turnAgentSpec?.creator_binding && actor.kind === 'agent'
         ? getAgentDispatchPolicy(uid, actor.id)
         : null;
@@ -7366,9 +7448,7 @@ async function runActorTurnBody(
           skillBuffer.recordInvoked(id, sys, trig),
         cacheRetention: "short",
         abortSignal: w.abortController.signal,
-        ...(actorMaxToolLoops != null
-          ? { maxToolLoops: actorMaxToolLoops }
-          : {}),
+        ...turnExecutionPolicy,
         ...(creatorExecutionOptions
           ? {
             toolAccess: creatorExecutionOptions.toolAccess,
@@ -8345,6 +8425,12 @@ async function runActorTurnBody(
           ? (agentRunTimingData.usage as Record<string, unknown>)
           : undefined;
       const usageOut: NonNullable<GroupMessageMetrics["usage"]> = {};
+      if (typeof usageIn?.totalInputTokens === "number")
+        usageOut.totalInputTokens = usageIn.totalInputTokens;
+      for (const key of ['requestedModel', 'reportedModel'] as const) {
+        const value = usageIn?.[key];
+        if (typeof value === 'string' && /^[A-Za-z0-9._:/@+\-]{1,160}$/.test(value)) usageOut[key] = value;
+      }
       if (typeof usageIn?.inputTokens === "number")
         usageOut.inputTokens = usageIn.inputTokens;
       if (typeof usageIn?.outputTokens === "number")
@@ -8362,6 +8448,7 @@ async function runActorTurnBody(
         >["lastCallUsage"];
       }
       const toolCalls = Number(agentRunTimingData.tool_calls);
+      const timings = normalizeRunTimings(agentRunTimingData);
       replyMetrics = {
         startedAt,
         firstTokenAt:
@@ -8370,6 +8457,7 @@ async function runActorTurnBody(
             : null,
         completedAt,
         ...(Object.keys(usageOut).length ? { usage: usageOut } : {}),
+        ...(timings ? { timings } : {}),
         ...(Number.isFinite(toolCalls) && toolCalls > 0
           ? { toolCalls }
           : {}),
@@ -8391,6 +8479,7 @@ async function runActorTurnBody(
       ...(citation.matchScore !== undefined ? { match_score: citation.matchScore } : {}),
       match_method: citation.matchMethod,
     }));
+    const persistedRecallFallback = !outcome.failureKind && !errText && !aborted ? recallFallback : undefined;
       // While dispatched actors are pending, this is an interim answer.
       // recordMemberRunTurnResult wakes the commander for one reporting round
       // after all actors finish; that round can close the turn.
@@ -8422,6 +8511,7 @@ async function runActorTurnBody(
       cid,
       fromActorId: actor.id,
       text: outcome.text,
+      ...(aborted ? { terminal_status: 'cancelled' as const } : {}),
       ...(outcome.failureKind ? { failure_kind: outcome.failureKind } : {}),
       ...(outcome.failureCode ? { failure_code: outcome.failureCode } : {}),
       ...(outcome.form ? { form: outcome.form } : {}),
@@ -8457,6 +8547,7 @@ async function runActorTurnBody(
       ...(persistedRecallCitations.length
         ? { recall_citations: persistedRecallCitations }
         : {}),
+      ...(persistedRecallFallback ? { recall_fallback: persistedRecallFallback } : {}),
       ...(w.projectionReceipt
         ? { projection_receipt: w.projectionReceipt }
         : {}),
@@ -12059,7 +12150,8 @@ async function hostRouteTaskTurn(
   // (greetings/status/emoji) with zero model calls and zero KStar writes;
   // everything else goes to the model judgement which decides is_task AND
   // continuation in one call with full conversation context.
-  const { isObviouslyTrivial, isClosingIntent, isAnswerLikeConfirmation } = await import('../kstar/task-intent');
+  const { isObviouslyTrivial, isClosingIntent, isAnswerLikeConfirmation, isExplicitTaskContinuation } = await import('../kstar/task-intent');
+  if (signal?.aborted) return { openedTask: false };
   const recordRouting = async (
     decision: import('../kstar/requirement-types').KstarRoutingDecision,
     options?: { requireExistingState?: boolean },
@@ -12164,6 +12256,15 @@ async function hostRouteTaskTurn(
     const openRequirement = lifecycle.requirement && lifecycle.requirement.status === 'open'
       ? { requirementId: lifecycle.requirement.id, goalText: lifecycle.requirement.goalText }
       : undefined;
+    if (signal?.aborted) return { openedTask: false };
+    if (openRequirement && isExplicitTaskContinuation(messageText)) {
+      await recordRouting({
+        at: nowIso(), kind: 'explicit_continuation', isTask: true, continuation: true,
+        reason: 'explicit continuation of an existing open requirement',
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+      }, { requireExistingState: true });
+      return { openedTask: false };
+    }
     const outcome = await judgeModelRouting(uid, cid, messageText, openRequirement, signal);
     if (signal?.aborted || outcome.status === 'cancelled') return { openedTask: false };
     if (outcome.status === 'unavailable') {

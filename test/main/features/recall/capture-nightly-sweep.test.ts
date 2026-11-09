@@ -28,7 +28,8 @@ vi.mock('../../../../src/main/model/core-agent/runner', () => ({ buildRunner: mo
 vi.mock('../../../../src/main/features/recall/candidate-service', () => ({
   saveRecallCandidate: mocks.saveCandidate, readRecallCandidate: mocks.readCandidate,
   findCaptureCandidateReceipt: mocks.findCandidateReceipt, readRecallAssetHandoffReceipt: vi.fn(),
-  promoteRecallCandidate: vi.fn(), listRecallCandidates: vi.fn(async () => []), supersedeRecallCandidate: vi.fn(),
+  promoteRecallCandidate: vi.fn(), listRecallCandidates: vi.fn(async () => []),
+  supersedeRecallCandidate: vi.fn(async () => undefined), ignoreRecallCandidate: vi.fn(async () => undefined),
   isAutoCaptureEligible: (candidate: { status: string }) => candidate.status === 'pending_review',
 }));
 vi.mock('../../../../src/main/util/boot_init', () => ({
@@ -119,6 +120,68 @@ async function workerFeedbackFixture() {
   mocks.saveCandidate.mockImplementation(async (_user, input) => ({ ...input, id: 'worker-candidate', status: 'pending_review' }));
   return { capture, record, observation, sourceRef, resultContext, context, read, readResult, verify,
     restore: () => { read.mockRestore(); readResult.mockRestore(); verify.mockRestore(); } };
+}
+
+async function semanticReformationFixture() {
+  const capture = await api();
+  const assets = await import('../../../../src/main/features/recall/asset-service');
+  const inspection = await import('../../../../src/main/features/recall/asset-inspection-service');
+  const stock = await import('../../../../src/main/features/recall/stock-organization');
+  const candidates = await import('../../../../src/main/features/recall/candidate-service');
+  const target = { id: 'semantic-target', ownerId: USER, type: 'cognition', version: '1', activeVersion: '1',
+    title: 'Traceability', statement: 'Always keep decisions traceable.', status: 'active', scope: 'project', evidenceRefs: [], updatedAt: at(11) };
+  const peer = { ...target, id: 'semantic-peer', statement: 'Keep decisions traceable in reports.' };
+  vi.spyOn(assets, 'listAbilityAssets').mockResolvedValue([target, peer] as any);
+  vi.spyOn(assets, 'readAbilityAssets').mockImplementation(async (_user, ids) => [target, peer].filter(asset => ids.includes(asset.id)) as any);
+  mocks.getMessagesPage.mockResolvedValue({ history: [row('u1', 11, 'user',
+    'Always keep decisions traceable. Cite the original evidence.'), row('a1', 11, 'assistant')], nextCursor: null });
+  mocks.buildRunner.mockImplementation(async options => ({ runner: { run: async input => {
+    await options.onModelDispatch?.();
+    return (options.sessionId.startsWith('memory-summary-') ? mocks.runSummary : mocks.runModel)({ ...input, sessionId: options.sessionId });
+  } } }));
+  const comparison = { relation: 'ambiguous', reason: 'Two related assets may conflict with this proposal.',
+    relatedAssets: [{ assetId: target.id, version: '1', quote: target.statement },
+      { assetId: peer.id, version: '1', quote: peer.statement }] };
+  mocks.runModel.mockImplementation(async (input: { sessionId?: string }) => {
+    const session = String(input.sessionId || '');
+    if (session.includes('-value-')) return answer(positive);
+    if (session.includes('-extract-')) return answer({ candidates: [{ judgment: 'Always keep decisions traceable.',
+      summary: 'Traceable decisions', value: 'Future decisions remain auditable.', suggestedType: 'rule',
+      suggestedScope: 'project', suggestedAction: 'create', risk: 'low', evidence: ['m1'] }] });
+    return answer({ assessments: [{ index: 0, checks: { supported: true, noUnsupportedClaims: true, scopePreserved: true,
+      finalDecisionPreserved: true, priorContentPreserved: true,
+      evidence: [{ label: 'm1', quote: 'Always keep decisions traceable.' }] }, uncertaintyDisposition: 'none', comparison }] });
+  });
+  const saved = new Map<string, any>(); let sequence = 0;
+  mocks.saveCandidate.mockImplementation(async (_user, input) => {
+    const record = { ...input, id: `semantic-candidate-${++sequence}`, status: 'pending_review', updatedAt: WINDOW };
+    saved.set(record.id, record); return record;
+  });
+  mocks.readCandidate.mockImplementation(async (_user, id: string) => saved.get(id));
+  const organize = vi.spyOn(stock, 'runStockOrganization').mockImplementation(async () => {
+    await inspection.recordSemanticInspectionFindings(USER, target.id, [peer.id],
+      [{ assetVersions: { [target.id]: '1', [peer.id]: '1' } }], async () => {});
+    return { phase: 'complete', total: 1, checked: 1, proposed: 0, saved: 0, remaining: 0,
+      noChange: 0, insufficient: 0, failed: 0, candidateIds: [] } as any;
+  });
+  let excludeAssetIds = new Set<string>();
+  const inspect = vi.spyOn(inspection, 'runAssetInspection').mockImplementation(async (_user, options) => {
+    excludeAssetIds = new Set(options.excludeAssetIds || []);
+    return { id: 'ir-semantic', ownerId: USER, schemaVersion: 1, trigger: 'nightly', scope: { statuses: ['active'] },
+      findings: [], scanned: 0, currentFindingKeys: [], coverage: { total: 0, evaluated: 0, remaining: 0 } } as any;
+  });
+  mocks.scheduleBootBackground.mockImplementation((_label, callback) => ({ cancel: vi.fn(),
+    promise: Promise.resolve().then(() => callback(new AbortController().signal)) }));
+  return {
+    capture, saved, target, peer,
+    supersede: vi.mocked(candidates.supersedeRecallCandidate),
+    formationPrompts: () => mocks.runModel.mock.calls
+      .filter(call => String(call[0]?.sessionId || '').includes('-formation-'))
+      .map(call => call[0].message),
+    excludeAssetIds: () => excludeAssetIds,
+    restore: () => { organize.mockRestore(); inspect.mockRestore();
+      vi.mocked(assets.listAbilityAssets).mockRestore(); vi.mocked(assets.readAbilityAssets).mockRestore(); },
+  };
 }
 
 describe('the sole nightly cognition pipeline', () => {
@@ -1442,7 +1505,8 @@ describe('the sole nightly cognition pipeline', () => {
     mocks.runModel.mockResolvedValue(answer({ ...positive, evidence: [{ messageId: 'a1', quote: 'Always keep decisions traceable.' }] }));
     const result = await capture.runRecallCapture(USER, (await records())[0].id);
     expect(result).toMatchObject({ status: 'failed', visibility: 'internal', errorCode: 'value_judgment_failed' });
-    expect(mocks.runModel).toHaveBeenCalledTimes(1);
+    // Contract errors earn one bounded repair retry; extraction still never starts.
+    expect(mocks.runModel).toHaveBeenCalledTimes(2);
     expect(capture.captureBucket(result)).toBe('silent');
   });
   it('submits all complete long messages beyond the former limits before value judgment', async () => {
@@ -2076,6 +2140,123 @@ describe('the sole nightly cognition pipeline', () => {
     expect(await capture.readRecallJsonRecord(USER, 'capture-sweep', 'nightly')).toEqual(legacy);
     await capture.runNightlyCaptureSweep(USER, WINDOW, capture.settings);
     expect((await capture.readRecallNightlySweep(USER))?.lastResult).toMatchObject({ pipelineVersion: 3, reviewDay: '2026-10-11' });
+  });
+
+  it('rejudges a proposal whose related assets conflict in the same round and supersedes the old candidate', async () => {
+    const fixture = await semanticReformationFixture();
+    try {
+      const result = await fixture.capture.runNightlyCaptureSweep(USER, WINDOW, fixture.capture.settings);
+      expect(result).toMatchObject({ ran: true });
+      const sweep = await fixture.capture.readRecallNightlySweep(USER);
+      expect(sweep?.receipt?.reformedCaptureIds).toHaveLength(1);
+      const [oldCandidateId, newCandidateId] = [...fixture.saved.keys()];
+      expect(oldCandidateId).toMatch(/^semantic-candidate-1$/);
+      expect(newCandidateId).toMatch(/^semantic-candidate-2$/);
+      // The literal finding joins the rejudgment prompt, and the second
+      // formation call is the only extra paid step.
+      expect(fixture.formationPrompts()).toHaveLength(2);
+      expect(JSON.parse(fixture.formationPrompts()[1]).relatedFindings).toEqual([
+        expect.objectContaining({ category: 'conflict', assetIds: ['semantic-peer', 'semantic-target'] }),
+      ]);
+      expect(fixture.supersede).toHaveBeenCalledWith(USER, oldCandidateId, newCandidateId, '被本轮重新核对取代');
+      expect(fixture.saved.get(newCandidateId)).toMatchObject({ formationComparison: {
+        relatedAssets: expect.arrayContaining([{ assetId: 'semantic-target', version: '1' }]),
+      } });
+      const receiptItem = sweep?.receipt?.items.find(item => item.captureId === sweep?.receipt?.captureIds[0]);
+      expect(receiptItem?.candidateIds).toEqual([newCandidateId]);
+      expect(sweep?.receipt?.candidateIds).toContain(newCandidateId);
+      expect(sweep?.receipt?.candidateIds).not.toContain(oldCandidateId);
+      // The re-formed proposal claims its new targets so the following
+      // inspection and stock pass leave those assets alone.
+      expect(sweep?.claims?.assets['semantic-target']?.candidateId).toBe(newCandidateId);
+      expect(sweep?.claims?.assets['semantic-peer']?.candidateId).toBe(newCandidateId);
+      expect([...fixture.excludeAssetIds()].sort()).toEqual(['semantic-peer', 'semantic-target']);
+      const record = (await records()).find(row => row.candidateIds?.includes(newCandidateId)) || (await records())[0];
+      expect(record.formationCheckpoint?.appliedFindingKeys).toContain('conflict:semantic:semantic-peer+semantic-target');
+    } finally { fixture.restore(); }
+  });
+
+  it('does not rejudge the same semantic finding again on a later sweep', async () => {
+    const fixture = await semanticReformationFixture();
+    try {
+      await fixture.capture.runNightlyCaptureSweep(USER, WINDOW, fixture.capture.settings);
+      const formationCalls = fixture.formationPrompts().length;
+      const saves = mocks.saveCandidate.mock.calls.length;
+      const supersedes = fixture.supersede.mock.calls.length;
+      await fixture.capture.runNightlyCaptureSweep(USER, WINDOW, fixture.capture.settings);
+      expect(fixture.formationPrompts()).toHaveLength(formationCalls);
+      expect(mocks.saveCandidate).toHaveBeenCalledTimes(saves);
+      expect(fixture.supersede).toHaveBeenCalledTimes(supersedes);
+      expect((await fixture.capture.readRecallNightlySweep(USER))?.receipt?.reformedCaptureIds).toHaveLength(1);
+    } finally { fixture.restore(); }
+  });
+
+  it('defers semantic reformations beyond five captures to the next round', async () => {
+    const capture = await api();
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const inspection = await import('../../../../src/main/features/recall/asset-inspection-service');
+    const stock = await import('../../../../src/main/features/recall/stock-organization');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const target = { id: 'semantic-target', ownerId: USER, type: 'cognition', version: '1', activeVersion: '1',
+      title: 'Traceability', statement: 'Always keep decisions traceable.', status: 'active', scope: 'project', evidenceRefs: [], updatedAt: at(11) };
+    const peer = { ...target, id: 'semantic-peer', statement: 'Keep decisions traceable in reports.' };
+    vi.spyOn(assets, 'listAbilityAssets').mockResolvedValue([target, peer] as any);
+    vi.spyOn(assets, 'readAbilityAssets').mockImplementation(async (_user, ids) => [target, peer].filter(asset => ids.includes(asset.id)) as any);
+    mocks.listConversations.mockResolvedValue(Array.from({ length: 6 }, (_, index) => conversation(`cid-${index + 1}`)));
+    mocks.getConversation.mockImplementation(async (_user, cid: string) => conversation(cid));
+    mocks.getMessagesPage.mockResolvedValue({ history: [row('u1'), row('a1', 11, 'assistant')], nextCursor: null });
+    mocks.buildRunner.mockImplementation(async options => ({ runner: { run: async input => {
+      await options.onModelDispatch?.();
+      return (options.sessionId.startsWith('memory-summary-') ? mocks.runSummary : mocks.runModel)({ ...input, sessionId: options.sessionId });
+    } } }));
+    const assessment = { index: 0, checks: { supported: true, noUnsupportedClaims: true, scopePreserved: true,
+      finalDecisionPreserved: true, priorContentPreserved: true,
+      evidence: [{ label: 'm1', quote: 'Always keep decisions traceable.' }] }, uncertaintyDisposition: 'none',
+      comparison: { relation: 'ambiguous', reason: 'Two related assets may conflict with this proposal.',
+        relatedAssets: [{ assetId: target.id, version: '1', quote: target.statement },
+          { assetId: peer.id, version: '1', quote: peer.statement }] } };
+    mocks.runModel.mockImplementation(async (input: { sessionId?: string }) => {
+      const session = String(input.sessionId || '');
+      if (session.includes('-value-')) return answer(positive);
+      if (session.includes('-extract-')) return answer({ candidates: [{ judgment: 'Always keep decisions traceable.', summary: 'Traceable decisions',
+        value: 'Future decisions remain auditable.', suggestedType: 'rule', suggestedScope: 'project', suggestedAction: 'create', risk: 'low', evidence: ['m1'] }] });
+      return answer({ assessments: [assessment] });
+    });
+    const saved = new Map<string, any>(); let sequence = 0;
+    mocks.saveCandidate.mockImplementation(async (_user, input) => {
+      const record = { ...input, id: `batch-candidate-${++sequence}`, status: 'pending_review', updatedAt: WINDOW };
+      saved.set(record.id, record); return record;
+    });
+    mocks.readCandidate.mockImplementation(async (_user, id: string) => saved.get(id));
+    const organize = vi.spyOn(stock, 'runStockOrganization').mockImplementation(async () => {
+      await inspection.recordSemanticInspectionFindings(USER, target.id, [peer.id], [{ assetVersions: { [target.id]: '1', [peer.id]: '1' } }], async () => {});
+      return { phase: 'complete', total: 1, checked: 1, proposed: 0, saved: 0, remaining: 0, noChange: 0, insufficient: 0, failed: 0, candidateIds: [] } as any;
+    });
+    const inspect = vi.spyOn(inspection, 'runAssetInspection').mockResolvedValue({ id: 'ir-batch', ownerId: USER, schemaVersion: 1,
+      trigger: 'nightly', scope: { statuses: ['active'] }, findings: [], scanned: 0, currentFindingKeys: [],
+      coverage: { total: 0, evaluated: 0, remaining: 0 } } as any);
+    mocks.scheduleBootBackground.mockImplementation((_label, callback) => ({ cancel: vi.fn(),
+      promise: Promise.resolve().then(() => callback(new AbortController().signal)) }));
+    try {
+      await capture.runNightlyCaptureSweep(USER, WINDOW, capture.settings);
+      expect(saved.size).toBe(11);
+      expect(candidates.supersedeRecallCandidate).toHaveBeenCalledTimes(5);
+      const sweep = await capture.readRecallNightlySweep(USER);
+      expect(sweep?.receipt?.reformedCaptureIds).toHaveLength(5);
+      expect(sweep?.receipt?.deferredReformations).toHaveLength(1);
+      const deferred = sweep!.receipt!.deferredReformations![0];
+      const deferredCapture = (await records()).find(record => record.id === deferred.captureId);
+      expect(deferredCapture?.conversationId).toBe('cid-6');
+      expect(deferred.findingKeys).toEqual(['conflict:semantic:semantic-peer+semantic-target']);
+      // The deferred capture carries into the next night even though that
+      // night admits no new messages.
+      vi.setSystemTime(new Date(at(13, 3)));
+      await capture.runNightlyCaptureSweep(USER, at(13, 3), capture.settings);
+      expect(candidates.supersedeRecallCandidate).toHaveBeenCalledTimes(6);
+      const next = await capture.readRecallNightlySweep(USER);
+      expect(next?.receipt?.deferredReformations).toBeUndefined();
+      expect(next?.receipt?.reformedCaptureIds).toHaveLength(1);
+    } finally { organize.mockRestore(); inspect.mockRestore(); }
   });
 
 });

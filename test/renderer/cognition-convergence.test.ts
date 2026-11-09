@@ -3,9 +3,9 @@ import { renderCognition, loadCognitionAssets } from './helpers/cognition-render
 import { getRecallCandidateCapabilities, projectReviewQueueCandidates } from '../../src/main/features/recall/candidate-capabilities';
 const candidate = (id: string, status = 'pending_review') => ({ id, status, judgment: '以后方案比较优先使用表格。', value: '便于反复比较方案差异。', summary: '方案比较格式', suggestedScope: '方案比较', suggestedType: 'personal', suggestedAction: 'create', captureProvenance: { pipeline: 'nightly_conversation', captureId: 'capture-a', messageIds: ['message-a'], extractionCompletedAt: '2026-10-12T01:00:00Z', valueJudgment: { eligible: true, reason: '可重复使用', judgedAt: '2026-10-12T00:59:00Z', evidence: [{ messageId: 'message-a', sourceId: 'source-a', quote: '这是真实来源原文' }] } }, sourceRefs: [{ kind: 'conversation', subtype: 'message', id: 'source-a', excerpt: '真实原文' }], capabilities: getRecallCandidateCapabilities({ status: status as never }), updatedAt: '2026-10-08T01:00:00Z' });
 describe('认知收敛后的单一治理入口', () => {
-  it('五个入口；旧待处理深链进入系统活动并保留建议身份', () => {
+  it('四个入口；旧待处理深链进入系统活动并保留建议身份', () => {
     const { ns } = loadCognitionAssets();
-    expect(ns.TABS.map((tab: { id: string }) => tab.id)).toEqual(['tree', 'overview', 'ontology', 'activity', 'settings']);
+    expect(ns.TABS.map((tab: { id: string }) => tab.id)).toEqual(['tree', 'ontology', 'overview', 'activity', 'settings']);
     ns.router.go({ name: 'review', candidateId: 'c1' });
     expect(ns.store.route).toMatchObject({ name: 'activity', candidateId: 'c1' });
   });
@@ -56,7 +56,7 @@ describe('认知收敛后的单一治理入口', () => {
     const html = renderCognition({ name: 'settings' }, { captureSettings: { enabled: true, executionPolicy: 'nightly' }, captureModel: { configured: true } });
     expect(html).toContain('夜间发现');
     expect(html).toMatch(/aria-checked="false"[^>]*disabled[^>]*data-act="auto-approval-toggle"/);
-    expect(html).toContain('完整建议进入');
+    expect(html).toContain('依据完整、范围明确且无冲突的更新可自动保存');
     expect(html).toContain('data-act="nightly-toggle"');
     expect(html).not.toContain('data-act="nightly-time"');
     expect(html).not.toContain('KSTAR');

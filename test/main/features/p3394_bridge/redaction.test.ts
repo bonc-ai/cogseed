@@ -14,16 +14,20 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 let previousVariant: string | undefined;
-let variantName: string;
+let previousBaseDir: string | undefined;
+let scratchBase = '';
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-redaction-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
-  // kstar/audit 落盘走 variantRoot()，一并隔离到一次性 variant。
+  // kstar/audit 落盘走 variantRoot()：把整棵变体树指到一次性临时根
+  // （runtime-paths 现在校验变体名），一并隔离。
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
-  variantName = 'p3394-red-' + Math.random().toString(36).slice(2, 8);
-  process.env.COGSEED_RUNTIME_VARIANT = variantName;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-red-'));
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 });
 
 afterEach(() => {
@@ -31,8 +35,10 @@ afterEach(() => {
   else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
   fs.rmSync(tmpDir, { recursive: true, force: true });
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
+  fs.rmSync(scratchBase, { recursive: true, force: true });
 });
 
 describe('P3394 统一脱敏（S-04/M-06）', () => {

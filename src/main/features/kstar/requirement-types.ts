@@ -149,6 +149,7 @@ export const KSTAR_ROUTING_KINDS = [
   'closing_intent',
   'obviously_trivial',
   'answer_confirmation',
+  'explicit_continuation',
   'model_judged',
   'routing_failed',
   'routing_unavailable',

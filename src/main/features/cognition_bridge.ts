@@ -54,6 +54,7 @@ function checkedStore(uid: string): CognitionStoreDocument {
 export function cognitionCompatibility(uid: string): CognitionCompatibilityState | undefined {
   return checkedStore(uid).compatibility;
 }
+/** Returns the store-cached record for this version; copy before mutating. */
 export function readUnifiedCognitionRecord(uid: string, collection: string, id: string): {
   authoritative: boolean; record?: Record<string, unknown>;
 } {
@@ -61,7 +62,8 @@ export function readUnifiedCognitionRecord(uid: string, collection: string, id: 
   const c = cognitionCompatibility(uid);
   return c?.mode === 'unified' ? { authoritative: true, record: Object.hasOwn(c.records[collection] ?? {}, id) ? c.records[collection][id] : undefined } : { authoritative: false };
 }
-/** One fresh, request-local collection snapshot; never reused by a later read/write. */
+/** One read-only collection snapshot per store version; later reads of the same
+ *  version reuse it, so callers must copy before mutating. */
 export function readUnifiedCognitionCollection(uid: string, collection: string): {
   authoritative: boolean; records: Record<string, Record<string, unknown>>;
 } {

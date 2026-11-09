@@ -27,6 +27,7 @@ function loadChatUseHelpers() {
         'connectors.use_label': 'Connector: {connector}',
         'connectors.use_prefix': 'Use {connector} connector: {content}',
         'connectors.inline_text': '{connector} connector',
+        'agents.use_label': 'Agent: {agent}',
         'skills.use_label': 'Skill: {skill}',
         'skills.use_prefix': 'Use {skill} skill: {content}',
         'skills.inline_text': '{skill} skill',
@@ -81,6 +82,15 @@ describe('chat use inline chips', () => {
     expect(h.mirror(text, (s: string) => s)).toContain('chat-use-inline-chip is-skill');
     expect(h.mirror(text, (s: string) => s)).toContain('Skill: ');
     expect(h.mirror(text, (s: string) => s)).toContain('Docs');
+  });
+
+  it('renders an Agent dependency chip without treating it as a Skill invocation', () => {
+    const h = loadChatUseHelpers();
+    const token = h.tokenFor({ kind: 'agent', id: 'analyst', name: 'Analyst' });
+
+    expect(token).toContain('Agent: Analyst');
+    expect(h.mirror(token, (s: string) => s)).toContain('chat-use-inline-chip is-agent');
+    expect(h.transform(token)).toBe('Agent: Analyst');
   });
 
   it('round-trips interleaved text and multiple resources through JSON message parts', () => {

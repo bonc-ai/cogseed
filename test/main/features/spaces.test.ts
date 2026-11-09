@@ -26,6 +26,13 @@ vi.mock('../../../src/main/features/agents', () => ({
       : { agent_id, name: agent_id }),
 }));
 
+// S5：createSpaceFromTemplate 动态引入 template_refs；用可变表模拟本机引用状态（未列出 = ready）。
+const refStates = vi.hoisted(() => new Map<string, string>());
+vi.mock('../../../src/main/features/template_refs', () => ({
+  resolveTemplateRefs: (_uid: string, refs: Array<{ kind: string; id: string }>) =>
+    refs.map((ref) => ({ ref, state: refStates.get(`${ref.kind}:${ref.id}`) ?? 'ready' })),
+}));
+
 // 纯函数直接静态导入（无 WS_ROOT 依赖）
 import {
   resolveSpaceResources,
@@ -45,6 +52,7 @@ beforeEach(async () => {
   users.activateUser(TEST_UID);
   visibleSkillIdsByUser.clear();
   visibleAgentIdsByUser.clear();
+  refStates.clear();
 });
 
 afterEach(() => {
@@ -738,3 +746,161 @@ describe('spaces › listSpaces 最近活跃会话（last_conversation_*）', ()
   });
 });
 ;
+
+describe('spaces › createSpaceFromTemplate（S5 Hub 空间模板）', () => {
+  const role = { source: 'builtin' as const, kind: 'role_template' as const, id: 'student' };
+  const hubSkill = { source: 'hub' as const, kind: 'skill' as const, id: 'aaaaaaaaaaa1' };
+  const hubAgent = { source: 'hub' as const, kind: 'agent' as const, id: 'bbbbbbbbbbb1' };
+
+  function input(over: Record<string, unknown> = {}) {
+    return {
+      request_id: 'req_0001',
+      template: { template_id: 'ws-tpl-a', name: '竞品研究空间', version: '1.0.0', project_dir: 'none' as const },
+      name: '竞品研究',
+      goal: '持续掌握竞品动态',
+      instructions: '每周输出一份对比结论。',
+      role_templates: [role],
+      extra_agents: [hubAgent],
+      extra_skills: [hubSkill],
+      app_version: '1.4.0',
+      ...over,
+    };
+  }
+
+  it('creates the space, writes resources and the origin sidecar in one call', async () => {
+    const s = await loadSpaces();
+    const res = await s.createSpaceFromTemplate(TEST_UID, input());
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.space).toMatchObject({
+      name: '竞品研究',
+      primary_template_id: 'student',
+      sustained_outcome: '持续掌握竞品动态',
+      instructions: '每周输出一份对比结论。',
+      extra_agents: ['bbbbbbbbbbb1'],
+      extra_skills: ['aaaaaaaaaaa1'],
+    });
+    const stored = await s.getSpace(TEST_UID, res.space.space_id);
+    expect(stored?.extra_skills).toEqual(['aaaaaaaaaaa1']);
+    const origin = await s.readSpaceOrigin(TEST_UID, res.space.space_id);
+    expect(origin).toMatchObject({ template_id: 'ws-tpl-a', template_name: '竞品研究空间', version: '1.0.0', request_id: 'req_0001' });
+    expect(typeof origin?.created_at).toBe('string');
+  });
+
+  it('rejects when any ref is not ready and returns the details; nothing is written', async () => {
+    refStates.set('skill:aaaaaaaaaaa1', 'needs_fetch');
+    const s = await loadSpaces();
+    const res = await s.createSpaceFromTemplate(TEST_UID, input());
+    expect(res).toMatchObject({ ok: false, code: 'refs_not_ready' });
+    if (res.ok) return;
+    expect(res.items?.map((i) => [i.ref.id, i.state])).toEqual([['aaaaaaaaaaa1', 'needs_fetch']]);
+    expect(await s.listSpaces(TEST_UID)).toEqual([]);
+  });
+
+  it('treats the local project dir as optional even for legacy required templates, and rejects dangerous roots when provided', async () => {
+    const s = await loadSpaces();
+    const required = { template_id: 'ws-tpl-a', name: 'x', version: '1', project_dir: 'required' as const };
+    const withoutFolder = await s.createSpaceFromTemplate(TEST_UID, input({ template: required }));
+    expect(withoutFolder.ok).toBe(true);
+    if (withoutFolder.ok) expect(withoutFolder.space.project_dir).toBeUndefined();
+    const bad = await s.createSpaceFromTemplate(TEST_UID, input({ template: required, project_dir: os.homedir(), request_id: 'req_0002' }));
+    expect(bad.ok).toBe(false);
+    // 用户自己的项目目录在数据根之外（数据根内的目录会被当成危险根拒绝）。
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-tpl-proj-'));
+    try {
+      const good = await s.createSpaceFromTemplate(TEST_UID, input({
+        template: required,
+        name: '竞品研究-绑定目录',
+        project_dir: dir,
+        request_id: 'req_0003',
+      }));
+      expect(good.ok).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is idempotent on request_id', async () => {
+    const s = await loadSpaces();
+    const first = await s.createSpaceFromTemplate(TEST_UID, input());
+    const again = await s.createSpaceFromTemplate(TEST_UID, input({ name: '另一个名字' }));
+    expect(first.ok && again.ok).toBe(true);
+    if (!first.ok || !again.ok) return;
+    expect(again.space.space_id).toBe(first.space.space_id);
+    expect((await s.listSpaces(TEST_UID)).length).toBe(1);
+  });
+
+  it('creates exactly one space when the same request_id arrives concurrently', async () => {
+    const s = await loadSpaces();
+    const [a, b] = await Promise.all([
+      s.createSpaceFromTemplate(TEST_UID, input()),
+      s.createSpaceFromTemplate(TEST_UID, input()),
+    ]);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.space.space_id).toBe(b.space.space_id);
+    expect((await s.listSpaces(TEST_UID)).map((x) => x.space_id)).toEqual([a.space.space_id]);
+    const { userSpacesDir } = await import('../../../src/main/paths');
+    const sidecars = fs.readdirSync(userSpacesDir(TEST_UID)).filter((f) => f.endsWith('.origin.json'));
+    expect(sidecars).toEqual([`${a.space.space_id}.origin.json`]);
+  });
+
+  it('leaves no origin sidecar behind when the space itself cannot be created', async () => {
+    const s = await loadSpaces();
+    expect((await s.createSpace(TEST_UID, { name: '竞品研究' })).ok).toBe(true);
+    const res = await s.createSpaceFromTemplate(TEST_UID, input());
+    expect(res).toMatchObject({ ok: false, code: 'name_dup' });
+    const { userSpacesDir } = await import('../../../src/main/paths');
+    expect(fs.readdirSync(userSpacesDir(TEST_UID)).filter((f) => f.endsWith('.origin.json'))).toEqual([]);
+  });
+
+  it('a second use of the same template with a new request is a separate space', async () => {
+    const s = await loadSpaces();
+    await s.createSpaceFromTemplate(TEST_UID, input());
+    await s.createSpaceFromTemplate(TEST_UID, input({ request_id: 'req_0003', name: '竞品研究 2' }));
+    expect((await s.listSpaces(TEST_UID)).length).toBe(2);
+  });
+
+  it('rejects a malformed request_id', async () => {
+    const s = await loadSpaces();
+    expect(await s.createSpaceFromTemplate(TEST_UID, input({ request_id: '../x' }))).toMatchObject({ ok: false, code: 'invalid_request' });
+  });
+
+  it('the origin sidecar is skipped by the list scan and has no space_id (old clients read it as null)', async () => {
+    const s = await loadSpaces();
+    const res = await s.createSpaceFromTemplate(TEST_UID, input());
+    if (!res.ok) throw new Error('unreachable');
+    const { userSpacesDir } = await import('../../../src/main/paths');
+    const sidecar = path.join(userSpacesDir(TEST_UID), `${res.space.space_id}.origin.json`);
+    const raw = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
+    expect(raw).not.toHaveProperty('space_id');
+    // 旧客户端的扫描把它当成一个 id 为 `<sid>.origin` 的空间去读：读出来没有 space_id，必须被丢弃。
+    expect(await s.getSpace(TEST_UID, `${res.space.space_id}.origin`)).toBeNull();
+    expect((await s.listSpaces(TEST_UID)).map((x) => x.space_id)).toEqual([res.space.space_id]);
+  });
+
+  it('origin survives an ordinary space update', async () => {
+    const s = await loadSpaces();
+    const res = await s.createSpaceFromTemplate(TEST_UID, input());
+    if (!res.ok) throw new Error('unreachable');
+    await s.updateSpace(TEST_UID, res.space.space_id, { name: '改名后' } as never);
+    expect(await s.readSpaceOrigin(TEST_UID, res.space.space_id)).toMatchObject({ template_id: 'ws-tpl-a' });
+  });
+
+  it('deleting the space removes the origin sidecar', async () => {
+    const s = await loadSpaces();
+    const res = await s.createSpaceFromTemplate(TEST_UID, input());
+    if (!res.ok) throw new Error('unreachable');
+    await s.deleteSpace(TEST_UID, res.space.space_id);
+    const { userSpacesDir } = await import('../../../src/main/paths');
+    expect(fs.existsSync(path.join(userSpacesDir(TEST_UID), `${res.space.space_id}.origin.json`))).toBe(false);
+    expect(await s.readSpaceOrigin(TEST_UID, res.space.space_id)).toBeNull();
+  });
+
+  it('spaces created without a template have no origin', async () => {
+    const s = await loadSpaces();
+    const res = await s.createSpace(TEST_UID, { name: '手建空间' });
+    if (!res.ok) throw new Error('unreachable');
+    expect(await s.readSpaceOrigin(TEST_UID, res.space.space_id)).toBeNull();
+  });
+});

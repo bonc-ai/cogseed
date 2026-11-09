@@ -819,6 +819,56 @@ describe('CogSeed Runtime controller', () => {
     expect(runtime.inputs).toEqual([]);
   });
 
+  it('records ontology usage for a completed local CLI task', async () => {
+    const { commitOntologyCommand } = await import('../../../../src/main/features/cognition/ontology/service');
+    const action = (recordId: string, record: Record<string, unknown>) => ({
+      intent: 'create', recordId, record, sourceLabel: '用户确认',
+    });
+    await commitOntologyCommand(USER, {
+      commandId: 'cli-usage-seed',
+      expectedRevision: 0,
+      actions: [
+        action('cli-module', { kind: 'module', name: '甲项目', description: '', scope: { kind: 'personal' } }),
+        action('cli-person-type', { kind: 'definition', moduleId: 'cli-module', name: '人员', description: '',
+          definitionKind: 'type', subjectTypes: [], objectTypes: [], valueType: 'entity', cardinality: 'many', cardinalityAnchor: 'subject' }),
+        action('cli-owner-def', { kind: 'definition', moduleId: 'cli-module', name: '负责人', description: '',
+          definitionKind: 'attribute', subjectTypes: ['cli-person-type'], objectTypes: [], valueType: 'text', cardinality: 'one', cardinalityAnchor: 'subject' }),
+        action('cli-person', { kind: 'entity', moduleId: 'cli-module', typeId: 'cli-person-type', name: '王工',
+          description: '', aliases: [], identityStatus: 'confirmed' }),
+        action('cli-fact', { kind: 'assertion', moduleId: 'cli-module', subjectId: 'cli-person', definitionId: 'cli-owner-def',
+          object: { kind: 'literal', valueType: 'text', value: '评审负责人是王工' },
+          validity: { from: '2026-01-01', until: null, precision: 'day', timezone: 'Asia/Shanghai' } }),
+      ],
+    });
+    const localCliAdapter = {
+      async *run(input: any) {
+        yield { type: 'result', request_id: input.requestId, runtime_session_id: input.runtimeSessionId,
+          status: 'completed', text: '完成 [[ontology:cli-module/cli-fact@1]]' };
+      },
+    };
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const controller = trackController(createCogSeedRuntimeController({ runtime: runtimeFrom([]), localCliAdapter } as any));
+    await createConversation('cid-cli-usage');
+    const task = await controller.startCogSeedTask(USER, {
+      requestId: 'req-cli-usage',
+      task: '准备甲项目评审会',
+      conversationId: 'cid-cli-usage',
+      agentId: 'agent-cli-usage',
+      executionKind: 'local-cli',
+      localCli: { cli: 'claude' },
+    } as any);
+    await eventually(async () => {
+      await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({ status: 'completed' });
+    });
+    const { listOntologyUsageReceipts } = await import('../../../../src/main/features/cognition/ontology/usage-receipt');
+    await eventually(async () => {
+      expect(await listOntologyUsageReceipts(USER, task.taskId)).toEqual([
+        expect.objectContaining({ recordId: 'cli-fact', recordVersion: 1 }),
+      ]);
+    });
+  });
+
   it('rejects a local CLI execution unless its Conversation actually exists', async () => {
     let adapterRuns = 0;
     const localCliAdapter = {

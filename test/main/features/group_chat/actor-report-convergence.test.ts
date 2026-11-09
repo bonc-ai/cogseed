@@ -37,10 +37,35 @@ const run = (actors: unknown[], extra: Record<string, unknown> = {}) => ({
   updated_at: '2026-10-13T00:00:00.000Z',
   actors,
   status: 'running',
+  actor_report_requested: true,
   ...extra,
 }) as never;
 
 describe('actor report convergence (R-11)', () => {
+  it('never reports direct or legacy runs without an explicit parent report request', async () => {
+    const { shouldEnqueueActorReport } = await runStore();
+    const actors = [{ agent_id: 'worker', terminal: 'done', produced: { messages: 1, artifacts: [] } }];
+    expect(shouldEnqueueActorReport(run(actors, { actor_report_requested: undefined }))).toBe(false);
+    expect(shouldEnqueueActorReport(run(actors, { actor_report_requested: false }))).toBe(false);
+  });
+
+  it('persists a report request separately from the immutable user submission', async () => {
+    const store = await runStore();
+    const created = await store.createRun({
+      uid: 'report-user', cid: 'report-cid', submittedText: 'user request',
+      memberAgentIds: ['worker'], mentionAgentIds: ['worker'],
+    });
+    expect(created?.actor_report_requested).toBeUndefined();
+    await store.requestActorReport('report-user', 'report-cid', created!.run_id);
+    const restored = await store.readRun('report-user', 'report-cid', created!.run_id);
+    expect(restored?.actor_report_requested).toBe(true);
+    expect(restored?.input_snapshot).toEqual(created?.input_snapshot);
+    await store.recordRunActorTerminal('report-user', 'report-cid', created!.run_id, 'worker', {
+      terminal: 'done', messages: 1,
+    });
+    expect(store.shouldEnqueueActorReport(await store.readRun('report-user', 'report-cid', created!.run_id))).toBe(true);
+  });
+
   it('keeps waiting while any dispatched actor is still pending', async () => {
     const { shouldEnqueueActorReport } = await runStore();
     expect(shouldEnqueueActorReport(run([

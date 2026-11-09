@@ -52,6 +52,9 @@ packages/*/dist
 /dist
 /output
 
+# Hub-only exports (template-refs:manifest); the reviewed copy lives under specs/
+/build/hub-export/
+
 # stray sidecar edits
 package.json.new
 

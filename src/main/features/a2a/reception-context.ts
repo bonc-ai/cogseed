@@ -48,10 +48,13 @@
  */
 
 import { readJsonl, safeId } from '../../storage';
+import { createHash } from 'node:crypto';
 import { conversationMessageReadFile } from '../../util/project-layout';
 import { createLogger } from '../../logger';
 import { logErrorRef, maskId } from '../../util/log-redact';
 import type { TrustedReceptionScope } from './reception-scope';
+import { readReceptionLedger } from './reception-ledger';
+import { listConsultations } from './consultations';
 
 const log = createLogger('a2a');
 
@@ -201,7 +204,31 @@ export async function loadReceptionHistory(
   try {
     const file = conversationMessageReadFile(userId, scope.conversationId);
     const rows = await readJsonl<ConversationRowLike>(file, RECEPTION_HISTORY_SCAN_ROWS);
-    return projectReceptionHistory(rows, scope.sourceActorId);
+    // A terminal model bubble may contain private deliberation emitted before
+    // the consultation tool stopped forwarding. Its turn ownership alone is
+    // not a delivery receipt. Exclude the entire consultation model turn in
+    // every decision state, including failed creation with only a ledger flag.
+    // A known dispatch also needs a successful public-send receipt: if even the
+    // privacy-marker write failed, its still-running ledger row must not allow
+    // the private terminal bubble into history after a restart.
+    // Owner-selected replies are delivered separately; never substitute the
+    // original model prose for them. Missing/corrupt privacy records fail closed
+    // through the outer catch rather than falling back to raw transcript rows.
+    const privateTurns = new Set<string>();
+    const entries = await readReceptionLedger(userId);
+    for (const entry of entries) {
+      if (entry.conversationId !== scope.conversationId) continue;
+      if (!entry.consultationRequested && !entry.consultationIntent && entry.status === 'answered'
+        && entry.stage === 'sent' && entry.answer?.ok && entry.answer.relayMessageId) continue;
+      privateTurns.add(`turn-a2a-in-${createHash('sha256').update(entry.messageId).digest('hex').slice(0, 20)}`);
+    }
+    for (const row of await listConsultations(userId, { conversationId: scope.conversationId })) {
+      if (typeof row.turnId === 'string') privateTurns.add(row.turnId);
+      if (typeof row.sourceMessageId === 'string') {
+        privateTurns.add(`turn-a2a-in-${createHash('sha256').update(row.sourceMessageId).digest('hex').slice(0, 20)}`);
+      }
+    }
+    return projectReceptionHistory(rows.filter(row => !privateTurns.has(String(row?.turn_id))), scope.sourceActorId);
   } catch (error) {
     log.warn('reception history projection unavailable', {
       user_id: maskId(userId),

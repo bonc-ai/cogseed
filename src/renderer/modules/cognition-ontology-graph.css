@@ -40,6 +40,10 @@
 .cog-og--star .cog-og-node.cog-og-node--reference .cog-og-node-portal{fill:#b7ccd8;fill-opacity:.4;stroke:#5b7f95;stroke-opacity:.5;stroke-width:1;stroke-dasharray:2 3}
 .cog-og--star .cog-og-node.cog-og-node--assertion .cog-og-node-bead{fill:#5f8a72;fill-opacity:.78;stroke:#4f9a73;stroke-opacity:.55;stroke-width:.8}
 .cog-og--star .cog-og-node.cog-og-node--attribute .cog-og-node-square{fill:#758579;fill-opacity:.6;stroke:#5f7265;stroke-opacity:.4;stroke-width:.7}
+.cog-og--star .cog-og-star-edge-label{opacity:0;pointer-events:none;transition:opacity .12s}
+.cog-og--star .cog-og-star-edge-label.is-visible{opacity:1}
+.cog-og--star .cog-og-star-edge-label rect{fill:rgba(251,253,248,.94);stroke:rgba(223,232,225,.9);stroke-width:.7}
+.cog-og--star .cog-og-star-edge-label text{fill:#526858;font-size:9px;font-weight:500}
 #ca-root .ontology-workspace.ont-prototype .cog-og--star .cog-og-star-label{pointer-events:none}
 #ca-root .ontology-workspace.ont-prototype .cog-og--star .cog-og-star-label text{paint-order:stroke;stroke-linejoin:round}
 #ca-root .ontology-workspace.ont-prototype .cog-og--star .cog-og-star-label.is-chip rect{fill:rgba(251,253,248,.88);stroke:rgba(223,232,225,.8);stroke-width:.7}
@@ -110,9 +114,6 @@
 .cog-og--star .cog-og-star-title{display:flex;align-items:baseline;gap:7px;white-space:nowrap}
 .cog-og--star .cog-og-star-title b{font-size:12px;font-weight:650;color:#20362b}
 .cog-og--star .cog-og-star-title span{font-size:9px;color:#9aa79c}
-.cog-og--star .cog-og-star-toolbar .ont-graph-lenses{gap:2px}
-.cog-og--star .cog-og-star-toolbar .ont-graph-lenses button{font-size:9px;padding:4px 6px;border-radius:5px}
-.cog-og--star .cog-og-star-toolbar .ont-graph-lenses button[aria-pressed=true]{background:#eef4e9;color:#3f6b50}
 .cog-og--star .cog-og-star-focus{display:flex;align-items:center;gap:5px;margin-left:2px;font-size:9px;color:#8b9e8d;white-space:nowrap}
 .cog-og--star .cog-og-star-focus select{max-width:140px;height:24px;border:1px solid #e1e9e2;border-radius:5px;background:#fafcf7;color:#526858;font:inherit;font-size:9.5px;padding:0 18px 0 7px}
 .cog-og--star .cog-og-star-actions{margin-left:auto;display:flex;align-items:center;gap:3px}

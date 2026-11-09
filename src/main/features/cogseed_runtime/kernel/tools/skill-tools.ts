@@ -19,6 +19,8 @@ import { isContentDisabled } from '../../../marketplace/installed-version';
 import { recordHubContentUsage } from '../../../marketplace/usage-event';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
 import { runWithRuntimeActionApproval } from './action-approval';
+import { wrapProcessForOsSandbox } from './os-sandbox';
+import { runtimeProtectedRoots } from './protected-paths';
 
 function formatError(code: string, message: string): RuntimeToolResult {
   return { content: `[${code}] ${message}`, isError: true };
@@ -36,9 +38,15 @@ async function capRuntimeResult(
   return capped as RuntimeToolResult;
 }
 
-function runProcess(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs?: number): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
+function runProcess(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+  wrapped?: { file: string; args: string[] } | null,
+): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(wrapped?.file ?? process.execPath, wrapped?.args ?? args, {
       cwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -78,6 +86,13 @@ function validateSkillToken(value: unknown, label: string): string {
     throw Object.assign(new Error(`invalid ${label}`), { code: 'E_RUNTIME_INVALID_ID' });
   }
   return text;
+}
+
+function skillSandboxAvailable(): boolean {
+  if (process.platform === 'darwin') return fs.existsSync('/usr/bin/sandbox-exec');
+  if (process.platform === 'linux') return process.env.COGSEED_OS_SANDBOX === '1'
+    || ['/usr/bin/bwrap', '/bin/bwrap', '/usr/local/bin/bwrap'].some(candidate => fs.existsSync(candidate));
+  return false;
 }
 
 export async function runRuntimeSkillTool(
@@ -201,8 +216,18 @@ export async function runRuntimeSkillTool(
       ? normalizeRuntimePath(input.cwd, ctx.allowedRoots)
       : (ctx.workspaceRoot || ctx.allowedRoots[0] || process.cwd());
     const args = Array.isArray(input.args) ? input.args.map((arg) => String(arg)) : [];
+    const canWrite = ctx.toolPolicy.fileWrite === 'all' || ctx.toolPolicy.fileWrite === 'explicit_writable_roots';
+    const skillTemp = canWrite
+      ? path.join(ctx.workspaceRoot || ctx.writableRoots[0] || cwd, '.cogseed-tmp')
+      : (process.env.TMPDIR || '/tmp');
+    if (canWrite) {
+      try { fs.mkdirSync(skillTemp, { recursive: true }); } catch { /* skill temp is best effort */ }
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      TMPDIR: skillTemp,
+      TMP: skillTemp,
+      TEMP: skillTemp,
       COGSEED_PC_DIR: ctx.pcDir,
       COGSEED_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
       ...(ctx.workspaceRoot ? { COGSEED_WORKSPACE_DIR: ctx.workspaceRoot } : {}),
@@ -221,13 +246,17 @@ export async function runRuntimeSkillTool(
         : formatError('E_ONTOLOGY_OPERATION_PRECONDITION_UNAVAILABLE', 'current host conditions unavailable');
       if (denied) return denied;
       if (opts.signal?.aborted) return formatError('E_RUNTIME_ABORTED', 'action cancelled');
-      const result = await runProcess([
-        runSkillPath,
-        skillId,
-        script,
-        '--',
-        ...args,
-      ], cwd, env, undefined);
+      const skillArgs = [runSkillPath, skillId, script, '--', ...args];
+      const sandboxed = skillSandboxAvailable()
+        ? wrapProcessForOsSandbox(process.execPath, skillArgs, {
+          ...(ctx.workspaceRoot ? { workspaceRoot: ctx.workspaceRoot } : {}),
+          writableRoots: ctx.writableRoots,
+          protectedPaths: runtimeProtectedRoots(ctx.userId),
+          tempRoots: canWrite ? [skillTemp] : [],
+          allowAllWrites: ctx.toolPolicy.fileWrite === 'all',
+        })
+        : null;
+      const result = await runProcess(skillArgs, cwd, env, undefined, sandboxed);
       // ── `hub_content_used` 的采集边界（specs/010 FR-061～FR-066）──────────
       // 这里是**真实使用尝试**真正产生结果的地方：脚本已经跑过了。
       // **不是** UI 点击、不是查看详情、不是安装动作——那些都不产生事件。

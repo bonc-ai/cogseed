@@ -27,7 +27,11 @@ import {
 import { CogSeedGroupChatTaskAdmissionError } from './followup-errors';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
 import { resolveRuntimeToolPolicyForRun } from './runtime-tool-policy';
-import { buildDispatchedRuntimeAssetContext, buildRuntimeAssetContext } from './runtime-asset-context';
+import {
+  buildDispatchedRuntimeAssetContextAssembly,
+  buildRuntimeAssetContextAssembly,
+  buildRuntimeOntologyContext,
+} from './runtime-asset-context';
 import { cogSeedRequestFingerprint } from './request-fingerprint';
 import { readCogSeedSession } from './session-store';
 import type { CogSeedTaskRecord } from './types';
@@ -306,6 +310,7 @@ async function buildTaskExecutionContext(
   task: CogSeedTaskRecord,
   input: StartCogSeedTaskInput,
   conversationId?: string,
+  ontologyGoal = '',
 ): Promise<unknown[] | undefined> {
   const context = [...(input.context ?? [])];
   const conversation = conversationId ? await (await import('../chats')).getConversation(userId, conversationId).catch(() => undefined) : undefined;
@@ -313,25 +318,66 @@ async function buildTaskExecutionContext(
     ...(conversation?.project_id ? { projectId: conversation.project_id } : {}),
     ...(conversation?.space_id || task.spaceId ? { workspaceId: conversation?.space_id || task.spaceId } : {}),
     ...(conversation?.kind ? { conversationKind: conversation.kind } : {}) };
+  const injectedAssetIds = new Set<string>();
   if (task.abilityAssetIds?.length) {
-    context.push(...await buildDispatchedRuntimeAssetContext(userId, task.abilityAssetIds, {
+    const dispatchedAssembly = await buildDispatchedRuntimeAssetContextAssembly(userId, task.abilityAssetIds, {
       taskId: task.taskId, executionId: task.executionId,
       ...assetScope,
-    }));
+    });
+    if (dispatchedAssembly.items.length) {
+      context.push(...dispatchedAssembly.items);
+      for (const assetId of dispatchedAssembly.assetIds) injectedAssetIds.add(assetId);
+    }
   }
   if (conversationId) {
-    const assetContext = await buildRuntimeAssetContext(userId, conversationId, task.taskId, task.executionId, assetScope);
-    if (assetContext.length) context.push(...assetContext);
+    const assetAssembly = await buildRuntimeAssetContextAssembly(
+      userId, conversationId, task.taskId, task.executionId, assetScope,
+    );
+    if (assetAssembly.items.length) {
+      context.push(...assetAssembly.items);
+      for (const assetId of assetAssembly.assetIds) injectedAssetIds.add(assetId);
+    }
+  }
+  const childTask = Boolean(task.parentTaskId) || (task.coordinationDepth ?? 0) > 0;
+  const receptionTask = conversationId
+    ? await (await import('./runtime-tool-policy'))
+      .isA2AReceptionRequest(userId, task.requestId, task.runtimeSessionId).catch(() => true)
+    : false;
+  if (conversationId && !childTask && !receptionTask) {
+    const ontologyPurpose = ontologyGoal || input.task;
+    const ontologyItems = await buildRuntimeOntologyContext(userId, task.taskId, {
+      taskText: input.task,
+      purpose: ontologyPurpose,
+      ...(ontologyGoal ? { topicQuery: ontologyGoal } : {}),
+      ...(task.executionId ? { executionId: task.executionId } : {}),
+      ...(task.agentId ? { agentId: task.agentId } : {}),
+      ...(conversation?.project_id ? { projectId: conversation.project_id } : {}),
+      ...(conversation?.space_id || task.spaceId ? { workspaceId: conversation?.space_id || task.spaceId } : {}),
+      ...(conversation?.kind ? { conversationKind: conversation.kind } : {}),
+      injectedAssetIds: [...injectedAssetIds],
+    });
+    if (ontologyItems.length) context.push(...ontologyItems);
   }
   return context.length ? context : undefined;
 }
 
-async function linkKstarTask(userId: string, conversationId: string | undefined, cogseedTaskId: string): Promise<void> {
-  if (!conversationId) return;
+async function readKstarGoal(userId: string, conversationId: string | undefined): Promise<string> {
+  if (!conversationId) return '';
   try {
     const lifecycle = await (await import('../kstar/lifecycle-adapter')).readKstarTaskLifecycle(userId, conversationId);
+    return String(lifecycle.requirement?.goalText || '').trim().slice(0, 4_000);
+  } catch {
+    return '';
+  }
+}
+
+async function linkKstarTask(userId: string, conversationId: string | undefined, cogseedTaskId: string): Promise<string> {
+  if (!conversationId) return '';
+  try {
+    const lifecycle = await (await import('../kstar/lifecycle-adapter')).readKstarTaskLifecycle(userId, conversationId);
+    const goal = String(lifecycle.requirement?.goalText || '').trim().slice(0, 4_000);
     const task = lifecycle.task;
-    if (!task || task.conversationId !== conversationId) return;
+    if (!task || task.conversationId !== conversationId) return goal;
     const kstar = await import('../kstar/requirement-store');
     if (task.cogseedTaskId !== cogseedTaskId) {
       await kstar.replaceKstarTask(userId, { ...task, cogseedTaskId, updatedAt: new Date().toISOString() });
@@ -344,8 +390,10 @@ async function linkKstarTask(userId: string, conversationId: string | undefined,
       ...(lifecycle.requirement?.forecastId ? { kstarForecastId: lifecycle.requirement.forecastId } : {}),
       updatedAt: new Date().toISOString(),
     }));
+    return goal;
   } catch (error) {
     log.warn('KSTAR/CogSeed task bridge degraded', { taskId: cogseedTaskId, error: logErrorRef(error) });
+    return '';
   }
 }
 
@@ -550,6 +598,36 @@ async function mapRuntimeEvent(
         const { checkPersistedRuntimeCognitionOutput } = await import('../recall/cognition-output-check');
         await checkPersistedRuntimeCognitionOutput(userId, finished.taskId, signal);
       } catch { log.warn('Runtime terminal text check unavailable; completed task preserved'); }
+      try {
+        const [{ readRuntimeResultContent }, { finalizeOntologyUsageCitations }] = await Promise.all([
+          import('../recall/runtime-result-content'),
+          import('../cognition/ontology/usage-receipt'),
+        ]);
+        const result = await readRuntimeResultContent(userId, finished.taskId);
+        await finalizeOntologyUsageCitations(userId, {
+          taskRunId: finished.taskId,
+          messageId: result.anchorId,
+          finalText: result.content.text,
+          ...(finished.executionId ? { executionId: finished.executionId } : {}),
+        });
+      } catch { log.warn('Runtime ontology usage receipt unavailable; completed task preserved'); }
+    }
+    if (finished.executionKind === 'local-cli' && finished.status === 'completed') {
+      try {
+        const [{ runtimeResultAnchor }, { finalizeOntologyUsageCitations }] = await Promise.all([
+          import('../recall/runtime-result-content'),
+          import('../cognition/ontology/usage-receipt'),
+        ]);
+        const text = String(event.text || '');
+        if (text.trim()) {
+          await finalizeOntologyUsageCitations(userId, {
+            taskRunId: finished.taskId,
+            messageId: runtimeResultAnchor(finished.executionId || finished.taskId),
+            finalText: text,
+            ...(finished.executionId ? { executionId: finished.executionId } : {}),
+          });
+        }
+      } catch { log.warn('Local CLI ontology usage receipt unavailable; completed task preserved'); }
     }
     return finished;
   }
@@ -1141,8 +1219,8 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       capabilities,
     };
     const conversationId = await resolveConversationIdForTask(userId, created.task, input);
-    await linkKstarTask(userId, conversationId, created.task.taskId);
-    launchInput.context = await buildTaskExecutionContext(userId, created.task, launchInput, conversationId);
+    const ontologyGoal = await linkKstarTask(userId, conversationId, created.task.taskId);
+    launchInput.context = await buildTaskExecutionContext(userId, created.task, launchInput, conversationId, ontologyGoal);
     return launchTask(userId, created.task, launchInput);
   }
 
@@ -1176,7 +1254,8 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       capabilities,
     };
     const conversationId = await resolveConversationIdForTask(userId, planned, launchInput);
-    launchInput.context = await buildTaskExecutionContext(userId, planned, launchInput, conversationId);
+    const ontologyGoal = await readKstarGoal(userId, conversationId);
+    launchInput.context = await buildTaskExecutionContext(userId, planned, launchInput, conversationId, ontologyGoal);
     return withTaskConversationAdmission(
       userId,
       conversationId,
@@ -1206,7 +1285,8 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
         capabilities,
       };
       const retryConversationId = await resolveConversationIdForTask(userId, retried, retryInput);
-      retryInput.context = await buildTaskExecutionContext(userId, retried, retryInput, retryConversationId);
+      const retryOntologyGoal = await readKstarGoal(userId, retryConversationId);
+      retryInput.context = await buildTaskExecutionContext(userId, retried, retryInput, retryConversationId, retryOntologyGoal);
       return launchTask(userId, retried, retryInput);
     };
     return operation();
@@ -1458,7 +1538,8 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
               capabilities: await resolveRuntimeCapabilities(userId, input.requestId, reserved.runtimeSessionId),
             };
             const conversationId = await resolveConversationIdForTask(userId, reserved, resumeInput);
-            resumeInput.context = await buildTaskExecutionContext(userId, reserved, resumeInput, conversationId);
+            const ontologyGoal = await readKstarGoal(userId, conversationId);
+            resumeInput.context = await buildTaskExecutionContext(userId, reserved, resumeInput, conversationId, ontologyGoal);
             return launchTask(userId, reserved, resumeInput);
           };
           return withTaskConversationAdmission(

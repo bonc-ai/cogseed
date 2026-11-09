@@ -7,13 +7,14 @@ import {
   listRemoteNodes, addRemoteNode, removeRemoteNode, testRemoteNode,
 } from '../../../../src/main/features/p3394_bridge/remote-nodes';
 
-// 状态文件按 runtime variant 隔离，用临时 variant 防止污染真实配置
-const VARIANT = `test-remote-nodes-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-process.env.COGSEED_RUNTIME_VARIANT = VARIANT;
+// 状态文件按变体目录隔离：整棵变体树指到一次性临时根（runtime-paths
+// 现在校验变体名），防止污染真实配置
+const SCRATCH_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-test-remote-nodes-'));
+process.env.COGSEED_VARIANT_BASE_DIR = SCRATCH_BASE;
+process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 
 function cleanupState(): void {
-  const dir = path.join(os.homedir(), '.cogseed', 'runtime-variants', VARIANT);
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(SCRATCH_BASE, { recursive: true, force: true });
 }
 afterAll(cleanupState);
 

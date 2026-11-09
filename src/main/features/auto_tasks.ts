@@ -56,6 +56,7 @@ import { t as translate } from '../i18n';
 import { getCurrentDevice } from '../util/device';
 import { limitNameDisplayText } from '../util/name-limit';
 import { findOuterTagRanges } from '../util/markdown-prose-code';
+import type { RefResolution, TemplateRef } from './template_types';
 export { getCurrentDevice };
 import { getActiveUserId, hasActiveUser } from './users';
 import * as chats from './chats';
@@ -124,6 +125,40 @@ export interface AutoTask {
   last_run_at?: string;
   /** Manual runs are receipts only; last_run_at remains the scheduler baseline. */
   last_manual_run_at?: string;
+  /** Hub 任务模板来源（FR-041）：只记录、不展示；指挥官容器路径不可写、不可改。 */
+  template_origin?: TaskTemplateOrigin;
+  /** 执行前复查依据（FR-038 / FR-053）：按保存时内容里留着的 Agent / Skill 标签生成。
+   *  有这个字段才做复查；手建任务没有，行为不变。 */
+  requirements?: TaskRequirements;
+  /** 模板任务的启用时刻：调度基线取它，使「启用后从下一个时间点开始」（R7）。
+   *  手建任务不写，保持「停用再启用会补一次」的既有行为。 */
+  enabled_at?: string;
+  /** 最近一次「到点未执行」；下一次成功执行后清除（FR-051）。 */
+  last_skip?: TaskSkipRecord;
+}
+
+/** 到点复查不通过时记下的原因；任务行据此显示「到点未执行：原因」。 */
+export interface TaskSkipRecord {
+  at: string;
+  reason: 'requirements_not_ready';
+  items: RefResolution[];
+}
+
+/** Hub 任务模板来源。`request_id` 同时是创建幂等键（FR-022）。 */
+export interface TaskTemplateOrigin {
+  template_id: string;
+  version: string;
+  request_id: string;
+}
+
+/** 模板任务的依赖声明；与 `templates.refs.resolve` 的入参同构。 */
+export interface TaskRequirements {
+  agent?: TemplateRef;
+  /** Extra dependency refs. The frozen Hub contract permits Agent and Skill extras; field name is retained for storage compatibility. */
+  skills: TemplateRef[];
+  /** Legacy S5 draft field. Preserved when reading old tasks but ignored by execution;
+   *  connector access follows the selected execution Agent. */
+  connector_types?: string[];
 }
 
 function genTaskId(): string { return 'at_' + crypto.randomBytes(4).toString('hex'); }
@@ -389,6 +424,10 @@ export type TaskDraft = {
   connector?: TaskConnectorRef;
   project_id?: string | null;
   attachments?: string[];
+  /** Hub 模板来源；创建时按 `request_id` 去重。 */
+  template_origin?: TaskTemplateOrigin;
+  /** 模板任务依赖声明；手建任务不传。 */
+  requirements?: TaskRequirements;
   // Caller-supplied id (renderer pre-allocates so attachments can upload
   // before submit). The pre-allocated id IS also the on-disk dir name.
   id?: string;
@@ -410,9 +449,74 @@ export type TaskError =
   | 'invalid_project'
   | 'invalid_id'
   | 'not_found'
-  | 'too_many_tasks';
+  | 'too_many_tasks'
+  | 'invalid_template_origin'
+  | 'invalid_requirements'
+  /** 模板单次任务的时间已经过去：启用被拒（FR-024）。 */
+  | 'one_time_expired'
+  /** 模板任务的依赖在启用 / 立即运行时不就绪；明细随结果返回（FR-050）。 */
+  | 'requirements_not_ready';
 
-type NormalisedFields = Omit<AutoTask, 'id' | 'created_at' | 'updated_at' | 'last_run_at'>;
+type NormalisedFields = Omit<AutoTask, 'id' | 'created_at' | 'updated_at' | 'last_run_at' | 'enabled_at'>;
+
+const REQUEST_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const TEMPLATE_REF_SOURCES = new Set(['builtin', 'hub']);
+const TEMPLATE_REF_KINDS = new Set(['agent', 'skill', 'role_template']);
+
+function _isValidTemplateOrigin(v: any): v is TaskTemplateOrigin {
+  return !!v && typeof v === 'object'
+    && typeof v.template_id === 'string' && v.template_id.length > 0 && v.template_id.length <= 128
+    && typeof v.version === 'string' && v.version.length <= 64
+    && typeof v.request_id === 'string' && REQUEST_ID_RE.test(v.request_id);
+}
+
+function _normaliseTemplateRef(v: any): TemplateRef | null {
+  if (!v || typeof v !== 'object') return null;
+  if (!TEMPLATE_REF_SOURCES.has(v.source) || !TEMPLATE_REF_KINDS.has(v.kind)) return null;
+  if (typeof v.id !== 'string' || !v.id || v.id.length > 128) return null;
+  const minVersion = v.compat && typeof v.compat.min_version === 'string' ? v.compat.min_version : undefined;
+  return {
+    source: v.source,
+    kind: v.kind,
+    id: v.id,
+    ...(minVersion ? { compat: { min_version: minVersion } } : {}),
+    ...(v.hub_availability === 'available' || v.hub_availability === 'missing'
+      || v.hub_availability === 'disabled' || v.hub_availability === 'incompatible'
+      || v.hub_availability === 'unknown'
+      ? { hub_availability: v.hub_availability }
+      : {}),
+  };
+}
+
+/** requirements 归一化：Agent / Skill 走同一个 ref 校验；旧 connector_types 只保留以兼容已落盘任务。 */
+function _normaliseRequirements(v: any): TaskRequirements | null {
+  if (!v || typeof v !== 'object') return null;
+  const agent = v.agent === undefined || v.agent === null ? undefined : _normaliseTemplateRef(v.agent);
+  if (v.agent !== undefined && v.agent !== null && !agent) return null;
+  const skills: TemplateRef[] = [];
+  if (v.skills !== undefined) {
+    if (!Array.isArray(v.skills) || v.skills.length > 32) return null;
+    for (const raw of v.skills) {
+      const ref = _normaliseTemplateRef(raw);
+      if (!ref) return null;
+      skills.push(ref);
+    }
+  }
+  const connectorTypes: string[] = [];
+  if (v.connector_types !== undefined) {
+    if (!Array.isArray(v.connector_types) || v.connector_types.length > 32) return null;
+    for (const raw of v.connector_types) {
+      if (typeof raw !== 'string') return null;
+      const type = raw.trim();
+      if (type && !connectorTypes.includes(type)) connectorTypes.push(type);
+    }
+  }
+  return {
+    ...(agent ? { agent } : {}),
+    skills,
+    ...(v.connector_types !== undefined ? { connector_types: connectorTypes } : {}),
+  };
+}
 
 function _normaliseDraft(d: TaskDraft): { ok: true; fields: NormalisedFields } | { ok: false; error: TaskError } {
   if (!_isValidSchedule(d.schedule)) return { ok: false, error: 'invalid_schedule' };
@@ -426,7 +530,8 @@ function _normaliseDraft(d: TaskDraft): { ok: true; fields: NormalisedFields } |
     ? _contentFromMessageParts(messageParts)
     : (typeof d.content === 'string' ? d.content.trim() : '');
   if (!content) return { ok: false, error: 'invalid_content' };
-  if (content.length > MAX_CONTENT_LEN) content = content.slice(0, MAX_CONTENT_LEN);
+  // FR-042：超过上限就拒绝，不截断——截断会让用户以为保存了完整内容。
+  if (content.length > MAX_CONTENT_LEN) return { ok: false, error: 'invalid_content' };
   let title = typeof d.title === 'string' ? d.title.trim() : '';
   title = limitNameDisplayText(title);
   const enabled = d.enabled === false ? false : true;
@@ -451,6 +556,21 @@ function _normaliseDraft(d: TaskDraft): { ok: true; fields: NormalisedFields } |
   const attachments = Array.isArray(d.attachments)
     ? d.attachments.filter((n) => typeof n === 'string' && n.length > 0)
     : undefined;
+  let templateOrigin: TaskTemplateOrigin | undefined;
+  if (d.template_origin !== undefined && d.template_origin !== null) {
+    if (!_isValidTemplateOrigin(d.template_origin)) return { ok: false, error: 'invalid_template_origin' };
+    templateOrigin = {
+      template_id: d.template_origin.template_id,
+      version: d.template_origin.version,
+      request_id: d.template_origin.request_id,
+    };
+  }
+  let requirements: TaskRequirements | undefined;
+  if (d.requirements !== undefined && d.requirements !== null) {
+    const normalised = _normaliseRequirements(d.requirements);
+    if (!normalised) return { ok: false, error: 'invalid_requirements' };
+    requirements = normalised;
+  }
   return {
     ok: true,
     fields: {
@@ -465,6 +585,8 @@ function _normaliseDraft(d: TaskDraft): { ok: true; fields: NormalisedFields } |
       ...(connector ? { connector } : {}),
       ...(projectId ? { project_id: projectId } : {}),
       ...(attachments && attachments.length ? { attachments } : {}),
+      ...(templateOrigin ? { template_origin: templateOrigin } : {}),
+      ...(requirements ? { requirements } : {}),
     },
   };
 }
@@ -514,6 +636,12 @@ export async function createTask(
   if (desiredId === null) return { ok: false, error: 'invalid_id' };
   return _runExclusive(uid, async () => {
     const all = await _readAll(uid);
+    // FR-022：同一次创建操作的重试按 request_id 返回已有任务，不再建第二个。
+    const requestId = norm.fields.template_origin?.request_id;
+    if (requestId) {
+      const existing = all.find((t) => t.template_origin?.request_id === requestId);
+      if (existing) return { ok: true as const, task: existing };
+    }
     if (all.length >= MAX_TASKS_PER_USER) {
       log.warn(`task create rejected uid=${uid} reason=too_many_tasks count=${all.length} cap=${MAX_TASKS_PER_USER}`);
       return { ok: false as const, error: 'too_many_tasks' as const };
@@ -535,6 +663,12 @@ export async function createTask(
       created_at: now,
       updated_at: now,
     };
+    // 模板任务的单次时间已经过去：建也不给建（用户必须重选日期，FR-024 / P7）。
+    if (task.template_origin && _templateEnableBlocked(task)) {
+      return { ok: false as const, error: 'one_time_expired' as const };
+    }
+    // 模板任务默认建好即停用；若调用方直接建为启用，启用时刻就是创建时刻（R7）。
+    if (task.template_origin && task.enabled) task.enabled_at = now;
     await _writeOne(uid, task);
     log.info(`task created uid=${uid} id=${task.id} type=${task.schedule.type} project=${task.project_id || '-'} attachments=${(task.attachments || []).length} device=${device.name}`);
     _scheduleTask(uid, task);
@@ -573,6 +707,9 @@ export async function updateTask(
         ? undefined
         : (typeof patch.project_id === 'string' ? patch.project_id : cur.project_id),
       attachments: patch.attachments !== undefined ? patch.attachments : cur.attachments,
+      // 来源一经写入不可改（FR-041）：patch 只能给还没有来源的任务补写。
+      template_origin: cur.template_origin ?? patch.template_origin ?? undefined,
+      requirements: patch.requirements !== undefined ? patch.requirements : cur.requirements,
     };
     const norm = _normaliseDraft(merged);
     if (!norm.ok) return { ok: false as const, error: (norm as { error: TaskError }).error };
@@ -592,6 +729,12 @@ export async function updateTask(
       } else {
         log.warn(`task device rebind skipped uid=${uid} id=${taskId} reason=missing_device_id`);
       }
+    }
+    // R7：只对模板任务，停用 → 启用时把「启用时刻」记下来作为调度基线。
+    if (cur.template_origin && !cur.enabled && next.enabled) {
+      const blocked = _templateEnableBlocked(next);
+      if (blocked) return { ok: false as const, error: blocked };
+      next.enabled_at = nowIso();
     }
     // Strip optional fields when they normalised away.
     if (!norm.fields.title) delete next.title;
@@ -635,6 +778,15 @@ export async function setTaskEnabled(
     const cur = await _readOne(uid, taskId);
     if (!cur) return { ok: false as const, error: 'not_found' as const };
     const next: AutoTask = { ...cur, enabled: !!enabled, updated_at: nowIso() };
+    if (cur.template_origin && !cur.enabled && enabled) {
+      const blocked = _templateEnableBlocked(next);
+      if (blocked) return { ok: false as const, error: blocked };
+      // FR-050：依赖不就绪就不许启用，返回明细让用户去补。
+      const reqState = await _taskRequirementsState(uid, cur);
+      const issues = reqState ? _requirementsIssue(reqState) : [];
+      if (issues.length) return { ok: false as const, error: 'requirements_not_ready' as const, items: issues };
+      next.enabled_at = nowIso();
+    }
     await _writeOne(uid, next);
     _scheduleTask(uid, next);
     return { ok: true as const, task: next };
@@ -886,6 +1038,8 @@ async function _markRan(uid: string, taskId: string, atIso: string, alsoDisable:
       last_run_at: atIso,
       ...(alsoDisable ? { enabled: false } : {}),
     };
+    // 成功执行后清除上次的「到点未执行」，任务行不再挂着旧原因（FR-051）。
+    if (next.last_skip) delete next.last_skip;
     await _writeOne(uid, next);
   });
 }
@@ -1135,7 +1289,7 @@ function _buildFireTitle(task: AutoTask): string {
   return firstLine.length > 40 ? firstLine.slice(0, 40) + '…' : firstLine;
 }
 
-export type TaskRunResult = { ok: true; cid?: string } | { ok: false; error: string };
+export type TaskRunResult = { ok: true; cid?: string } | { ok: false; error: string; items?: RefResolution[] };
 
 // Serialize dispatch per user/task. A manual double-click fails promptly;
 // a scheduled boundary waits for an in-progress dispatch, then re-checks due time.
@@ -1159,6 +1313,13 @@ export async function runTaskNow(uid: string, taskId: string): Promise<TaskRunRe
     if (!task) return { ok: false, error: 'not_found' };
     if (task.device_id && task.device_id !== getCurrentDevice().id) {
       return { ok: false, error: 'device_mismatch' };
+    }
+    // FR-050：依赖不就绪时立即运行也拒绝，并给出明细，不静默改派。
+    const reqState = await _taskRequirementsState(uid, task);
+    const issues = reqState ? _requirementsIssue(reqState) : [];
+    if (issues.length) {
+      log.info(`manual run rejected uid=${uid} id=${taskId} reason=requirements_not_ready`);
+      return { ok: false, error: 'requirements_not_ready', items: issues };
     }
     const at = new Date().toISOString();
     try {
@@ -1367,6 +1528,14 @@ export type AutoFireEvent =
       duration_ms?: number;
     }
   | {
+      /** 到点复查不通过：不派发、保持启用，等下一个时间点（FR-051）。 */
+      type: 'fire_skipped';
+      task_id: string;
+      title?: string;
+      reason: 'requirements_not_ready';
+      items: RefResolution[];
+    }
+  | {
       type: 'fire_failed';
       task_id: string;
       cid?: string;
@@ -1416,14 +1585,82 @@ const _timers = new Map<string, NodeJS.Timeout>();
 let _resumeListenerAttached = false;
 let _started = false;
 
-function _scheduleBaseline(task: AutoTask): Date | null {
-  if (task.last_run_at) {
-    const d = new Date(task.last_run_at);
-    if (!Number.isNaN(d.getTime())) return d;
+/** 任务声明的 Agent / Skill 依赖在本机是否就绪。连接器由执行 Agent 在实际调用时处理。 */
+async function _taskRequirementsState(
+  uid: string, task: AutoTask,
+): Promise<{ items: RefResolution[] } | null> {
+  const req = task.requirements;
+  if (!req) return null;
+  const refs: TemplateRef[] = [
+    ...(req.agent ? [req.agent] : []),
+    ...(req.skills || []),
+  ];
+  const { resolveTemplateRequirements } = await import('./template_refs');
+  const resolved = resolveTemplateRequirements(uid, refs, [], _currentAppVersion());
+  return { items: resolved.items };
+}
+
+/** 不就绪项明细仅包含模板显式引用的 Agent / Skill。 */
+function _requirementsIssue(state: { items: RefResolution[] }): RefResolution[] {
+  return state.items.filter((i) => i.state !== 'ready');
+}
+
+/** 客户端版本（引用兼容判断用）；拿不到就当空串，按「没写最低版本」处理。 */
+function _currentAppVersion(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const { app } = require('electron') as { app?: { getVersion?: () => string } };
+    return app?.getVersion?.() || '';
+  } catch {
+    return '';
   }
-  if (task.schedule.type === 'one_time') return null;
-  const created = new Date(task.created_at);
-  return Number.isNaN(created.getTime()) ? null : created;
+}
+
+async function _recordSkip(uid: string, taskId: string, items: RefResolution[], now: Date): Promise<void> {
+  await _runExclusive(uid, async () => {
+    const cur = await _readOne(uid, taskId);
+    if (!cur) return;
+    await _writeOne(uid, {
+      ...cur,
+      last_skip: { at: now.toISOString(), reason: 'requirements_not_ready', items },
+      updated_at: nowIso(),
+    });
+  });
+  log.info(`task fire skipped uid=${uid} id=${taskId} reason=requirements_not_ready items=${items.length}`);
+}
+
+/** 模板单次任务的时间已经过去时返回 `one_time_expired`；其它情况返回 null。
+ *  只对模板任务生效（手建任务「选了过去时间」的既有行为不改，R7 不覆盖）。 */
+function _templateEnableBlocked(task: AutoTask): TaskError | null {
+  if (!task.template_origin) return null;
+  if (task.schedule.type !== 'one_time') return null;
+  const at = new Date(task.schedule.at);
+  if (Number.isNaN(at.getTime())) return 'invalid_schedule';
+  return at.getTime() <= Date.now() ? 'one_time_expired' : null;
+}
+
+/** 调度基线。
+ *
+ *  手建任务（既有行为，不改）：`last_run_at` → 没有则 `created_at`（单次任务为 null）。
+ *  模板任务（R7）：`max(last_run_at, enabled_at, created_at)`——停用期间错过的点不补，
+ *  启用后从下一个时间点开始。 */
+function _scheduleBaseline(task: AutoTask): Date | null {
+  const times: number[] = [];
+  const add = (iso: string | undefined) => {
+    if (!iso) return;
+    const t = new Date(iso).getTime();
+    if (!Number.isNaN(t)) times.push(t);
+  };
+  add(task.last_run_at);
+  // 跳过也是一种「这个时间点已经处理过」；否则同一到点会被反复跳过。
+  add(task.last_skip?.at);
+  if (task.template_origin) {
+    add(task.enabled_at);
+    add(task.created_at);
+  } else if (!times.length && task.schedule.type !== 'one_time') {
+    add(task.created_at);
+  }
+  return times.length ? new Date(Math.max(...times)) : null;
 }
 
 /** Compute the next moment a task should fire, or null if it never will
@@ -1551,7 +1788,13 @@ async function _onTimerFireUnlocked(uid: string, taskId: string): Promise<void> 
     && (!task.device_id || task.device_id === getCurrentDevice().id)
     && dueBoundary !== null;
   if (canFireHere) {
-    if (!_tryClaimFireBoundary(uid, task, dueBoundary, now)) {
+    const reqState = await _taskRequirementsState(uid, task);
+    const issues = reqState ? _requirementsIssue(reqState) : [];
+    if (issues.length) {
+      // 到点复查不通过：不派发、不计成功、保持启用，等下一个时间点（FR-051）。
+      await _recordSkip(uid, taskId, issues, now);
+      _emitFire({ type: 'fire_skipped', task_id: taskId, title: _buildFireTitle(task), reason: 'requirements_not_ready', items: issues });
+    } else if (!_tryClaimFireBoundary(uid, task, dueBoundary, now)) {
       claimedElsewhereBoundary = dueBoundary;
       log.info(`fire skipped duplicate uid=${uid} id=${taskId} boundary=${dueBoundary.toISOString()}`);
     } else {

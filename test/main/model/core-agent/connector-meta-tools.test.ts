@@ -383,6 +383,41 @@ describe('getConnectorPromptBlock', () => {
 // ── list_connector_tools ────────────────────────────────────────────────
 
 describe('list_connector_tools', () => {
+  it('discloses only selected schemas without changing constraints or catalog order', async () => {
+    fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
+    const { createConnectorMetaTools } = await loadModule();
+    const [list] = await createConnectorMetaTools({ userId: UID });
+    const full = await runTool(list, { connector_id: 'notion' });
+    const selected = await runTool(list, { connector_id: 'notion', tool_names: ['create_page', 'create_page'] });
+    const schemas = [...selected.content.matchAll(/```json\n(.*?)\n```/gs)].map(m => m[1]);
+    expect(selected.isError).toBeFalsy();
+    expect(selected.content).not.toContain('### search');
+    expect(schemas).toEqual([JSON.stringify(NOTION_TOOLS[1].input_schema)]);
+    expect(JSON.parse(schemas[0])).toEqual(NOTION_TOOLS[1].input_schema);
+    expect(selected.content.length).toBeLessThan(full.content.length);
+    const reversed = await runTool(list, { connector_id: 'notion', tool_names: ['create_page', 'search'] });
+    expect(reversed.content).toBe(full.content);
+  });
+
+  it.each([[], [''], [42], 'search', null])('rejects malformed tool selection %j', async tool_names => {
+    fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
+    const { createConnectorMetaTools } = await loadModule();
+    const [list] = await createConnectorMetaTools({ userId: UID });
+    expect(await runTool(list, { connector_id: 'notion', tool_names }))
+      .toMatchObject({ isError: true, content: expect.stringContaining('E_BAD_INPUT') });
+  });
+
+  it('rechecks live action permission and never returns a partial selection on denial', async () => {
+    fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
+    const { createConnectorMetaTools } = await loadModule();
+    const [list] = await createConnectorMetaTools({ userId: UID });
+    fixtures.instances[0].enabled_subtools = ['search'];
+    const r = await runTool(list, { connector_id: 'notion', tool_names: ['search', 'create_page'] });
+    expect(r).toMatchObject({ isError: true, content: expect.stringContaining('E_TOOL_NOT_AVAILABLE') });
+    expect(r.content).not.toContain('### search');
+    expect(r.content).not.toContain('"title"');
+  });
+
   it('connected instance returns full tool schemas', async () => {
     fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
     const { createConnectorMetaTools } = await loadModule();
@@ -514,6 +549,16 @@ describe('list_connector_tools', () => {
 // ── call_connector_tool ─────────────────────────────────────────────────
 
 describe('call_connector_tool', () => {
+  it.each([true, false])('preserves the explicit MCP error flag %s through result conversion', async isError => {
+    fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
+    fixtures.callTool = async () => ({ isError, content: [{ type: 'text', text: 'service receipt' }] });
+    const { createConnectorMetaTools } = await loadModule();
+    const [, call] = await createConnectorMetaTools({ userId: UID });
+    const r = await runTool(call, { connector_id: 'notion', tool_name: 'create_page', args: { title: 'one' } });
+    expect(r.content).toBe('service receipt');
+    expect(Boolean(r.isError)).toBe(isError);
+  });
+
   it('routes a valid call to manager.callTool with verbatim args + stringifies the result', async () => {
     fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
     let received: { uid?: string; id?: string; name?: string; args?: Record<string, unknown> } = {};

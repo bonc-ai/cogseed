@@ -1,6 +1,6 @@
 // Application shell state (specs/008-shell-rail-layout): maps a view to its
 // top-level module, highlights the rail entry, and shows that module's
-// sidebar host. Modules without a sidebar (workspace / auto)
+// sidebar host. Modules without a sidebar (contacts / workspace / auto)
 // let the main content take the full width.
 (function initAppShell(root) {
   'use strict';
@@ -8,6 +8,7 @@
   const MODULE_BY_VIEW = {
     'new-chat': 'task',
     conversation: 'task',
+    contacts: 'contacts',
     workspace: 'workspace',
     spaces: 'workspace',
     kb: 'kb',

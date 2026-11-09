@@ -153,6 +153,22 @@ describe('区块读取世代号：drain 与 reload 双飞乱序，旧响应作�
   });
 });
 
+describe('版本冲突态的广播失效', () => {
+  it('clears a stale conflict when the asset changes outside the confirmation', () => {
+    let pushEvent: ((notice: unknown) => void) | null = null;
+    const { ns, store } = loadCognitionAssets({}, {}, {
+      cogseed: {
+        invoke: vi.fn(async () => ({ ok: true })),
+        onPushEvent: (_channel: string, cb: (notice: unknown) => void) => { pushEvent = cb; },
+      },
+    });
+    ns.setupChangeRail(() => false);
+    store.candidateVersionConflict = { candidateId: 'cand-1', currentVersion: '2' };
+    pushEvent!({ collection: 'ability-assets' });
+    expect(store.candidateVersionConflict).toBe(null);
+  });
+});
+
 describe('经验迁移状态读取：保留现值+在途守卫', () => {
   function migrationState() {
     return {

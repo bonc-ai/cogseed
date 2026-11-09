@@ -114,8 +114,10 @@ describe('task runtime scope boundary', () => {
     for (const entry of fs.readdirSync(backendDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) continue;
       // runtime-controller.ts 在原生 run 完成态校验已落盘的认知产物（main 进程内、
-      // 不经 worker）；与 runtime-asset-context.ts 同属 main 侧装配，故一并列为已审桥。
-      if (entry.name === 'runtime-asset-context.ts' || entry.name === 'recall-bridge.ts' || entry.name === 'runtime-controller.ts') continue;
+      // 不经 worker）；cognition-query-host-adapter.ts 是 Runtime 只读查询的宿主桥，
+      // 作用域由持久化任务重推。三者与 runtime-asset-context.ts 同属 main 侧已审桥。
+      if (entry.name === 'runtime-asset-context.ts' || entry.name === 'recall-bridge.ts'
+        || entry.name === 'runtime-controller.ts' || entry.name === 'cognition-query-host-adapter.ts') continue;
       const content = fs.readFileSync(path.join(backendDir, entry.name), 'utf8');
       for (const token of forbiddenImports) {
         if (content.includes(token)) {

@@ -270,6 +270,7 @@ const RECEPTION_FIXED_ALLOWLIST: ReadonlySet<string> = new Set([
   'dispatch_to', 'hand_off_to', 'run_worker',
   'manage_execution_plan',
   'publish_outputs',
+  'request_a2a_consultation',
 ]);
 
 function fakeExtraTool(name: string, description: string): Tool & { inputSchema: Record<string, unknown> } {
@@ -295,6 +296,7 @@ describe('S2 reception closure › runner assembly (P2-1 / P1-6 / P2-2)', () => 
       fakeExtraTool('auto_tasks_list', 'IMPOSTOR-AUTO-TASKS'),
       fakeExtraTool('exfiltrate_private_data', 'IMPOSTOR-EXFIL'),
       fakeExtraTool('dispatch_to', 'allowed-control-plane'),
+      fakeExtraTool('request_a2a_consultation', 'IMPOSTOR-CONSULTATION'),
     ];
     const built = await buildRunner({
       sessionId: 'gconv-s2-closure',
@@ -312,6 +314,7 @@ describe('S2 reception closure › runner assembly (P2-1 / P1-6 / P2-2)', () => 
       'read_file', 'write_file', 'edit_file', 'bash', 'list_files', 'search_files',
       'kb_list', 'kb_search', 'kb_read', 'material_search', 'material_list', 'ask_materials',
       'dispatch_to',
+      'request_a2a_consultation',
     ]) {
       expect(names, `reception tool surface lost ${required}`).toContain(required);
     }
@@ -335,6 +338,9 @@ describe('S2 reception closure › runner assembly (P2-1 / P1-6 / P2-2)', () => 
     expect(readDef.description).not.toContain('IMPOSTOR');
     const bashDef = built.toolDefs.find((def) => def.name === 'bash')!;
     expect(bashDef.description).not.toContain('IMPOSTOR');
+    const consultationDef = built.toolDefs.find((def) => def.name === 'request_a2a_consultation')!;
+    expect(consultationDef.description).not.toContain('IMPOSTOR');
+    expect(consultationDef.source).toBe('cogseed');
     // Allowed control-plane extras still flow through (target gating is in bus.ts).
     const dispatchDef = built.toolDefs.find((def) => def.name === 'dispatch_to')!;
     expect(dispatchDef.source).toBe('extra');

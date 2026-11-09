@@ -1461,6 +1461,100 @@ describe('committed projection knowledge boundary', () => {
       .rejects.toMatchObject({ code: 'projection_asset_version_changed' });
   });
 
+  async function promoteSessionSourceAsset(judgment: string, summary: string, sourceId: string) {
+    const { candidates } = await modules();
+    const candidate = await createNightlyCandidateFixture('user-a', {
+      judgment,
+      summary,
+      suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
+      suggestedScope: 'review',
+      sourceRefs: [{ kind: 'conversation', id: sourceId, subtype: 'session', scope: 'personal' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user', forceCreateSimilar: true });
+    await elevateToTransferVerified(promoted.asset.id);
+    return promoted;
+  }
+
+  it('omits a dead-source asset from committed reads without failing the whole projection', async () => {
+    const { projection } = await modules();
+    const dead = await promoteSessionSourceAsset(
+      'Database lesson whose source conversation was later paused.', 'Dead-source lesson', 'conv-source-gone');
+    const healthy = await promoteSessionSourceAsset(
+      'OAuth checklist lesson backed by a live conversation.', 'Live-source lesson', 'conv-source-alive');
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-src-gone', purpose: 'review', authorization: 'user_confirmed',
+    });
+    expect(preview.assetIds).toEqual(expect.arrayContaining([dead.asset.id, healthy.asset.id]));
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+
+    // 确认后显式停用来源，模拟引用指向已不存在的会话或用户暂停来源的场景。
+    const sourceControl = await import('../../../../src/main/features/recall/source-control');
+    await sourceControl.pauseCognitionSource('user-a', dead.asset.evidenceRefs[0]);
+
+    await expect(projection.validateProjectionAssetVersions('user-a', confirmed))
+      .rejects.toMatchObject({ code: 'projection_source_unavailable' });
+    const versions = await projection.validateCommittedProjectionAssetVersions('user-a', confirmed);
+    expect(Object.keys(versions)).toEqual([healthy.asset.id]);
+
+    const promptInjection = await import('../../../../src/main/features/recall/prompt-injection');
+    const turn = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-src-gone', taskRunId: 'turn-src-gone',
+      taskText: 'Prepare the formal OAuth review.',
+      committedProjectionId: confirmed.id,
+    });
+    expect(turn.promptBlock).toContain(healthy.asset.statement);
+    expect(turn.promptBlock).not.toContain(dead.asset.statement);
+  });
+
+  it('omits already-dead sources when building a new projection view (write side)', async () => {
+    const { projection } = await modules();
+    const dead = await promoteSessionSourceAsset(
+      'Database lesson that is dead before any projection.', 'Dead-before-write lesson', 'conv-dead-at-write');
+    const healthy = await promoteSessionSourceAsset(
+      'OAuth checklist lesson that stays injectable.', 'Alive-at-write lesson', 'conv-alive-at-write');
+    const sourceControl = await import('../../../../src/main/features/recall/source-control');
+    await sourceControl.pauseCognitionSource('user-a', dead.asset.evidenceRefs[0]);
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-write-side', purpose: 'review', authorization: 'user_confirmed',
+    });
+    expect(preview.assetIds).not.toContain(dead.asset.id);
+    expect(preview.assetIds).toContain(healthy.asset.id);
+    expect(preview.omittedRefs).toContainEqual({ assetId: dead.asset.id, reason: 'source_unavailable' });
+  });
+
+  it('falls back to automatic projection when committed assembly fails (version drift)', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '1');
+    const { assets, projection } = await modules();
+    const pinned = await promoteSessionSourceAsset(
+      'OAuth review checklist stays eligible through the automatic fallback.', 'Drift fallback lesson', 'conv-drift-pinned');
+    const drifting = await promoteSessionSourceAsset(
+      'Database lesson whose content drifts after confirmation.', 'Drifting lesson', 'conv-drift-drifting');
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-committed-drift', purpose: 'review', authorization: 'user_confirmed',
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+    expect(confirmed.assetIds).toEqual(expect.arrayContaining([pinned.asset.id, drifting.asset.id]));
+    // 内容修改使冻结版本失效（并按阶梯把成熟度降回 bud），committed 装配整组失败。
+    await assets.updateAbilityAsset('user-a', drifting.asset.id, {
+      statement: 'Changed after confirmation: database checklist v2.',
+      actor: 'user',
+      reason: 'test committed drift fallback',
+    });
+
+    const promptInjection = await import('../../../../src/main/features/recall/prompt-injection');
+    const turn = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-committed-drift', taskRunId: 'turn-committed-drift',
+      taskText: 'Prepare the formal OAuth review with the current checklist.',
+      committedProjectionId: confirmed.id,
+    }, fakeSemanticOptions);
+    expect(turn.promptBlock).toContain(pinned.asset.statement);
+    expect(turn.promptBlock).not.toContain('Changed after confirmation: database checklist v2.');
+    expect(turn.committedFallbackReason).toBeTruthy();
+  });
+
   it('includes a space-attributed asset in its own workspace without an explicit workspace reference', async () => {
     const { candidates, projection, refs } = await modules();
     const candidate = await createNightlyCandidateFixture('user-a', {
@@ -1823,4 +1917,28 @@ it('records an all-unassessed semantic result without creating an empty projecti
   expect(await listInjectionReceipts('user-a', 'unassessed-task')).toEqual([
     expect.objectContaining({ assetId: asset.id, assetVersion: asset.version, status: 'omitted', reason: 'prompt_budget' }),
   ]);
+});
+
+it('distinguishes an inconclusive source check from confirmed unavailability', async () => {
+  vi.doMock('../../../../src/main/features/recall/source-control', async importOriginal => ({
+    ...await importOriginal<typeof import('../../../../src/main/features/recall/source-control')>(),
+    isCognitionSourceEnabled: vi.fn().mockRejectedValue(new Error('transient source read failure')),
+  }));
+  try {
+    vi.resetModules();
+    const { createAssetSourceAvailability } = await import('../../../../src/main/features/recall/asset-source-availability');
+    let indeterminate = 0;
+    const check = createAssetSourceAvailability('user-a', { onIndeterminate: () => { indeterminate += 1; } });
+    const asset: Parameters<typeof check>[0] = {
+      id: 'asset-inconclusive-check',
+      candidateId: 'candidate-inconclusive',
+      sourceCandidateIds: [],
+      sourceSessionIds: [],
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-inconclusive', subtype: 'session', taxonomyVersion: 2, scope: 'personal' }],
+    };
+    await expect(check(asset)).resolves.toBe(false);
+    expect(indeterminate).toBe(1);
+  } finally {
+    vi.doUnmock('../../../../src/main/features/recall/source-control');
+  }
 });

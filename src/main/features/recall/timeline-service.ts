@@ -41,7 +41,8 @@ export type RecallAssetTimelineKind =
   | 'usage_recorded'
   | 'transfer_prepared'
   | 'transfer_completed'
-  | 'effectiveness_recorded' | 'catalog_hint_unused';
+  | 'effectiveness_recorded' | 'catalog_hint_unused'
+  | 'old_content_applied' | 'old_content_undone';
 
 /** 真实使用事件的统一白名单，列表、详情和排序因子共用。
  * 仅包含被带入任务或实际使用的事件；创建、版本、治理和撤销不抬高最近使用时间。
@@ -98,6 +99,8 @@ function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
     case 'asset_restored': return 'Asset restored';
     case 'asset_rolled_back': return 'Asset rolled back';
     case 'asset_version_selected': return 'Asset version selected';
+    case 'old_content_applied': return 'Old-content cleanup applied';
+    case 'old_content_undone': return 'Old-content cleanup undone';
     case 'asset_maturity_downgraded': return 'Asset maturity downgraded';
     case 'asset_version': return 'Asset version saved';
     case 'projection_confirmed': return 'Projection confirmed';
@@ -128,6 +131,8 @@ function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined
     case 'restored': return 'asset_restored';
     case 'rolled_back': return 'asset_rolled_back';
     case 'version_selected': return 'asset_version_selected';
+    case 'old_content_applied': return 'old_content_applied';
+    case 'old_content_undone': return 'old_content_undone';
     case 'maturity_downgraded': return 'asset_maturity_downgraded';
     case 'pause_recommended':
     case 'rework_recommended':

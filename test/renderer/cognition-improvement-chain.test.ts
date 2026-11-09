@@ -56,11 +56,10 @@ function ensureModule(): { cogAssets: Record<string, unknown>; domRoot: { innerH
       return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
     },
     TABS: [
-      { id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树' },
-      { id: 'ontology', titleKey: 'cognition.tab_ontology', title: '个人本体' },
+      { id: 'ontology', titleKey: 'cognition.tab_ontology', title: '本体' },
       { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知' },
-      { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理' },
-      { id: 'organize', titleKey: 'cognition.tab_organize', title: '整理' },
+      { id: 'activity', titleKey: 'cognition.tab_activity', title: '认知生长' },
+      { id: 'settings', titleKey: 'cognition.tab_settings', title: '资产设置' },
     ],
     // 与 core.js::NS.stats 同口径的待确认计数（countsAsPending && !isSnoozed）：
     // "结论不进待办"这条断言要靠它才有意义。

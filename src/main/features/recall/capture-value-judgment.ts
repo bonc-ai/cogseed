@@ -24,6 +24,27 @@ export function captureValueJudgmentInput(summary: CaptureContextSummary,
     })) };
 }
 
+const VALUE_CONTRACT_ERRORS = new Set([
+  'invalid capture value judgment',
+  'invalid value evidence',
+  'unsupported capture value evidence',
+  'positive value judgment requires user evidence',
+]);
+const VALUE_REPAIR_INSTRUCTION = 'The previous output was not valid for this contract. Return only one JSON object '
+  + '{"eligible":boolean,"reason":"short explanation","evidence":[...]}. Each evidence entry is one object with '
+  + 'messageId and quote; separate array elements with commas. Do not add Markdown fences, comments or text after the JSON. '
+  + 'Keep the same source meaning and never invent message IDs or quotations.';
+
+/** One bounded repair applies only to output-contract errors; transport,
+ * authorization, abort and forbidden-content failures keep their own paths.
+ * JSON syntax failures arrive as `SyntaxError` from `JSON.parse`; matching
+ * prose such as "unexpected response" would retry a transport failure. */
+export function captureValueRepairInstruction(error: unknown): string | undefined {
+  if (error instanceof SyntaxError) return VALUE_REPAIR_INSTRUCTION;
+  const message = error instanceof Error ? error.message : '';
+  return message && VALUE_CONTRACT_ERRORS.has(message) ? VALUE_REPAIR_INSTRUCTION : undefined;
+}
+
 export function parseCaptureValueJudgment(
   raw: string,
   messages: readonly { id: string; sourceId: string; role: string; text: string; discovery?: boolean }[],

@@ -26,6 +26,7 @@ export async function evaluateNightlyAutomaticApproval(userId: string, candidate
     reasons.push('automatic_confirmation_grant_expired');
   }
   if (candidate.status !== 'pending_review' || candidate.userModifiedAt || candidate.ontologyHandoff) reasons.push('candidate_requires_individual_review');
+  if (candidate.oldContentPlan) reasons.push('old_content_plan_requires_individual_review');
   if (candidate.risk !== 'low') reasons.push('risk_requires_individual_review');
   if (candidate.uncertainty?.trim()) reasons.push('candidate_has_uncertainty');
   if (Date.parse(candidate.expiresAt) <= Date.now()) reasons.push('candidate_expired');

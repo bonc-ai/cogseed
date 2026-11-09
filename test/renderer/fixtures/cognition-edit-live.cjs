@@ -189,7 +189,7 @@ ipcMain.on('cogseed.streamStart', async (event, { requestId, channel, payload })
     send({ type: 'chat', event: { type: 'chat.turn.started', cid, turnId, actorId: 'commander', startedAt: new Date().toISOString() } });
     const host = { userId: uid, cid, turnId, sourceMessageId: messageId, sourceMessageFromUser: true, taskText: text };
     const read = createAssetStewardTools(host).find(tool => tool.name === 'read_ability_asset');
-    const baseline = await read.execute({ assetId: 'aa-preference', mode: 'manage' });
+    const baseline = await read.execute({ assetId: 'aa-preference' });
     if (baseline.isError) throw new Error('Actual host management read failed: ' + baseline.content);
     const edit = createCognitionEditTools(host)[0];
     let editCount = 0, actual;

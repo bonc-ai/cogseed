@@ -274,6 +274,24 @@ def coverage_findings(rules: dict[str, Any], docs: list[tuple[str, str]],
     return out
 
 
+#: 依赖公告里「值得为它加一张风险卡片」的严重级。
+_DEPENDENCY_WORTH_CAUTION = frozenset({"critical", "high"})
+
+
+def _has_high_dependency_finding(findings: list[dict[str, Any]]) -> bool:
+    """是否存在需要单独提醒的高危依赖公告。
+
+    只看 ``category == "dependency_vuln"``：这是原生 OSV 快照与 osv-scanner
+    两条后端共同的类别名。判定读 ``severity``（不是 ``original_severity``）——
+    依赖公告没有上下文降权，两者相等。
+    """
+    return any(
+        str(f.get("category")) == "dependency_vuln"
+        and str(f.get("severity")).lower() in _DEPENDENCY_WORTH_CAUTION
+        for f in findings
+    )
+
+
 def build_report(skill_dir: Path, rel_name: str, rules: dict[str, Any],
                   findings: list[dict[str, Any]], sr_items: list[dict[str, Any]],
                   profile: dict[str, Any], binary_result: dict[str, Any],
@@ -301,6 +319,19 @@ def build_report(skill_dir: Path, rel_name: str, rules: dict[str, Any],
     recommendation = deployment_recommendation(
         risk, hard_blocked, required_failed, confirmed_critical=confirmed_critical,
     )
+    # 依赖漏洞：已知高危/严重公告至少 CAUTION。
+    #
+    # 2.3.0 把依赖漏洞做成了原生能力，但只把它算进分数。实测（红队
+    # E2-index-url）`requests==2.0.0` 命中 1 条 high + 5 条 medium GHSA，
+    # 分数 42 / 风险 MEDIUM / 建议 **ALLOW** —— 一条 high 的已知漏洞在
+    # CAUTION 这个桶里根本构不成一个桶：MEDIUM 以下全部是 ALLOW。
+    #
+    # 为什么不直接拒装：依赖版本是可修复的，而「装不了」不产生修复动机；
+    # CAUTION 会带风险卡片和 `dependency_vuln` 发现项，用户可以看见是哪一条。
+    # 也不把 critical 提到 DO_NOT_INSTALL：那是 scoring 红线的语义，依赖公告
+    # 的可利用性依赖于运行时用法，静态快照证明不了。
+    if recommendation == "ALLOW" and _has_high_dependency_finding(active):
+        recommendation = "CAUTION"
 
     attack_surface = {
         "network_egress_points": [f for f in active
@@ -384,6 +415,10 @@ def build_report(skill_dir: Path, rel_name: str, rules: dict[str, Any],
             "文本检测以正则/关键词为主，存在误报与漏报，分数为启发式而非绝对度量",
             "上下文降权基于静态启发式（路径命名 + 轻量注释解析）：test/vendor 目录里的命中会被压低严重级，"
             "强制拦截场景应同时消费 finding 的 original_severity 字段",
+            "载体取证（2.4.0）有硬上限：归档最多 2 层、200 个成员、单成员 2 MiB、总解压 8 MiB；"
+            "PDF 只抽取未加密内容流里的文本字面量；PNG 只抽取 tEXt/zTXt/iTXt 文本块，"
+            "像素内的文字与 OCR 不在覆盖范围。触顶的部分以 carrier_* / archive_* finding 如实披露，"
+            "未披露即未扫描，不等于干净",
             "不可见内容（零宽字符 / Unicode 标签块 / 双向控制符）不做上下文降权——"
             "它们不可见这一事实与所在目录无关",
             "置信度（confidence）反映规则本身的确定性，不反映命中内容是否真的有害",
@@ -406,14 +441,19 @@ def build_report(skill_dir: Path, rel_name: str, rules: dict[str, Any],
 def scan_one_skill(skill_dir: Path, rel_name: str,
                    ruleset_version: str = DEFAULT_RULESET_VERSION) -> dict[str, Any]:
     rules = load_rules(ruleset_version)
-    files, docs = collect_evidence(skill_dir)
+    # 载体取证（2.4.0）：归档成员 / PDF 文本层 / PNG 文本块都并入 `docs`，
+    # 因此下面的每一条检测都会覆盖它们，不需要为「压缩包里的东西」再写一套。
+    # 第三项是「读不了的部分」的记账——它必须进入 findings，而不是只留在
+    # coverage 统计里：用户读的是发现项列表。
+    files, docs, carrier_findings = collect_evidence(skill_dir)
 
     # 上下文只算一次，供所有模块共享（含压缩产物探测与注释扫描，有成本）。
     # 传 FileContext 而不是裸字符串：模块需要**行级**判定，否则文档里的
     # 「禁止 curl | sh」会和围栏代码块里的真命令得到同一个上下文。
     contexts = build_contexts(docs)
 
-    findings = text_rules.scan_regex_rules(docs, rules)
+    findings = list(carrier_findings)
+    findings += text_rules.scan_regex_rules(docs, rules)
     findings += text_rules.scan_forbidden_files(files, rules)
     findings += hidden_content.scan_hidden_content(docs, contexts)
     findings += obfuscation.scan_obfuscation(docs, contexts)

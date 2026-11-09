@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
  * request exposes accept/reject — without asserting on page-local classes.
  */
 const source = readFileSync(resolve(__dirname, '../../src/renderer/modules/contacts-page.js'), 'utf8');
+const bridgeSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/contacts.js'), 'utf8');
 const formSource = readFileSync(resolve(__dirname, '../../src/renderer/modules/ui-form.js'), 'utf8');
 
 interface Harness {
@@ -33,6 +34,8 @@ interface Harness {
   detailHtml: (contact: unknown, history: unknown[]) => string;
   expiredNotice: (rows: unknown[]) => string;
   render: () => void;
+  loadRequestDtos: (rows: unknown[]) => Promise<void>;
+  setTab: (tab: string) => void;
   decideRequestAdd: (lookup: unknown) => { allowed: boolean; reason?: string };
 }
 
@@ -243,11 +246,45 @@ function createHarness({
     insertMention,
     startChatFocus,
     render: () => sandbox.window.renderContactsPage(),
+    setTab: (tab) => sandbox.window.contactsPage.setTab(tab),
+    loadRequestDtos: async (rows) => {
+      // Exercise the actual IPC bridge and business page together; requests
+      // intentionally retain the main-process DTO rather than contact aliases.
+      sandbox.cogseed = { invoke: vi.fn(async (channel: string) => {
+        if (channel === 'contacts.list') return { ok: true, contacts: [] };
+        if (channel === 'contacts.requests') return { ok: true, requests: rows };
+        throw new Error(`unexpected IPC: ${channel}`);
+      }) };
+      sandbox.dispatchEvent = (event: any) => eventListeners.get(event.type)?.forEach((listener) => listener());
+      sandbox.CustomEvent = class {
+        detail: unknown;
+        constructor(public type: string, init?: { detail?: unknown }) { this.detail = init?.detail; }
+      };
+      vm.runInContext(bridgeSource, sandbox, { filename: 'contacts.js' });
+      await sandbox.contacts.refresh();
+    },
     decideRequestAdd: (lookup: any) => sandbox.window.contactsPage.decideRequestAdd(lookup),
   };
 }
 
 describe('contacts page › rendering', () => {
+  it('shows masked phone titles for incoming and outgoing request DTOs without a peer name', async () => {
+    const h = createHarness();
+    await h.loadRequestDtos([
+      { id: 'incoming-phone', direction: 'in', state: 'pending', phoneMasked: '138****1234', createdAt: '2026-11-04T10:00:00Z' },
+      { id: 'outgoing-phone', direction: 'out', state: 'pending', phoneMasked: '139****5678', createdAt: '2026-11-04T10:00:00Z' },
+    ]);
+    h.setTab('requests');
+    const incoming = h.html().split('<card').find((chunk) => chunk.includes('data-id="incoming-phone"')) || '';
+    const outgoing = h.html().split('<card').find((chunk) => chunk.includes('data-id="outgoing-phone"')) || '';
+    expect(incoming).toContain('138****1234');
+    expect(incoming).toContain('<span class="mono">138****1234</span>');
+    expect(incoming).toContain('data-request-accept');
+    expect(outgoing).toContain('139****5678');
+    expect(outgoing).not.toContain('data-request-accept');
+    expect(h.html()).not.toContain('未知联系人');
+  });
+
   it('offers the add action when there are no contacts', () => {
     const h = createHarness();
     h.setContacts([]);

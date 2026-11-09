@@ -43,7 +43,8 @@ vi.mock('../../../src/main/logger', () => ({
 
 const TEST_UID = 'u-list-waiting-approval';
 let previousVariant: string | undefined;
-let variant = '';
+let previousBaseDir: string | undefined;
+let scratchBase = '';
 
 async function writeWakeState(requests: Array<Record<string, unknown>>) {
   const { wakeStateFile } = await import('../../../src/main/features/p3394/wake-store');
@@ -73,8 +74,11 @@ function wakeRequest(cid: string, status: string, runId: string) {
 
 beforeEach(async () => {
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
-  variant = 'p3394-list-approval-' + Math.random().toString(36).slice(2, 8);
-  process.env.COGSEED_RUNTIME_VARIANT = variant;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-list-approval-'));
+  // per-variant 状态目录指到一次性临时根（runtime-paths 现在校验变体名）。
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
   invokeHandler = null;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
@@ -92,7 +96,9 @@ function invoke(channel: string, payload: unknown = {}) {
 afterEach(() => {
   if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variant), { recursive: true, force: true }); } catch { /* best effort */ }
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
+  try { fs.rmSync(scratchBase, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
 describe('conversations.list › waiting_approval annotation', () => {

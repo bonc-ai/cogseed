@@ -19,6 +19,64 @@ const PROFILE: CogSeedProviderProfile = {
   maxOutputTokens: 2048,
 };
 
+describe('Runtime cache usage contract', () => {
+  it.each(['https://api.openai.com/v1', 'https://provider.test/v1'])('requests streamed usage only for the official OpenAI endpoint: %s', async (baseUrl) => {
+    let body: Record<string, unknown> = {};
+    const provider = createCogSeedOpenAICompatibleProvider({
+      resolveProfile: async () => ({ ...PROFILE, baseUrl }),
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return sseResponse(['data: [DONE]\n\n']);
+      },
+    });
+    await collect(provider(REQUEST));
+    if (baseUrl === 'https://api.openai.com/v1') expect(body.stream_options).toEqual({ include_usage: true });
+    else expect(body).not.toHaveProperty('stream_options');
+  });
+
+  it.each([undefined, 0, 7, -1, 1.5, '7'])('preserves valid Chat cache counts without inventing missing usage: %s', async (cached) => {
+    const provider = createCogSeedOpenAICompatibleProvider({
+      resolveProfile: async () => PROFILE,
+      fetchImpl: async () => sseResponse([
+        `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15, prompt_tokens_details: { cached_tokens: cached } } })}\n\n`,
+        'data: [DONE]\n\n',
+      ]),
+    });
+    const events = await collect(provider(REQUEST));
+    const usage = events.find((event) => event.type === 'usage');
+    expect(usage).toMatchObject({ usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 } });
+    if (cached === 0 || cached === 7) expect(usage).toMatchObject({ usage: { cacheReadTokens: cached } });
+    else expect(usage && 'usage' in usage ? usage.usage.cacheReadTokens : undefined).toBeUndefined();
+  });
+
+  it('includes Anthropic cache reads and writes in total input without double counting cumulative updates', async () => {
+    const provider = createCogSeedAnthropicProvider({
+      resolveProfile: async () => ({ ...PROFILE, protocol: 'anthropic' }),
+      fetchImpl: async () => sseResponse([
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":12,"cache_read_input_tokens":20,"cache_creation_input_tokens":5}}}\n\n',
+        'data: {"type":"message_delta","usage":{"output_tokens":3}}\n\n',
+        'data: {"type":"message_delta","usage":{"output_tokens":7}}\n\n',
+        'data: {"type":"message_stop"}\n\n',
+      ]),
+    });
+    const events = await collect(provider(REQUEST));
+    expect(events.filter((event) => event.type === 'usage')).toEqual([
+      { type: 'usage', usage: { inputTokens: 37, outputTokens: 3, totalTokens: 40, cacheReadTokens: 20, cacheWriteTokens: 5 } },
+      { type: 'usage', usage: { inputTokens: 37, outputTokens: 7, totalTokens: 44, cacheReadTokens: 20, cacheWriteTokens: 5 } },
+    ]);
+  });
+
+  it('keeps Gemini total input inclusive of cached content', async () => {
+    const provider = createCogSeedGeminiProvider({
+      resolveProfile: async () => ({ ...PROFILE, protocol: 'gemini' }),
+      fetchImpl: async () => sseResponse([
+        'data: {"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":6,"totalTokenCount":26,"cachedContentTokenCount":10}}\n\n',
+      ]),
+    });
+    expect(await collect(provider(REQUEST))).toContainEqual({ type: 'usage', usage: { inputTokens: 20, outputTokens: 6, totalTokens: 26, cacheReadTokens: 10 } });
+  });
+});
+
 const REQUEST: RuntimeModelRequest = {
   userId: 'cogseed-provider-user',
   requestId: 'req-provider',
@@ -453,8 +511,7 @@ describe('CogSeed OpenAI Responses Model Provider', () => {
     expect(events).toEqual([
       { type: 'delta', text: 'Checking. ' },
       { type: 'delta', text: 'Done.' },
-      // cached tokens (10) subtracted from input_tokens (30) → 20
-      { type: 'usage', usage: { inputTokens: 20, outputTokens: 8, totalTokens: 38 } },
+      { type: 'usage', usage: { inputTokens: 30, outputTokens: 8, totalTokens: 38, cacheReadTokens: 10 } },
     ]);
   });
 

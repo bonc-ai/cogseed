@@ -82,13 +82,13 @@ describe('cognition-assets snapshot and routing', () => {
     expect(core).toContain('return fallback;');
   });
 
-  it('routes the five views through one router', () => {
-    // specs/018 后端驱动重构:五页签=待我处理/我的认知/个人本体/系统活动/设置,
+  it('routes the four views through one router', () => {
+    // 2026-11-04：本体/我的认知/认知生长/资产设置四个并列入口，不设分组标题。
     // 默认落地待我处理;认知树是 overview 的视图投影(assetView='tree')。
     // 旧路由名(tree/organize/organize-settings/experiences)在 router.go 归一。
     expect(core).toContain("route: { name: 'overview'");
     expect(core).toContain("legacyName === 'review'");
-    expect(core).toContain("{ id: 'tree', titleKey: 'cognition.tab_tree'");
+    expect(core).toContain("{ id: 'ontology', titleKey: 'cognition.tab_ontology'");
     expect(core).toContain("{ id: 'overview', titleKey: 'cognition.tab_overview'");
     expect(core).toContain("{ id: 'activity', titleKey: 'cognition.tab_activity'");
     expect(core).toContain("{ id: 'settings', titleKey: 'cognition.tab_settings'");

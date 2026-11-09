@@ -71,6 +71,7 @@
     const result = await invoke('cognition.ontology.snapshot');
     if (state !== current || request !== current.snapshotRequest) return;
     current.doc = result.ontology;
+    current.graphSnapshots = result.graphSnapshots || {};
     current.lastLoadedAt = Date.now();
     void loadPending(current);
     render();
@@ -442,8 +443,70 @@
     return `${pageHeader({ kicker: 'ONTOLOGY WORKSPACE', title: text('globalGraphTitle', '本体关系图谱'), description: text('globalGraphHint', '只展示本体之间明确建立的引用关系。'), back: button(text('backModules', '← 本体列表'), 'back-list'), actions: '' })}
       ${graphCanvas(graph, false)}`;
   }
+  function graphScopeKey(local, moduleId) {
+    return local && moduleId ? `module:${moduleId}` : 'global';
+  }
+
+  function graphSnapshotEntry(local) {
+    return state.graphSnapshots?.[graphScopeKey(local, local ? state.moduleId : '')] || null;
+  }
+
+  function graphLayoutFor(local) {
+    const snapshot = graphSnapshotEntry(local)?.snapshot;
+    if (!snapshot) return null;
+    return {
+      revision: `${snapshot.ontologyRevision}:${snapshot.generatedAt}`,
+      positions: Object.fromEntries(snapshot.nodes.map(node => [node.id, { x: node.x, y: node.y }])),
+      groups: Object.fromEntries(snapshot.nodes.filter(node => node.group).map(node => [node.id, node.group])),
+      nodeLabels: Object.fromEntries(snapshot.nodes.filter(node => node.label).map(node => [node.id, node.label])),
+      edgeLabels: Object.fromEntries(snapshot.edges.filter(edge => edge.label).map(edge => [edge.id, edge.label])),
+    };
+  }
+
+  async function refreshGraphSnapshots(current) {
+    try {
+      const result = await invoke('cognition.ontology.graph.snapshot');
+      if (state === current) current.graphSnapshots = result.entries || {};
+    } catch (_) { /* graph status is an enhancement; the document path remains usable */ }
+  }
+
+  function graphStatusMarkup(local) {
+    const entry = graphSnapshotEntry(local);
+    if (!entry) return '';
+    const revision = entry.snapshot?.ontologyRevision;
+    const retry = () => button(text('graphRetry', '重试生成'), 'retry-graph', 'secondary', {
+      'data-graph-scope': local ? 'module' : 'global',
+      ...(local ? { 'data-module-id': state.moduleId } : {}),
+    });
+    if (entry.status === 'running') {
+      const message = revision
+        ? text('graphUpdating', '本体已更新，正在生成新图谱；当前显示 v{revision}。', { revision })
+        : text('graphGenerating', '正在生成图谱…');
+      return `<div class="ontology-graph-status is-running" role="status" data-graph-status="running"><span>${esc(message)}</span></div>`;
+    }
+    if (entry.status === 'failed') {
+      const message = revision
+        ? text('graphFailed', '图谱更新失败，当前显示 v{revision}。', { revision })
+        : text('graphFailedFirst', '图谱生成失败。');
+      return `<div class="ontology-graph-status is-failed" role="status" data-graph-status="failed"><span>${esc(message)}</span>${retry()}</div>`;
+    }
+    if (revision) {
+      return `<div class="ontology-graph-status is-ready" data-graph-status="ready"><span>${esc(text('graphReady', '基于本体 v{revision}', { revision }))}</span></div>`;
+    }
+    return '';
+  }
+
   function graphCanvas(_graph, local) {
-    return `<div class="ontology-document-graph" data-ontology-graph-mount data-module-id="${esc(local ? state.moduleId : '')}"></div>`;
+    const suggestions = graphSnapshotEntry(local)?.snapshot?.suggestions || [];
+    const suggestionList = suggestions.length
+      ? `<section class="ontology-graph-suggestions" aria-label="${esc(text('graphSuggestions', '待确认关系'))}"><h3>${esc(text('graphSuggestions', '待确认关系'))}</h3><ul>${suggestions.map(item => `<li><strong>${esc(item.label)}</strong><span>${esc(item.reason)}</span><em>${esc(text('graphSuggestionPending', '待确认'))}</em></li>`).join('')}</ul></section>`
+      : '';
+    return `<div data-graph-status-host>${graphStatusMarkup(local)}</div>${suggestionList}<div class="ontology-document-graph" data-ontology-graph-mount data-module-id="${esc(local ? state.moduleId : '')}"></div>`;
+  }
+
+  function syncGraphStatus(current, local) {
+    const host = current.root.querySelector?.('[data-graph-status-host]');
+    if (host) host.innerHTML = graphStatusMarkup(local);
   }
   function moduleScope(id) { const module = state.doc.records[id]; return module ? text(module.scope.kind, module.scope.kind === 'personal' ? '个人本体' : module.scope.kind === 'project' ? '项目本体' : '工作区本体') : ''; }
   function factAt(record, at) {
@@ -538,6 +601,37 @@
     root.uiToast?.(text('savedReadBack', '已保存并回读确认。'), { variant: 'success' });
     return result;
   }
+  function hasTaskRecords(moduleId) {
+    return Object.values(state.doc.records).some(record => record.kind !== 'module' && record.moduleId === moduleId
+      && record.status === 'active' && record.access === 'task');
+  }
+  async function promoteAccess(moduleId) {
+    const preview = await invoke('cognition.ontology.access.preview', { moduleIds: [moduleId] });
+    const moduleNames = preview.modules.map(module => module.name).join(' · ');
+    const kindLabels = { definition: text('definition', '定义'), entity: text('entity', '对象'), assertion: text('assertion', '事实'), rule: text('rule', '规则'), reference: text('reference', '引用') };
+    const breakdown = Object.entries(kindLabels).filter(([kind]) => preview.counts.byKind[kind])
+      .map(([kind, label]) => `${label} ${preview.counts.byKind[kind]}`).join(' · ');
+    const blockedText = preview.blocked.length
+      ? '\n' + text('accessPromoteBlocked', '另有 {count} 条因依赖不可用保持私有。', { count: preview.blocked.length }) : '';
+    const approved = await root.uiConfirm?.(text('accessPromoteConfirm',
+      '将把以下本体改为可用于任务：{modules}。记录 {records} 条（{breakdown}）。{blocked}这是权限放宽，会写入版本与历史。确认继续？',
+      { modules: moduleNames, records: preview.counts.records, breakdown, blocked: blockedText }));
+    if (!approved) return false;
+    // 闭包由后端重算：前端透传整个 preview.closure 会撞 IPC 的 20 模块上限。
+    const result = await invoke('cognition.ontology.access.promote', { moduleIds: [moduleId] });
+    await refresh();
+    if (result.partial) {
+      // 已放开的批次不回滚；留在对话框里，再点保存即对剩余项续跑（幂等）。
+      root.uiToast?.(text('accessPromotePartial', '批量放开未全部完成：已放开 {modules} 个模块、{records} 条记录；{blocked} 条保持私有。请重试。', {
+        modules: result.promoted.modules, records: result.promoted.records, blocked: result.blocked.length,
+      }), { variant: 'error' });
+      return false;
+    }
+    root.uiToast?.(text('accessPromoteDone', '已放开 {modules} 个模块、{records} 条记录；{blocked} 条保持私有。', {
+      modules: result.promoted.modules, records: result.promoted.records, blocked: result.blocked.length,
+    }), { variant: 'success' });
+    return true;
+  }
   function sourceLabel() { return text('userConfirmed', '用户确认'); }
   function openDialog({ title, body, trigger, onSubmit }) {
     const modal = root.uiModal({ title, closeLabel: text('close', '关闭'), size: 'md', initialFocus: '.ontology-ws-form input,.ontology-ws-form textarea,.ai-select-trigger',
@@ -601,13 +695,30 @@
     ], record?.scope.kind || 'personal')}${field(text('scopeId', '项目或工作区标识'), 'scopeId', record?.scope.id || '', 'text', text('scopeIdHint', '个人本体无需填写。'))}${select(text('access', '谁可以在任务中使用'), 'access', [
       { value: 'task', label: text('taskAccess', '认知资产可按引用供任务使用') }, { value: 'owner_only', label: text('privateAccess', '仅自己查看，不提供给任务') },
     ], record?.access || 'task')}`;
-    return openDialog({ title: record ? text('editModule', '编辑本体') : text('createModuleTitle', '创建本体'), body, trigger, onSubmit: data => {
+    return openDialog({ title: record ? text('editModule', '编辑本体') : text('createModuleTitle', '创建本体'), body, trigger, onSubmit: async data => {
       if (!data.name.trim()) throw new Error(text('requiredName', '请填写名称。'));
       const scope = { kind: data.scope, ...(data.scope === 'personal' ? {} : { id: data.scopeId.trim() }) };
       if (data.scope !== 'personal' && !scope.id) throw new Error(text('requiredScope', '该范围需要填写标识。'));
-      const patch = { name: data.name.trim(), description: data.description.trim(), scope, access: data.access };
-      return commit([record ? { intent: 'update', recordId: record.id, expectedVersion: record.version, patch, sourceLabel: sourceLabel() }
-        : { intent: 'create', record: { kind: 'module', ...patch }, sourceLabel: sourceLabel() }]);
+      const access = data.access === 'owner_only' ? 'owner_only' : 'task';
+      const name = data.name.trim(), description = data.description.trim();
+      if (!record) {
+        return commit([{ intent: 'create', record: { kind: 'module', name, description, scope, access }, sourceLabel: sourceLabel() }]);
+      }
+      if (record.access === 'task' && access === 'owner_only' && hasTaskRecords(record.id)) {
+        throw new Error(text('narrowRequiresRecords', '该模块下仍有可用于任务的记录，请先逐条改为仅自己；反向批量收窄尚未提供。'));
+      }
+      const fieldsChanged = name !== record.name || description !== record.description
+        || scope.kind !== record.scope.kind || (scope.id || '') !== (record.scope.id || '');
+      if (record.access === 'owner_only' && access === 'task') {
+        if (fieldsChanged) {
+          const saved = await commit([{ intent: 'update', recordId: record.id, expectedVersion: record.version,
+            patch: { name, description, scope }, sourceLabel: sourceLabel() }]);
+          if (saved === false) return false;
+        }
+        return promoteAccess(record.id);
+      }
+      const patch = { name, description, scope, access };
+      return commit([{ intent: 'update', recordId: record.id, expectedVersion: record.version, patch, sourceLabel: sourceLabel() }]);
     } });
   }
   function openDefinitionDialog(trigger, initialKind = 'type', record) {
@@ -754,6 +865,18 @@
     if (action === 'document-discard') { state.editor?.discard(id); render(); return; }
     if (action === 'document-add-toggle') { state.documentAddOpen = !state.documentAddOpen; render(); return; }
     if (action === 'document-view-toggle') { await state.editor?.flush(); state.tab = target.dataset.view || (state.tab === 'graph' ? 'document' : 'graph'); state.documentAddOpen = false; render(); return; }
+    if (action === 'retry-graph') {
+      const scope = target.dataset.graphScope === 'module' ? 'module' : 'global';
+      const moduleId = target.dataset.moduleId || state.moduleId || '';
+      await invoke('cognition.ontology.graph.generate', {
+        scope,
+        ...(scope === 'module' ? { moduleId } : {}),
+        at: state.at,
+        contentScale: 'instances',
+      });
+      await refresh();
+      return;
+    }
     if (action === 'directory-view') { if (target.dataset.view === 'graph') await enterGraph(true); else { state.mode = 'list'; render(); } return; }
     if (action === 'directory-scope') { state.scopeFilter = target.dataset.scope; state.showInactive = false; state.modulePage = 0; render(); return; }
     if (action === 'directory-clear-search') { state.searchQuery = ''; state.searchResults = []; state.modulePage = 0; render(); return; }
@@ -1074,8 +1197,10 @@
       if (allowed.has(current.listGraphSelection.id)) initialSelection = { ...current.listGraphSelection };
       else current.listGraphSelection = null;
     }
+    const graphLayout = graphLayoutFor(!isGlobal);
     current.graphController = root.CogOntologyGraph.mount(mount, { prototype: true, doc: graphDoc, moduleId: mount.dataset.moduleId || '', at: current.at, text,
       initialSelection,
+      ...(graphLayout ? { layout: graphLayout } : {}),
       onSelect({ recordId, kind, open }) {
         if (state !== current) return;
         current.recordId = recordId;
@@ -1144,6 +1269,7 @@
     const result = await invoke('cognition.ontology.snapshot');
     if (state !== current || request !== current.snapshotRequest) return;
     state.doc = result.ontology;
+    state.graphSnapshots = result.graphSnapshots || {};
     state.lastLoadedAt = Date.now();
     ensureDocumentEditor(state);
     try { state.recentIds = JSON.parse(root.localStorage?.getItem(`ontology-recent:${state.doc.ownerId}`) || '[]'); if (!Array.isArray(state.recentIds)) state.recentIds = []; } catch (_) { state.recentIds = []; }
@@ -1173,7 +1299,7 @@
     // and controllers alive; each i18n change would then render every old tree.
     if (state) unmountCognitionOntology();
     state = { snapshotRequest: 0, graphRequest: 0, recordRequest: 0, root: container, page: 'list', mode: 'list', moduleId: '', tab: 'document', box: 'T', modulePage: 0, recordPage: 0, lastLoadedAt: 0, recentModuleIds: [],
-      selectedId: '', selectedEdgeId: '', listGraphSelection: null, graphFocusId: '', graphSearchQuery: '', graphSearchResults: [], graphZoom: 1, graphLayout: 'radial', graphScale: 'instances', graphRules: true, at: root.CogOntologyDocument.today(), graph: null, history: [], documentDetails: {} };
+      selectedId: '', selectedEdgeId: '', listGraphSelection: null, graphFocusId: '', graphSearchQuery: '', graphSearchResults: [], graphZoom: 1, graphLayout: 'radial', graphScale: 'instances', graphRules: true, graphSnapshots: {}, at: root.CogOntologyDocument.today(), graph: null, history: [], documentDetails: {} };
     state.selectionController = root.CogOntologySelection?.mount(container, { getDocument: () => state?.doc, text, esc, save: async (id, field, value, options = {}) => {
       const current = state;
       if (!current?.editor) throw new Error(text('documentEditorUnavailable', '文档编辑器尚未就绪。'));
@@ -1274,21 +1400,41 @@
     const current = state;
     if (!current || !doc || doc.ownerId !== current.doc?.ownerId) return;
     void loadPending(current);
-    if (doc.revision <= current.doc.revision) return;
-    current.doc = doc;
-    if (current.documentPointerDown || current.root.contains?.(document.activeElement) && document.activeElement?.matches?.('[data-ontology-edit]')) { current.documentNeedsRender = true; return; }
-    if (current.graphController) {
-      const moduleId = current.page === 'module' ? current.moduleId : '';
-      const graphDoc = graphDocFor(current, doc, moduleId);
-      current.graphController.update({ doc: graphDoc, moduleId, at: current.at });
-      const visible = new Set(Object.keys(graphDoc.records));
-      if (current.listGraphSelection && !visible.has(current.listGraphSelection.id)) current.listGraphSelection = null;
-      if (current.recordId && !visible.has(current.recordId)) current.recordId = undefined;
+    const revisionAdvanced = doc.revision > current.doc.revision;
+    if (revisionAdvanced) current.doc = doc;
+    const applyGraphSnapshots = () => {
+      if (state !== current) return;
+      if (current.documentPointerDown || current.root.contains?.(document.activeElement) && document.activeElement?.matches?.('[data-ontology-edit]')) {
+        if (revisionAdvanced) current.documentNeedsRender = true;
+        return;
+      }
+      if (current.graphController) {
+        const moduleId = current.page === 'module' ? current.moduleId : '';
+        const graphDoc = graphDocFor(current, current.doc, moduleId);
+        current.graphController.update({
+          doc: graphDoc, moduleId, at: current.at,
+          ...(graphLayoutFor(Boolean(moduleId)) ? { layout: graphLayoutFor(Boolean(moduleId)) } : {}),
+        });
+        syncGraphStatus(current, Boolean(moduleId));
+        const visible = new Set(Object.keys(graphDoc.records));
+        if (current.listGraphSelection && !visible.has(current.listGraphSelection.id)) current.listGraphSelection = null;
+        if (current.recordId && !visible.has(current.recordId)) current.recordId = undefined;
+        return;
+      }
+      if (revisionAdvanced || current.tab === 'graph' || (current.page === 'list' && current.mode === 'graph')) {
+        void loadGraph(current.page === 'list' ? undefined : current.moduleId).then(() => { if (state === current) render(); }).catch(showError);
+      } else render();
+    };
+    if (revisionAdvanced) {
+      // Keep the document/graph update synchronous for callers that already
+      // hold the new doc; the sidecar refresh only upgrades layout afterwards.
+      applyGraphSnapshots();
+      void refreshGraphSnapshots(current).then(applyGraphSnapshots);
       return;
     }
-    if (current.tab === 'graph' || (current.page === 'list' && current.mode === 'graph')) {
-      void loadGraph(current.page === 'list' ? undefined : current.moduleId).then(() => { if (state === current) render(); }).catch(showError);
-    } else render();
+    // Graph generation only changes the sidecar status; the ontology revision
+    // is unchanged, so refresh snapshots without rebuilding the document.
+    void refreshGraphSnapshots(current).then(applyGraphSnapshots);
   }
   function unmountCognitionOntology() {
     if (!state?.root) return;

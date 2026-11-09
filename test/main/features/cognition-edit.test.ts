@@ -247,8 +247,8 @@ describe('host cognition edits', () => {
     await env.store.writeRecallJsonRecord(uid, 'ability-assets', 'aa-same-name', { ...before, id: 'aa-same-name', candidateId: 'same-name-candidate', ontologyRefs: [], standingPreferenceAuthority: undefined, userEditDecision: undefined });
     const { createAssetStewardTools } = await import('../../../src/main/model/core-agent/asset-steward-tools');
     const read = createAssetStewardTools(host('请查看技术说明偏好。')).find(tool => tool.name === 'read_ability_asset')!;
-    const result = await read.execute({ assetId: before.id, mode: 'manage' }) as any;
-    expect(result.content).toContain('ambiguous'); expect(result.content).not.toContain(original);
+    const result = await read.execute({ assetId: before.id }) as any;
+    expect(result.isError).toBeUndefined(); expect(result.content).toContain(original);
     await expect(env.editor.editCognition(uid, host('请把技术说明偏好改成先给证据。'), { target: { assetId: before.id }, fields: { statement: '先给证据' }, reason: '同名未选定' })).rejects.toMatchObject({ code: 'ambiguous_identity' });
   });
 
@@ -276,15 +276,15 @@ describe('host cognition edits', () => {
     await env.assets.pauseAbilityAsset(uid, 'aa-preference', { actor: 'user', reason: '暂停' });
     const steward = await import('../../../src/main/model/core-agent/asset-steward-tools');
     const read = steward.createAssetStewardTools(host('请查看技术说明偏好。')).find(t => t.name === 'read_ability_asset')!;
-    expect((await read.execute({ assetId: 'aa-preference', mode: 'manage' }) as any).content).toContain(original);
+    expect((await read.execute({ assetId: 'aa-preference' }) as any).content).toContain(original);
     const authority = await import('../../../src/main/features/recall/standing-preference');
     expect(await authority.hasUserAuthorizedStandingPreference(uid, await env.assets.readAbilityAsset(uid, 'aa-preference'))).toBe(false);
     await env.ontology.commitOntologyCommand(uid, { commandId: 'private-rule', expectedRevision: env.ontology.readOntologyDocument(uid).revision, actions: [{ intent: 'update', recordId: 'rule-one', expectedVersion: env.ontology.readOntologyDocument(uid).records['rule-one'].version, patch: { access: 'owner_only' }, sourceLabel: 'private' }] });
     const { createOntologyTools } = await import('../../../src/main/model/core-agent/ontology-tools');
     const query = createOntologyTools(host('请查看说明规则。'))[0];
-    expect((await query.execute({ mode: 'manage', recordId: 'rule-one' }) as any).content).toContain('owner_only');
+    expect((await query.execute({ recordId: 'rule-one' }) as any).content).toContain('owner_only');
     await env.store.updateRecallJsonRecord(uid, 'ability-assets', 'aa-preference', old => ({ ...old!, status: 'revoked' }));
-    const denied = await read.execute({ assetId: 'aa-preference', mode: 'manage' }) as any;
+    const denied = await read.execute({ assetId: 'aa-preference' }) as any;
     expect(denied.isError).toBe(true); expect(denied.content).not.toContain(original);
   });
 
@@ -442,6 +442,27 @@ describe('host cognition edits', () => {
     expect(extra.status).toBe('blocked');
     expect(interaction).toHaveBeenCalledTimes(3);
     expect(await env.assets.readAbilityAsset(uid, before.id)).toMatchObject({ version: before.version, statement: before.statement, forbiddenWhen: before.forbiddenWhen });
+  });
+
+  it('routes edit requests without a listed verb to the card and saves after allow', async () => {
+    const env = await setup(); await fullSave(env);
+    const before = await env.assets.readAbilityAsset(uid, 'aa-preference');
+    const result = await env.editor.editCognition(uid, host('帮我把技术说明偏好的说法理顺一点。', 'colloquial-edit'), {
+      target: { assetId: before.id }, fields: { statement: before.statement + '理顺后的补充。' }, reason: '口语化编辑指令' });
+    expect(result.status).toBe('applied');
+    expect(interaction).toHaveBeenCalledTimes(2);
+    expect((await env.assets.readAbilityAsset(uid, before.id)).statement).toBe(before.statement + '理顺后的补充。');
+  });
+
+  it('does not read 别人…改 as a negation and asks via the card instead', async () => {
+    const env = await setup(); await fullSave(env);
+    const before = await env.assets.readAbilityAsset(uid, 'aa-preference');
+    interaction.mockResolvedValueOnce({ interactionId: 'others-edited-denied', reason: 'answered', decision: 'deny' });
+    const result = await env.editor.editCognition(uid, host('别人修改过的技术说明偏好现在也可以调整。', 'others-edited'), {
+      target: { assetId: before.id }, fields: { statement: before.statement + '补充。' }, reason: '描述他人改动，不是否决' });
+    expect(result.status).toBe('blocked');
+    expect(interaction).toHaveBeenCalledTimes(2);
+    expect(await env.assets.readAbilityAsset(uid, before.id)).toMatchObject({ version: before.version, statement: before.statement });
   });
 });
 

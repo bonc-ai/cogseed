@@ -98,6 +98,10 @@ if [ "$(uname -s)" = "Darwin" ]; then
     for key in COGSEED_BUILD_CHANNEL COGSEED_BUILD_COMMIT COGSEED_BUILD_DIRTY COGSEED_BUILD_TIME; do
       OPEN_ENV_ARGS+=(--env "$key=${!key}")
     done
+    # LaunchServices needs explicit forwarding; preserve the caller's opt-in.
+    if [ -n "${COGSEED_LOG_LEVEL:-}" ]; then
+      OPEN_ENV_ARGS+=(--env "COGSEED_LOG_LEVEL=$COGSEED_LOG_LEVEL")
+    fi
     if [ -n "${COGSEED_HUB_API_BASE:-}" ]; then
       OPEN_ENV_ARGS+=(--env "COGSEED_HUB_API_BASE=$COGSEED_HUB_API_BASE")
     fi

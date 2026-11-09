@@ -83,6 +83,10 @@ describe('旧内容语义核对', () => {
     expect(JSON.stringify(report)).not.toContain(statements['stock-a']);
     expect(JSON.stringify(report)).not.toContain(statements['stock-b']);
     expect(report.currentFindingKeys).toContain(issue?.key);
+    const semantic = await inspection.listSemanticInspectionFindings(user);
+    expect(semantic).toEqual([expect.objectContaining({ key: issue?.key, assetIds: ['stock-a', 'stock-b'],
+      assetVersions: { 'stock-a': '1', 'stock-b': '1' }, at: expect.any(String) })]);
+    expect(JSON.stringify(semantic)).not.toContain(statements['stock-a']);
     expect((await (await import('../../../../src/main/features/recall/asset-service')).listAbilityAssets(user))
       .map(asset => asset.status)).toEqual(['active', 'active']);
   });

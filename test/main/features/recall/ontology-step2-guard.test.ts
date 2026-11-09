@@ -26,8 +26,14 @@ describe('IPC 通道登记一致性', () => {
       'transcript_glossary.visible',
       // 本体时点快照导出、命令与历史入口。
       'cognition.ontology.export',
+      // Versioned graph snapshots and explicit host-owned graph generation.
+      'cognition.ontology.graph.snapshot',
+      'cognition.ontology.graph.generate',
       'cognition.ontology.command.commit',
       'cognition.ontology.command.preview',
+      // 本体权限批量放开（PR #216）：读取授权的预览与放开走独立通道，不并入 command.*。
+      'cognition.ontology.access.preview',
+      'cognition.ontology.access.promote',
       // 本体字段编辑走主档命令、回执与回读。
       'cognition.ontology.document.edit',
       'cognition.ontology.history.get',
@@ -80,6 +86,9 @@ describe('IPC 通道登记一致性', () => {
       // 2026-09-30 托盘常驻：关闭到托盘的偏好通道（7c04fded 加入 handler 表，
       // 按字母序排在 po.* 之后、recall.* 之前）。
       'prefs.getCloseToTray',
+      // 关联资产超过形成上限时的清单与合并/保留处置（不建候选）。
+      'recall.captures.relatedOverflow.list',
+      'recall.captures.relatedOverflow.resolve',
       // waiting_approval 区分等待批准与执行中；返回会话 id 列表供页面同步。
       'conversations.waitingApproval',
       'prefs.setCloseToTray',
@@ -114,6 +123,23 @@ describe('IPC 通道登记一致性', () => {
       // 候选历史与审核依据的只读查询。
       'recall.candidates.history',
       'recall.reviewEvidence.read',
+      // 多条关联内容的一次性处置：合并旧内容后由所属整理任务重判，或保留全部。
+      'recall.candidates.resolveRelated',
+      // 用户确认已校验的旧内容整理方案，资产与候选回执同一次提交。
+      'recall.candidates.oldContent.confirm',
+      // 独立旧内容方案：列表、读取、按资产查询、逐项修订、执行、放弃。
+      'recall.oldContent.plan.list',
+      'recall.oldContent.plan.review',
+      'recall.oldContent.plan.undoPreview',
+      'recall.oldContent.plan.undo',
+      'recall.oldContent.plan.read',
+      'recall.oldContent.plan.forAssets',
+      'recall.oldContent.plan.resolve',
+      'recall.oldContent.plan.update',
+      'recall.oldContent.plan.execute',
+      'recall.oldContent.plan.dismiss',
+      // 候选收尾：先提交旧内容，再保存新内容，失败可重试。
+      'recall.candidates.finalize',
       // 编辑夜间候选后重核关联本体，更新预览，保存需确认。
       'recall.candidates.recheckOntologyFormation',
       // 推理强度按模型声明的能力提供，用户的选择持久化到
@@ -150,10 +176,34 @@ describe('IPC 通道登记一致性', () => {
       'skills.getGlobalRootsEnabled',
       'skills.setGlobalRootsEnabled',
       'skills.trust.cancel',
+      // S5 Hub 模板：只读的目录列表 / 详情与本机依赖检查（specs/010 contracts/ui-and-ipc.md）。
+      'templates.catalog.list',
+      'templates.catalog.detail',
+      'templates.refs.resolve',
+      'spaces.createFromTemplate',
     ];
     expect(sneaked.sort(), '出现未登记的新通道').toEqual([...registeredPost014].sort());
     // 排除已退役的形成入口；其他基线通道禁止无登记删除。
     const retiredFormationChannels = ["recall.captures.retry", "recall.captures.pause", "recall.captures.resume", "recall.captures.cancel", "recall.captures.runNow", "recall.captures.batchRetry", "recall.captures.batchRunNow", "recall.captures.manualCreate", "recall.captures.historicalAutoStart", "recall.candidates.save", "recall.memory.migrate", "recall.scopedMemoryMigration.preview", "recall.scopedMemoryMigration.run", "cognition.capture.draft", "recall.candidates.importPersonalOntology", "personalOntology.candidates.transferToRecall", "cognition.ontology.import.submit", "transcript.correct.proposeCandidate"];
     expect(removed.sort()).toEqual(baseline.filter(name => retiredFormationChannels.includes(name)).sort());
+  });
+
+  it('registers graph channels through the canonical cognition handlers and preload invoke bridge', () => {
+    const cognition = fs.readFileSync(path.join(ROOT, 'src/main/ipc/cognition.ts'), 'utf8');
+    const main = fs.readFileSync(path.join(ROOT, 'src/main/ipc/index.ts'), 'utf8');
+    const preload = fs.readFileSync(path.join(ROOT, 'src/main/preload.js'), 'utf8');
+    for (const channel of ['cognition.ontology.graph.snapshot', 'cognition.ontology.graph.generate']) {
+      expect([...cognition.matchAll(/^  '([^']+)':/gm)].filter(match => match[1] === channel)).toHaveLength(1);
+      expect(main).not.toContain(`'${channel}':`);
+    }
+    expect(cognition).toContain('entries: await listGraphSnapshotEntries(ctx.userId)');
+    expect(cognition).toContain('await requestGraphGeneration({ userId: ctx.userId, scope,');
+    expect(main).toContain("invokeHandlers as cognitionHandlers, ontologyErrorDetails } from './cognition'");
+    expect(main).toContain('...(cognitionHandlers as Record<string, unknown>)');
+    // Invoke channel names travel in the envelope; preload has no per-name invoke list.
+    expect(preload).toMatch(/function invoke\(channel, payload\)\s*\{\s*return ipcRenderer\.invoke\('cogseed\.invoke', \{ channel, payload: payload \|\| \{\} \}\);\s*\}/);
+    expect(preload).toMatch(/const cogseedApi = \{[\s\S]*?\n  invoke,/);
+    expect(preload).toContain("contextBridge.exposeInMainWorld('cogseed', cogseedApi)");
+    expect(main).toContain('const handler = invokeHandlers[channel]');
   });
 });

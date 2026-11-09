@@ -20,20 +20,26 @@ const listAgentsMock = vi.fn(async () => [
 vi.mock('../../../../src/main/features/agents', () => ({ listAgents: (...args: unknown[]) => listAgentsMock(...args) }));
 
 let previousVariant: string | undefined;
-let variantName: string;
+let previousBaseDir: string | undefined;
+let scratchBase: string;
 
-// 测试隔离：p3394StateFile 走 COGSEED_RUNTIME_VARIANT，必须用一次性 variant，
-// 否则这些测试会把真实 cogseed variant 的 p3394-peers.json /
-// p3394-external-gateways.json 清空重建（污染用户运行状态）。
+// 测试隔离：p3394StateFile 走变体目录；把整棵变体树指到一次性临时目录
+// （runtime-paths 现在校验变体名），否则这些测试会把真实 cogseed
+// variant 的 p3394-peers.json / p3394-external-gateways.json 清空重建
+// （污染用户运行状态）。
 beforeEach(() => {
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
-  variantName = 'p3394-gw-' + Math.random().toString(36).slice(2, 8);
-  process.env.COGSEED_RUNTIME_VARIANT = variantName;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  scratchBase = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-gw-test-'));
+  process.env.COGSEED_VARIANT_BASE_DIR = scratchBase;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
 });
 afterEach(() => {
   if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
+  try { fs.rmSync(scratchBase, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
 function writeNodeCli(name: string, body: string): string {

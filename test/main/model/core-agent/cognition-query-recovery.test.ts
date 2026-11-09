@@ -101,15 +101,17 @@ describe('cognition query recovery', () => {
     expect(new Set(transcriptErrors.map(row => JSON.stringify(row))).size).toBe(1);
     expect(new Set(queryErrors.map(row => JSON.stringify(row))).size).toBe(1);
     expect(transcriptErrors[0].error).toBe('module outside task scope');
-    expect(queryErrors[0].recoveryHint).toContain('current task permissions');
+    expect(queryErrors[0].recoveryHint).toContain('current permissions');
   });
 
-  it('preserves task query validation and inventory authorization instead of turning errors into empty results', async () => {
+  it('preserves task query validation and an ungated paged overview instead of turning errors into empty results', async () => {
     const { query } = await setup();
-    for (const input of [{ query: 7 }, { query: {} }, { query: 'Synthetic Team', mode: ['task'] }])
+    for (const input of [{ query: 7 }, { query: {} }, { query: '' }, { query: '   ' }, { query: 'a'.repeat(201) },
+      { moduleId: 'module-1' }, { contentCursor: 0 }])
       failure(await query.execute(input), 'invalid_input');
-    const inventory = failure(await query.execute({ mode: 'inventory', limit: 50 }), 'inventory_intent_required');
-    expect(inventory.recoveryHint).toContain('explicit full-inventory instruction');
+    const overview = await query.execute({ limit: 50 });
+    expect(overview.isError).toBeUndefined();
+    expect(JSON.parse(overview.content)).toMatchObject({ mode: 'inventory', page: expect.any(Object), counts: expect.any(Object) });
     const normal = await query.execute({ query: 'Unmatched Synthetic Topic' });
     expect(normal.isError).toBeUndefined();
     expect(JSON.parse(normal.content)).toMatchObject({ modules: [], records: [], facts: [], sourceCoverage: { complete: true } });
@@ -118,7 +120,7 @@ describe('cognition query recovery', () => {
   it('recovers an invalid content cursor with a fresh authorized read, without guessing a version', async () => {
     const { query } = await setup();
     const failed = failure(await query.execute({ query: 'Synthetic Team', contentCursor: 'invalid-cursor' }), 'invalid_cursor');
-    expect(failed.recoveryHint).toContain('Restart the original authorized read');
+    expect(failed.recoveryHint).toContain('Restart the original read');
     const result = await query.execute({ query: 'Synthetic Team' });
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(result.content)).toMatchObject({ revision: 1, modules: [expect.objectContaining({ id: 'module-a' })] });
@@ -128,8 +130,8 @@ describe('cognition query recovery', () => {
     const { query, service, model } = await setup();
     const read = vi.spyOn(service, 'readOntologyView');
     for (const [code, hint] of [
-      ['baseline_changed', 'Restart the original authorized read'],
-      ['inventory_snapshot_changed', 'Restart the original authorized read'],
+      ['baseline_changed', 'Restart the original read'],
+      ['inventory_snapshot_changed', 'Restart the original read'],
       ['source_unavailable', 'Stop operations that depend on the unreadable content'],
       ['store_corrupt', 'Stop operations that depend on the unreadable content'],
       ['not_found', 'Recheck the exact target'],

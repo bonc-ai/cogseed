@@ -301,6 +301,8 @@ function _deriveBundleInstance(entry) {
 // retry a degraded connector (that is what heals it), but we must not advertise one to the *user*
 // as ready, nor pin a composer draft to it.
 function isConnectorLive(id) {
+  const entry = (_connectorsState.catalog || []).find(row => row.id === id);
+  if (entry && entry.auth_mode === 'local_mcp' && _isConnectorVisibleDisabled(entry)) return false;
   const inst = _instanceById(id);
   return !!(inst && inst.status && inst.status.kind === 'connected' && inst.enabled !== false);
 }
@@ -334,7 +336,7 @@ function _showConnectorUnsupportedToast() {
 }
 
 function _showConnectorCliMissingToast(entry) {
-  const message = t(entry && _connectorManagedRuntime(entry) ? 'connectors.runtime.platform_unavailable' : 'connectors.toast.cli_missing');
+  const message = t(entry && entry.auth_mode === 'local_mcp' ? 'connectors.apple.dependency_missing' : entry && _connectorManagedRuntime(entry) ? 'connectors.runtime.platform_unavailable' : 'connectors.toast.cli_missing');
   if (typeof uiToast === 'function') uiToast(message, { variant: 'warning' });
   else uiAlert(message);
 }
@@ -342,7 +344,11 @@ function _showConnectorCliMissingToast(entry) {
 /** Single entry point for a card / detail action that cannot run because the provider is
  *  unavailable — keeps the CLI-missing branch ahead of the generic unsupported path. */
 function _showConnectorUnavailableToast(entry) {
-  if (_isConnectorCliMissing(entry)) _showConnectorCliMissingToast(entry);
+  if (entry && entry.disabled_reason === 'macos_only') {
+    const message = t('connectors.apple.macos_only');
+    if (typeof uiToast === 'function') uiToast(message, { variant: 'warning' });
+    else uiAlert(message);
+  } else if (_isConnectorCliMissing(entry)) _showConnectorCliMissingToast(entry);
   else _showConnectorUnsupportedToast();
 }
 
@@ -401,7 +407,7 @@ function listUsableConnectorsForPicker() {
   const catalogById = new Map((_connectorsState.catalog || []).map((entry) => [entry.id, entry]));
   const lang = (typeof getLang === 'function') ? getLang() : 'en';
   return (_connectorsState.instances || [])
-    .filter((inst) => inst && inst.status && inst.status.kind === 'connected' && inst.enabled !== false)
+    .filter((inst) => inst && isConnectorLive(inst.id))
     .map((inst) => {
       const entry = catalogById.get(inst.id) || _entryFromInstance(inst);
       const account = inst.oauth_grant && inst.oauth_grant.account_label ? inst.oauth_grant.account_label : '';
@@ -621,7 +627,7 @@ function _renderCatalogCard(entry, instance) {
   const e = entry || _entryFromInstance(instance);
   const isOAuthPending = !!(e && e.unavailable_reason === 'oauth_pending');
   const isVisibleDisabled = _isConnectorVisibleDisabled(e);
-  const connected = !!(instance && instance.status && instance.status.kind === 'connected');
+  const connected = !!(instance && instance.status && instance.status.kind === 'connected') && !(e.auth_mode === 'local_mcp' && isVisibleDisabled);
   const errored = !!(instance && instance.status && instance.status.kind === 'error');
   // Authorized + cached, but the last connect/refresh failed. Stays in this group (a 30s backend
   // blip must not reshuffle every card out of the list) but must never render as connected: the
@@ -716,8 +722,10 @@ function _renderCatalogCard(entry, instance) {
     action = _connectorUiButton({ label: t('connectors.action.unavailable'), role: 'secondary', size: 'sm', disabled: true });
   } else if (_isConnectorCliMissing(e) && e.runtime_installable) {
     action = _connectorUiButton({ label: t(_connectorRuntimeErrors.has(_connectorRuntimeKey(e.id)) ? 'connectors.runtime.retry' : 'connectors.runtime.install_connect'), role: 'primary', size: 'sm', icon: 'download', attrs: { 'data-act': 'connect' } });
+  } else if (_isConnectorCliMissing(e) && e.auth_mode === 'local_mcp') {
+    action = _connectorUiButton({ label: t('connectors.apple.setup'), role: 'primary', size: 'sm', icon: 'download', attrs: { 'data-act': 'open-popup' } });
   } else if (isVisibleDisabled) {
-    action = _connectorUiButton({ label: t('connectors.action.connect'), role: 'primary', size: 'sm', icon: 'plug', attrs: { 'data-act': 'unsupported-connect' } });
+    action = _connectorUiButton({ label: t(e.disabled_reason === 'macos_only' ? 'connectors.apple.macos_only' : 'connectors.action.connect'), role: 'primary', size: 'sm', icon: 'plug', disabled: e.disabled_reason === 'macos_only', attrs: { 'data-act': 'unsupported-connect' } });
   } else if (connected) {
     const useTitle = formatChatUseLabel({ kind: 'connector', id: e.id, name: e.display_name || e.id });
     action = _connectorUiButton({ label: t('common.use'), role: 'primary', size: 'sm', className: 'connector-card-use', disabled: !enabledFlag, attrs: { 'data-act': 'use-connector', title: useTitle } });
@@ -795,7 +803,7 @@ function _renderCatalogCard(entry, instance) {
     el.title = text;
   } else if (_isConnectorCliMissing(e) && !_connectorManagedRuntime(e)) {
     const el = card.querySelector('.connector-card-cli-missing');
-    const text = t('connectors.tencent.runtime_unavailable');
+    const text = t(e.auth_mode === 'local_mcp' ? 'connectors.apple.dependency_missing' : 'connectors.tencent.runtime_unavailable');
     el.textContent = text;
     el.title = text;
   }
@@ -1030,6 +1038,8 @@ async function _quickDisconnect(entry, instance) {
 // Only registered connectors expose this business composition. uiModal owns the overlay,
 // keyboard behavior and focus trap; all controls reuse the shared factories.
 const _CONNECTOR_POPUP_PROFILES = {
+  'apple-reminders': { prefix: 'connectors.apple.reminders.examples', keys: ['query', 'create'] },
+  'apple-notes': { prefix: 'connectors.apple.notes.examples', keys: ['query', 'create'] },
   'tencent-meeting': { prefix: 'connectors.tencent.examples', keys: ['query', 'summary', 'schedule'], note: 'connectors.tencent.connected.note' },
   'email-163': { prefix: 'connectors.popup.email.examples', note: 'connectors.popup.email.note' },
   'email-enterprise': { prefix: 'connectors.popup.email.examples', note: 'connectors.popup.email.note' },
@@ -1093,6 +1103,8 @@ function _connectorSetupText(entry) {
     docsUrl: setup.docs_url || '',
     docsLabel: (zh ? setup.docs_label_zh : setup.docs_label_en) || t('connectors.setup.open_docs'),
     install: setup.install_command || '',
+    installUrl: setup.install_url || '',
+    installLabel: (zh ? setup.install_label_zh : setup.install_label_en) || t('connectors.setup.install_tool'),
     note: (zh ? setup.credential_note_zh : setup.credential_note_en) || '',
   };
 }
@@ -1118,6 +1130,14 @@ function _connectorPopupSetupHtml(entry) {
         })}
       </div>`
     : '';
+  const download = text.installUrl
+    ? `<div class="connectors-detail-setup-docs">${_connectorUiButton({
+        label: text.installLabel,
+        role: 'secondary',
+        size: 'sm',
+        attrs: { 'data-act': 'open-install-docs' },
+      })}</div>`
+    : '';
   const docs = text.docsUrl
     ? `<div class="connectors-detail-setup-docs">${_connectorUiButton({
         label: text.docsLabel,
@@ -1127,16 +1147,16 @@ function _connectorPopupSetupHtml(entry) {
       })}</div>`
     : '';
   const note = text.note ? `<p class="connectors-detail-setup-note">${escapeHtml(text.note)}</p>` : '';
-  if (!steps && !install && !docs && !note) return '';
+  if (!steps && !install && !download && !docs && !note) return '';
   return `<div class="connectors-detail-setup">
       <p class="connectors-detail-setup-title">${escapeHtml(t('connectors.setup.title'))}</p>
-      ${steps}${install}${docs}${note}
+      ${steps}${install}${download}${docs}${note}
     </div>`;
 }
 
 function _connectorPopupPresentation(entry, instance) {
   const kind = instance && instance.status && instance.status.kind;
-  const connected = kind === 'connected';
+  const connected = kind === 'connected' && !(entry.auth_mode === 'local_mcp' && _isConnectorVisibleDisabled(entry));
   const usable = connected && instance.enabled !== false;
   const preparing = _connectorRuntimeProgress(entry);
   const authorizing = (_connectorAuthorizationUrl && _connectorAuthorizationUrl.catalog_id === entry.id)
@@ -1167,11 +1187,11 @@ function _connectorPopupPresentation(entry, instance) {
     action = { label: t(kind === 'degraded' ? 'connectors.action.retry' : 'connectors.popup.reconnect'), role: 'primary', disabled: busy || connectUnavailable, attrs: { 'data-act': kind === 'degraded' ? 'retry-degraded' : 'connect' } };
   } else if (_isConnectorCliMissing(entry)) {
     label = t('connectors.onboarding.cli_missing_title', { name: entry.display_name || entry.id });
-    message = _connectorRuntimeErrors.get(_connectorRuntimeKey(entry.id)) || t(entry.runtime_installable ? 'connectors.runtime.required' : 'connectors.runtime.platform_unavailable');
+    message = _connectorRuntimeErrors.get(_connectorRuntimeKey(entry.id)) || t(entry.auth_mode === 'local_mcp' ? 'connectors.apple.dependency_missing' : entry.runtime_installable ? 'connectors.runtime.required' : 'connectors.runtime.platform_unavailable');
     action = { label: t(entry.runtime_installable ? 'connectors.runtime.install_connect' : 'connectors.action.unavailable'), role: 'primary', disabled: !entry.runtime_installable, attrs: { 'data-act': 'connect' } };
   } else if (_isConnectorVisibleDisabled(entry)) {
     label = t('connectors.popup.unavailable.title');
-    message = t('connectors.popup.unavailable.desc');
+    message = t(entry.disabled_reason === 'macos_only' ? 'connectors.apple.macos_only' : 'connectors.popup.unavailable.desc');
   }
   const account = String(instance && (instance.email_settings?.address || instance.oauth_grant?.account_label) || '').trim();
   const switchHtml = connected ? `<div class="connector-popup-enable"><span>${escapeHtml(t('connectors.popup.enable'))}</span>${uiSwitch({ label: t('connectors.popup.enable'), checked: instance.enabled !== false, disabled: busy, attrs: { 'data-act': 'toggle-enabled' } })}</div>` : '';
@@ -1182,7 +1202,7 @@ function _connectorPopupPresentation(entry, instance) {
   })).join('');
   const setup = _connectorPopupSetupHtml(entry);
   const guidance = !connected && setup ? uiAccordion({
-    className: 'connector-popup-guidance', defaultOpen: [],
+    className: 'connector-popup-guidance', defaultOpen: entry.auth_mode === 'local_mcp' && _isConnectorCliMissing(entry) ? [0] : [],
     items: [{ title: t('connectors.setup.title'), bodyHtml: setup }],
   }) : '';
   const bodyHtml = `<div class="connector-popup-content">
@@ -1327,6 +1347,7 @@ function _bindConnectorPopupActions(host, entry, instance) {
     if (action === 'copy-auth-url') return _copyConnectorAuthorizationUrl(entry);
     if (action === 'copy-setup-command') return _copyConnectorSetupCommand(entry);
     if (action === 'open-setup-docs') return _openConnectorSetupDocs(entry);
+    if (action === 'open-install-docs') return _openConnectorSetupDocs(entry, 'install');
     if (action === 'connect') return _connectFromConnectorPopup(entry);
     if (action === 'retry-degraded') return _retryConnect(entry, 'connector_degraded_retry');
     if (action === 'cancel-authorization' || action === 'cancel-runtime') {
@@ -1397,11 +1418,12 @@ async function _copyConnectorSetupCommand(entry) {
 
 /** Open the provider's console/docs for this connector. Goes through `auth.openExternal` so the
  *  https-only validation and the OS handler stay in one place. */
-async function _openConnectorSetupDocs(entry) {
+async function _openConnectorSetupDocs(entry, destination = 'docs') {
   const text = _connectorSetupText(entry);
-  if (!text || !text.docsUrl) return;
+  const url = text && (destination === 'install' ? text.installUrl : text.docsUrl);
+  if (!url) return;
   try {
-    const res = await window.cogseed.invoke('auth.openExternal', { url: text.docsUrl });
+    const res = await window.cogseed.invoke('auth.openExternal', { url });
     if (res && res.ok === false) throw new Error(res.error || 'open failed');
   } catch (err) {
     _connectorsLog.warn('setup docs open failed', { error: (err && err.message) || String(err) });

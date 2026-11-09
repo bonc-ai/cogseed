@@ -1698,6 +1698,11 @@ if (!gotLock) {
         };
       },
       openConversation: openConversationFromTaskNotification,
+    }, undefined, {
+      // 「到点未执行」通知：事件来自 auto_tasks 的 fire 订阅，走同一套运行时与开关。
+      subscribeFires: (listener) => autoTasks.subscribeFires(
+        listener as (ev: autoTasks.AutoFireEvent) => void,
+      ),
     });
     // ---------------------------------------------------------------------
     // 退出时的"停表"钩子。全部是同步的 stop 函数，聚合到一个 before-quit

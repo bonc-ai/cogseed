@@ -59,6 +59,16 @@ describe('skill verdict › security notability', () => {
     }
   });
 
+  it('keeps an overridden install notable', () => {
+    // `blocked` is what a consented override records: the scanner refused the
+    // content and the user chose to install anyway. De-emphasising it would make
+    // the single skill carrying an explicit risk acceptance the quietest row on
+    // the security page.
+    expect(securityNotableOf({ decision: 'blocked', topRule: 'shape_trigger_missing', topLevel: 'MEDIUM' }))
+      .toBe(true);
+    expect(securityNotableOf({ decision: 'blocked' })).toBe(true);
+  });
+
   it('keeps a substantive finding notable at MEDIUM and EXTREME', () => {
     expect(securityNotableOf({
       decision: 'risk', topRule: 'no_raw_ip_or_suspicious_tld_endpoint', topLevel: 'MEDIUM',
@@ -82,8 +92,10 @@ describe('skill verdict › security notability', () => {
     expect(securityNotableOf({ decision: 'risk', topLevel: 'MEDIUM' })).toBe(true);
   });
 
-  it('is false for every non-risk decision', () => {
-    for (const decision of ['pass', 'blocked', 'unknown', '']) {
+  it('is false for a decision that neither refused nor flagged anything', () => {
+    // `blocked` is deliberately NOT in this list any more: it is the refusal
+    // itself (an overridden install keeps it), so it can never be bookkeeping.
+    for (const decision of ['pass', 'unknown', '']) {
       expect(securityNotableOf({ decision, topRule: 'no_credential_path_read', topLevel: 'EXTREME' }))
         .toBe(false);
     }

@@ -28,7 +28,8 @@ describe('shared resource grid integration', () => {
 
     const workspace = read('modules/workspace.js');
     expect(workspace).toContain('ws-space-grid ui-resource-grid');
-    expect(workspace.match(/ws-template-grid[^"`]*ui-resource-grid/g)).toHaveLength(2);
+    // S5 FR-003：「角色模板」分组退场，内置场景与平台模板共用同一个场景网格。
+    expect(workspace.match(/ws-template-grid[^"`]*ui-resource-grid/g)).toHaveLength(1);
     expect(read('modules/auto.js')).toContain('auto-tpl-grid ui-resource-grid');
     expect(read('modules/agents.js')).toContain('agents-source-section-grid ui-resource-grid');
     expect(read('modules/skills.js').match(/skills-source-section-grid ui-resource-grid/g)).toHaveLength(3);

@@ -6,8 +6,8 @@ import { readAbilityAsset } from '../../recall/asset-service';
 import { readRecallCandidate } from '../../recall/candidate-service';
 import { cognitionSourceControlSnapshot, isCognitionSourceEnabled } from '../../recall/source-control';
 import type { CognitionSourceRef } from '../../recall/source-service';
-import { assertAssetManagementSources, type CognitionEditHost } from '../edit-service';
-import { assertFullManagementRead, decodeManagementCursor, encodeManagementCursor, MANAGEMENT_PAGE_TOKENS,
+import { assertAssetManagementSources } from '../edit-service';
+import { decodeManagementCursor, encodeManagementCursor, MANAGEMENT_PAGE_TOKENS,
   managementReadVersion, managementContentChunk } from '../management-read';
 import { readOntologyManagementView } from './legacy-view';
 import { OntologyError, type OntologyDocument, type OntologyRecord } from './model';
@@ -106,8 +106,7 @@ function counts(rows: OntologyRecord[]) {
   const tally = (key: 'kind' | 'status' | 'access') => rows.reduce((out, r) => { out[r[key]] = (out[r[key]] || 0) + 1; return out; }, {} as Record<string, number>);
   return { total: rows.length, modules: rows.filter(r => r.kind === 'module').length, byKind: tally('kind'), byStatus: tally('status'), byAccess: tally('access') };
 }
-export async function readOntologyInventory(userId: string, host: CognitionEditHost, input: { limit?: unknown; cursor?: unknown; expectedRevision?: unknown }) {
-  await assertFullManagementRead(userId, host, 'ontology');
+export async function readOntologyInventory(userId: string, input: { limit?: unknown; cursor?: unknown; expectedRevision?: unknown }) {
   const limit = input.limit === undefined ? 25 : input.limit;
   if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new OntologyError('invalid_input', t('cognition.read.invalid_limit'));
   const snapshot = await view(userId), revision = snapshot.canonical.revision;

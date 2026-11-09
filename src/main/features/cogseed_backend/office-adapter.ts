@@ -12,6 +12,7 @@ import {
   type RunOfficeCliOpts,
 } from '../office/office_engine';
 import type { RuntimeHostToolName } from '../cogseed_runtime/protocol';
+import { isRuntimeProtectedPath } from '../cogseed_runtime/kernel/tools/protected-paths';
 import { cogseedCapabilityArtifactRegistry, type CogSeedCapabilityArtifactRegistry } from './capability-artifact-lifecycle';
 
 export interface CogSeedHostToolScope {
@@ -185,6 +186,9 @@ export function createCogSeedOfficeAdapter(deps: CogSeedOfficeAdapterDeps = {}):
     const roots = name === 'office_create' || name === 'office_edit' ? scope.writableRoots : [...scope.readOnlyRoots, ...scope.writableRoots];
     const scopeError = pathError(file, roots, name === 'office_create' ? 'write' : 'read');
     if (scopeError || !file) return scopeError ?? error('E_OFFICE_INPUT', 'path is required');
+    if (isRuntimeProtectedPath(scope.userId, file, name === 'office_create' || name === 'office_edit' ? 'write' : 'read')) {
+      return error('E_RUNTIME_COGNITION_PATH', 'Office tools cannot access CogSeed private cognition data');
+    }
     const cwd = path.dirname(file);
     if (name !== 'office_create' && !fs.existsSync(file)) return error('E_OFFICE_NOT_FOUND', 'Office file not found');
     if (name === 'office_create' && fs.existsSync(file)) return error('E_OFFICE_EXISTS', 'Office create target already exists; use office_edit or choose a new path');

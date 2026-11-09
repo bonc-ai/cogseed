@@ -11,10 +11,15 @@ import type { CognitionSourceLocator, CognitionSourceRef } from './source-servic
 
 type AssetSourceDependencies = Pick<RecallAbilityAssetRecord, 'id' | 'evidenceRefs' | 'candidateId' | 'sourceCandidateIds' | 'sourceSessionIds'>;
 export type AssetSourceAvailability = (asset: AssetSourceDependencies) => Promise<boolean>;
+/** 校验过程本身抛异常时回调，让调用方把「不确定」与「确认不可用」分开。
+ *  不传回调时保持原有语义：异常一律按不可用处理。 */
+export interface AssetSourceAvailabilityOptions {
+  onIndeterminate?: (error: unknown) => void;
+}
 const contentVersion = (ref: CognitionSourceRef) => /^sha256:[a-f0-9]{64}$/.test(ref.sourceVersion || '');
 const sameSource = (left: CognitionSourceRef, right: CognitionSourceRef) => left.kind === right.kind && left.id === right.id;
 
-export function createAssetSourceAvailability(userId: string): AssetSourceAvailability {
+export function createAssetSourceAvailability(userId: string, options: AssetSourceAvailabilityOptions = {}): AssetSourceAvailability {
   const reads = new Map<string, Promise<boolean>>();
   const candidates = new Map<string, Promise<RecallCandidateRecord | undefined>>();
   const captures = new Map<string, ReturnType<typeof readRecallJsonRecord>>();
@@ -103,6 +108,6 @@ export function createAssetSourceAvailability(userId: string): AssetSourceAvaila
         } else if (ref.locator && !await located(ref)) return false;
       }
       return true;
-    } catch { return false; }
+    } catch (error) { options.onIndeterminate?.(error); return false; }
   };
 }

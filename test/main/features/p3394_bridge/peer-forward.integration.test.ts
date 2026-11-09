@@ -22,7 +22,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
 const GATEWAY_SCRIPT = path.join(REPO_ROOT, 'p3394-gateway', 'gateway.cjs');
-const VARIANT = 'p3394-fwd-int-' + Math.random().toString(36).slice(2, 8);
+// isolate: redirect the whole variant tree to a scratch base instead of
+// inventing variant names (runtime-paths validates them now). The registry
+// (p3394-peers.json) is written by the in-process bridge, so redirecting the
+// parent covers the gateway children too.
+const SCRATCH_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-fwd-int-'));
 const BRIDGE_PORT = 18000 + Math.floor(Math.random() * 1000);
 const BRIDGE_TOKEN = 'fwd-int-token';
 const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
@@ -36,6 +40,7 @@ let cliA = '';
 let cliB = '';
 let previousVariant: string | undefined;
 let previousWorkspaceRoot: string | undefined;
+let previousBaseDir: string | undefined;
 
 function freePort(): Promise<number> {
   return new Promise((resolve) => {
@@ -106,7 +111,9 @@ function startGateway(port: number, agent: string, cli: string): ChildProcess {
 beforeAll(async () => {
   previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
-  process.env.COGSEED_RUNTIME_VARIANT = VARIANT;
+  previousBaseDir = process.env.COGSEED_VARIANT_BASE_DIR;
+  process.env.COGSEED_VARIANT_BASE_DIR = SCRATCH_BASE;
+  process.env.COGSEED_RUNTIME_VARIANT = 'cogseed';
   // paths.ts 要求：index.ts 启动时设置；测试环境需显式给出隔离工作区。
   process.env.COGSEED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-fwd-ws-'));
   process.env.COGSEED_P3394_PORT = String(BRIDGE_PORT);
@@ -140,12 +147,14 @@ afterAll(async () => {
   await bridgeHandle?.close().catch(() => {});
   if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
+  if (previousBaseDir === undefined) delete process.env.COGSEED_VARIANT_BASE_DIR;
+  else process.env.COGSEED_VARIANT_BASE_DIR = previousBaseDir;
   if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   delete process.env.COGSEED_P3394_PORT;
   delete process.env.COGSEED_P3394_TOKEN;
   delete process.env.COGSEED_P3394_CONVERSATION;
-  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', VARIANT), { recursive: true, force: true }); } catch { /* best effort */ }
+  try { fs.rmSync(SCRATCH_BASE, { recursive: true, force: true }); } catch { /* best effort */ }
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
@@ -157,7 +166,7 @@ describe('P3394 peer-forward real integration (no mocks)', () => {
     expect(await waitHealth(portB)).toBe(true);
 
     // 等两个节点 hello 注册进真实 registry 文件。
-    const registryFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', VARIANT, 'p3394-peers.json');
+    const registryFile = path.join(SCRATCH_BASE, 'runtime-variants', 'cogseed', 'p3394-peers.json');
     const deadline = Date.now() + 15000;
     let bothRegistered = false;
     while (Date.now() < deadline && !bothRegistered) {

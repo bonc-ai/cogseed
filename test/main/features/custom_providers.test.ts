@@ -535,6 +535,26 @@ describe('custom providers › fetchCustomProviderModels', () => {
     expect(failed.error).not.toContain('gk-live');
   });
 
+  it('imports only declared cache capabilities from both metadata sources through the owning add API', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Declared Cache Relay', protocol: 'openai', baseUrl: 'https://declared.example/v1', apiKey: 'test-key',
+    });
+    if (!added.ok) throw new Error(added.error);
+    vi.stubGlobal('fetch', vi.fn(async () => jsonBody({ data: [
+      { id: 'relay-declared-cache', supported_parameters: ['structured_outputs', ' PROMPT_CACHE_KEY ', 'prompt_cache_key'],
+        capabilities: ['session_affinity', 'prompt_cache_retention_24h', 'unknown-cache'] },
+      { id: 'relay-no-cache', supported_parameters: ['temperature', 'prompt_cache_retention'] },
+    ] })));
+    const fetched = await providers.fetchCustomProviderModels(UID, added.id);
+    if (!fetched.ok) throw new Error(fetched.error);
+    expect(fetched.models[0].capabilities).toEqual(['structured_output', 'prompt_cache_key', 'session_affinity', 'prompt_cache_retention_24h']);
+    expect(fetched.models[1].capabilities).toBeUndefined();
+    expect(providers.listCustomProviders(UID)[0].models).toEqual([]);
+    expect(providers.addCustomProviderModel(UID, added.id, fetched.models[0]).ok).toBe(true);
+    expect(providers.listCustomProviders(UID)[0].models[0].capabilities).toEqual(fetched.models[0].capabilities);
+  });
+
   it('maps declared input modalities and capabilities into the fetched rows', async () => {
     // /models 只保证 id；能拿尽拿的扩展字段（OpenRouter 等）要落进结果，运行时
     // 才能"配置驱动调用"：input 模态参与多模态判定，capabilities 映射 compat。

@@ -101,8 +101,8 @@ export function _resetForTest(): void {
 }
 
 function _broadcast(channel: string, payload: unknown): boolean {
-  if (_broadcastOverride) { _broadcastOverride(channel, payload); return true; }
   try {
+    if (_broadcastOverride) { _broadcastOverride(channel, payload); return true; }
     // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
     const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
     if (!ipc.broadcastToRenderer) return false;
@@ -176,7 +176,7 @@ export async function requestBashDecision(opts: {
       return;
     }
     notifyWaiting();
-    if (opts.onWaiting) {
+    if (opts.onWaiting && _pending.has(requestId)) {
       const heartbeat = setInterval(notifyWaiting, WAITING_HEARTBEAT_MS);
       if (typeof heartbeat.unref === 'function') heartbeat.unref();
       pending.heartbeat = heartbeat;
@@ -185,7 +185,7 @@ export async function requestBashDecision(opts: {
 }
 
 /** Renderer answer (via `bash.permission_response`). Unknown ids are ignored
- *  (stale dialog after timeout). Returns true when a pending request was
+ *  (stale dialog after cancellation). Returns true when a pending request was
  *  resolved. */
 export function respond(requestId: string, decision: BashDecision): boolean {
   const pending = _pending.get(requestId);
@@ -207,6 +207,9 @@ export function cancelForCid(cid: string): void {
     _pending.delete(id);
     if (pending.heartbeat) clearInterval(pending.heartbeat);
     pending.resolve('deny');
+    // Request-specific closure releases the renderer FIFO as well as the tool.
+    // Failure to deliver must never interrupt denial or other pending cleanup.
+    _broadcast('bash:permission-closed', { request_id: id, cid });
   }
   for (const key of [..._runAllow.keys()]) {
     if (key.startsWith(`${cid} `)) _runAllow.delete(key);

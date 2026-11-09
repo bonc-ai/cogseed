@@ -63,8 +63,12 @@ export type CompletionParams = {
 export type CompletionResult = {
   content: Message["content"];
   stopReason: StopReason;
-  usage: Usage;
+  /** Missing counters are unknown, including a successful response with no
+   * usage at all. Matches the stream message_end presence-aware contract. */
+  usage: Partial<Usage>;
   model: string;
+  /** Endpoint-reported identifier, separate from the requested route alias. */
+  reportedModel?: string;
 };
 
 /**

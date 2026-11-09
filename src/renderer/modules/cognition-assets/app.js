@@ -20,6 +20,13 @@
   /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
   const WRITE_ACTIONS = new Set([
     'refresh', 'cand-adopt-with-form', 'cand-decide', 'formation-recheck',
+    // 多条关联内容的一次性处置：合并旧内容后重判 / 保留全部 / 失败重试。
+    'related-resolve-merge', 'related-resolve-keep', 'related-resolve-retry',
+    'old-content-item-keep', 'old-content-keep-unresolved',
+    'old-content-unresolved-keep', 'old-content-unresolved-archive', 'old-content-unresolved-merge',
+    'old-content-plan-keep-unresolved', 'old-content-plan-execute', 'old-content-plan-undo',
+    'old-content-edit-merge-save',
+    'old-content-finalize-old', 'old-content-finalize-retry',
 
     'asset-action', 'asset-recommend-ack', 'select-asset-version', 'delete-asset-version',
     'rollback-cleanup-item', 'cleanup-uncertain-dismiss', 'cleanup-uncertain-defer',
@@ -31,6 +38,7 @@
 
     'proof-rate',
     'nightly-toggle', 'nightly-scan-now', 'nightly-scan-stop', 'auto-approval-toggle', 'nightly-model-remove', 'nightly-model-up', 'nightly-model-down', 'nightly-model-reset', 'nightly-window-save', 'nightly-window-reset',
+    'related-overflow-merge', 'related-overflow-keep', 'related-overflow-retry',
 
     // 经验目录管理：四个管理动作 + 迁移执行；preview/status
     // 是只读扫描，不进 pending 集（与 refresh 的口径不同：它们有各自的载入态）。
@@ -68,6 +76,12 @@
       ...(card.querySelector('[data-f="applicable"]') ? { applicableWhen: value('applicable').split(/\r?\n/).map(v => v.trim()).filter(Boolean) } : {}),
       ...(card.querySelector('[data-f="forbidden"]') ? { forbiddenWhen: value('forbidden').split(/\r?\n/).map(v => v.trim()).filter(Boolean) } : {}),
     };
+  }
+
+  function readRelatedTarget(anchorEl) {
+    const card = anchorEl && anchorEl.closest ? anchorEl.closest('.ca-candidate-detail') : null;
+    const select = card && card.querySelector('[data-related-target]');
+    return select ? String(select.value || '') : '';
   }
 
   // 侧栏页签（specs/008-shell-rail-layout）：页签导航迁出 #ca-root，root 上的
@@ -177,6 +191,7 @@
           // 不新增 tab。assetView 必须进 router.go 的归一化白名单，否则被丢弃。
           case 'asset-view': router.go(id === 'tree' ? { name: 'tree' } : { name: 'overview', assetView: id === 'catalog' ? 'catalog' : '' }); break;
           case 'go-review': router.go({ name: 'activity' }); break;
+          case 'go-processed': router.go({ name: 'activity', activityView: 'done', activityDone: '1' }); break;
           case 'go-run-review': {
             const runId = S.captureStats?.sweep?.receipt?.runId;
             if (runId) router.go({ name: 'activity', activityRunId: String(runId) });
@@ -206,6 +221,15 @@
             else focusOrganize();
             break;
           }
+          case 'go-run-settings': case 'go-receipt': {
+            const anchorId = act === 'go-run-settings' ? 'ca-settings-run' : 'ca-settings-recent-run';
+            const node = document.getElementById(anchorId);
+            if (node) {
+              node.scrollIntoView({ block: 'start' });
+              if (typeof node.focus === 'function') node.focus({ preventScroll: true });
+            }
+            break;
+          }
           case 'auto-approval-toggle':
             await NS.assetSettings.toggleAutoApproval();
             break;
@@ -215,6 +239,10 @@
             break;
           case 'nightly-window-save': case 'nightly-window-reset':
             await NS.assetSettings.windowAction(act, el, root);
+            break;
+          case 'related-overflow-merge': case 'related-overflow-keep':
+          case 'related-overflow-retry': case 'related-overflow-reload':
+            await NS.assetSettings.relatedOverflowAction(act, el);
             break;
           case 'nightly-toggle': {
             // 夜间发现统管对话发现与已有内容整理，不改变资产使用状态。
@@ -274,6 +302,37 @@
           case 'open-overview': router.go({ name: 'overview' }); break;
           case 'cand-adopt-with-form': await A.adoptCandidate(id, readCandidateForm(el) || undefined); break;
           case 'cand-decide': await A.decideCandidate(id, el.dataset.action); break;
+          case 'related-resolve-merge': await A.resolveRelatedFormation(id, 'merge', readRelatedTarget(el)); break;
+          case 'related-resolve-retry': await A.resolveRelatedFormation(id, 'merge'); break;
+          case 'related-resolve-keep': await A.resolveRelatedFormation(id, 'keep'); break;
+          case 'open-old-content-plan': router.go({ name: 'activity', planId: id }); break;
+          case 'old-content-plan-reload': await NS.loadOldContentPlan(id, true); break;
+          case 'old-content-plan-review-reload': await NS.loadOldContentPlanReview(id, true); break;
+          case 'old-content-item-keep': await A.keepOldContentItem(id, el.dataset.itemId); break;
+          case 'old-content-keep-unresolved': await A.keepOldContentUnresolved(id); break;
+          case 'old-content-unresolved-keep': await A.resolveOldContentUnresolved(id, el.dataset.itemId, 'keep'); break;
+          case 'old-content-unresolved-archive': await A.resolveOldContentUnresolved(id, el.dataset.itemId, { kind: 'archive' }); break;
+          case 'old-content-unresolved-merge': await A.resolveOldContentUnresolved(id, el.dataset.itemId,
+            { kind: 'merge', targetAssetId: el.dataset.target }); break;
+          case 'old-content-plan-keep-unresolved': await A.keepOldContentUnresolvedByPlan(id); break;
+          case 'old-content-edit-merge-save': {
+            const draft = el.closest('details')?.querySelector('[data-old-content-merge-body]');
+            await A.editOldContentMergeBody(id, el.dataset.itemId, draft?.value ?? '');
+            break;
+          }
+          case 'old-content-finalize-old': await A.finalizeOldContentOnly(id); break;
+          case 'old-content-finalize-retry': await A.retryOldContentNew(id); break;
+          case 'old-content-plan-undo': await A.undoOldContentPlan(id); break;
+          case 'old-content-plan-execute': {
+            const unitIds = Array.from(document.querySelectorAll?.('[data-old-content-unit]:checked') || [])
+              .map(el => el.value).filter(Boolean);
+            if (!unitIds.length) {
+              await NS.alertUser(T('cognition.old_content_plan_execute_none', '先勾选要执行的方案项。'));
+              break;
+            }
+            await A.executeOldContentPlan(id, unitIds);
+            break;
+          }
           case 'asset-action': await A.assetAction(id, el.dataset.action); break;
           case 'asset-recommend-ack': await A.acknowledgeAssetRecommendation(id); break;
           case 'select-asset-version': await A.selectAssetVersion(id, el.dataset.version || ''); break;
@@ -459,6 +518,10 @@
       });
     });
     root.addEventListener('change', (event) => {
+      const overflowTarget = event.target.closest?.('[data-overflow-target-field]');
+      if (overflowTarget) {
+        NS.assetSettings.selectOverflowTarget(String(overflowTarget.dataset.overflowKey || ''), String(overflowTarget.value || ''));
+      }
       const categoryField = event.target.closest?.('.ca-asset-edit select[data-f="contentCategory"]');
       const categoryAssetId = categoryField?.closest('.ca-asset-edit')?.dataset.assetEditId;
       if (categoryAssetId) {
@@ -529,6 +592,10 @@
     root.addEventListener('change', event => {
       // 原生下拉的最终选择也写入草稿，覆盖只派发 change 的输入路径。
       if (event.target?.matches?.('.ca-activity-detail select[data-f]')) NS.activityController?.handleInput(event);
+    });
+    root.addEventListener('ui-tabs-change', event => {
+      if (!event.target?.closest?.('[data-settings-run-tabs]') || !root.contains?.(event.target)) return;
+      NS.assetSettings.setRunTab(event.detail?.value);
     });
     root.addEventListener('dragstart', event => NS.assetSettings.modelDragStart(event, root));
     root.addEventListener('dragover', event => NS.assetSettings.modelDragOver(event, root));
@@ -707,7 +774,10 @@
   // 分流，这里按当前路由补拉（loadCaptureContext 内部有缓存判重）。
   NS.onChange(() => {
     if (!panelVisible()) return;
-    if (S.route.name === 'settings') void NS.assetSettings.loadModels();
+    if (S.route.name === 'settings') {
+      void NS.assetSettings.loadModels();
+      void NS.assetSettings.loadRelatedOverflow();
+    }
     const captureId = String(S.route.captureId || '');
     const experienceRouteId = String(S.route.experienceId || '');
     if (captureId && (!S.captureContext || S.captureContext.captureId !== captureId)) {

@@ -9,7 +9,12 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'cognition-scan-now-'));
 app.setPath('userData', path.join(temporary, 'electron'));
 const table = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/zh.json'), 'utf8'));
 let completeBoot, finishScan, scanCalls = 0, stopCalls = 0;
-let settings = { enabled: true, autoApproval: false, nightlyStart: '01:00', nightlyEnd: '05:00' };
+let settings = { enabled: true, autoApproval: false, nightlyStart: '01:00', nightlyEnd: '05:00',
+  modelCandidates: [{ provider: 'synthetic-one', model: 'glm-5.2' }, { provider: 'synthetic-two', model: 'gpt-5.1' }] };
+const modelSelection = { configured: [
+  { provider: 'synthetic-one', model: 'glm-5.2', label: '智谱 · glm-5.2', available: true, configured: true },
+  { provider: 'synthetic-two', model: 'gpt-5.1', label: 'OpenAI · gpt-5.1', available: true, configured: true },
+] };
 let stats = { ok: true, sweep: {}, runtime: { running: false } };
 const bootReady = new Promise(resolve => { completeBoot = resolve; });
 ipcMain.handle('cogseed.env', () => ({ ok: true, platform: process.platform, isDev: true }));
@@ -25,7 +30,7 @@ ipcMain.handle('cogseed.invoke', async (_event, { channel, payload }) => {
   }
   if (channel === 'recall.captures.settings.get') return { ok: true,
     settings,
-    capabilities: { autoApproval: true }, modelSelection: { configured: [] }, model: { channel: 'cli' } };
+    capabilities: { autoApproval: true }, modelSelection, model: { channel: 'cli' } };
   if (channel === 'recall.captures.settings.update') { settings = { ...settings, ...payload }; return { ok: true, settings }; }
   if (channel === 'recall.captures.sweep.stop') { stopCalls++; stats = { ...stats, runtime: { running: false }, sweep: { ...stats.sweep, phase: 'stopped' } }; return { ok: true, stopped: true }; }
   if (channel === 'recall.captures.stats') return stats;
@@ -90,7 +95,7 @@ app.whenReady().then(async () => {
     await js(`(async () => { await loadRendererFeature('recall'); CogAssets.router.go({ name: 'settings' }); setView('recall'); await CogAssets.loadRoute(); })()`);
     await until(`${button} && !${button}.disabled`);
     await check('no separate saved-content switch', `!document.querySelector('[data-act="stock-organization-toggle"]')`);
-    await check('discovery describes the whole workflow', `document.querySelector('.ca-settings-page').textContent.includes('包括内容合并与拆分')`);
+    await check('discovery describes the whole workflow', `document.querySelector('.ca-settings-page').textContent.includes('没有新内容时，巡检已有认知与本体')`);
     const discoverySwitch = `document.querySelector('[data-act="nightly-toggle"]')`;
     await js(`${discoverySwitch}.click()`);
     await until(`${button}.disabled && ${discoverySwitch}.getAttribute('aria-checked') === 'false'`);
@@ -112,7 +117,7 @@ app.whenReady().then(async () => {
     pushStats({ ok: true, sweep: { phase: 'organizing', stock: { total: 2, checked: 1, proposed: 1, saved: 0, remaining: 1, noChange: 0, insufficient: 0 } }, budget: { windowKey: '2026-01-01', recorded: true, calls: 2, inputChars: 200, reportedTokens: 40, unknownUsageCalls: 0, stock: { calls: 2 }, failureGuard: { held: false, consecutiveFailures: 0, limit: 3 } }, runtime: { running: true, startedAt: '2026-01-01T01:00:00Z' } });
     finishScan({ ok: true, ran: true });
     await until(`${button}.disabled && ${button}.textContent.includes('扫描中')`);
-    await check('stock progress is visible', `document.querySelector('.ca-settings-page').textContent.includes('检查 1/2')`);
+    await check('running shows phase progress', `document.querySelector('.ca-run-phases') && document.querySelector('.ca-run-progress-top')?.textContent.includes('巡检')`);
     await screenshot('scan-running-desktop');
     await js(`document.querySelector('[data-act="nightly-scan-stop"]').click()`);
     await until(`!${button}.disabled && document.querySelector('.ca-settings-page').textContent.includes('本次停止')`);
@@ -120,9 +125,16 @@ app.whenReady().then(async () => {
     pushStats({ ok: true, sweep: { lastResult: { finishedAt: '2026-01-01T01:01:00Z', scanned: 1, queued: 0, failed: 0 } }, runtime: { running: false } });
     await until(`!${button}.disabled`);
 
+    await js(`(async () => { document.querySelector('#ca-settings-run').scrollIntoView({ block: 'start', behavior: 'instant' });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
+    await screenshot('scan-run-settings-desktop');
+
     // Resize this hidden synthetic window, never the user's running instance.
     window.setSize(900, 760);
     await screenshot('scan-settings-narrow');
+    await js(`(async () => { document.querySelector('#ca-settings-run').scrollIntoView({ block: 'start', behavior: 'instant' });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
+    await screenshot('scan-run-settings-narrow');
     await settled();
     await js(`${button}.focus()`);
     window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
@@ -149,11 +161,11 @@ app.whenReady().then(async () => {
     await until(`document.querySelector('.ca-settings-page').textContent.includes('模型连接失败')`);
     await check('failure is not described as a spent quota', `!document.querySelector('.ca-settings-page').textContent.includes('额度用完') && !document.querySelector('.ca-settings-page [role="progressbar"]')`);
     await js(`(async () => {
-      document.querySelector('.ca-setting-card:last-child').scrollIntoView({ block: 'center', behavior: 'instant' });
+      document.querySelector('#ca-settings-recent-run').scrollIntoView({ block: 'center', behavior: 'instant' });
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     })()`);
     await check('failure explanation fits the viewport after scrolling', `(() => {
-      const card = document.querySelector('.ca-setting-card:last-child').getBoundingClientRect();
+      const card = document.querySelector('#ca-settings-recent-run').getBoundingClientRect();
       // 亚像素取整会让贴底卡片偶尔多出不到 1px，按 1px 容差判断是否真的溢出。
       return card.top >= 0 && card.bottom <= innerHeight + 1;
     })()`);
@@ -166,7 +178,6 @@ app.whenReady().then(async () => {
     pushStats({ ok: true, sweep: { phase: 'budget_held' }, budget: { calls: 20, stock: { calls: 20 }, reportedTokens: 0, unknownUsageCalls: 20, recorded: true, windowKey: '2026-01-01' }, runtime: { running: false } });
     await until(`document.querySelector('.ca-settings-page').textContent.includes('旧次数上限已取消')`);
     await js(`(() => {
-      document.querySelector('[data-settings-disclosure="advanced"] details').open = true;
       for (const [field, value] of [['start', '22:00'], ['end', '06:00']]) {
         const input = document.querySelector('[data-window-field="' + field + '"]');
         input.value = value; input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -181,9 +192,13 @@ app.whenReady().then(async () => {
         { captureId: 'failed', conversationId: 'synthetic-conversation', status: 'failed', errorCode: 'invalid_model_output', candidateIds: [] },
       ] } }, runtime: { running: false } });
     await until(`document.querySelector('.ca-settings-page').textContent.includes('部分完成')`);
+    await js(`document.querySelector('[data-ui-tab="failures"]').click()`);
+    await until(`document.querySelector('#ca-run-pane')?.textContent.includes('模型结果无法识别')`);
     await check('failure and continuation shown', `document.querySelector('.ca-settings-page').textContent.includes('模型结果无法识别') && document.querySelector('.ca-settings-page').textContent.includes('点击“立即扫描”继续')`);
-    await js(`(async () => { document.querySelector('[data-settings-disclosure="advanced"] details').open = false;
-      const scroll = document.getElementById('ca-scroll'); scroll.scrollTop = scroll.scrollHeight;
+    await js(`(async () => { document.querySelector('#ca-settings-recent-run').scrollIntoView({ block: 'start', behavior: 'instant' });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
+    await screenshot('scan-partial-failures');
+    await js(`(async () => { const scroll = document.getElementById('ca-scroll'); scroll.scrollTop = scroll.scrollHeight;
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
     await screenshot('scan-partial-narrow');
     await js(`document.querySelector('[data-act="go-run-review"]').click()`);

@@ -66,4 +66,34 @@ describe('auto tasks sync dirty notifications', () => {
     ]);
     expect(deleted).toEqual(['cloud/auto_tasks/at_abcdef12/attachments/brief.txt']);
   });
+
+  it('keeps template_origin, requirements and enabled_at in the synced config', async () => {
+    const autoTasks = await import('../../../src/main/features/auto_tasks');
+    autoTasks._setSyncDirtyNotifierForTest((domain, relPath) => dirty.push({ domain, relPath }));
+
+    const templateOrigin = { template_id: 'task-tpl-b', version: '1.0.0', request_id: 'req_sync_0001' };
+    const requirements = {
+      agent: { source: 'hub' as const, kind: 'agent' as const, id: 'bbbbbbbbbbb1' },
+      skills: [{ source: 'hub' as const, kind: 'skill' as const, id: 'aaaaaaaaaaa1' }],
+      connector_types: ['tencent-meeting'],
+    };
+    // 直接以启用态建任务：模板任务再启用会复检依赖（FR-050），而这份 fixture 的
+    // hub 引用在本机不可解析，走 setTaskEnabled 只会被正确地挡住。本用例管的是
+    // 三个字段随 config.json 同步，不是那道闸。
+    const created = await autoTasks.createTask(UID, {
+      id: 'at_0badc0de', content: 'hello', enabled: true,
+      schedule: { type: 'daily', hour: 9, minute: 0 },
+      template_origin: templateOrigin, requirements,
+    });
+    expect(created.ok).toBe(true);
+    autoTasks.stopScheduler();
+
+    // 另一台设备读同步下来的 config.json：三个字段都要还在。
+    vi.resetModules();
+    const fresh = await import('../../../src/main/features/auto_tasks');
+    const saved = await fresh.getTask(UID, 'at_0badc0de');
+    fresh.stopScheduler();
+    expect(saved).toMatchObject({ enabled: true, template_origin: templateOrigin, requirements });
+    expect(typeof saved?.enabled_at).toBe('string');
+  });
 });

@@ -40,8 +40,13 @@ function installRecallLiveBudget(root, fetchImpl = globalThis.fetch, limits = {}
     if (codingPlan) {
       // Subscription calls have no simulated per-token cash reservation. Never
       // silently send this opt-in mode to the independently billed general API.
-      if (url.origin !== 'https://api.z.ai' || url.pathname !== '/api/coding/paas/v4/chat/completions')
-        throw new Error('Coding Plan validation requires the verified subscription endpoint');
+      const endpoint = url.origin + url.pathname;
+      const allowed = new Set([
+        'https://api.z.ai/api/coding/paas/v4/chat/completions',
+        'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions',
+      ]);
+      if (!allowed.has(endpoint))
+        throw new Error('Coding Plan validation requires a verified subscription endpoint');
       return fetchImpl(input, init);
     }
     if (url.hostname !== 'api.z.ai' || payload.model !== 'glm-5.2') throw new Error('live acceptance model route changed; pricing must be reviewed');

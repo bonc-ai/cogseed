@@ -5,7 +5,7 @@ import { createNightlyCandidateFixture } from '../../../helpers/nightly-formatio
  * 守四条：
  *   ① 分页可达**全量**（不受界面目录展示条数限制）、总数与实际一致；
  *   ② 长正文分批读全（拼接后与原文逐字相同，单批 ≤2000 字）；
- *   ③ 已删除/已暂停**如实标注状态且不交出正文**——不静默当不存在，也不绕过门禁；
+ *   ③ 已删除/已撤销/已彻底清除不交出正文；暂停/归档如实标注状态但正文可读；
  *   ④ 管理视角的读取**不写使用记录**（把"管家看了一眼"记成"任务用了它"会让采用统计失真）。
  *
  * 另有只读会话不变量（T016）：**任何 recall 组工具都不得进入闭合只读白名单**。
@@ -276,12 +276,11 @@ describe('read_ability_asset', () => {
     const out = text(result);
     expect(out).toContain('当前不可读出正文');
     expect(out).toContain('已删除[deleted]');
-    expect(out).toContain('status_not_active');
     expect(out).toContain('restore_ability_asset');
     expect(out).not.toContain('绝不该被读出来的正文');
   });
 
-  it('已暂停：同样如实标注，不静默当不存在', async () => {
+  it('已暂停：正文照给，状态如实标注', async () => {
     const base = await seedAsset('暂停的资产不该继续作为依据。');
     const assetId = (await cloneAssets(base as unknown as Record<string, unknown>, 1, [
       { status: 'paused', statement: '暂停资产的正文' },
@@ -289,10 +288,33 @@ describe('read_ability_asset', () => {
     const { read } = await stewardTools();
 
     const result = await read.execute({ assetId }, {} as never);
-    expect(result.isError).toBe(true);
-    expect(text(result)).toContain('已暂停[paused]');
-    expect(text(result)).toContain('不是"资产不存在"');
-    expect(text(result)).not.toContain('暂停资产的正文');
+    expect(result.isError).toBeUndefined();
+    const out = text(result);
+    expect(out).toContain('已暂停[paused]');
+    expect(out).toContain('暂停资产的正文');
+  });
+
+  it('来源失效或正文已清除时不交出正文', async () => {
+    const store = await import('../../../../src/main/features/recall/store');
+    const controls = await import('../../../../src/main/features/recall/source-control');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const source = { kind: 'conversation' as const, taxonomyVersion: 2 as const, subtype: 'message' as const, id: 'private-source' };
+    const sourceBase = await seedAsset('来源失效不该读出的正文。');
+    const sourceId = (await cloneAssets(sourceBase as unknown as Record<string, unknown>, 1))[0];
+    await store.updateRecallJsonRecord(TEST_UID, 'ability-assets', sourceId, old => ({ ...old!, evidenceRefs: [source] }));
+    await controls.pauseCognitionSource(TEST_UID, source);
+    const { read } = await stewardTools();
+    const sourceResult = await read.execute({ assetId: sourceId }, {} as never);
+    expect(sourceResult.isError).toBe(true);
+    expect(text(sourceResult)).not.toContain('来源失效不该读出的正文。');
+
+    const purgedBase = await seedAsset('清除后的正文不该读出。');
+    const purgedId = (await cloneAssets(purgedBase as unknown as Record<string, unknown>, 1))[0];
+    await assets.purgeAbilityAsset(TEST_UID, purgedId, { actor: 'user', reason: 'synthetic purge' });
+    const purgedResult = await read.execute({ assetId: purgedId }, {} as never);
+    expect(purgedResult.isError).toBe(true);
+    expect(text(purgedResult)).toContain('purged');
+    expect(text(purgedResult)).not.toContain('清除后的正文不该读出。');
   });
 
   it('不存在的资产如实说"不存在"，不冒充状态问题', async () => {

@@ -30,6 +30,17 @@ export function organizationContentAssetIds(record: RecallJsonRecord): string[] 
   };
   for (const id of Array.isArray(record.contentAssetIds) ? record.contentAssetIds : []) add(id);
   add(record.assetId);
+  for (const id of Array.isArray(record.assetIds) ? record.assetIds : []) add(id);
+  for (const id of Object.keys(object(record.baselineVersions))) add(id);
+  for (const item of rows(record.items)) {
+    for (const id of item.assetIds || []) add(id); add(item.targetAssetId);
+  }
+  for (const item of rows(record.unresolved)) for (const id of item.assetIds || []) add(id);
+  for (const execution of rows(record.executions)) for (const item of rows(execution.items)) {
+    for (const id of item.assetIds || []) add(id); add(item.targetAssetId);
+    for (const id of item.archivedIds || []) add(id); for (const id of item.deletedIds || []) add(id);
+  }
+  for (const id of Object.keys(object(object(record.prepared).before))) add(id);
   candidate(record); candidate(record.prepared);
   add(object(object(record.unit).asset).id);
   plan(record.plan); plan(record.organizationPlan);
@@ -47,6 +58,8 @@ export function purgedOrganizationRecord(collection: string, record: RecallJsonR
       'contentFormatVersion', 'taxonomyVersion', 'captureKey', 'captureReceiptKeys', 'reviewDecisionId', 'promotedAssetId', 'targetAssetId',
       'targetVersionUsed', 'processingDecisionActor', 'processingDecisionAt']
     : collection === 'asset-approvals' ? ['assetId', 'baselineVersion', 'baselineActiveVersion', 'state', 'createdAt', 'decidedAt', 'appliedVersion', 'cardMessageId']
+    : collection === 'old-content-plans' ? ['schemaVersion', 'groupKey', 'revision', 'assetIds', 'baselineVersions', 'origin', 'digest',
+      'createdAt', 'updatedAt']
     : ['kind', 'candidateId', 'createdAt', 'updatedAt', 'checkedAt', 'lastWindow', 'replacesJobId', 'reviewKind'];
   for (const key of keys) if (record[key] !== undefined) retained[key] = record[key];
   if (collection === 'candidates') {
@@ -55,6 +68,9 @@ export function purgedOrganizationRecord(collection: string, record: RecallJsonR
     Object.assign(retained, { judgment: '', summary: '', suggestedScope: '', sourceRefs: [], evidenceRefs: [] });
   } else if (collection === 'asset-approvals') {
     Object.assign(retained, { before: '', after: '', fields: [], payload: {}, reason: '' });
+  } else if (collection === 'old-content-plans') {
+    Object.assign(retained, { status: 'purged', items: [], unresolved: [], executions: [], finalizations: [], history: [],
+      digest: typeof record.digest === 'string' ? record.digest : '0'.repeat(64) });
   } else {
     retained.state = 'purged';
   }

@@ -567,14 +567,14 @@ describe('prompts ↔ code contract', () => {
     const stableOrder = ['if (agentsBlock) parts.push(agentsBlock);',
       'if (projectContextPolicyBlock) parts.push(projectContextPolicyBlock);',
       'if (projectInstructionsBlock) parts.push(projectInstructionsBlock);',
-      'Read existing ontology and confirmed transcript corrections',
-      'if (runtimeInjectionBlock) parts.push(runtimeInjectionBlock);'].map(block => runner.indexOf(block));
+      'Read existing ontology and confirmed transcript corrections'].map(block => runner.indexOf(block));
     expect(stableOrder.every(index => index >= 0)).toBe(true);
     expect(stableOrder).toEqual([...stableOrder].sort((a, b) => a - b));
     // memoryBlock is the LAST block pushed into the (cached) system prompt.
     expect(runner).toMatch(/if \(memoryBlock\) parts\.push\(memoryBlock\);/);
     // The volatile blocks feed turnEphemeral, NOT the system prompt parts.
-    expect(runner).toMatch(/const turnEphemeral = \[orchestrationBlock, volatileTail\]/);
+    expect(runner).toMatch(/const turnEphemeral = \[runtimeInjectionBlock, orchestrationBlock, volatileTail\]/);
+    expect(runner).not.toMatch(/parts\.push\(runtimeInjectionBlock\)/);
     expect(runner).not.toMatch(/parts\.push\(projectStatusBlock\)/);
     expect(runner).not.toMatch(/parts\.push\(orchestrationBlock\)/);
     expect(runner).not.toMatch(/parts\.push\(volatileTail\)/);

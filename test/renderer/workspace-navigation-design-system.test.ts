@@ -100,6 +100,10 @@ describe('workspace navigation design-system integration', () => {
     expect(workspaceCss).not.toMatch(/\.ws-ability-dialog\s*\{[^}]*(?:border|background|box-shadow):/s);
     expect(workspaceCss).toContain('.ws-form-grid .ui-input, .ws-form-grid .ui-textarea');
     expect(workspaceCss).toContain('.ws-role-primary-btn.ui-button');
+    expect(workspaceCss).toMatch(/\.ws-dialog-body\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.15fr\) minmax\(0, 1fr\)/s);
+    expect(workspaceCss).toMatch(/@media \(max-width: 900px\)\s*\{\s*\.ws-dialog-body\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+    expect(workspaceSource).toContain('class="ws-dialog-capabilities"');
+    expect(workspaceSource).toContain("_t('ws.project_dir_optional_hint'");
   });
 
   it('keeps collaborating Agent tool selection and keyboard focus visually observable', () => {
@@ -167,7 +171,8 @@ describe('workspace navigation design-system integration', () => {
     expect(workspaceSource).not.toContain('class="ws-count"');
     expect(workspaceSource).toContain("window.uiIconButton({ label: _t('ws.more_actions_for'");
     expect(workspaceSource).toContain('<p class="ws-space-roles">');
-    expect(workspaceSource.match(/window\.uiButton\(\{ label: _t\('ws\.(enter_space|use_template|use_scene)'/g)).toHaveLength(3);
+    // S5：平台空间模板卡与场景卡同款，复用同一个共享按钮（第 4 处）。
+    expect(workspaceSource.match(/window\.uiButton\(\{ label: _t\('ws\.(enter_space|use_template|use_scene)'/g)).toHaveLength(4);
     expect(workspaceSource).toContain("education: 'book-open'");
     expect(workspaceSource).toContain("writing: 'document-pencil'");
     expect(workspaceSource).toContain("workplace: 'layout-grid'");

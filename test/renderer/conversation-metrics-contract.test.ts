@@ -14,8 +14,8 @@ describe('对话内用量契约（验收标准）', () => {
 
   it('聚合=单次求和：fold 结果与逐条原值一致', () => {
     const ms = [
-      { startedAt: 0, firstTokenAt: 1_000, completedAt: 5_000, usage: { inputTokens: 100, outputTokens: 200, cacheReadTokens: 300 } },
-      { startedAt: 9, firstTokenAt: 10_000, completedAt: 15_000, usage: { inputTokens: 50, outputTokens: 25, cacheReadTokens: 450 }, toolCalls: 2 },
+      { startedAt: 0, firstTokenAt: 1_000, completedAt: 5_000, usage: { inputTokens: 100, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: 0 } },
+      { startedAt: 9, firstTokenAt: 10_000, completedAt: 15_000, usage: { inputTokens: 50, outputTokens: 25, cacheReadTokens: 450, cacheWriteTokens: 0 }, toolCalls: 2 },
     ];
     const f = foldSessionMetrics(ms, { contextWindow: null, price: null });
     // 合并定稿（2026-09-08）：cacheHitText 用 DSH billedInput 分母
@@ -44,7 +44,7 @@ describe('对话内用量契约（验收标准）', () => {
   it('不含凭证：metrics 输出只有数字与缩写文本', () => {
     const line = messageMetricsLine({
       startedAt: 0, firstTokenAt: 500, completedAt: 2_000,
-      usage: { inputTokens: 1, outputTokens: 1 },
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
     });
     expect(JSON.stringify(line)).not.toMatch(/key|token=|bearer|authorization|http/i);
     // 正向钉住「有则出数」：JSON.stringify(null) 同样不匹配上面的凭证正则，

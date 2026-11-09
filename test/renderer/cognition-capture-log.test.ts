@@ -112,9 +112,9 @@ const detailCapture = {
 
 describe('信息架构：六个顶级入口与深链归一', () => {
   it('旧六视图已删净，新视图（系统活动双视角）+ 设置页 + 异常下钻组件存在', () => {
-    // 独立待我处理页下线，五页签；
+    // 2026-11-04：本体/我的认知/认知生长/资产设置四个并列页签，不设分组标题；
     // 治理动作收敛进系统活动（viewActivity：需要关注/已处理）。
-    expect(coreSource).toContain("{ id: 'tree', titleKey: 'cognition.tab_tree', title: '认知树', disabled: true }");
+    expect(coreSource).toContain("{ id: 'ontology', titleKey: 'cognition.tab_ontology', title: '本体' }");
     expect(coreSource).toContain("{ id: 'activity', titleKey: 'cognition.tab_activity'");
     expect(coreSource).toContain("{ id: 'settings', titleKey: 'cognition.tab_settings'");
     expect(coreSource).not.toContain("{ id: 'review', titleKey: 'cognition.tab_review'");
@@ -204,7 +204,8 @@ describe('系统活动与认知设置', () => {
       expect(html).toContain(enabled ? 'aria-checked="true"' : 'aria-checked="false"');
       expect(html).toMatch(/aria-checked="false"[^>]*disabled[^>]*data-act="auto-approval-toggle"/);
       for (const action of ['auto-approval-boundary', 'run-maintenance', 'open-cleanup']) expect(html).not.toContain(`data-act="${action}"`);
-      expect(html).toContain('完整建议进入');
+      expect(html).toContain('依据完整、范围明确且无冲突的更新可自动保存');
+      expect(html).toContain('查看已处理');
     }
   });
 
@@ -216,8 +217,8 @@ describe('系统活动与认知设置', () => {
       },
       captureModel: { channel: 'api', available: true, configured: true, authorizationRequired: false },
     });
-    expect(html).toContain('自动：02:30–06:00；手动“立即扫描”可随时处理。');
-    expect(html).toContain('应用需运行，会消耗模型额度。');
+    expect(html).toContain('窗口 02:30–06:00 · 应用需保持运行');
+    expect(html).toContain('应用需保持运行，错过窗口不补扫；修改从下一轮生效。');
     expect(html).not.toContain('ca-settings-model');
     expect(html).not.toContain('如有新消息，会重新计时');
     expect(html).not.toContain('ca-settings-model');
