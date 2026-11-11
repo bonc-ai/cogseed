@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-11
+
+### Changed
+
+- **版本号更正**：本版与 1.4.1 为同一份源码、同一份产物，仅把发错的版本号更正为
+  1.5.0；产品行为、依赖与安装内容均无变化，请以本版为准。1.4.1 的功能清单见下
+  一节。
+
 ## [1.4.1] - 2026-11-09
 
 ### Security
