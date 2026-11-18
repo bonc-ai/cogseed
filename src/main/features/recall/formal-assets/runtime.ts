@@ -17,6 +17,7 @@
 import { resolveAssetUsePolicy, type AbilityAssetUsePolicy, type AssetPolicyInput } from './policy';
 import {
   isAssetScopeAllowed,
+  isAssetScopeUnspecified,
   type AssetScopeContext,
   type RecallAbilityAssetScopePolicy,
 } from '../scope-policy';
@@ -131,7 +132,8 @@ export function evaluateAssetRuntimeEligibility(
 ): AssetRuntimeEligibility {
   const reasons: AssetRuntimeBlockReason[] = [];
   const operation = context.operation ?? (context.silentDefaultInjection === true ? 'default_injection' : 'explicit_use');
-  const sameScope = context.scope === undefined || context.scope === asset.scope;
+  const scopeUnspecified = isAssetScopeUnspecified(asset.scope, asset.applicableWhen);
+  const sameScope = !scopeUnspecified && (context.scope === undefined || context.scope === asset.scope);
   const defaultUsePolicy = resolveAssetUsePolicy(asset, sameScope);
 
   if (asset.status !== 'active') reasons.push('status_not_active');
@@ -157,7 +159,8 @@ export function evaluateAssetRuntimeEligibility(
   if (operation === 'default_injection') {
     // 证明带入成功不等于效果成功；自动使用仍服从共同默认策略。
     // 跨场景确认只授权明确使用，不把 prompt/confirm 偷升为 auto。
-    if (asset.status === 'active' && defaultUsePolicy !== 'auto') {
+    if (scopeUnspecified) reasons.push('scope_mismatch');
+    else if (asset.status === 'active' && defaultUsePolicy !== 'auto') {
       if (!sameScope) reasons.push('scope_mismatch');
       else reasons.push('maturity_below_default_use');
     }

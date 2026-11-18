@@ -259,6 +259,44 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(result.citations.map((citation) => citation.assetId)).not.toContain(database.asset.id);
   });
 
+  it('keeps unspecified legacy scopes out of automatic model context and uses only matching rules', async () => {
+    vi.stubEnv('COGSEED_RECALL_BASELINE_TOP', '8');
+    const legacy = await createAssetWith({
+      judgment: 'Ask for preferences before suggesting a trip.', summary: 'Legacy outing advice',
+      sourceId: 'scope-unrecorded', applicableWhen: ['处理通用时'],
+    });
+    const scoped = await createAssetWith({
+      judgment: 'Offer three outing options with travel time.', summary: 'Scoped outing advice',
+      sourceId: 'scope-supported', applicableWhen: ['安排周末出游'],
+    });
+    const { assets, promptInjection } = await modules();
+    await assets.updateAbilityAsset('user-a', scoped.asset.id, { scope: '安排周末出游', actor: 'user', reason: '保留来源场景' });
+    await elevateToTransferVerified(scoped.asset.id);
+    const options = {
+      embedTexts: async (texts: string[]) => texts.map(() => [1, 0]),
+      assessApplicability: async (input: string) => {
+        const { currentTask, candidates } = JSON.parse(input);
+        return JSON.stringify({ decisions: candidates.map((candidate: { assetId: string; version: string; statement: string }) => ({
+          assetId: candidate.assetId, version: candidate.version,
+          verdict: currentTask.includes('安排周末出游') ? 'applicable' : 'not_applicable',
+          reason: 'Compare the requested task with the outing boundary.',
+          taskQuote: currentTask, assetQuote: candidate.statement, rank: 0,
+        })) });
+      },
+    };
+    const unrelated = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-scope', taskRunId: 'scope-nonmatch', taskText: '检查登录接口的超时问题',
+    }, options);
+    expect(unrelated.citations).toEqual([]);
+    const matching = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-scope', taskRunId: 'scope-match', taskText: '请安排周末出游',
+    }, options);
+    expect(matching.promptBlock).toContain(scoped.asset.statement);
+    expect(matching.promptBlock).toContain('安排周末出游');
+    expect(matching.promptBlock).not.toContain(legacy.asset.statement);
+    expect(matching.citations.map(citation => citation.assetId)).toEqual([scoped.asset.id]);
+  });
+
   it('carries only rendered automatic Semantica relations into answer validation evidence', async () => {
     vi.stubEnv('COGSEED_SEMANTICA_ENABLED', '1');
     const entry = await createAssetWith({

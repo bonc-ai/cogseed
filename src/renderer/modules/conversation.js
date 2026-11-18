@@ -2667,7 +2667,7 @@ function _parseWelcomeCarry(raw) {
 }
 
 /** 渲染导入会话接续欢迎的「准备携带」条（查看依据 → 打开右栏展示完整来源；
- *  带着这些继续 → 按 Action Plan 真实执行）。resumeJson 为 commander 回复携带的
+ *  带着这些继续 → 执行最新用户目标）。resumeJson 为 commander 回复携带的
  *  welcome_resume（{restatement, carry, boundary, plan}），挂在 DOM 供事件委托用。 */
 function _renderWelcomeCarryHtml(carry, resumeJson) {
   if (!Array.isArray(carry) || !carry.length) return '';
@@ -2778,8 +2778,7 @@ async function _createSpaceFromDraft(draft) {
   }
 }
 
-/** 事件委托：导入会话接续欢迎「带着这些继续」→ 按 Action Plan 真实执行。
- *  按钮挂在 commander 欢迎回复的 welcome-carry 块上，plan 来自 welcome_resume。 */
+/** 导入会话接续欢迎「带着这些继续」由主进程解析当前请求。 */
 document.addEventListener('click', (e) => {
   const btn = e.target && e.target.closest ? e.target.closest('[data-welcome-continue]') : null;
   if (!btn) return;
@@ -2807,22 +2806,13 @@ document.addEventListener('click', (e) => {
   }
 });
 
-/** 「带着这些继续」：把「当前请求」作为本轮任务发给 commander / CLI
- *  （当前请求优先；Action Plan 只作为参考步骤）。两者都没有时不要发送旧的
- *  通用引导句——那会把用户目标替换成「先汇报进度」，改为提示用户补充任务。 */
+/** 执行点击时仍有效的用户目标。欢迎卡里的计划留在历史上下文。 */
 async function _submitWelcomeContinue(cid, block, btn) {
-  let plan = [];
   let summary = '';
-  let currentRequest = '';
   try {
     const raw = block && block.dataset.welcomeResume;
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      plan = Array.isArray(parsed && parsed.plan) ? parsed.plan : [];
-      summary = String((parsed && parsed.summary) || '');
-      currentRequest = String((parsed && parsed.currentRequest) || '').trim();
-    }
-  } catch (_) { /* keep empty plan / request */ }
+    if (raw) summary = String(JSON.parse(raw)?.summary || '');
+  } catch (_) { /* keep empty summary */ }
 
   // 任务较长判定：摘要字符数超过阈值视为长任务（按任务长度判断）。
   const taskIsLong = summary.trim().length > 300;
@@ -2834,30 +2824,20 @@ async function _submitWelcomeContinue(cid, block, btn) {
     try { window.interactiveTour.markWelcomeContinued({ taskIsLong }); } catch (_) {}
   }
 
-  const planLines = plan.map((item, i) => `${i + 1}. ${item}`).join('\n');
-  const message = currentRequest
-    ? (plan.length
-      ? t('chat.welcome_continue_with_request_and_plan', { request: currentRequest, plan: planLines })
-      : t('chat.welcome_continue_with_request', { request: currentRequest }))
-    : (plan.length
-      ? t('chat.welcome_continue_with_plan', { plan: planLines })
-      : '');
-
-  if (!message) {
-    // No current request and no plan: sending the old generic "where are we?"
-    // sentence would silently replace the user's goal. Ask instead, and keep
-    // the welcome panel actionable.
-    if (btn) btn.disabled = false;
-    if (typeof uiToast === 'function') {
-      uiToast(t('chat.welcome_continue_need_request'), { variant: 'warning', timeoutMs: 5000 });
-    }
-    if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
-      const input = document.getElementById('chat-input');
-      if (input && typeof input.focus === 'function') input.focus();
-    }
-    return;
-  }
   try {
+    const target = await window.cogseed.invoke('chats.getImportedContinuationRequest', { conversationId: cid });
+    if (!target?.ok) throw new Error(target?.error || 'continuation request unavailable');
+    const message = String(target.currentRequest || '').trim();
+    if (!message) {
+      if (btn) btn.disabled = false;
+      if (typeof uiToast === 'function') {
+        uiToast(t('chat.welcome_continue_need_request'), { variant: 'warning', timeoutMs: 5000 });
+      }
+      if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
+        document.getElementById('chat-input')?.focus();
+      }
+      return;
+    }
     if (typeof sendInConversation === 'function') {
       const res = await sendInConversation(cid, message, undefined, {});
       // sendInConversation 失败不抛错（返回 result:'failure'）；此时恢复按钮
@@ -2878,6 +2858,9 @@ async function _submitWelcomeContinue(cid, block, btn) {
   } catch (err) {
     _convLog.warn('welcome continue failed', { cid, error: err });
     if (btn) btn.disabled = false;
+    if (typeof uiToast === 'function') {
+      uiToast(t('chat.welcome_continue_failed', '发送失败，请检查模型配置或本机 Agent 后重试'), { variant: 'warning', timeoutMs: 5000 });
+    }
   }
 }
 
@@ -6065,20 +6048,21 @@ function _appendConversationSlice(rows) {
   conversations = Array.from(byCid.values());
 }
 
-async function _hydrateConversationRow(cid) {
+async function _hydrateConversationRow(cid, { refresh = false } = {}) {
   const id = String(cid || '');
   if (!id) return null;
-  if (Array.isArray(conversations)) {
+  if (!refresh && Array.isArray(conversations)) {
     const existing = conversations.find((row) => row && row.conversation_id === id);
     if (existing) return existing;
   }
   const active = _conversationRowHydrationLoads.get(id);
-  if (active) return active;
+  if (active && !refresh) return active;
   const run = (async () => {
     try {
       const res = await apiFetch(`/api/conversations/${encodeURIComponent(id)}`);
       const data = await res.json();
-      if (!data?.ok || !data.conversation?.conversation_id) return null;
+      if (!data?.ok || data.conversation?.conversation_id !== id || _conversationRowHydrationLoads.get(id) !== run) return null;
+      if (refresh) _markConversationListLocallyChanged();
       _appendConversationSlice([data.conversation]);
       return data.conversation;
     } catch (err) {
@@ -6090,6 +6074,16 @@ async function _hydrateConversationRow(cid) {
   })();
   _conversationRowHydrationLoads.set(id, run);
   return run;
+}
+
+async function _refreshConversationSpaceBinding(cid) {
+  if (!(await _hydrateConversationRow(cid, { refresh: true }))) return;
+  _sortConversationCacheForSidebar();
+  renderConversationList();
+  if (cid === currentCid) {
+    _refreshChatHeader();
+    window.refreshWorkspaceChip?.();
+  }
 }
 
 function _markConversationListLocallyChanged() {

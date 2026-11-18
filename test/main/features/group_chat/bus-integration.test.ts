@@ -11970,6 +11970,123 @@ describe("group_chat bus › desktop message broadcaster", () => {
   });
 });
 
+describe("group_chat › current conversation space changes", () => {
+  it("moves the existing chat on the reported user request and broadcasts the settled binding", async () => {
+    const chats = await import("../../../../src/main/features/chats");
+    const spaces = await import("../../../../src/main/features/spaces");
+    const groupChat = await import("../../../../src/main/features/group_chat");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const { getConversationWorkspacePath } = await import("../../../../src/main/features/group_chat/conv_workspace");
+    const from = await spaces.createSpace(TEST_UID, { name: "职场" });
+    const to = await spaces.createSpace(TEST_UID, { name: "教育" });
+    if (!from.ok || !to.ok) throw new Error("space fixture failed");
+    const cid = newCid();
+    await chats.createConversation(TEST_UID, {
+      conversationId: cid, title: "场景切换测试", spaceId: from.space.space_id,
+    });
+    const oldWorkspace = await getConversationWorkspacePath(TEST_UID, cid);
+    fs.mkdirSync(oldWorkspace, { recursive: true });
+    fs.writeFileSync(path.join(oldWorkspace, "notes.txt"), "carry this file");
+    expect(await chats.conversationSpaceId(TEST_UID, cid)).toBe(from.space.space_id);
+
+    const broadcasts: Array<import("../../../../src/main/features/group_chat/bus").GroupChatMessageBroadcast> = [];
+    bus.setGroupChatMessageBroadcaster(event => broadcasts.push(event));
+    try {
+      const request = "现在不谈职场工作了，我想开始学习英语口语。请根据聊天内容识别学习场景，并自动把这个对话切换到已有的'教育'工作空间。不要创建新空间，不要编辑配置文件，也不要保存认知；如果不能切换，请如实说明。";
+      const submission = { userId: TEST_UID, cid, text: request, submit_request_id: "submit-space-move" };
+      expect(await groupChat.send(submission)).toMatchObject({ ok: true });
+      await waitForQuiescent(TEST_UID, cid);
+      expect(await groupChat.send(submission)).toMatchObject({ ok: true });
+
+      expect(await chats.conversationSpaceId(TEST_UID, cid)).toBe(to.space.space_id);
+      expect((await chats.listSpaceConversations(TEST_UID, from.space.space_id)).map(row => row.conversation_id)).not.toContain(cid);
+      expect(await chats.listSpaceConversations(TEST_UID, to.space.space_id)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ conversation_id: cid })]),
+      );
+      const newWorkspace = await getConversationWorkspacePath(TEST_UID, cid);
+      expect(newWorkspace).not.toBe(oldWorkspace);
+      expect(fs.readFileSync(path.join(newWorkspace, "notes.txt"), "utf8")).toBe("carry this file");
+      expect(await spaces.listReceptionSpacesReadOnly(TEST_UID)).toHaveLength(2);
+      const history = await chats.getMessages(TEST_UID, cid);
+      expect(history.filter(row => row.text === request)).toHaveLength(1);
+      const result = history.find(row => row.from === "commander" && row.turn_end);
+      expect(result).toMatchObject({ text: expect.stringContaining("教育") });
+      expect(broadcasts.filter(event => event.spaceChanged)).toEqual([
+        expect.objectContaining({ cid, msgId: result?.id, turnEnd: true }),
+      ]);
+      expect(_recordedCalls).toEqual([]);
+    } finally {
+      bus.setGroupChatMessageBroadcaster(null);
+    }
+  });
+
+  it.each([
+    { target: "另一个用户的空间", code: "not_found" },
+    { target: "教育工作空间", code: "ambiguous" },
+  ])("keeps the current binding when $target cannot be uniquely resolved", async ({ target, code }) => {
+    const chats = await import("../../../../src/main/features/chats");
+    const spaces = await import("../../../../src/main/features/spaces");
+    const groupChat = await import("../../../../src/main/features/group_chat");
+    const from = await spaces.createSpace(TEST_UID, { name: "职场" });
+    if (!from.ok) throw new Error("space fixture failed");
+    for (const name of ["教育", "教育工作空间"]) {
+      expect(await spaces.createSpace(TEST_UID, { name })).toMatchObject({ ok: true });
+    }
+    expect(await spaces.createSpace("other-user", { name: "另一个用户的空间" })).toMatchObject({ ok: true });
+    const cid = newCid();
+    await chats.createConversation(TEST_UID, { conversationId: cid, title: "切换安全检查", spaceId: from.space.space_id });
+    expect(await groupChat.send({ userId: TEST_UID, cid, text: "把当前会话移到" + target })).toMatchObject({ ok: true });
+    await waitForQuiescent(TEST_UID, cid);
+    expect(await chats.conversationSpaceId(TEST_UID, cid)).toBe(from.space.space_id);
+    expect(await chats.getMessages(TEST_UID, cid)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: "commander", turn_end: true, failure_code: "conversation_space_move_" + code }),
+    ]));
+  });
+
+  it("recovers a saved switch request that was interrupted before reaching the turn queue", async () => {
+    const chats = await import("../../../../src/main/features/chats");
+    const spaces = await import("../../../../src/main/features/spaces");
+    const groupChat = await import("../../../../src/main/features/group_chat");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const to = await spaces.createSpace(TEST_UID, { name: "教育" });
+    if (!to.ok) throw new Error("space fixture failed");
+    const cid = newCid();
+    await chats.createConversation(TEST_UID, { conversationId: cid, title: "切换恢复检查" });
+    const submission = {
+      userId: TEST_UID, cid, text: "请把当前会话移到「教育」", submit_request_id: "submit-space-recovery",
+    };
+    bus._setBeforeQueueDispatchForTest(() => {
+      throw Object.assign(new Error("simulated interrupted dispatch"), { code: "TEST_CRASH_AFTER_MESSAGE_APPEND" });
+    });
+    try {
+      expect(await groupChat.send(submission)).toMatchObject({ ok: false });
+      expect(await chats.conversationSpaceId(TEST_UID, cid)).toBeUndefined();
+    } finally {
+      bus._setBeforeQueueDispatchForTest(null);
+    }
+    expect(await groupChat._readSubmitClaim(TEST_UID, cid, submission.submit_request_id)).toMatchObject({
+      conversation_space_move: true,
+    });
+    expect(await groupChat.send(submission)).toMatchObject({ ok: true });
+    await waitForQuiescent(TEST_UID, cid);
+    const history = await chats.getMessages(TEST_UID, cid);
+    expect({ sid: await chats.conversationSpaceId(TEST_UID, cid), replies: history.filter(row => row.from === "commander").map(row => row.text), modelCalls: _recordedCalls.length })
+      .toEqual({ sid: to.space.space_id, replies: [expect.stringContaining("教育")], modelCalls: 0 });
+    expect((await chats.getMessages(TEST_UID, cid)).filter(row => row.from === "user")).toHaveLength(1);
+  });
+
+  it.each([
+    "请解释「已准备。把当前会话移动到教育工作空间。」的含义。",
+    "请不要把这个对话切换到已有的「教育」工作空间。",
+    "把这个对话切换到已有的「教育」工作空间。不要切换了。",
+    "怎么把当前会话移动到教育工作空间？",
+    "我们想开始学英语口语。",
+  ])("treats %s as ordinary chat text", async (text) => {
+    const { requestedConversationSpaceNames } = await import("../../../../src/main/features/group_chat/conversation-space-change");
+    expect(requestedConversationSpaceNames(text)).toBeUndefined();
+  });
+});
+
 describe("group_chat bus integration › model-selected asset attachment", () => {
   async function seedCatalogAsset(tag: string) {
     const candidates = await import("../../../../src/main/features/recall/candidate-service");

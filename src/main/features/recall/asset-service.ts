@@ -21,12 +21,12 @@ import type { RecallAbilityAssetRecord, RecallAbilityAssetLifecycleStatus } from
 import { ensureAbilityTags, normalizeAbilityTagList, sameAbilityTagSet } from './ability-tag-service';
 import { readAbilityAssetRelationContract } from './asset-relations';
 import { readAbilityAssetSemantics } from './asset-semantics';
-import { normalizeAbilityAssetScopePolicy, resolveScopeForAsset, normalizeAssetScopeValue, isRecallScopeTerm, type RecallAbilityAssetScopePolicy } from './scope-policy';
+import { hasLegacyGenericAssetScope, normalizeAbilityAssetScopePolicy, resolveScopeForAsset, normalizeAssetScopeValue, isRecallScopeTerm, UNSPECIFIED_ASSET_SCOPE, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { RECALL_TEXT_LIMITS, normalizeStatementText } from './content-contract';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { fileEditLock } from '../../util/locks';
 import { normalizeCausalRule } from './world-model-types';
-import { resolveExecutionEvidenceRefs } from './evidence-resolution';
+import { readKstarScopeEvidence, resolveExecutionEvidenceRefs } from './evidence-resolution';
 import { assertCompliantAbilityAssetTitle, assertReviewedAbilityAssetTitle, isReviewedAbilityAssetTitle, recallTitleIssue } from './title-policy';
 import { createLogger } from '../../logger';
 import { organizationContentAssetIds, purgedOrganizationRecord } from './organization-content-lifecycle';
@@ -283,7 +283,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (
     typeof value.candidateId !== 'string' || typeof value.title !== 'string' ||
     typeof value.statement !== 'string' || !Array.isArray(value.evidenceRefs) ||
-    typeof value.scope !== 'string' || typeof value.version !== 'string' ||
+    (value.scope != null && typeof value.scope !== 'string') || typeof value.version !== 'string' ||
     typeof value.updatedAt !== 'string' ||
     !ABILITY_ASSET_STATUSES.has(value.status as RecallAbilityAssetRecord['status']) ||
     (value.maturity !== undefined
@@ -348,6 +348,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   }
   return {
     ...value,
+    scope: value.scope ?? UNSPECIFIED_ASSET_SCOPE,
     reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
     // Preserve the written confirmation semantics instead of force-rewriting
     // to user_confirmed_unverified: both automatic lines
@@ -765,7 +766,7 @@ export async function createAbilityAsset(
   metadata: { reason: string; actor: AbilityAssetActor },
 ): Promise<RecallAbilityAssetRecord> {
   if (metadata.actor !== 'user' && metadata.actor !== 'system') throw new Error('invalid ability asset creation actor');
-  // scope 写入点统一规范化：词条放行，场景描述句回落 general。
+  // 统一保留明确的任务范围，空值按范围未记录处理。
   if (input.scope !== undefined) input = { ...input, scope: resolveScopeForAsset(input.scope) };
   // 创建与更新共用标题边界：折叠空白、trim 并限制为 ≤120 字，再核对正文。
   // 在资产写入口校验，所有创建来源都必须经过此处。
@@ -1439,50 +1440,55 @@ export async function migrateLegacyUserFacingTitles(userId: string): Promise<num
   return migrated;
 }
 
-/** 把可归一的旧自由文本 scope 迁为受控词表值；词表值原样跳过。
- * 内容版本递增后同步刷新 confirmed 投影的 assetVersions，保持版本校验一致。 */
+/** Normalize known aliases and recover the source task for KStar's old
+ *  generic fallback. Refresh committed projection versions after each edit. */
 export async function migrateLegacyFreeTextScopes(userId: string): Promise<number> {
-  const { normalizeAssetScopeValue, isRecallScopeTerm } = await import('./scope-policy');
   let migrated = 0;
   for (const asset of await listAbilityAssets(userId)) {
     // 迁移不触碰终态或删除保留期内的资产。
     if (asset.status !== 'active' && asset.status !== 'paused' && asset.status !== 'archived') continue;
     const scope = String(asset.scope || '');
-    if (isRecallScopeTerm(scope)) continue;
-    const normalized = normalizeAssetScopeValue(scope);
-    if (!normalized || normalized === scope.toLowerCase()) continue;
+    const legacyGeneric = hasLegacyGenericAssetScope(scope, asset.applicableWhen);
+    if (!legacyGeneric && isRecallScopeTerm(scope)) continue;
     try {
-      await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
+      let boundary: string | undefined;
+      if (legacyGeneric) {
+        boundary = await readKstarScopeEvidence(userId, asset.evidenceRefs, asset.learningProvenance?.episodeId);
+        if (boundary) assertNotForbiddenToPersist([boundary]);
+      }
+      const normalized = legacyGeneric ? boundary || UNSPECIFIED_ASSET_SCOPE : normalizeAssetScopeValue(scope);
+      if (!normalized || normalized === scope.toLowerCase()) continue;
+      let changed = false;
+      const updated = await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
         if (!raw) throw new Error('recall ability asset not found');
         const current = asAsset(raw);
         // 锁内终态复核，墓碑/撤回资产不进改写。
         assertMutableAbilityAsset(current);
+        if (current.version !== asset.version || current.scope !== scope
+          || legacyGeneric && !hasLegacyGenericAssetScope(current.scope, current.applicableWhen)) return current;
         current.scope = normalized;
+        if (legacyGeneric) {
+          if (boundary) current.applicableWhen = [boundary];
+          else delete current.applicableWhen;
+        }
         current.version = nextVersion(current.version);
         // 同上：scope 是会进版本快照与注入的内容维度，在用版
         // 指针必须跟随迁移后的新快照，不能留在 select 过的旧版上。
         current.activeVersion = current.version;
         current.updatedAt = new Date().toISOString();
+        changed = true;
         return current;
       });
-      const migratedAsset = await readAbilityAsset(userId, asset.id);
-      if (migratedAsset) {
-        // committed 投影冻结了旧版本号：必须同步刷新（动态 import 避免
-        // asset-service ↔ context-projection 静态循环依赖）。
-        const { refreshCommittedProjectionAssetVersion } = await import('./context-projection');
-        const refreshed = await refreshCommittedProjectionAssetVersion(userId, asset.id, String(migratedAsset.version));
-        if (refreshed > 0) {
-          log.info(`scope migration refreshed committed projections assetId=${asset.id} count=${refreshed}`);
-        }
-        await appendVersion(userId, migratedAsset, {
-          reason: `legacy free-text scope "${scope}" → controlled term "${normalized}"`,
-          actor: 'system',
-        });
-        await appendAudit(userId, asset.id, 'updated', {
-          note: `legacy free-text scope "${scope}" → controlled term "${normalized}"`,
-          actor: 'system',
-        });
+      if (!changed) continue;
+      const migratedAsset = asAsset(updated);
+      // committed 投影冻结了旧版本号：必须同步刷新（动态 import 避免依赖环）。
+      const { refreshCommittedProjectionAssetVersion } = await import('./context-projection');
+      const refreshed = await refreshCommittedProjectionAssetVersion(userId, asset.id, migratedAsset.version);
+      if (refreshed > 0) {
+        log.info(`scope migration refreshed committed projections assetId=${asset.id} count=${refreshed}`);
       }
+      await appendVersion(userId, migratedAsset, { reason: 'legacy task scope corrected', actor: 'system' });
+      await appendAudit(userId, asset.id, 'updated', { note: 'legacy task scope corrected', actor: 'system' });
       migrated += 1;
     } catch (err) {
       log.warn(`ability asset scope migration skipped id=${asset.id}: ${(err as Error).message}`);

@@ -47,6 +47,7 @@ import {
 } from './collaboration';
 import { buildRetryResumeModelText } from './retry_resume';
 import { detectSequentialIntent, shouldDeferToCommanderForOrder } from './member_scope';
+import { requestedConversationSpaceNames } from './conversation-space-change';
 import type { KstarTaskLifecycleSnapshot } from '../kstar/lifecycle-adapter';
 
 /** Re-export so the IPC layer can poll the bus's true quiescent state on
@@ -1082,6 +1083,7 @@ export interface SubmitClaim {
   message_id: string;
   recipient_ids: string[];
   dispatch_turn_ids: Record<string, string>;
+  conversation_space_move?: true;
 }
 
 type SubmitPersistenceHooks = {
@@ -1126,6 +1128,7 @@ export function _normSubmitClaim(raw: unknown, requestId: string): SubmitClaim |
     message_id: r.message_id,
     recipient_ids: Array.from(new Set(r.recipient_ids)),
     dispatch_turn_ids: dispatchTurnIds,
+    ...(r.conversation_space_move === true ? { conversation_space_move: true as const } : {}),
   };
 }
 
@@ -1200,6 +1203,7 @@ async function _recoverPersistedSubmit(
   claim: SubmitClaim,
   msg: GroupMessage,
 ): Promise<void> {
+  const conversationSpaceMove = claim.conversation_space_move ? requestedConversationSpaceNames(msg.text) : undefined;
   for (const recipientId of msg.to) {
     if (recipientId === USER_ID) continue;
     const turnId = claim.dispatch_turn_ids[recipientId];
@@ -1211,6 +1215,7 @@ async function _recoverPersistedSubmit(
       actionRequestId: claim.request_id,
       recipientId,
       turnId,
+      ...(recipientId === COMMANDER_ID && conversationSpaceMove ? { conversationSpaceMove } : {}),
     });
   }
 }
@@ -1339,6 +1344,7 @@ export async function send(
   let memberIds: string[] = [];
   let mentionIds: string[] = [];
   let implicitActiveRecipient = '';
+  let conversationSpaceMove: string[] | undefined;
   let executionConfigs: Record<string, import('./bus').TurnExecutionConfig> | null = null;
   let memberExternalIds: string[] = [];
   try {
@@ -1347,7 +1353,13 @@ export async function send(
       preserveCommander: true,
     });
     if (mentionIds.length && userRoute) throw new Error('mention route conflicts with recipient route');
-    if (!userRoute && !memberIds.length && !mentionIds.length) {
+    if ((!userRoute || userRoute.agentId === COMMANDER_ID) && !memberIds.length
+      && mentionIds.every(id => id === COMMANDER_ID)
+      && !attachments?.length && !references?.length && !use_selections?.length
+      && !model_text && !p3394_envelope && !recall_projection_card && !kstar_review_card) {
+      conversationSpaceMove = requestedConversationSpaceNames(text);
+    }
+    if (!conversationSpaceMove && !userRoute && !memberIds.length && !mentionIds.length) {
       const activeRecipient = (await readState(userId, cid)).active_recipient || '';
       if (safeId(activeRecipient) && activeRecipient !== USER_ID) {
         const validated = await _validateAgentIdList(
@@ -1398,7 +1410,7 @@ export async function send(
   try {
     const chats = await import('../chats');
     const conv = await chats.getConversation(userId, cid);
-    if (conv && !conv.title_manually_set && isPlaceholderTitle(conv.title)) {
+    if (!conversationSpaceMove && conv && !conv.title_manually_set && isPlaceholderTitle(conv.title)) {
       const mechanicalTitle = chats.autoTitle(text);
       await chats.updateConversation(
         userId,
@@ -1482,6 +1494,7 @@ export async function send(
           message_id: deterministicMessageId,
           recipient_ids: [],
           dispatch_turn_ids: deterministicTurnIds,
+          ...(conversationSpaceMove ? { conversation_space_move: true as const } : {}),
         };
         await _writeSubmitClaim(userId, cid, submitRequestId, claim);
       }
@@ -1507,26 +1520,29 @@ export async function send(
       const alreadyPersisted = await _loadClaimedMessage(userId, cid, claim.message_id);
       if (alreadyPersisted) return acceptPersisted(alreadyPersisted);
 
-      const { readRun } = await import('./run_store');
-      let run = await readRun(userId, cid, claim.run_id);
-      if (!run) {
-        await _submitPersistenceHooksForTest?.beforeRunWrite?.();
-        const createdRunId = await _startRunForSubmit({
-          userId,
-          cid,
-          text,
-          memberIds,
-          mentionIds: runMentionIds,
-          externalIds: memberExternalIds,
-          executionConfigs,
-          attachments: attachments ? [...attachments] : [],
-          references: resolvedReferences,
-          requiresSequential,
-          runId: claim.run_id,
-        });
-        if (createdRunId !== claim.run_id) throw new Error('collaboration run persistence failed');
-        run = await readRun(userId, cid, claim.run_id);
-        if (!run) throw new Error('collaboration run persistence failed');
+      // This host action uses the submit claim for idempotency. It has no
+      // collaboration actors whose run ledger can settle before recovery.
+      if (!conversationSpaceMove) {
+        const { readRun } = await import('./run_store');
+        if (!await readRun(userId, cid, claim.run_id)) {
+          await _submitPersistenceHooksForTest?.beforeRunWrite?.();
+          const createdRunId = await _startRunForSubmit({
+            userId,
+            cid,
+            text,
+            memberIds,
+            mentionIds: runMentionIds,
+            externalIds: memberExternalIds,
+            executionConfigs,
+            attachments: attachments ? [...attachments] : [],
+            references: resolvedReferences,
+            requiresSequential,
+            runId: claim.run_id,
+          });
+          if (createdRunId !== claim.run_id || !await readRun(userId, cid, claim.run_id)) {
+            throw new Error('collaboration run persistence failed');
+          }
+        }
       }
 
       try {
@@ -1553,7 +1569,8 @@ export async function send(
           ...(mentionIds.length && !deferToCommander ? { forceTo: mentionIds } : {}),
           ...(implicitActiveRecipient ? { forceTo: [implicitActiveRecipient] } : {}),
           ...(deferToCommander ? { forceTo: [COMMANDER_ID] } : {}),
-          runId: claim.run_id,
+          ...(conversationSpaceMove ? { forceTo: [COMMANDER_ID], conversationSpaceMove } : {}),
+          ...(!conversationSpaceMove ? { runId: claim.run_id } : {}),
           ...(executionConfig ? { executionConfig } : {}),
           ...(executionConfigs ? { memberConfigs: executionConfigs } : {}),
           ...(memberExternalIds.length
@@ -1594,7 +1611,7 @@ export async function send(
         throw err;
       }
     });
-    if (result.ok) {
+    if (result.ok && !conversationSpaceMove) {
       try {
         const chats = await import('../chats');
         await chats.updateConversation(userId, cid, { task_references: [] });

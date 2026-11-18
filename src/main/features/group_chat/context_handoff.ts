@@ -27,7 +27,7 @@ import * as path from "node:path";
 
 import { conversationLayout } from "../../util/project-layout";
 import { readJson, writeJson, readJsonl } from "../../storage";
-import { readSlice, type GroupMessage } from "./visibility";
+import { modelHistoryText, readSlice, type GroupMessage } from "./visibility";
 import { createLogger } from "../../logger";
 
 const log = createLogger("group_chat.context_handoff");
@@ -90,7 +90,7 @@ async function writeWatermark(
 
 /** Truncate a message body for the digest: collapse whitespace, cap length. */
 function digestText(m: GroupMessage, maxChars: number): string {
-  const raw = String(m.model_text || m.text || "").replace(/\s+/g, " ").trim();
+  const raw = modelHistoryText(m).replace(/\s+/g, " ").trim();
   if (raw.length <= maxChars) return raw;
   return `${raw.slice(0, maxChars)}…`;
 }

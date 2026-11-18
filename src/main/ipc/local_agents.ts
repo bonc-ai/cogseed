@@ -634,7 +634,7 @@ export const invokeHandlers = {
   /**
    * Read the resume welcome panel for an imported conversation (v1.6 three-part
    * template). Does not append a message and does not consume `needs_welcome`;
-   * the renderer shows the panel and only sends the guide sentence on confirm.
+   * the renderer resolves the latest request separately when the user continues.
    */
   'chats.getWelcomePanel': async (
     { conversationId }: { conversationId?: unknown } = {},
@@ -646,6 +646,16 @@ export const invokeHandlers = {
     if (!userId) throw new Error('no active user');
     const { getWelcomePanel } = await import('../features/chats');
     return getWelcomePanel(userId, conversationId);
+  },
+
+  'chats.getImportedContinuationRequest': async (
+    { conversationId }: { conversationId?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) throw new Error('conversationId required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getImportedContinuationRequest } = await import('../features/chats');
+    return getImportedContinuationRequest(userId, conversationId);
   },
 
   /**

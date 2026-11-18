@@ -84,6 +84,7 @@ import {
   projectMessageForActorSlice,
   readSlice,
   buildReplayPrefix,
+  modelHistoryText,
   type ChatUseSelection,
   type ChatMessageReference,
   type GroupMessageFailureKind,
@@ -93,6 +94,7 @@ import {
   type RecallMessageCitation,
   type WakeRequestSummary,
 } from "./visibility";
+import { formatImportedBackground, parseSeedModelText } from "../session_import/task-context";
 import type { RunRecord } from "./run_store";
 import {
   applyActiveContextPatches,
@@ -374,6 +376,8 @@ export interface GroupChatMessageBroadcast {
   msgId?: string;
   /** Existing deterministic row that was revised or durably repaired. */
   revisionOf?: string;
+  /** The persisted message reports a host-owned conversation space change. */
+  spaceChanged?: true;
   from: string;
   turnEnd: boolean;
 }
@@ -1367,6 +1371,8 @@ interface QueueItem {
   /** Exact visible user text, kept separate from the LLM payload so teaching
    * intent cannot be inferred from injected references or attachment metadata. */
   sourceMessageText?: string;
+  /** Exact target names parsed by the local composer submission, not by an actor. */
+  conversationSpaceMove?: readonly string[];
   /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随派发 item
    * 运行时携带，不持久化到 GroupMessage。 */
   /** Composed runtime payload — what the worker actually feeds the LLM,
@@ -2826,6 +2832,8 @@ export interface EnqueueParams {
    * structured fields. When true, prose `@display-name` text stays inert;
    * direct bus callers without this marker retain historical parsing. */
   structuredUserSubmission?: boolean;
+  conversationSpaceMove?: readonly string[];
+  conversationSpaceChanged?: true;
   /** Host-internal control message (Commander-only, e.g. review request /
    *  continuation judge): must NOT open a new taskRun (fromActorId is USER_ID
    *  for routing but this is not a user action) — otherwise each control
@@ -3994,6 +4002,7 @@ async function _enqueueBody(
         msgId,
         from: fromActorId,
         turnEnd: params.turn_end === true,
+        ...(params.conversationSpaceChanged ? { spaceChanged: true } : {}),
       });
       log.info(`desktop message broadcast uid=${uid} cid=${cid} msg=${msgId} from=${fromActorId}`);
     } catch {
@@ -4184,6 +4193,9 @@ async function _enqueueBody(
         ? { receptionSourceActorId: fromActorId } : {}),
       ...(params.internalControl ? { internalControl: true } : {}),
       ...(fromActorId === USER_ID ? { sourceMessageText: msg.text } : {}),
+      ...(fromActorId === USER_ID && recipientId === COMMANDER_ID && params.structuredUserSubmission
+        && !params.internalControl && !params.externalInbound && params.conversationSpaceMove
+        ? { conversationSpaceMove: params.conversationSpaceMove } : {}),
       llmPayload: composeLlmTurnPayload(uid, fromActorId, recipientMsg, recipientId, memberScopeTemplate),
       ...(recipientMsg.p3394?.recipient_epochs[recipientId] !== undefined
         ? { incomingEpoch: recipientMsg.p3394.recipient_epochs[recipientId] }
@@ -4254,6 +4266,7 @@ async function _enqueueBody(
 }
 
 export interface RecoverPersistedUserDispatchInput {
+  conversationSpaceMove?: readonly string[];
   uid: string;
   cid: string;
   messageId: string;
@@ -4556,6 +4569,7 @@ export async function recoverPersistedUserDispatch(
         msgId: msg.id,
         fromActorId: USER_ID,
         sourceMessageText: msg.text,
+        ...(input.recipientId === COMMANDER_ID && input.conversationSpaceMove ? { conversationSpaceMove: input.conversationSpaceMove } : {}),
         llmPayload: composeLlmTurnPayload(
           input.uid,
           USER_ID,
@@ -5558,6 +5572,44 @@ async function wakeDeclaredWaitAlreadyAnswered(
   }
 }
 
+async function finishConversationSpaceMove(
+  state: CidState, w: WorkerState, item: QueueItem, names: readonly string[],
+): Promise<ActorTurnResult> {
+  const { uid, cid, actor } = w;
+  const busy = state.backendTurns.size > 0
+    || [...state.workers.values()].some(worker => worker !== w && worker.running);
+  const { moveCurrentConversationToExistingSpace } = await import('./conversation-space-change');
+  const result = busy
+    ? { status: 'busy' as const }
+    : await moveCurrentConversationToExistingSpace(uid, cid, names, w.abortController?.signal);
+  const succeeded = 'name' in result;
+  const cancelled = result.status === 'cancelled';
+  const text = succeeded
+    ? t(result.status === 'moved' ? 'chat.conv_space_bound' : 'chat.conv_space_move_already_there', { name: escapeHtmlForBubble(result.name) })
+    : t(`chat.conv_space_move_${result.status}`, { name: escapeHtmlForBubble(names[0]) });
+  const outcome: planExecutor.TurnOutcome = {
+    kind: 'persist', text,
+    ...(!succeeded && !cancelled ? {
+      failureKind: 'validation' as const, failureCode: `conversation_space_move_${result.status}`,
+    } : {}),
+  };
+  await markInFlight(uid, cid, actor.id, false);
+  await emitStateChanged(state);
+  const persistedMsg = await enqueue({
+    uid, cid, fromActorId: actor.id, forceTo: [USER_ID], text,
+    ...(outcome.failureKind ? { failure_kind: outcome.failureKind, failure_code: outcome.failureCode } : {}),
+    ...(cancelled ? { terminal_status: 'cancelled' as const } : {}),
+    ...(result.status === 'moved' ? { conversationSpaceChanged: true } : {}),
+    ...(item.runId ? { runId: item.runId } : {}),
+    turn_id: item.turnId, source_msg_id: item.msgId, turn_end: true,
+  });
+  return {
+    kind: 'completed', text, produced: [], outcome, persistedMsg,
+    ...(cancelled ? { aborted: true } : {}),
+    terminalStatus: succeeded ? 'completed' : cancelled ? 'cancelled' : 'failed',
+  };
+}
+
 async function runActorTurnBody(
   state: CidState,
   w: WorkerState,
@@ -5572,6 +5624,9 @@ async function runActorTurnBody(
   const { processItems, lease: coordinatorLease } = coordinator;
   const sessionId = actorSessionId(cid, actor);
   const isCommander = actor.kind === "commander";
+  if (isCommander && item.conversationSpaceMove) {
+    return finishConversationSpaceMove(state, w, item, item.conversationSpaceMove);
+  }
   // Per-conv subdir under the user's root workspace — keeps repeat
   // agent runs writing the same basename grouped together instead of
   // littering the root with `requirements-2.md / -3.md / ...`. Lazy:
@@ -15563,7 +15618,8 @@ async function _buildCliPrompt(
   const sliceLines: string[] = [];
   for (const m of history) {
     const to = (m.to || []).join(",") || "-";
-    const text = (m.text || "").replace(/\r/g, "").trim();
+    if (m.imported_seed) continue; // The seed is added once, separately below.
+    const text = modelHistoryText(m, false).replace(/\r/g, "").trim();
     if (!text) continue;
     sliceLines.push(`[${m.from} → ${to}] ${text}`);
   }
@@ -15579,10 +15635,10 @@ async function _buildCliPrompt(
   const importedSummary = await _extractImportedCliContext(uid, cid);
   if (importedSummary) {
     sliceLines.unshift(
-      `[commander → user] (导入会话接续上下文) ${importedSummary}`,
+      `[commander → user] ${formatImportedBackground(importedSummary)}`,
     );
     sliceLines.push(
-      `[系统] 接续上下文已在上方完整提供（目标、约束、已完成工作、下一步）。直接执行用户的当前任务即可，不要重新扫描工作区、不要重读历史日志、不要运行完整测试套件来“恢复上下文”——只为当前任务做最小必要的检查。`,
+      `[系统] 以上导入内容为背景。以本次派发的任务为准，只为当前任务做必要的检查。`,
     );
     log.info(`cli prompt: injected imported context cid=${cid} agent=${agent.agent_id} chars=${importedSummary.length}`);
   }
@@ -15664,8 +15720,12 @@ async function _extractImportedCliContext(uid: string, cid: string): Promise<str
     const page = await chats.getMessagesPage(uid, cid, 2000, null, projectId || null);
     const messages = page.history;
     for (const m of messages) {
-      const modelText = (m as any)?.model_text;
+      const modelText = m.model_text;
       if (m.from !== "commander" || typeof modelText !== "string") continue;
+      if (m.imported_seed || modelText.startsWith('以下是用户从')) {
+        const parsed = parseSeedModelText(modelText);
+        if (parsed.summary || parsed.currentRequest) return parsed.summary;
+      }
       const match = re.exec(modelText);
       const summary = (match && match[1]) ? match[1].trim() : "";
       if (summary) return summary;

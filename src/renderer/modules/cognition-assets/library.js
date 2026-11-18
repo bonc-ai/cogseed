@@ -47,7 +47,7 @@
       ...(Array.isArray(policy.projectIds) ? policy.projectIds : []), ...(Array.isArray(policy.purposeTags) ? policy.purposeTags : []),
     ];
     if (Object.values(policy).some(v => Array.isArray(v) && v.length === 0)) parts.push(T('cognition.library_scope_none', '存在禁止使用的范围'));
-    return parts.length ? parts.join(' · ') : T('cognition.library_scope_open', '未限定使用对象');
+    return [NS.ui.assetTaskScopeLabel(a), ...parts].join(' · ');
   }
   function uses(a) { return NS.ui.broughtInCountFor ? NS.ui.broughtInCountFor(a.id) : 0; }
   function filtered() {

@@ -1211,12 +1211,25 @@
   function scopeLabelText(raw) {
     const value = String(raw || '');
     if (!value) return T('cognition.asset_scope_unset', '还没设置');
+    if (value === 'unspecified') return T('cognition.scope_unknown', '范围未记录');
     // 白话映射覆盖中英两种内部写法：
     // 后端 scope 是自由文本，认得出的常见形态翻人话，认不出原样显示。
     const known = { general: T('cognition.capture.scope_general', '跨任务通用'), report: T('cognition.capture.scope_report', '报告'), code: T('cognition.capture.scope_code', '编程'), review: T('cognition.capture.scope_review', '审查与评审'), product: T('cognition.capture.scope_product', '产品工作') };
     if (known[value]) return known[value];
     if (value === 'personal') return T('cognition.asset_scope_personal', '个人对话');
     return value;
+  }
+  function hasLegacyGenericTaskScope(asset) {
+    return String(asset.scope || '').trim().toLowerCase() === 'general'
+      && asset.applicableWhen?.length === 1
+      && /^处理通用(?:任务)?时$/.test(String(asset.applicableWhen[0]).trim());
+  }
+  function assetTaskScopeLabel(asset) {
+    const scope = String(asset.scope || '').trim();
+    if (!scope || scope === 'unspecified' || hasLegacyGenericTaskScope(asset)) {
+      return T('cognition.scope_unknown', '范围未记录');
+    }
+    return scope.split(',').map(value => value.trim()).filter(Boolean).map(scopeLabelText).join('、');
   }
   /** 版本快照的来源行：按该版快照的学习信号判定 KSTAR
    *  血统；无信号（会话整理线）不显示——返回空串即可被行渲染跳过。 */
@@ -1891,7 +1904,7 @@
     const missing = T('cognition.activity_not_recorded', '未记录');
     const controls = options.controls || {};
     const text = value => Array.isArray(value) ? value.join('；') || missing : String(value || missing);
-    const value = (key, className = '') => controls[key] || `<p class="content-text ${className}">${esc(text(content[key]))}</p>`;
+    const value = (key, className = '') => controls[key] || `<p class="content-text ${className}">${esc(text(key === 'applicableWhen' && hasLegacyGenericTaskScope(content) ? undefined : content[key]))}</p>`;
     const section = (label, html, cls = '') => `<section class="ca-library-content ${cls}"><h3>${esc(label)}</h3>${html}</section>`;
     const part = options.part || 'all';
     const body = section(T(options.ontologyOnly ? 'cognition.ontology_proposal_description' : 'cognition.asset_content_section', options.ontologyOnly ? '完整变更说明' : '内容'), value('statement', 'ca-asset-body'))
@@ -2044,8 +2057,7 @@
       ['conversationKinds', T('cognition.asset_scope_visible_conversation_kinds', '适用会话类型')],
       ['fileKinds', T('cognition.asset_scope_visible_file_kinds', '适用文件类型')],
     ];
-    const scopeLabels = { general: T('cognition.capture.scope_general', '跨任务通用'), report: T('cognition.capture.scope_report', '报告'), code: T('cognition.capture.scope_code', '编程'), review: T('cognition.capture.scope_review', '审查与评审'), product: T('cognition.capture.scope_product', '产品工作') };
-    const scope = String(asset.scope || '').split(',').map(value => value.trim()).filter(Boolean).map(value => scopeLabels[value] || scopeLabelText(value)).join('、');
+    const scope = assetTaskScopeLabel(asset);
     const baseDimensions = [
       ['agentIds', T('cognition.prototype_agent', '智能体'), agentNames],
       ['workspaceIds', T('cognition.prototype_workspace', '工作空间'), spaceNames],
@@ -2059,7 +2071,7 @@
       const value = ids === null ? T('cognition.library_scope_incomplete', '范围信息不完整，请核对') : ids.length ? ids.map((id, index) => lookup ? lookup.get(id) || T(key === 'agentIds' ? 'cognition.asset_scope_missing_agent' : 'cognition.asset_scope_missing_space', key === 'agentIds' ? '已不可用的旧智能体限制 {n}' : '已不可用的旧工作空间限制 {n}', { n: String(index + 1) }) : id).join('、') : T('cognition.asset_scope_denied_all', '明确禁止任何对象使用');
       return `<span>${esc(label)}</span><span>${esc(value)}</span>`;
     }).join('');
-    return `<section class="ca-library-scope"><h3>${esc(T('cognition.library_scope', '使用范围'))}</h3><p class="ca-library-scope-summary">${esc(scope || T('cognition.scope_unknown', '范围未记录'))}</p>${rows ? `<div class="ca-prototype-kv">${rows}</div>` : ''}<p class="note ca-review-footnote">${esc(T('cognition.library_scope_usage_note', '是否使用仍取决于任务匹配、状态与来源权限。'))}</p></section>`;
+    return `<section class="ca-library-scope"><h3>${esc(T('cognition.library_scope', '使用范围'))}</h3><p class="ca-library-scope-summary">${esc(scope)}</p>${rows ? `<div class="ca-prototype-kv">${rows}</div>` : ''}<p class="note ca-review-footnote">${esc(T('cognition.library_scope_usage_note', '是否使用仍取决于任务匹配、状态与来源权限。'))}</p></section>`;
   }
   function libraryEvidenceDialog(asset) {
     const state = S.reviewEvidence?.['asset:' + asset.id];
@@ -3896,5 +3908,5 @@
   // render 内部（闭包捕获每帧状态），不在此列。
   // resolveSourceRef 一并导出：五处来源展示与用例都
   // 认这一份解析结果，避免测试各自复制一套判据。
-  NS.ui = { cognitionHistory, savedDecisionContent, cognitionSourceParts, cognitionSourceSection, cognitionSourceRows, cognitionContentFields, cognitionRelated, cognitionSources, versionContent, broughtInCountFor, broughtInCountsFor, chip, assetStatusChip, resolveSourceRef, evidenceChip, btn, roleBtn, hero, empty, sectionHead, termNote, otherActions, CATEGORIES, categoryLabel, CONTENT_CATEGORIES, contentCategoryOf, contentCategoryLabel, contentCategorySelect, evidenceChipParts, isKstarEvidenceRef, isLiveKstarEvidenceRef, evidenceGroupsHtml, stripMarkdown, attributionLabel, sourceRefKind, sourceIndex, reviewOutcomeText, stripInternalIds, foldValue, kstarEpisodeSection, detailTitleActions };
+  NS.ui = { cognitionHistory, savedDecisionContent, cognitionSourceParts, cognitionSourceSection, cognitionSourceRows, cognitionContentFields, cognitionRelated, cognitionSources, versionContent, assetTaskScopeLabel, broughtInCountFor, broughtInCountsFor, chip, assetStatusChip, resolveSourceRef, evidenceChip, btn, roleBtn, hero, empty, sectionHead, termNote, otherActions, CATEGORIES, categoryLabel, CONTENT_CATEGORIES, contentCategoryOf, contentCategoryLabel, contentCategorySelect, evidenceChipParts, isKstarEvidenceRef, isLiveKstarEvidenceRef, evidenceGroupsHtml, stripMarkdown, attributionLabel, sourceRefKind, sourceIndex, reviewOutcomeText, stripInternalIds, foldValue, kstarEpisodeSection, detailTitleActions };
 })();

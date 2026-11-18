@@ -277,6 +277,40 @@ describe('conversation run observer cleanup', () => {
 });
 
 describe('conversation sidebar task row actions', () => {
+  it('refreshes the sidebar group and breadcrumb from the same saved space binding', async () => {
+    const context = loadConversationRenderer();
+    const sidebar = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] };
+    const breadcrumb = { innerHTML: '', hidden: true, querySelectorAll: () => [] };
+    context.document.getElementById = (id: string) =>
+      id === 'conversation-list' ? sidebar : id === 'chat-header-breadcrumb' ? breadcrumb : null;
+    vm.runInContext(`
+      _sidebarSpacesLoaded = true;
+      _sidebarSpaces = [
+        { space_id: 'space-work', name: '职场' },
+        { space_id: 'space-study', name: '教育' },
+      ];
+      _sidebarCollapse.spaces = false;
+      _sidebarCollapse.spaceGroups = {};
+    `, context);
+    context.currentCid = 'chat-1';
+    context.conversations = [{ conversation_id: 'chat-1', title: '口语练习', space_id: 'space-work', space_name: '职场' }];
+    context.apiFetch = async () => ({
+      json: async () => ({ ok: true, conversation: { conversation_id: 'chat-1', title: '口语练习', space_id: 'space-study' } }),
+    });
+    context.renderConversationList();
+    context._refreshChatHeader();
+    expect(sidebar.innerHTML).toContain('职场');
+    expect(breadcrumb.innerHTML).toContain('职场');
+
+    await context._refreshConversationSpaceBinding('chat-1');
+
+    expect(sidebar.innerHTML).toContain('教育');
+    expect(sidebar.innerHTML).toContain('口语练习');
+    expect(sidebar.innerHTML).not.toContain('职场');
+    expect(breadcrumb.innerHTML).toContain('data-space-id="space-study"');
+    expect(breadcrumb.innerHTML).toContain('教育');
+  });
+
   it('renders the real sidebar vertically as conditional pinned, recent, then spaces', () => {
     const context = loadConversationRenderer();
     const container = {

@@ -15,6 +15,28 @@ import { safeId } from '../../storage';
 // LLM 产出）。
 export const RECALL_SCOPE_TERMS = ['general', 'report', 'code', 'review', 'product', 'personal'] as const;
 export type RecallScopeTerm = (typeof RECALL_SCOPE_TERMS)[number];
+export const UNSPECIFIED_ASSET_SCOPE = 'unspecified';
+
+/** The old KStar fallback generated this condition when it had no task type. */
+export function hasLegacyGenericAssetScope(scope: string, applicableWhen?: readonly string[]): boolean {
+  return scope.trim().toLowerCase() === 'general'
+    && applicableWhen?.length === 1
+    && /^处理通用(?:任务)?时$/.test(applicableWhen[0].trim());
+}
+
+export function isAssetScopeUnspecified(scope: string, applicableWhen?: readonly string[]): boolean {
+  const value = scope.trim().toLowerCase();
+  return !value || value === UNSPECIFIED_ASSET_SCOPE || hasLegacyGenericAssetScope(value, applicableWhen);
+}
+
+/** Retain the source task as a boundary when it fits the scope field. */
+export function sourceTaskBoundary(goal: string): string | undefined {
+  const text = goal.replace(/\s+/g, ' ').trim();
+  if (text.length < 2 || text.length > 500) return undefined;
+  const scope = resolveScopeForAsset(text);
+  return ['general', 'personal', 'space', '*', UNSPECIFIED_ASSET_SCOPE].includes(scope.toLowerCase())
+    || normalizeAssetScopeValue(text) === 'general' ? undefined : text;
+}
 
 export function isRecallScopeTerm(value: string): boolean {
   return (RECALL_SCOPE_TERMS as readonly string[]).includes(String(value || '').trim().toLowerCase());
@@ -32,19 +54,11 @@ const GLOBAL_SCOPE_HINTS = [
 const PERSONAL_SCOPE_HINTS_EXACT = ['personal', 'user', '个人', '身份'];
 const PERSONAL_SCOPE_HINTS_INCLUDES = ['personal', '个人偏好', '个人身份', '用户偏好'];
 
-/** 资产**写入点**的 scope 归一（2026-09-19 刀一）：三档——
- *  ① 词表值/中文全局提示 → 软归一为词表值；
- *  ② 合法自定义词条（≤20 字、无句读分隔、非"…时"句式）→ 原样保留——
- *     scope 不是封闭五值枚举，自定义词条（'architecture-review' 等）是
- *     体系内合法形态；
- *  ③ 适用场景描述句（"新增、审核、晋升认知资产条目时"这类、含顿号/句读/
- *     超长/以"时"结尾）→ 兜底 'general'——它们是 applicableWhen 的内容
- *     走错了门，不进 scope。
- *  只在 create/update 的输入口调用；读取口（asAsset）不动——存量自由文本
- *  由既有 migrateLegacyFreeTextScopes 轨道处理，读时强归一会破坏词条语义。 */
+/** Asset write boundary. Preserve custom conditions and distinguish a missing
+ *  scope from an explicitly declared global one. */
 export function resolveScopeForAsset(raw: string): string {
   const text = String(raw || '').trim();
-  if (!text) return 'general';
+  if (!text) return UNSPECIFIED_ASSET_SCOPE;
   const aliases: Record<string, string> = {
     '跨任务通用': 'general', '报告': 'report', '报告任务': 'report', '报告与文档': 'report',
     '编程开发': 'code', '编程': 'code', '审查与评审': 'review', '产品与架构': 'product',
@@ -67,7 +81,8 @@ export function normalizeAssetScopeValue(raw: string): RecallScopeTerm | null {
   if (!text) return null;
   if (isRecallScopeTerm(text)) return text as RecallScopeTerm;
   if (PERSONAL_SCOPE_HINTS_INCLUDES.some((hint) => text.includes(hint))) return 'personal';
-  if (GLOBAL_SCOPE_HINTS.some((hint) => text.includes(hint))) return 'general';
+  if (GLOBAL_SCOPE_HINTS.includes(text) || text === '用户全局画像'
+    || /^该用户的身份与沟通定位[（(]跨会话稳定[）)]$/.test(text)) return 'general';
   return null;
 }
 
@@ -209,6 +224,7 @@ export function scopeTokenMatches(haystackTokens: string[], needle: string): boo
  *  matching runs first; when that misses, both sides are tokenized and any
  *  bidirectional token containment (CJK) / equal token (ASCII) passes. */
 export function scopeIncludes(scope: string, text: string): boolean {
+  if (isAssetScopeUnspecified(scope)) return false;
   const terms = scope.split(',').map((term) => term.trim()).filter(Boolean);
   if (terms.includes('*')) return true;
   // general（通用）是显式通配：general 资产适用于任意 purpose/任务，不应被

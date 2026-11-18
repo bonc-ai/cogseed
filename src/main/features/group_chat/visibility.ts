@@ -22,6 +22,7 @@ import type { PersistedChatEntry } from "../chat_events/process-persist";
 import { appendJsonlAtomic, readJsonl } from "../../storage";
 import { COMMANDER_ID, USER_ID } from "./state";
 import { createLogger } from "../../logger";
+import { formatImportedBackground, isLegacyWelcomePlanDispatch, parseSeedModelText } from "../session_import/task-context";
 import type { ProducedFileValidation } from "../produced_files";
 
 const log = createLogger("group_chat.visibility");
@@ -255,9 +256,8 @@ export interface GroupMessage {
    *  parses it to power the「查看依据」expand. */
   welcome_carry?: string;
   /** Full resume bundle for the imported-session welcome reply:
-   *  `{ restatement, carry, boundary, plan }` (JSON string). Renders the
-   *  right-rail「查看依据」evidence and the「带着这些继续」Action Plan
-   *  without re-fetching. */
+   *  `{ restatement, carry, boundary, plan, summary, currentRequest }` (JSON
+   *  string). The renderer uses it to display the welcome's historical evidence. */
   welcome_resume?: string;
   /** True on the seed message of an imported session. The seed carries the
    *  session summary for the model (model_text) but is hidden from the user
@@ -574,6 +574,26 @@ export interface SliceReplay {
   prefix: string;
 }
 
+/** The seed and welcome are historical on subsequent model turns. A saved
+ *  execution heading only had authority while assembling that welcome. */
+export function modelHistoryText(message: GroupMessage, useModelText = true): string {
+  const text = (useModelText && message.model_text) || message.text || '';
+  if (message.from === USER_ID && isLegacyWelcomePlanDispatch((message.text || '').trim())) {
+    return formatImportedBackground(message.text);
+  }
+  if (message.from !== COMMANDER_ID) return text;
+  if (message.imported_seed || message.model_text?.startsWith('以下是用户从')) {
+    const seed = parseSeedModelText(message.model_text);
+    if (message.imported_seed || seed.summary || seed.currentRequest) {
+      return formatImportedBackground(seed.summary || message.text);
+    }
+  }
+  if (message.welcome_resume || message.model_text?.startsWith('## 接续上下文（导入会话）')) {
+    return formatImportedBackground(message.text);
+  }
+  return text;
+}
+
 export function buildReplayPrefix(
   slice: GroupMessage[],
   currentMsgId: string,
@@ -607,7 +627,7 @@ export function buildReplayPrefix(
       lines.push(snapshot);
       lines.push("</referenced-messages>");
     }
-    lines.push(m.model_text || m.text);
+    lines.push(modelHistoryText(m));
     lines.push("</msg>");
   }
   lines.push("</group-chat-history>");
