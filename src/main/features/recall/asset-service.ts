@@ -1440,6 +1440,12 @@ export async function migrateLegacyUserFacingTitles(userId: string): Promise<num
   return migrated;
 }
 
+function legacyScopeMigrationTarget(asset: RecallAbilityAssetRecord): string | undefined {
+  if (hasLegacyGenericAssetScope(asset.scope, asset.applicableWhen)) return UNSPECIFIED_ASSET_SCOPE;
+  if (isRecallScopeTerm(asset.scope)) return undefined;
+  return normalizeAssetScopeValue(asset.scope) ?? undefined;
+}
+
 /** Normalize known aliases and recover the source task for KStar's old
  *  generic fallback. Refresh committed projection versions after each edit. */
 export async function migrateLegacyFreeTextScopes(userId: string): Promise<number> {
@@ -1447,29 +1453,27 @@ export async function migrateLegacyFreeTextScopes(userId: string): Promise<numbe
   for (const asset of await listAbilityAssets(userId)) {
     // 迁移不触碰终态或删除保留期内的资产。
     if (asset.status !== 'active' && asset.status !== 'paused' && asset.status !== 'archived') continue;
-    const scope = String(asset.scope || '');
-    const legacyGeneric = hasLegacyGenericAssetScope(scope, asset.applicableWhen);
-    if (!legacyGeneric && isRecallScopeTerm(scope)) continue;
+    if (!legacyScopeMigrationTarget(asset)) continue;
     try {
-      let boundary: string | undefined;
-      if (legacyGeneric) {
-        boundary = await readKstarScopeEvidence(userId, asset.evidenceRefs, asset.learningProvenance?.episodeId);
-        if (boundary) assertNotForbiddenToPersist([boundary]);
-      }
-      const normalized = legacyGeneric ? boundary || UNSPECIFIED_ASSET_SCOPE : normalizeAssetScopeValue(scope);
-      if (!normalized || normalized === scope.toLowerCase()) continue;
       let changed = false;
-      const updated = await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
+      const updated = await updateRecallJsonRecord(userId, 'ability-assets', asset.id, async (raw) => {
         if (!raw) throw new Error('recall ability asset not found');
         const current = asAsset(raw);
-        // 锁内终态复核，墓碑/撤回资产不进改写。
         assertMutableAbilityAsset(current);
-        if (current.version !== asset.version || current.scope !== scope
-          || legacyGeneric && !hasLegacyGenericAssetScope(current.scope, current.applicableWhen)) return current;
-        current.scope = normalized;
-        if (legacyGeneric) {
-          if (boundary) current.applicableWhen = [boundary];
-          else delete current.applicableWhen;
+        // Derive the repair from the locked record and its current evidence.
+        // The listing above is only a filter for likely migration candidates.
+        const target = legacyScopeMigrationTarget(current);
+        if (!target) return current;
+        current.scope = target;
+        if (target === UNSPECIFIED_ASSET_SCOPE) {
+          const boundary = await readKstarScopeEvidence(userId, current.evidenceRefs, current.learningProvenance?.episodeId);
+          if (boundary) {
+            assertNotForbiddenToPersist([boundary]);
+            current.scope = boundary;
+            current.applicableWhen = [boundary];
+          } else {
+            delete current.applicableWhen;
+          }
         }
         current.version = nextVersion(current.version);
         // 同上：scope 是会进版本快照与注入的内容维度，在用版

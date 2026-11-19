@@ -178,7 +178,11 @@ describe('KStar task-level precipitation (B5)', () => {
     await seedStoredAbilityAsset('user-b5', legacy);
     await seedStoredAbilityAsset('user-b5', { ...legacy, id: 'aa-legacy-no-source', evidenceRefs: [] });
 
-    expect(await migrateLegacyFreeTextScopes('user-b5')).toBe(2);
+    const [first, second] = await Promise.all([
+      migrateLegacyFreeTextScopes('user-b5'),
+      migrateLegacyFreeTextScopes('user-b5'),
+    ]);
+    expect(first + second).toBe(2);
     expect(await readAbilityAsset('user-b5', legacy.id)).toMatchObject({
       scope: goal, applicableWhen: [goal], forbiddenWhen: ['紧急出行'], version: '2',
     });
