@@ -1,5 +1,6 @@
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { scopeForTask } from '../recall/experience-taxonomy';
+import { sourceTaskBoundary, UNSPECIFIED_ASSET_SCOPE } from '../recall/scope-policy';
 import { lessonLanguageMismatches } from '../../util/language';
 import { safeId } from '../../storage';
 import { attributionAllowsReusableLearning } from './secondary-attribution';
@@ -146,11 +147,13 @@ export function proposeKstarCandidates(
     episode.a.toolCalls.every((call) => call.status === 'ok');
 
   const signalAvailable = clearsPrecipitationGate(review);
-  const scope = scopeForTask(episode.t.userGoal);
+  const taskType = scopeForTask(episode.t.userGoal);
+  const sourceBoundary = taskType === 'general' ? sourceTaskBoundary(episode.t.userGoal) : undefined;
+  const scope = taskType === 'general' ? sourceBoundary || UNSPECIFIED_ASSET_SCOPE : taskType;
   const scopeLabel = ({
     report: '报告类任务', code: '代码类任务', review: '审查类任务',
     product: '产品类任务', general: '通用',
-  } as Record<string, string>)[scope] ?? scope;
+  } as Record<string, string>)[taskType] ?? taskType;
   // 语言硬闸（消费方防御）：lesson 可能来自历史 review 或用户确认路径，不
   // 一定经过出生点拦截。主导脚本与任务不匹配的 lesson 一律不产候选——宁可
   // 回退确定性模板，也不让英文经验（中文任务）进候选池。
@@ -159,9 +162,10 @@ export function proposeKstarCandidates(
   // 规则类候选的适用范围：PRD 3.1 把"确认适用与禁止范围"列为 RuleAsset 的
   // 最低门槛，没有边界的规则只能停在候选池。KStar 唯一有证据支撑的边界是
   // "这条教训是在哪类任务上学到的"——就只声明这一条，不编造禁止范围。
-  const ruleBoundary = (suggestedType: string): Pick<KstarCandidateProposal, 'applicableWhen'> => (
-    suggestedType === 'rule' ? { applicableWhen: [`处理${scopeLabel}时`] } : {}
-  );
+  const applicableBoundary = (suggestedType: string): Pick<KstarCandidateProposal, 'applicableWhen'> => {
+    if (sourceBoundary) return { applicableWhen: [sourceBoundary] };
+    return taskType !== 'general' && suggestedType === 'rule' ? { applicableWhen: [`处理${scopeLabel}时`] } : {};
+  };
   if (verifiedWorkflow && signalAvailable) {
     const lesson = lessonFor(review.lesson?.trim());
     const core = lessonTitleCore(lesson || episode.t.userGoal);
@@ -181,7 +185,7 @@ export function proposeKstarCandidates(
         : 'skill_method',
       suggestedScope: scope,
       ...assetMutationFor(episode, review),
-      ...ruleBoundary(lesson ? (gapType(review) ?? 'rule') : 'skill_method'),
+      ...applicableBoundary(lesson ? (gapType(review) ?? 'rule') : 'skill_method'),
       sourceRefs,
       learningSignal: learningSignal(review),
     });
@@ -202,7 +206,7 @@ export function proposeKstarCandidates(
       suggestedType: type,
       suggestedScope: scope,
       ...assetMutationFor(episode, review),
-      ...ruleBoundary(type),
+      ...applicableBoundary(type),
       sourceRefs,
       learningSignal: learningSignal(review),
     });

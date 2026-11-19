@@ -265,7 +265,7 @@ describe('imported-session welcome panel', () => {
     expect(html).not.toContain('已确认“我的能力”资产');
   });
 
-  it('sends the Action Plan via sendInConversation and marks the welcome seen', async () => {
+  it('keeps a historic Action Plan from becoming a request when no user goal is saved', async () => {
     const block = {
       dataset: {
         welcomeResume: JSON.stringify({
@@ -276,7 +276,7 @@ describe('imported-session welcome panel', () => {
         }),
       },
     };
-    const btn = { disabled: false };
+    const btn = { disabled: true };
     const invokeCalls: string[] = [];
     let sent: { cid: string; text: string } | null = null;
     const submit = runWith(
@@ -288,7 +288,7 @@ describe('imported-session welcome panel', () => {
           cogseed: {
             invoke: async (channel: string) => {
               invokeCalls.push(channel);
-              return { ok: true };
+              return { ok: true, currentRequest: '' };
             },
           },
         },
@@ -303,18 +303,17 @@ describe('imported-session welcome panel', () => {
 
     await submit('c1', block, btn);
 
-    expect(sent).not.toBeNull();
-    expect(sent!.text).toContain('1. 补齐主路径');
-    expect(sent!.text).toContain('2. 输出评审问题');
-    expect(invokeCalls).toEqual(['chats.markWelcomeSeen']);
+    expect(sent).toBeNull();
+    expect(btn.disabled).toBe(false);
+    expect(invokeCalls).toEqual(['chats.getImportedContinuationRequest']);
   });
 
-  it('sends the current request together with the Action Plan', async () => {
+  it('resolves the latest request at click time and leaves the stale card in history', async () => {
     const block = {
       dataset: {
         welcomeResume: JSON.stringify({
-          plan: ['补齐主路径'],
-          currentRequest: '把这段工作内容整理成可汇报版本',
+          plan: ['先问用户有哪些材料'],
+          currentRequest: '先梳理手头材料',
         }),
       },
     };
@@ -325,7 +324,7 @@ describe('imported-session welcome panel', () => {
       {
         t: createTranslator('zh'),
         sendInConversation: async (cid: string, text: string) => { sent = { cid, text }; },
-        window: { cogseed: { invoke: async (channel: string) => { invokeCalls.push(channel); return { ok: true }; } } },
+        window: { cogseed: { invoke: async (channel: string) => { invokeCalls.push(channel); return { ok: true, currentRequest: '用现有代码做场景复测' }; } } },
         JSON, Array, String, Number,
         _convLog: { warn() {} },
       },
@@ -334,10 +333,8 @@ describe('imported-session welcome panel', () => {
 
     await submit('c1', block, { disabled: false });
 
-    expect(sent).not.toBeNull();
-    expect(sent!.text).toContain('继续这项工作：把这段工作内容整理成可汇报版本');
-    expect(sent!.text).toContain('1. 补齐主路径');
-    expect(invokeCalls).toEqual(['chats.markWelcomeSeen']);
+    expect(sent).toEqual({ cid: 'c1', text: '用现有代码做场景复测' });
+    expect(invokeCalls).toEqual(['chats.getImportedContinuationRequest', 'chats.markWelcomeSeen']);
   });
 
   it('uses the current request when the Action Plan is empty', async () => {
@@ -355,7 +352,7 @@ describe('imported-session welcome panel', () => {
       {
         t: createTranslator('zh'),
         sendInConversation: async (cid: string, text: string) => { sent = { cid, text }; },
-        window: { cogseed: { invoke: async () => ({ ok: true }) } },
+        window: { cogseed: { invoke: async () => ({ ok: true, currentRequest: '把这段工作内容整理成可汇报版本' }) } },
         JSON, Array, String, Number,
         _convLog: { warn() {} },
       },
@@ -364,7 +361,7 @@ describe('imported-session welcome panel', () => {
 
     await submit('c1', block, { disabled: false });
 
-    expect(sent?.text).toBe('继续这项工作：把这段工作内容整理成可汇报版本');
+    expect(sent?.text).toBe('把这段工作内容整理成可汇报版本');
   });
 
   it('asks for a task instead of sending the generic sentence when nothing is available', async () => {
@@ -389,7 +386,7 @@ describe('imported-session welcome panel', () => {
     await submit('c1', { dataset: { welcomeResume: JSON.stringify({ plan: [] }) } }, btn);
 
     expect(sent).toBeNull();
-    expect(invokeCalls).toEqual([]);
+    expect(invokeCalls).toEqual(['chats.getImportedContinuationRequest']);
     expect(btn.disabled).toBe(false);
     expect(toasts[0]).toContain('请先在输入框');
   });

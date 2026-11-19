@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { seedStoredAbilityAsset } from '../../../helpers/stored-ability-asset';
 import type { KstarEpisodeRecord, KstarReviewRecord } from '../../../../src/main/features/kstar/types';
+import type { RecallAbilityAssetRecord } from '../../../../src/main/features/recall/candidate-service';
 
 // 语义查重不依赖真实 embedding 模型（95MB ONNX，测试环境无关性）：按文本
 // 哈希生成确定性 512 维向量——不同文本向量不同 → 查重走 no_match 正常晋升。
@@ -151,6 +153,45 @@ const learningReview = {
 };
 
 describe('KStar task-level precipitation (B5)', () => {
+  it('retains the source task in new proposals and fixes legacy generic scope only from evidence', async () => {
+    const goal = '安排周末出游';
+    const ep = episode('kse-b5-outing', goal, [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(ep);
+    const { createInitialKstarReview } = await import('../../../../src/main/features/kstar/review-service');
+    const review = { ...createInitialKstarReview(ep), ...learningReview };
+    const { proposeKstarCandidates } = await import('../../../../src/main/features/kstar/extraction-service');
+    const { aggregateRequirementProposals } = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const requirement = { ...await seedRequirement([ep.id]), goalText: goal };
+    for (const proposals of [proposeKstarCandidates(ep, review), aggregateRequirementProposals({ requirement, episodes: [ep], reviews: [review] })]) {
+      expect(proposals[0]).toMatchObject({ suggestedScope: goal, applicableWhen: [goal] });
+    }
+
+    const { migrateLegacyFreeTextScopes, readAbilityAsset } = await import('../../../../src/main/features/recall/asset-service');
+    const legacy: RecallAbilityAssetRecord = {
+      schemaVersion: 1,
+      id: 'aa-legacy-outing', ownerId: 'user-b5', candidateId: 'outings-candidate', reviewDecisionId: 'legacy-untracked',
+      type: 'rule', title: '出游建议', statement: '提议出游选项前先了解出行偏好。',
+      evidenceRefs: [{ kind: 'execution', id: ep.id }], scope: 'general', applicableWhen: ['处理通用时'],
+      forbiddenWhen: ['紧急出行'], status: 'active', lifecycleStatus: 'user_confirmed_unverified', maturity: 'transfer_validated',
+      version: '1', createdAt: ep.createdAt, updatedAt: ep.updatedAt,
+    };
+    await seedStoredAbilityAsset('user-b5', legacy);
+    await seedStoredAbilityAsset('user-b5', { ...legacy, id: 'aa-legacy-no-source', evidenceRefs: [] });
+
+    const [first, second] = await Promise.all([
+      migrateLegacyFreeTextScopes('user-b5'),
+      migrateLegacyFreeTextScopes('user-b5'),
+    ]);
+    expect(first + second).toBe(2);
+    expect(await readAbilityAsset('user-b5', legacy.id)).toMatchObject({
+      scope: goal, applicableWhen: [goal], forbiddenWhen: ['紧急出行'], version: '2',
+    });
+    const unresolved = await readAbilityAsset('user-b5', 'aa-legacy-no-source');
+    expect(unresolved.scope).toBe('unspecified');
+    expect(unresolved.applicableWhen).toBeUndefined();
+    expect(await migrateLegacyFreeTextScopes('user-b5')).toBe(0);
+  });
+
   it('builds a B-local proposal without any ownerless external update', async () => {
     const epB = episode('kse-b5-ownerless-p3394', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
     await seedEpisode(epB);

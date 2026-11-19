@@ -203,6 +203,7 @@ describe('原型任务范围的自由文本写入', () => {
     const { resolveScopeForAsset, scopeIncludes } = await import('../../../../src/main/features/recall/scope-policy');
     const scope = '项目周报、风险核对与后续行动安排';
     expect(resolveScopeForAsset(scope)).toBe(scope);
+    expect(resolveScopeForAsset('')).toBe('unspecified');
     expect(resolveScopeForAsset('跨任务通用')).toBe('general');
     expect(resolveScopeForAsset('报告与文档')).toBe('report');
     expect(resolveScopeForAsset('不跨任务通用的项目复盘')).not.toBe('general');

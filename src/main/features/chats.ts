@@ -48,7 +48,7 @@ import {
   ZH_FILLER_RE, EN_FILLER_RE, TITLE_MAX, findTitleClauseBoundary,
 } from '../util/auto-title';
 import { isExpiredIsoTombstone, pruneExpiredDeletedRecords } from '../util/tombstone_retention';
-import { isSubstantiveTaskText, normalizeTaskRequest, parseSeedModelText } from './session_import/task-context';
+import { isLegacyWelcomePlanDispatch, isSubstantiveTaskText, normalizeTaskRequest, parseSeedModelText } from './session_import/task-context';
 import {
   RECORD_SYNC_DEVICE_FIELD,
   RECORD_SYNC_REV_FIELD,
@@ -2778,6 +2778,7 @@ export async function setConversationSpace(
   cid: string,
   spaceId: string | null,
   projectIdHint?: string | null,
+  guard?: { expectedSpaceId: string | null; signal?: AbortSignal },
 ): Promise<Conversation | null> {
   if (!safeId(cid)) return null;
   if (spaceId !== null && !safeId(spaceId)) return null;
@@ -2786,6 +2787,12 @@ export async function setConversationSpace(
     if (!target || isDeletedConversation(target.conversation)) return null;
     const next = { ...target.conversation };
     const normalized = spaceId || null;
+    if (guard) {
+      const current = target.conversation.space_id || null;
+      if (current !== normalized && current !== guard.expectedSpaceId) return null;
+      if (normalized && !(await (await import('./spaces')).spaceExists(userId, normalized))) return null;
+      if (guard.signal?.aborted) return null;
+    }
     if (normalized) next.space_id = normalized;
     else delete next.space_id;
     if (next.space_id !== target.conversation.space_id) {
@@ -2793,6 +2800,7 @@ export async function setConversationSpace(
       next.updated_at = nowIso();
       _stampConversationSync(userId, next);
       await store.persistTarget(target, next);
+      _spaceIdCache.delete(`${userId}:${cid}`);
       // 工作区随归属迁移（尽力而为；失败由 getConversationWorkspacePath 惰性兜底）
       try {
         const { migrateConversationWorkspace } = await import('./group_chat/conv_workspace');
@@ -3313,6 +3321,39 @@ async function readSeedContext(
   return { summary: '', currentRequest: '' };
 }
 
+async function readLatestContinuationRequest(userId: string, conversation: Conversation): Promise<string> {
+  let cursor: number | null = null;
+  do {
+    const page = await getMessagesPage(userId, conversation.conversation_id, 50, cursor, conversation.project_id ?? null);
+    for (let index = page.history.length - 1; index >= 0; index -= 1) {
+      const message = page.history[index];
+      if (message.from === 'user' && !message.model_text && isSubstantiveTaskText(message.text)
+        && !isLegacyWelcomePlanDispatch(message.text.trim())) {
+        return message.text.trim();
+      }
+    }
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+  return '';
+}
+
+/** Resolve the target when a welcome card is used, even if the card predates
+ *  the user's latest message. Only real user text can become the new task. */
+export async function getImportedContinuationRequest(
+  userId: string,
+  conversationId: string,
+): Promise<{ ok: boolean; currentRequest?: string; error?: string }> {
+  const conversation = await getConversation(userId, conversationId);
+  if (!conversation?.imported) return { ok: false, error: 'not_imported' };
+  const latest = await readLatestContinuationRequest(userId, conversation);
+  if (latest) return { ok: true, currentRequest: latest };
+  const seed = await readSeedContext(userId, conversationId, conversation.project_id);
+  if (seed.currentRequest) return { ok: true, currentRequest: seed.currentRequest };
+  const { readContinuationSnapshot } = await import('./task_continuation');
+  const snapshot = await readContinuationSnapshot(userId, conversationId, conversation.project_id ?? null);
+  return { ok: true, currentRequest: snapshot?.currentRequest || '' };
+}
+
 /**
  * Insert a welcome message into an imported conversation and clear the
  * needs_welcome flag. Called when the user opens an imported conversation
@@ -3338,7 +3379,7 @@ export async function insertWelcomeMessage(
       conversationId,
       spaceId: (conv as any)?.space_id ?? null,
       sessionSummary,
-      currentRequest: seed.currentRequest || undefined,
+      currentRequest: (conv.imported ? await readLatestContinuationRequest(userId, conv) : '') || seed.currentRequest || undefined,
     });
 
     // Build and append the message
@@ -3402,6 +3443,7 @@ export async function getWelcomePanel(
     const seed = await readSeedContext(userId, conversationId, conv.project_id);
     const sessionSummary = seed.summary || undefined;
     const currentRequest = String(options.currentRequest ?? '').trim()
+      || (conv.imported ? await readLatestContinuationRequest(userId, conv) : '')
       || seed.currentRequest
       || undefined;
 
@@ -3491,8 +3533,8 @@ export async function handoffWelcomeReply(
       log.warn('project brief ensure failed', { conversationId, error: String(err) });
     }
 
-    // A request stated in this turn is the strongest target; a bare handoff
-    // phrase ("继续这项工作") is not a task, so fall back to the imported one.
+    // A request stated in this turn is the strongest target. For a bare
+    // handoff, the panel resolves the latest saved user goal before the seed.
     // Pass it into the ONE panel generation below instead of generating the
     // welcome twice (the old path ran the plan model twice per handoff).
     const typedRequest = typeof userText === 'string' && isSubstantiveTaskText(userText)

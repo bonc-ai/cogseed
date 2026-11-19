@@ -263,8 +263,6 @@ export async function evaluateRecallAssetRuntimeEligibility(
   const standingPreferenceAuthorized = await hasUserAuthorizedStandingPreference(userId, asset);
   const defaultUseAuthorized = standingPreferenceAuthorized || await hasUserAuthorizedPersonalDefaultUse(userId, asset);
   const sourceAvailable = await sourcesAvailable(asset);
-  const defaultOperation = context.operation === 'default_injection'
-    || (!context.operation && context.silentDefaultInjection === true);
   return evaluateAssetRuntimeEligibility({
     defaultUseAuthorized,
     status: asset.status,
@@ -273,10 +271,7 @@ export async function evaluateRecallAssetRuntimeEligibility(
     scope: asset.scope,
     ...(asset.crossScopeConfirmedAt ? { crossScopeConfirmedAt: asset.crossScopeConfirmedAt } : {}),
     ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
-    // A human-approved response preference is supplied as conditional guidance.
-    // Literal substring mismatch cannot establish inapplicability; the complete
-    // conditions still render below and are checked against the actual answer.
-    ...(asset.applicableWhen && !(standingPreferenceAuthorized && defaultOperation) ? { applicableWhen: asset.applicableWhen } : {}),
+    applicableWhen: asset.applicableWhen,
     ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
   }, {
     ...context,

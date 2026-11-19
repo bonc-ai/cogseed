@@ -111,7 +111,7 @@ describe('资产目录视图', () => {
     expect(table).toContain(asset.title);
     expect(table).not.toContain('规则与偏好');
     expect(table).not.toContain('<th>类型</th>');
-    expect(table).toContain('未限定使用对象');
+    expect(table).toContain('跨任务通用');
     expect(table).toContain('启用');
     expect(table).toContain('data-act="library-select" data-id="aa-cat0001"');
     expect(html).toContain('在用 v2');
@@ -119,6 +119,19 @@ describe('资产目录视图', () => {
     expect(loaded.ui.broughtInCountFor(asset.id)).toBe(1);
     expect(html).not.toContain('资产目录（模型视角）');
     expect(html).not.toContain('data-act="asset-view"');
+  });
+
+  it('matches the displayed task scope across list and detail for legacy and scoped assets', () => {
+    const legacy = { ...asset, applicableWhen: ['处理通用时'] };
+    const scoped = { ...asset, id: 'aa-cat0002', scope: '安排周末出游', applicableWhen: ['安排周末出游'] };
+    const loaded = loadCognitionAssets({ assets: [legacy, scoped] }, { name: 'overview' });
+    const table = loaded.render().match(/<table class="ca-library-table"[\s\S]*?<\/table>/)?.[0] || '';
+    expect(table).toContain('范围未记录');
+    expect(table).toContain(scoped.scope);
+    const legacyDetail = loaded.ns.renderLibraryAssetDetail(legacy);
+    expect(legacyDetail).toContain('范围未记录');
+    expect(legacyDetail).not.toContain('处理通用时');
+    expect(loaded.ns.renderLibraryAssetDetail(scoped)).toContain(scoped.scope);
   });
 
   it('没有真实使用证据时计数为零，详情不冒充采用', () => {

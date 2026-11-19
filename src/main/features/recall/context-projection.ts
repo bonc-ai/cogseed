@@ -8,7 +8,7 @@ import { createLogger } from '../../logger';
 import { abilityAssetActiveVersion, listAbilityAssets, readAbilityAsset, type AbilityAssetVersionRecord } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
-import { isAssetScopeAllowed, scopeIncludes, type AssetScopeContext, type RecallAbilityAssetScopePolicy } from './scope-policy';
+import { isAssetScopeAllowed, isAssetScopeUnspecified, scopeIncludes, type AssetScopeContext, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { loadOntologyGroupTitleMap } from './ontology-taxonomy';
 import { buildRecallTaskContract } from './task-contract';
 import {
@@ -682,6 +682,7 @@ async function isAssetEligibleForProjection(
   runtimeScope: AssetScopeContext = {},
 ): Promise<boolean> {
   if (asset.status !== 'active') throw new Error('context projection asset is not active');
+  if (projection.authorization === 'model_selected' && isAssetScopeUnspecified(asset.scope, asset.applicableWhen)) return false;
   const needsConversationContext = (runtimeScope.projectId === undefined && projection.projectId === undefined)
     || (runtimeScope.workspaceId === undefined && projection.workspaceId === undefined)
     || (runtimeScope.conversationKind === undefined && projection.conversationKind === undefined);
@@ -1091,6 +1092,10 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
   for (const asset of assets) {
     const inactiveReason = inactiveAssetOmissionReason(asset.status);
     if (inactiveReason) { omittedRefs.push({ assetId: asset.id, reason: inactiveReason }); continue; }
+    if (isAssetScopeUnspecified(asset.scope, asset.applicableWhen)) {
+      omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' });
+      continue;
+    }
     if (!isAssetScopeAllowed(asset.scopePolicy, {
       purpose: purposeContext,
       ...(input.agentId ? { agentId: input.agentId } : {}),

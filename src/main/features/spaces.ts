@@ -746,6 +746,18 @@ export async function spaceExists(uid: string, spaceId: string): Promise<boolean
   return (await getSpace(uid, spaceId)) !== null;
 }
 
+/** Resolve the exact displayed name within the requesting user's spaces. */
+export async function findExistingSpacesByName(uid: string, names: readonly string[]): Promise<Space[]> {
+  const wanted = new Set(names.map(name => name.normalize('NFC').trim().toLocaleLowerCase()));
+  const identities = await listReceptionSpacesReadOnly(uid);
+  const spaces = await Promise.all(identities.map(({ space_id }) => getSpace(uid, space_id)));
+  return spaces.filter((space): space is Space => {
+    if (!space) return false;
+    const aliases = space.system_name_key ? systemSpaceNameVariants(space.system_name_key) : [];
+    return [space.name, ...aliases].some(name => wanted.has(name.normalize('NFC').trim().toLocaleLowerCase()));
+  });
+}
+
 export async function createSpace(
   uid: string,
   opts: {

@@ -11,6 +11,7 @@ import {
 import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord } from './episode-store';
 import { assetMutationFor, clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore } from './extraction-service';
 import { scopeForTask } from '../recall/experience-taxonomy';
+import { sourceTaskBoundary, UNSPECIFIED_ASSET_SCOPE } from '../recall/scope-policy';
 import type { KstarAdmissionContext } from './improvement-admission';
 import { attributionAllowsReusableLearning } from './secondary-attribution';
 import { readKstarReview } from './review-service';
@@ -191,23 +192,27 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
 
   const proposals: KstarCandidateProposal[] = [];
   const goal = requirement.goalText || requirement.title;
-  const scope = scopeForTask(goal);
+  const taskType = scopeForTask(goal);
+  const sourceBoundary = taskType === 'general' ? sourceTaskBoundary(goal) : undefined;
+  const scope = taskType === 'general' ? sourceBoundary || UNSPECIFIED_ASSET_SCOPE : taskType;
   // 规则类候选的适用范围（PRD 3.1 RuleAsset 最低门槛）。只声明有证据支撑的
   // 那一条——这条经验学自哪类任务；禁止范围没有证据支撑，不编。
-  const ruleBoundary = (type: string): Pick<KstarCandidateProposal, 'applicableWhen'> => (
-    type === 'rule' ? { applicableWhen: [`处理${userScopeLabel(scope)}时`] } : {}
-  );
+  const applicableBoundary = (type: string): Pick<KstarCandidateProposal, 'applicableWhen'> => {
+    if (sourceBoundary) return { applicableWhen: [sourceBoundary] };
+    return taskType !== 'general' && type === 'rule' ? { applicableWhen: [`处理${userScopeLabel(taskType)}时`] } : {};
+  };
   if (strongest) {
     const strongestLesson = lessonUsable(goal, strongest.lesson);
     if (verifiedWorkflow && !strongestLesson) {
       // Verified workflow without a reasoned lesson → skill_method.
       proposals.push({
         judgment: `处理类似「${goal}」的任务时，可使用已验证的工作流程：${toolChain.join(' → ')}。`,
-        summary: userFacingSummary('workflow', scope, goal),
+        summary: userFacingSummary('workflow', taskType, goal),
         uncertainty: '基于已闭环任务的执行经验生成，使用前可复核。',
         suggestedType: 'skill_method',
         suggestedScope: scope,
         ...assetMutationFor(primaryEpisode, strongest),
+        ...applicableBoundary('skill_method'),
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
         ...(primaryEpisode ? { learningProvenance: provenanceFor(strongest, primaryEpisode) } : {}),
@@ -218,12 +223,12 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
       // it is a judgment lesson, not a workflow.
       proposals.push({
         judgment: strongestLesson,
-        summary: userFacingSummary('lesson', scope, strongestLesson),
+        summary: userFacingSummary('lesson', taskType, strongestLesson),
         uncertainty: '基于任务执行经验提炼，使用前可复核。',
         suggestedType: 'rule',
         suggestedScope: scope,
         ...assetMutationFor(primaryEpisode, strongest),
-        ...ruleBoundary('rule'),
+        ...applicableBoundary('rule'),
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
         ...(primaryEpisode ? { learningProvenance: provenanceFor(strongest, primaryEpisode) } : {}),
@@ -245,12 +250,12 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
     const gapProvenance = provenanceFor(gapReview, gapEpisode);
     proposals.push({
       judgment: gapLesson,
-      summary: userFacingSummary('gap', scope, gapLesson),
+      summary: userFacingSummary('gap', taskType, gapLesson),
       uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: gapAssetType,
       suggestedScope: scope,
       ...assetMutationFor(gapEpisode, gapReview),
-      ...ruleBoundary(gapAssetType),
+      ...applicableBoundary(gapAssetType),
       sourceRefs: mergedRefs,
       learningSignal: learningSignal(gapReview),
       ...(gapProvenance ? { learningProvenance: gapProvenance } : {}),

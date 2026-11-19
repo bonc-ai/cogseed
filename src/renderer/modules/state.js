@@ -340,6 +340,11 @@ function bindStaticHandlers() {
     if (!payload || typeof payload !== 'object') return;
     const { cid, msgId, revisionOf } = payload;
     if (typeof cid !== 'string' || !cid) return;
+    // A streamed final reply can already be on screen while the sidebar and
+    // breadcrumb still have the old space. Refresh only the conversation row.
+    if (payload.spaceChanged === true && typeof _refreshConversationSpaceBinding === 'function') {
+      void _refreshConversationSpaceBinding(cid);
+    }
     const isRevision = typeof revisionOf === 'string' && revisionOf.length > 0;
     const tracker = window.__cogseedLiveBusTracker;
     if (!isRevision && msgId && tracker && typeof tracker.has === 'function' && tracker.has(msgId)) return;

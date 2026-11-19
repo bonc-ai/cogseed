@@ -1,4 +1,5 @@
 import { createLogger } from '../../logger';
+import { sourceTaskBoundary } from './scope-policy';
 import type { CognitionSourceRef } from './source-service';
 
 const log = createLogger('recall.evidence-resolution');
@@ -10,6 +11,26 @@ export const KSTAR_EPISODE_MISSING = 'kstar_episode_missing';
  *  （kind=execution 且 id 前缀 kse-）。 */
 function isKstarEpisodeRef(ref: CognitionSourceRef): boolean {
   return String(ref.kind || '') === 'execution' && String(ref.id || '').startsWith('kse-');
+}
+
+/** Recover a boundary only from reachable KStar evidence owned by this user.
+ *  Unlinked origins must agree on the task before it can be restored. */
+export async function readKstarScopeEvidence(
+  userId: string, refs: readonly CognitionSourceRef[], episodeId?: string,
+): Promise<string | undefined> {
+  const candidates = refs.filter(ref => isKstarEpisodeRef(ref) && (!episodeId || ref.id === episodeId));
+  if (!candidates.length) return undefined;
+  const { readKstarEpisode } = await import('../kstar/episode-store');
+  const { isCognitionSourceEnabled } = await import('./source-control');
+  const goals = new Set<string>();
+  for (const ref of candidates) {
+    if (ref.degraded || !await isCognitionSourceEnabled(userId, ref)) return undefined;
+    const episode = await readKstarEpisode(userId, ref.id);
+    const boundary = episode && sourceTaskBoundary(episode.t.userGoal);
+    if (!boundary) return undefined;
+    goals.add(boundary);
+  }
+  return goals.size === 1 ? goals.values().next().value : undefined;
 }
 
 /**
