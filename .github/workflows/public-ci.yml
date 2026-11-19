@@ -72,6 +72,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+        env:
+          # The Linux runners use ONNX Runtime's bundled CPU provider.
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
       - run: npm run test:resources:setup
       - name: Configure Chromium sandbox for Linux fixtures
         run: |
